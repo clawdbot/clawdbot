@@ -16,6 +16,8 @@ import {
   getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
   expectMockCallArgFields,
@@ -26,7 +28,11 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  hasReplyOperationExecutionStarted,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
@@ -122,6 +128,49 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
   });
 
+  it("passes the operator-reviewed proposal revision to every embedded candidate", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.skillWorkshopProposalRevision = {
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      proposalId: "proposal-h1",
+      expectedRevisionHash: "revision-h1",
+    };
+    state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "primary", initialFallbackAttemptOptions(params));
+      const result = await params.run(
+        "openai",
+        "fallback",
+        fallbackAttemptOptions(params, "unknown"),
+      );
+      return { result, provider: "openai", model: "fallback", attempts: [] };
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(
+      state.runEmbeddedAgentMock.mock.calls.map(
+        (call, index) =>
+          requireRecord(call[0], `embedded candidate ${index}`).skillWorkshopProposalRevision,
+      ),
+    ).toEqual([
+      {
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+        proposalId: "proposal-h1",
+        expectedRevisionHash: "revision-h1",
+      },
+      {
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+        proposalId: "proposal-h1",
+        expectedRevisionHash: "revision-h1",
+      },
+    ]);
+  });
+
   it("records diagnostic progress from global-lane wait notifications", async () => {
     const replyOperation = createReplyOperation({
       sessionKey: "agent:main:global-lane-progress",
@@ -168,8 +217,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       },
     };
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("openai", "gpt-5.6-sol");
-      const result = await params.run("demo", "basic");
+      await params.run("openai", "gpt-5.6-sol", initialFallbackAttemptOptions(params));
+      const result = await params.run("demo", "basic", fallbackAttemptOptions(params, "unknown"));
       return { result, provider: "demo", model: "basic", attempts: [] };
     });
     state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
@@ -193,7 +242,11 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     followupRun.run.thinkLevel = "high";
     followupRun.run.thinkingCatalog = [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("ollama", "qwen3.5:4b");
+      const result = await params.run(
+        "ollama",
+        "qwen3.5:4b",
+        initialFallbackAttemptOptions(params),
+      );
       return { result, provider: "ollama", model: "qwen3.5:4b", attempts: [] };
     });
     state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "ok" }], meta: {} });
@@ -212,9 +265,15 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     followupRun.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       expect(freezeAbortMock).not.toHaveBeenCalled();
-      await params.run("anthropic", "claude").catch(() => undefined);
+      await params
+        .run("anthropic", "claude", initialFallbackAttemptOptions(params))
+        .catch(() => undefined);
       expect(freezeAbortMock).not.toHaveBeenCalled();
-      const result = await params.run("openai", "gpt-5.5");
+      const result = await params.run(
+        "openai",
+        "gpt-5.5",
+        fallbackAttemptOptions(params, "unknown"),
+      );
       expect(freezeAbortMock).not.toHaveBeenCalled();
       return {
         result,
@@ -279,7 +338,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       meta: {},
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("anthropic", "claude");
+      const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
       markCandidateSettled();
       await fallbackRelease;
       return {
@@ -339,7 +398,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       meta: {},
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("anthropic", "claude");
+      const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
       markCandidateSettled();
       await fallbackRelease;
       return {
@@ -393,7 +452,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       meta: {},
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run("anthropic", "claude");
+      const result = await params.run("anthropic", "claude", initialFallbackAttemptOptions(params));
       markCandidateSettled();
       await fallbackRelease;
       return {
@@ -455,32 +514,44 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("signals typing from embedded harness execution phases before assistant text", async () => {
+  it("signals typing and records the execution boundary before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
+    const replyOperation = createReplyOperation({
+      sessionKey: "agent:main:execution-boundary",
+      sessionId: "execution-boundary",
+      resetTriggered: false,
+    });
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
       params.onExecutionPhase?.({
         phase: "model_call_started",
         provider: "openai",
         model: "gpt-5.4",
       });
+      expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(true);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn({
-      ...createMinimalRunAgentTurnParams({
-        opts: {
-          onAgentRunStart,
-        } satisfies GetReplyOptions,
-      }),
-      typingSignals,
-    });
+    try {
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn({
+        ...createMinimalRunAgentTurnParams({
+          opts: {
+            onAgentRunStart,
+          } satisfies GetReplyOptions,
+        }),
+        replyOperation,
+        typingSignals,
+      });
 
-    expect(result.kind).toBe("success");
-    expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
-    expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
-    expect(onAgentRunStart).toHaveBeenCalledOnce();
+      expect(result.kind).toBe("success");
+      expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
+      expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
+      expect(onAgentRunStart).toHaveBeenCalledOnce();
+    } finally {
+      replyOperation.complete();
+    }
   });
 
   it("injects pending MCP App context exactly once without changing transcript text", async () => {
@@ -545,7 +616,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("forwards CLI harness execution phases into typing signals", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4"),
+      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "codex-cli",
       model: "gpt-5.4",
       attempts: [],
@@ -587,7 +658,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("consumes pending MCP App context when a CLI process receives the turn", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("codex-cli", "gpt-5.4"),
+      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "codex-cli",
       model: "gpt-5.4",
       attempts: [],
@@ -624,7 +695,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("requires explicit message targets on heartbeat CLI runs", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("claude-cli", "sonnet-4.6"),
+      result: await params.run("claude-cli", "sonnet-4.6", initialFallbackAttemptOptions(params)),
       provider: "claude-cli",
       model: "sonnet-4.6",
       attempts: [],
@@ -654,7 +725,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
   it("requires explicit message targets on heartbeat embedded runs", async () => {
     // Heartbeat ambient From/To must not become implicit message-tool recipients.
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],
@@ -680,7 +751,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
   it("omits requireExplicitMessageTarget on ordinary embedded runs", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],

@@ -30,11 +30,14 @@ describe("ollama lazy imports", () => {
 
   it("loads optional runtime owners only on first use", async () => {
     let embeddingImports = 0;
+    const embeddingQueryCalls: unknown[] = [];
+    const embeddingBatchCalls: unknown[] = [];
     let mediaImports = 0;
     let memoryImports = 0;
     let nodeInferenceImports = 0;
     let setupImports = 0;
     let streamImports = 0;
+    let streamParams: Record<string, unknown> | undefined;
     let webSearchImports = 0;
     let wslImports = 0;
     let wslChecks = 0;
@@ -49,10 +52,23 @@ describe("ollama lazy imports", () => {
     vi.doMock("./src/embedding-provider.runtime.js", () => {
       embeddingImports += 1;
       return {
-        createOllamaEmbeddingProvider: async () => ({
-          provider: { id: "ollama", model: "nomic-embed-text" },
-          client: { baseUrl: "http://127.0.0.1:11434" },
-        }),
+        createOllamaEmbeddingProvider: async () => {
+          return {
+            provider: {
+              id: "ollama",
+              model: "nomic-embed-text",
+              embed: async (...args: unknown[]) => {
+                embeddingQueryCalls.push(args);
+                return [1];
+              },
+              embedBatch: async (...args: unknown[]) => {
+                embeddingBatchCalls.push(args);
+                return [[2]];
+              },
+            },
+            client: { baseUrl: "http://127.0.0.1:11434" },
+          };
+        },
       };
     });
     vi.doMock("./src/memory-embedding-adapter.js", () => {
@@ -114,7 +130,10 @@ describe("ollama lazy imports", () => {
     vi.doMock("./src/stream.runtime.js", () => {
       streamImports += 1;
       return {
-        createConfiguredOllamaStreamFn: () => async () => ({ transport: "ollama" }),
+        createConfiguredOllamaStreamFn: (params: Record<string, unknown>) => {
+          streamParams = params;
+          return async () => ({ transport: "ollama" });
+        },
       };
     });
     vi.doMock("./src/web-search-provider.runtime.js", () => {
@@ -144,13 +163,14 @@ describe("ollama lazy imports", () => {
     const providers: ProviderPlugin[] = [];
     let nodeInferenceTool: AnyAgentTool | undefined;
     let webSearchProvider: WebSearchProviderPlugin | undefined;
+    const runtime = createPluginRuntimeMock();
     ollamaPlugin.register(
       createTestPluginApi({
         id: "ollama",
         name: "Ollama",
         source: "test",
         config: {},
-        runtime: createPluginRuntimeMock(),
+        runtime,
         registerEmbeddingProvider: (adapter) => {
           embeddingAdapter = adapter;
         },
@@ -207,16 +227,19 @@ describe("ollama lazy imports", () => {
     });
 
     const localProvider = providers.find((provider) => provider.id === "ollama");
-    await expect(
-      localProvider?.createEmbeddingProvider?.({
-        config: {},
-        model: "",
-        provider: "ollama",
-      } as never),
-    ).resolves.toMatchObject({
+    const localEmbedding = await localProvider?.createEmbeddingProvider?.({
+      config: {},
+      model: "",
+      provider: "ollama",
+    } as never);
+    expect(localEmbedding).toMatchObject({
       id: "ollama",
       client: { baseUrl: "http://127.0.0.1:11434" },
     });
+    await expect(localEmbedding?.embedQuery("query")).resolves.toEqual([1]);
+    await expect(localEmbedding?.embedBatch(["document"])).resolves.toEqual([[2]]);
+    expect(embeddingQueryCalls).toEqual([["query", { inputType: "query" }]]);
+    expect(embeddingBatchCalls).toEqual([[["document"], { inputType: "document" }]]);
     await expect(
       localProvider?.auth[0]?.run({
         config: {},
@@ -229,9 +252,9 @@ describe("ollama lazy imports", () => {
       config: {
         models: {
           providers: {
-            ollama: {
+            "ollama-gpu": {
               api: "ollama",
-              baseUrl: "http://127.0.0.1:11434",
+              baseUrl: "http://127.0.0.1:11435",
               models: [],
             },
           },
@@ -240,12 +263,19 @@ describe("ollama lazy imports", () => {
       model: {
         api: "ollama",
         id: "qwen3:32b",
-        provider: "ollama",
+        provider: "ollama-gpu",
       },
-      provider: "ollama",
+      provider: "ollama-gpu",
     } as never);
     await expect(streamFn?.({} as never, {} as never, {})).resolves.toEqual({
       transport: "ollama",
+    });
+    expect(streamParams).toMatchObject({
+      providerBaseUrl: "http://127.0.0.1:11435",
+      localService: {
+        providerId: "ollama-gpu",
+        acquire: runtime.llm.acquireLocalService,
+      },
     });
 
     expect({

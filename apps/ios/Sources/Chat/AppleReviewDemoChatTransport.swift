@@ -140,7 +140,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         try await self.store.history(sessionKey: sessionKey)
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         [
             OpenClawChatModelChoice(
                 modelID: self.fixture.modelID,
@@ -298,8 +298,8 @@ struct AppleReviewDemoChatTransport: OpenClawChatTransport {
         try await self.transport.requestHistory(sessionKey: sessionKey)
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
-        try await self.transport.listModels()
+    func listModels(agentID: String?) async throws -> [OpenClawChatModelChoice] {
+        try await self.transport.listModels(agentID: agentID)
     }
 
     func sendMessage(

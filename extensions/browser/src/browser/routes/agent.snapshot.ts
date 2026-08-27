@@ -59,7 +59,10 @@ import {
   withPlaywrightRouteContext,
   withRouteTabContext,
 } from "./agent.shared.js";
-import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
+import {
+  captureBrowserOperationTarget,
+  resolveOperationTargetOutcome,
+} from "./agent.snapshot-target.js";
 import {
   resolveSnapshotPlan,
   shouldUsePlaywrightForAriaSnapshot,
@@ -132,15 +135,21 @@ async function clearChromeMcpOverlay(params: ChromeMcpSnapshotOperation): Promis
 async function renderChromeMcpLabels(
   params: ChromeMcpSnapshotOperation & {
     refs: string[];
+    clipToRef?: boolean;
   },
 ): Promise<{ labels: number; skipped: number }> {
   const refList = JSON.stringify(params.refs);
+  const clipToRef = params.clipToRef === true ? "true" : "false";
   const result = await evaluateChromeMcpScript({
     ...params,
     args: params.refs,
     fn: `(...elements) => {
       const refs = ${refList};
+      const clipToRef = ${clipToRef};
       document.querySelectorAll("[${CHROME_MCP_OVERLAY_ATTR}]").forEach((node) => node.remove());
+      if (clipToRef && elements[0] instanceof Element) {
+        elements[0].scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+      }
       const root = document.createElement("div");
       root.setAttribute("${CHROME_MCP_OVERLAY_ATTR}", "labels");
       root.style.position = "fixed";
@@ -165,8 +174,8 @@ async function renderChromeMcpLabels(
         badge.textContent = refs[index] || String(labels);
         badge.style.position = "fixed";
         badge.style.left = \`\${Math.max(0, rect.left)}px\`;
-        badge.style.top = \`\${Math.max(0, rect.top)}px\`;
-        badge.style.transform = "translateY(-100%)";
+        badge.style.top = \`\${Math.max(0, rect.top + (clipToRef ? 2 : 0))}px\`;
+        badge.style.transform = clipToRef ? "none" : "translateY(-100%)";
         badge.style.padding = "2px 6px";
         badge.style.borderRadius = "999px";
         badge.style.background = "#FF4500";
@@ -368,19 +377,25 @@ export function registerBrowserAgentSnapshotRoutes(
         if (!pw) {
           return;
         }
+        const resolveRelayTarget = captureBrowserOperationTarget({
+          ctx,
+          profileName: profileCtx.profile.name,
+          targetId: tab.targetId,
+        });
         const result = await pw.navigateViaPlaywright({
           cdpUrl,
           targetId: tab.targetId,
           url,
           timeoutMs,
+          ...(resolveRelayTarget ? { resolveOperationTarget: resolveRelayTarget } : {}),
           ...browserNavigationPolicyForProfile(ctx, profileCtx),
         });
-        const currentTargetId = await resolveTargetIdAfterNavigate({
-          oldTargetId: tab.targetId,
-          navigatedUrl: result.url,
-          listTabs: () => profileCtx.listTabs(),
+        const currentTargetId = resolveOperationTargetOutcome({
+          actedOnTargetId: tab.targetId,
+          operationTargetId: result.targetId,
+          resolveRelayTarget,
         });
-        res.json({ ok: true, targetId: currentTargetId, ...result });
+        res.json({ ok: true, ...result, targetId: currentTargetId });
       },
     });
   });
@@ -469,15 +484,20 @@ export function registerBrowserAgentSnapshotRoutes(
             return jsonError(res, 400, EXISTING_SESSION_LIMITS.snapshot.screenshotElement);
           }
           if (labels) {
-            const snapshot = await takeChromeMcpSnapshot(operation);
-            const built = buildChromeMcpRouteSnapshot({ root: snapshot });
+            const built = ref
+              ? undefined
+              : buildChromeMcpRouteSnapshot({
+                  root: await takeChromeMcpSnapshot(operation),
+                });
             const labelResult = await renderChromeMcpLabels({
               ...operation,
-              refs: Object.keys(built.refs),
+              refs: ref ? [ref] : Object.keys(built?.refs ?? {}),
+              clipToRef: Boolean(ref),
             });
             try {
               const buffer = await takeChromeMcpScreenshot({
                 ...operation,
+                uid: ref,
                 fullPage,
                 format: type,
               });
@@ -490,7 +510,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 labels: true,
                 labelsCount: labelResult.labels,
                 labelsSkipped: labelResult.skipped,
-                truncated: built.truncated,
+                truncated: built?.truncated,
               });
             } finally {
               await clearChromeMcpOverlay(operation);
@@ -574,6 +594,7 @@ export function registerBrowserAgentSnapshotRoutes(
             format: type,
             quality: type === "jpeg" ? 85 : undefined,
             timeoutMs,
+            headless: ctx.state().profiles.get(profileCtx.profile.name)?.running?.headless,
           });
         }
 

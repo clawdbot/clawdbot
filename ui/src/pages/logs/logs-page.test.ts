@@ -266,7 +266,7 @@ describe("LogsPage lifecycle", () => {
     await page.loadLogs({ reset: true });
     expect(page.logsEntries).toHaveLength(1);
     expect(page.logsStatus).toEqual({
-      error: "Error: logs unavailable",
+      error: "logs unavailable",
       hasLoaded: true,
       stale: true,
     });

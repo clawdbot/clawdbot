@@ -9,6 +9,7 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
@@ -204,12 +205,11 @@ async function deliverTwitchReply(params: {
       debug: (msg) => runtime.log?.(msg),
     });
 
-    if (!payload.text) {
-      runtime.error?.(`No text to send in reply payload`);
-      return { visibleReplySent: false };
-    }
-    const textToSend = stripMarkdownForTwitch(payload.text);
+    const textToSend = stripMarkdownForTwitch(
+      [payload.text, ...resolveOutboundMediaUrls(payload)].filter(Boolean).join(" "),
+    );
     if (!textToSend) {
+      runtime.error?.(`No text to send in reply payload`);
       return { visibleReplySent: false };
     }
     const result = await clientManager.sendMessage(

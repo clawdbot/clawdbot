@@ -148,6 +148,7 @@ describe("agent-runner-utils", () => {
       enforceFinalTag: true,
       cwd: "/tmp/task-repo",
       taskSuggestionDeliveryMode: "gateway",
+      terminalReplyExpectation: "optional",
       trustedInternalHandoff: {
         kind: "subagent-completion",
         sourceSessionKey: "agent:child",
@@ -202,6 +203,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.runId).toBe("run-1");
     expect(resolved.promptCacheKey).toBe("webchat-cache-key");
     expect(resolved.taskSuggestionDeliveryMode).toBe("gateway");
+    expect(resolved.terminalReplyExpectation).toBe("optional");
   });
 
   it("threads prompt cache affinity through embedded execution params", () => {
@@ -408,10 +410,17 @@ describe("agent-runner-utils", () => {
           context,
         }: {
           accountId?: string | null;
-          context: { ChatType?: string; NativeChannelId?: string; To?: string };
+          context: {
+            ChatType?: string;
+            MessageThreadId?: string | number;
+            NativeChannelId?: string;
+            To?: string;
+          };
         }) => ({
           currentChannelId: context.NativeChannelId ?? context.To,
           currentMessagingTarget: context.To,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
           replyToMode: accountId === "work" && context.ChatType === "direct" ? "off" : "all",
         }),
       },
@@ -423,12 +432,15 @@ describe("agent-runner-utils", () => {
       sessionCtx: {
         Provider: "cron-event",
         NativeChannelId: "D1",
+        SessionKey: "agent:main:main:thread:1234:42",
+        MessageThreadId: "stale-topic",
       },
       replyRoute: {
         originatingChannel: "slack",
         originatingTo: "user:U1",
         originatingAccountId: "work",
         originatingChatType: "direct",
+        originatingThreadId: 42,
       },
       hasRepliedRef: undefined,
       provider: "openai",
@@ -440,9 +452,44 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageTo).toBe("user:U1");
     expect(resolved.embeddedContext.currentChannelId).toBe("D1");
     expect(resolved.embeddedContext.currentMessagingTarget).toBe("user:U1");
+    expect(resolved.embeddedContext.messageThreadId).toBe(42);
+    expect(resolved.embeddedContext.currentThreadTs).toBe("42");
     expect(resolved.embeddedContext.agentAccountId).toBe("work");
     expect(resolved.embeddedContext.chatType).toBe("direct");
     expect(resolved.embeddedContext.replyToMode).toBe("off");
+  });
+
+  it("carries a prepared direct-message reply mode into generic message tools", () => {
+    const run = makeRun();
+    const replyRoute = {
+      originatingChannel: "reef",
+      originatingTo: "reef:remote-agent",
+      originatingReplyToMode: "all",
+    } satisfies Pick<
+      FollowupRun,
+      "originatingChannel" | "originatingTo" | "originatingReplyToMode"
+    >;
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      replyRoute,
+      sessionCtx: {
+        Provider: "reef",
+        To: "reef:local-agent",
+        MessageSid: "message-1",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.embeddedContext).toMatchObject({
+      currentChannelId: "reef:remote-agent",
+      currentChannelProvider: "reef",
+      currentMessageId: "message-1",
+      replyToMode: "all",
+    });
   });
 
   it("carries inbound audio context into embedded message tools", () => {

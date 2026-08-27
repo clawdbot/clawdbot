@@ -47,6 +47,10 @@ function createNpmTarget(globalRoot: string): ResolvedGlobalInstallTarget {
     command: "npm",
     globalRoot,
     packageRoot: path.join(globalRoot, "openclaw"),
+    npmOwner: {
+      version: "12.0.0",
+      lifecyclePolicy: "allow-scripts",
+    },
   };
 }
 
@@ -75,6 +79,9 @@ async function expectPathMissing(filePath: string): Promise<void> {
 
 function createRootRunner(globalRoot: string): CommandRunner {
   return async (argv) => {
+    if (argv.join(" ") === "npm --version") {
+      return { stdout: "12.0.0\n", stderr: "", code: 0 };
+    }
     if (argv.join(" ") === "npm root -g") {
       return { stdout: `${globalRoot}\n`, stderr: "", code: 0 };
     }
@@ -155,13 +162,44 @@ describe("markPackagePostInstallDoctorAdvisory", () => {
   });
 });
 
+describe("npm lifecycle policy preflight", () => {
+  it("stops before mutation when the owning npm version is unknown", async () => {
+    const runStep = vi.fn();
+    const runCommand = vi.fn<CommandRunner>();
+    const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
+    installTarget.npmOwner = {
+      version: null,
+      lifecyclePolicy: null,
+      probeError: "version probe failed",
+    };
+
+    const result = await runGlobalPackageUpdateSteps({
+      installTarget,
+      installSpec: "openclaw@2.0.0",
+      packageName: "openclaw",
+      runCommand,
+      runStep,
+      timeoutMs: 1000,
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(result.failedStep?.stderrTail).toContain("Unable to determine the owning npm version");
+    expect(runStep).not.toHaveBeenCalled();
+  });
+});
+
 describe("runGlobalPackageUpdateSteps", () => {
   it("installs npm updates into a clean staged prefix before swapping the global package", async () => {
     await withTestDir({ prefix: "openclaw-package-update-staged-" }, async (base) => {
       const prefix = path.join(base, "prefix");
       const globalRoot = path.join(prefix, "lib", "node_modules");
       const packageRoot = path.join(globalRoot, "openclaw");
+      const checkoutRoot = path.join(base, "checkout");
       await writePackageRoot(packageRoot, "1.0.0");
+      await writePackageRoot(checkoutRoot, "2.0.0");
+      await fs.writeFile(path.join(checkoutRoot, "openclaw.mjs"), "#!/usr/bin/env node\n", {
+        mode: 0o755,
+      });
       await fs.mkdir(path.join(packageRoot, "dist", "extensions", "qa-channel"), {
         recursive: true,
       });
@@ -184,14 +222,19 @@ describe("runGlobalPackageUpdateSteps", () => {
             throw new Error("missing staged prefix");
           }
           expect(path.dirname(stagePrefix)).toBe(globalRoot);
-          await writePackageRoot(
-            path.join(stagePrefix, "lib", "node_modules", "openclaw"),
-            "2.0.0",
-          );
-          await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+          const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
+          await fs.mkdir(stageLayout.globalRoot, { recursive: true });
           await fs.symlink(
-            "../lib/node_modules/openclaw/dist/index.js",
-            path.join(stagePrefix, "bin", "openclaw"),
+            process.platform === "win32"
+              ? checkoutRoot
+              : path.relative(stageLayout.globalRoot, checkoutRoot),
+            path.join(stageLayout.globalRoot, "openclaw"),
+            process.platform === "win32" ? "junction" : undefined,
+          );
+          await fs.mkdir(stageLayout.binDir, { recursive: true });
+          await fs.symlink(
+            "../lib/node_modules/openclaw/openclaw.mjs",
+            path.join(stageLayout.binDir, "openclaw"),
           );
           return {
             name,
@@ -205,7 +248,7 @@ describe("runGlobalPackageUpdateSteps", () => {
 
       const result = await runGlobalPackageUpdateSteps({
         installTarget: createNpmTarget(globalRoot),
-        installSpec: "openclaw@2.0.0",
+        installSpec: checkoutRoot,
         packageName: "openclaw",
         packageRoot,
         runCommand: createRootRunner(globalRoot),
@@ -226,8 +269,9 @@ describe("runGlobalPackageUpdateSteps", () => {
       await expectPathMissing(
         path.join(packageRoot, "dist", "extensions", "qa-channel", "runtime-api.js"),
       );
+      await expect(fs.realpath(packageRoot)).resolves.toBe(await fs.realpath(checkoutRoot));
       await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(
-        "../lib/node_modules/openclaw/dist/index.js",
+        "../lib/node_modules/openclaw/openclaw.mjs",
       );
     });
   });

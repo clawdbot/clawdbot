@@ -22,8 +22,7 @@ import {
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { resolvePackageExtensionEntries, type OpenClawPackageManifest } from "./manifest.js";
-import { satisfiesPluginApiRange } from "./package-compat.js";
-import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import {
   emitPluginAuditSecurityEvent,
   emitPluginInstallSecurityEvent,

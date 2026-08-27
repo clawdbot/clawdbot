@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src/index.js";
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
@@ -21,8 +22,11 @@ import {
 } from "../../infra/format-time/parse-offsetless-zoned-datetime.js";
 import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { formatLookupMiss } from "../error-format.js";
+import { rethrowExpectedCliError } from "../failure-output.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
 function parseCronArgv(value: unknown, flag: string): string[] | undefined {
@@ -74,11 +78,12 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
 }
 
 export const getCronChannelOptions = () => {
-  // Keep help truthful even before the plugin registry is bootstrapped.
+  // Keep help truthful even before the plugin registry is bootstrapped. The fallback names the
+  // channel plugin id the runtime resolves, not a per-conversation platform channel identifier.
   const pluginIds = listChannelPlugins()
     .map((plugin) => plugin.id)
     .filter(Boolean);
-  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-plugin-id>";
 };
 
 function toLocalIsoTime(value: unknown): string | undefined {
@@ -165,12 +170,12 @@ export function enrichCronJsonWithStatus(value: unknown): unknown {
 }
 
 function computeStatus(job: { enabled?: unknown; state?: unknown }): string {
-  if (!job.enabled) {
-    return "disabled";
-  }
   const state = asOptionalRecord(job.state) ?? {};
   if (state.runningAtMs) {
     return "running";
+  }
+  if (!job.enabled) {
+    return "disabled";
   }
   return typeof state.lastRunStatus === "string"
     ? state.lastRunStatus
@@ -193,18 +198,39 @@ function decorateStatusWithFailures(status: string, consecutiveErrors: number | 
 
 function formatCronStatusForDisplay(job: CronJob): string {
   const state = job.state ?? {};
-  if (computeStatus(job) === "disabled" && state.autoDisabled) {
+  const status = computeStatus(job);
+  if (job.enabled && job.schedule?.kind === "stream" && state.streamStatus === "disabled") {
+    return "disabled";
+  }
+  if (status === "disabled" && state.autoDisabled) {
     return state.autoDisabled.reason === "schedule-errors"
       ? "disabled (schedule)"
       : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   }
-  return decorateStatusWithFailures(computeStatus(job), state.consecutiveErrors);
+  if (status === "ok" && state.lastDeliveryStatus === "not-delivered") {
+    return "ok (not delivered)";
+  }
+  return decorateStatusWithFailures(status, state.consecutiveErrors);
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(formatErrorMessage(err)));
+  rethrowExpectedCliError(err);
+  const missingJob = readCronJobNotFoundError(err);
+  const message = missingJob ? formatCronLookupMiss(missingJob.jobId) : formatErrorMessage(err);
+  if (isJsonOutputModeActive(process.argv)) {
+    throw missingJob ? new Error(message) : err;
+  }
+  defaultRuntime.error(danger(message));
   defaultRuntime.exit(1);
 }
+
+export const formatCronLookupMiss = (jobId: string) =>
+  formatLookupMiss({
+    noun: "Automation",
+    value: sanitizeTerminalText(jobId),
+    listCommand: "openclaw cron list",
+    valueLabel: "automation id",
+  });
 
 export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   // Old/offline gateways should not make successful cron mutations fail after the fact.
@@ -398,7 +424,7 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   }
   if (schedule?.kind === "stream") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
-    return `stream ${schedule.command.join(" ")}${cwd}`;
+    return `stream ${schedule.command.join(" ")}${cwd}${suffix}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";
@@ -461,7 +487,7 @@ export function printCronList(
     formatCell("Model", CRON_MODEL_PAD),
   ].join(" ");
 
-  runtime.log(rich ? theme.heading(header) : header);
+  const lines = [rich ? theme.heading(header) : header];
   const now = Date.now();
 
   for (const job of jobs) {
@@ -494,13 +520,13 @@ export function printCronList(
     );
 
     const coloredStatus = (() => {
-      if (statusRaw === "ok") {
+      if (statusRaw === "ok" && state.lastDeliveryStatus !== "not-delivered") {
         return colorize(rich, theme.success, statusLabel);
       }
       if (statusRaw === "error") {
         return colorize(rich, theme.error, statusLabel);
       }
-      if (statusRaw === "running") {
+      if (statusRaw === "running" || statusRaw === "ok") {
         return colorize(rich, theme.warn, statusLabel);
       }
       if (statusRaw === "skipped") {
@@ -536,8 +562,10 @@ export function printCronList(
         : colorize(rich, theme.muted, modelLabel),
     ].join(" ");
 
-    runtime.log(line.trimEnd());
+    lines.push(line.trimEnd());
   }
+
+  runtime.log(lines.join("\n"));
 }
 
 export function printCronShow(
@@ -555,6 +583,10 @@ export function printCronShow(
   runtime.log(`owner session: ${showValue(job.owner?.sessionKey)}`);
   runtime.log(`enabled: ${job.enabled ? "yes" : "no"}`);
   runtime.log(`schedule: ${showValue(formatSchedule(job.schedule, job.trigger !== undefined))}`);
+  if (job.schedule?.kind === "stream") {
+    runtime.log(`stream status: ${showValue(job.state.streamStatus)}`);
+    runtime.log(`stream error: ${showValue(job.state.streamError)}`);
+  }
   runtime.log(
     `trigger: ${job.trigger ? `once=${job.trigger.once === true ? "yes" : "no"}; evals=${job.state.triggerEvalCount ?? 0}; last eval=${formatRelative(job.state.lastTriggerEvalAtMs, Date.now())}; last fire=${formatRelative(job.state.lastTriggerFireAtMs, Date.now())}` : "-"}`,
   );

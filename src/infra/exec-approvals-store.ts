@@ -4,7 +4,7 @@ import {
   AgentDeletionCommitUncertainError,
 } from "../agents/agent-lifecycle-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { readAgentDeletionJournal } from "../state/agent-deletion-journal.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -224,9 +224,10 @@ export async function withAgentExecApprovalsRemoved<T>(
   if (!operationId) {
     throw new ExecApprovalsMutationFencedError();
   }
-  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(
-    ([policyKey]) => normalizeAgentId(policyKey) === key,
-  );
+  const removedPolicyEntries = Object.entries(snapshot.file.agents ?? {}).filter(([policyKey]) => {
+    const normalizedPolicyKey = normalizeAgentIdStrict(policyKey);
+    return normalizedPolicyKey.ok && normalizedPolicyKey.value === key;
+  });
   if (removedPolicyEntries.length > 0) {
     const updated = updateExecApprovalsInTransaction({
       baseHash: snapshot.hash,

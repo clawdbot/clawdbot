@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { TerminalSessionManager } from "./session-manager.js";
-import { baseOpenRequest, makeFakePty, taskAgentOwner } from "./session-manager.test-helpers.js";
+import {
+  agentTerminalOwner,
+  baseOpenRequest,
+  makeFakePty,
+  taskAgentOwner,
+} from "./session-manager.test-helpers.js";
 
 const TERMINAL_EVENT_EXIT = "terminal.exit";
 
@@ -18,7 +23,7 @@ describe("TerminalSessionManager task lifecycle", () => {
       }),
     );
 
-    expect(manager.closeAgentSessions("task-1")).toBe(0);
+    expect(manager.closeTaskSessions("task-1")).toBe(0);
     const latePty = makeFakePty();
     resolveSpawn(latePty);
 
@@ -35,9 +40,7 @@ describe("TerminalSessionManager task lifecycle", () => {
     const fake = makeFakePty();
     const manager = new TerminalSessionManager({ emit: vi.fn(), spawn: async () => fake });
     const owner = {
-      kind: "agent",
-      agentSessionKey: "agent:ops:main",
-      agentId: "ops",
+      ...agentTerminalOwner("agent:ops:main", "ops-session", "ops"),
       taskId: "agent:research:main",
     } as const;
     const opened = await manager.open(baseOpenRequest({ owner }));
@@ -45,16 +48,16 @@ describe("TerminalSessionManager task lifecycle", () => {
       throw new Error("expected terminal session");
     }
 
-    expect(manager.writeAgent("agent:research:main", opened.sessionId, "nope", "research")).toBe(
-      false,
+    const collidingOwner = agentTerminalOwner(
+      "agent:research:main",
+      "research-session",
+      "research",
     );
-    expect(manager.resizeAgent("agent:research:main", opened.sessionId, 90, 30, "research")).toBe(
-      false,
-    );
-    expect(
-      manager.snapshotAgent("agent:research:main", opened.sessionId, "research"),
-    ).toBeUndefined();
-    expect(manager.closeAgent("agent:research:main", opened.sessionId, "research")).toBe(false);
+    expect(manager.snapshotAgent(collidingOwner, opened.sessionId)).toBeUndefined();
+    expect(manager.closeAgent(collidingOwner, opened.sessionId)).toEqual({
+      ok: false,
+      code: "session_unavailable",
+    });
     expect(fake.killed).toBe(false);
   });
 
@@ -70,11 +73,10 @@ describe("TerminalSessionManager task lifecycle", () => {
       spawn: async () => expectDefined(ptys[spawnIndex++], "terminal PTY test invariant"),
     });
     const runOwner = {
-      kind: "agent",
-      agentSessionKey: "agent:main:cron:job-1:run:run-1",
+      ...agentTerminalOwner("agent:main:cron:job-1:run:run-1", "run-session"),
       taskId: "task-1",
     } as const;
-    const persistentOwner = { kind: "agent", agentSessionKey: "agent:main:main" } as const;
+    const persistentOwner = agentTerminalOwner("agent:main:main", "main-session");
     const first = await manager.open(baseOpenRequest({ owner: runOwner }));
     const second = await manager.open(baseOpenRequest({ owner: runOwner }));
     const persistent = await manager.open(baseOpenRequest({ owner: persistentOwner }));
@@ -88,12 +90,12 @@ describe("TerminalSessionManager task lifecycle", () => {
     manager.attach("viewer-2", second.sessionId);
     emit.mockClear();
 
-    expect(manager.closeAgentSessions(runOwner.taskId)).toBe(2);
+    expect(manager.closeTaskSessions(runOwner.taskId)).toBe(2);
     expect(runPtys.every((pty) => pty.killed)).toBe(true);
     expect(persistentPty.killed).toBe(false);
     expect(connectionPty.killed).toBe(false);
-    expect(manager.listAgent(runOwner.agentSessionKey)).toEqual([]);
-    expect(manager.listAgent(persistentOwner.agentSessionKey)).toHaveLength(1);
+    expect(manager.listAgent(runOwner)).toEqual([]);
+    expect(manager.listAgent(persistentOwner)).toHaveLength(1);
     expect(manager.write("connection-owner", connection.sessionId, "still live\n")).toBe(true);
     expect(emit).toHaveBeenCalledWith("viewer-1", TERMINAL_EVENT_EXIT, {
       sessionId: first.sessionId,
@@ -110,5 +112,58 @@ describe("TerminalSessionManager task lifecycle", () => {
     manager.handleDisconnect("viewer-1");
     manager.handleDisconnect("viewer-2");
     expect(manager.size).toBe(2);
+  });
+
+  it("drains one agent incarnation while admitting its same-key replacement", async () => {
+    const oldPty = makeFakePty();
+    const pendingPty = makeFakePty();
+    let resolvePending!: (pty: ReturnType<typeof makeFakePty>) => void;
+    const pendingBackend = new Promise<ReturnType<typeof makeFakePty>>((resolve) => {
+      resolvePending = resolve;
+    });
+    const replacementPtys = [makeFakePty(), makeFakePty()];
+    let spawnIndex = 0;
+    const manager = new TerminalSessionManager({
+      emit: vi.fn(),
+      spawn: async () => replacementPtys[spawnIndex++] ?? makeFakePty(),
+    });
+    const oldOwner = agentTerminalOwner("agent:main:archive-target", "old-session");
+    const replacementOwner = agentTerminalOwner("agent:main:archive-target", "replacement-session");
+    const opened = await manager.open(
+      baseOpenRequest({ owner: oldOwner, createBackend: async () => oldPty }),
+    );
+    if (!opened.ok) {
+      throw new Error("expected terminal session");
+    }
+    const pending = manager.open(
+      baseOpenRequest({ owner: oldOwner, createBackend: () => pendingBackend }),
+    );
+
+    const drain = manager.beginAgentSessionDrain(oldOwner);
+    expect(oldPty.killed).toBe(true);
+    expect(drain.hasWork()).toBe(true);
+    resolvePending(pendingPty);
+    await expect(pending).resolves.toMatchObject({ ok: false, code: "closed" });
+    expect(pendingPty.killed).toBe(true);
+    expect(drain.hasWork()).toBe(true);
+    oldPty.emitExit(0);
+    expect(drain.hasWork()).toBe(true);
+    pendingPty.emitExit(0);
+    await expect(drain.drained).resolves.toBeUndefined();
+    expect(drain.hasWork()).toBe(false);
+    await expect(manager.open(baseOpenRequest({ owner: oldOwner }))).resolves.toMatchObject({
+      ok: false,
+      code: "closed",
+    });
+    await expect(manager.open(baseOpenRequest({ owner: replacementOwner }))).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+
+    drain.release();
+    await expect(manager.open(baseOpenRequest({ owner: oldOwner }))).resolves.toMatchObject({
+      ok: true,
+    });
   });
 });

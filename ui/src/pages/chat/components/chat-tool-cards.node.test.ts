@@ -485,6 +485,21 @@ describe("tool-card extraction", () => {
   it("does not create previews for non-assistant canvas or generic outputs", () => {
     const cases = [
       {
+        name: "node-panel target",
+        toolName: "show_widget",
+        content: JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_node_panel",
+            url: "/__openclaw__/canvas/documents/cv_node_panel/index.html",
+          },
+          presentation: {
+            target: "node_panel",
+            title: "Device panel demo",
+          },
+        }),
+      },
+      {
         name: "tool-card target",
         toolName: "canvas_render",
         content: JSON.stringify({

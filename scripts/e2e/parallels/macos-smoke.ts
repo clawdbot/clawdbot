@@ -3,11 +3,9 @@
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
 import { posixAgentWorkspaceScript } from "./agent-workspace.ts";
 import {
   die,
-  ensureValue,
   currentRunningSnapshotInfo,
   extractLastOpenClawVersionFromLog,
   makeTempDir,
@@ -16,12 +14,9 @@ import {
   packageVersionFromTgz,
   parseMacosDsclUserHomeLine,
   packOpenClaw,
-  parseMode,
-  parseProvider,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
-  parseTcpPort,
   readGitCommitEnv,
   readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
@@ -52,26 +47,11 @@ import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runne
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
+import { parseSmokeCliArgs, type SmokeCliOptions } from "./smoke-common.ts";
 
-interface MacosOptions {
-  vmName: string;
+interface MacosOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
-  snapshotHint: string;
-  mode: Mode;
-  provider: Provider;
-  apiKeyEnv?: string;
-  modelId?: string;
-  installUrl: string;
-  hostPort: number;
-  hostPortExplicit: boolean;
-  hostIp?: string;
-  latestVersion?: string;
-  installVersion?: string;
-  npmRegistry?: string;
-  targetPackageSpec?: string;
   skipLatestRefCheck: boolean;
-  keepServer: boolean;
-  json: boolean;
   discordTokenEnv?: string;
   discordGuildId?: string;
   discordChannelId?: string;
@@ -175,98 +155,22 @@ Environment:
 }
 
 export function parseArgs(argv: string[]): MacosOptions {
-  const args = stripLeadingPackageManagerSeparator(argv);
   const options = defaultOptions();
-  parseArgv: for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    switch (arg) {
-      case "--":
-        break parseArgv;
-      case "--vm":
-        options.vmName = ensureValue(args, i, arg);
-        options.vmNameExplicit = true;
-        i++;
-        break;
-      case "--snapshot-hint":
-        options.snapshotHint = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--mode":
-        options.mode = parseMode(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(args, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-url":
-        options.installUrl = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--host-port":
-        options.hostPort = parseTcpPort(ensureValue(args, i, arg), arg);
-        options.hostPortExplicit = true;
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--latest-version":
-        options.latestVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--install-version":
-        options.installVersion = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--npm-registry":
-        options.npmRegistry = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--skip-latest-ref-check":
-        options.skipLatestRefCheck = true;
-        break;
-      case "--keep-server":
-        options.keepServer = true;
-        break;
-      case "--discord-token-env":
-        options.discordTokenEnv = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--discord-guild-id":
-        options.discordGuildId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--discord-channel-id":
-        options.discordChannelId = ensureValue(args, i, arg);
-        i++;
-        break;
-      case "--json":
-        options.json = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
-        die(`unknown arg: ${arg}`);
-    }
-  }
-  return options;
+  return parseSmokeCliArgs(argv, options, {
+    flagHandlers: {
+      "--skip-latest-ref-check": (parsed) => (parsed.skipLatestRefCheck = true),
+    },
+    usage,
+    valueHandlers: {
+      "--discord-channel-id": (parsed, value) => (parsed.discordChannelId = value),
+      "--discord-guild-id": (parsed, value) => (parsed.discordGuildId = value),
+      "--discord-token-env": (parsed, value) => (parsed.discordTokenEnv = value),
+      "--vm": (parsed, value) => {
+        parsed.vmName = value;
+        parsed.vmNameExplicit = true;
+      },
+    },
+  });
 }
 
 class MacosSmoke {
@@ -291,6 +195,7 @@ class MacosSmoke {
   private modelTimeoutSeconds: number;
   private updateDevTimeoutSeconds: number;
   private devTargetCommit: string | undefined;
+  private options: MacosOptions;
 
   private status = {
     freshAgent: "skip",
@@ -309,7 +214,8 @@ class MacosSmoke {
     upgradeVersion: "skip",
   };
 
-  constructor(private options: MacosOptions) {
+  constructor(options: MacosOptions) {
+    this.options = options;
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
@@ -348,12 +254,6 @@ class MacosSmoke {
         : resolveSnapshot(this.options.vmName, this.options.snapshotHint);
       this.latestVersion = resolveLatestVersion(this.options.latestVersion);
       this.installVersion = this.options.installVersion || this.latestVersion;
-      this.hostIp = resolveHostIp(this.options.hostIp);
-      this.hostPort = await resolveHostPort(
-        this.options.hostPort,
-        this.options.hostPortExplicit,
-        defaultOptions().hostPort,
-      );
 
       say(`VM: ${this.options.vmName}`);
       say(`Snapshot hint: ${this.options.snapshotHint}`);
@@ -367,7 +267,13 @@ class MacosSmoke {
       );
       say(`Run logs: ${this.runDir}`);
 
-      if (await this.needsHostTgz()) {
+      if (this.needsHostTgz()) {
+        this.hostIp = resolveHostIp(this.options.hostIp);
+        this.hostPort = await resolveHostPort(
+          this.options.hostPort,
+          this.options.hostPortExplicit,
+          defaultOptions().hostPort,
+        );
         this.artifact = await packOpenClaw({
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,
@@ -478,11 +384,10 @@ class MacosSmoke {
     return Boolean(spec && !/^(https?:|file:|\/|\.\/|\.\.\/|.*\.tgz$)/.test(spec));
   }
 
-  private async needsHostTgz(): Promise<boolean> {
-    if (!this.options.targetPackageSpec) {
-      return true;
-    }
-    return !this.targetInstallsDirectly();
+  private needsHostTgz(): boolean {
+    return this.options.targetPackageSpec
+      ? !this.targetInstallsDirectly()
+      : this.options.mode !== "upgrade";
   }
 
   private artifactLabel(): string {
@@ -747,7 +652,7 @@ exec node "$entry" ${argv}`,
     for (let attempt = 1; attempt <= 2; attempt++) {
       const result = run(
         "prlctl",
-        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id, "--skip-resume"],
+        ["snapshot-switch", this.options.vmName, "--id", this.snapshot.id],
         { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(360_000) },
       );
       this.log(result.stdout);

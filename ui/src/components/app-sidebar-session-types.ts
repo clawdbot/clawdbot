@@ -1,14 +1,19 @@
+import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { SessionVisibility } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
-import type { SessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
+  SessionObserverDigest,
+  SessionCreatedActor,
+  SessionOwner,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
   normalizeCatalogProjectGrouping,
   type CatalogProjectGrouping,
@@ -59,6 +64,9 @@ export type SidebarRecentSession = {
   displayName?: string;
   incognito?: boolean;
   createdActor?: SessionCreatedActor;
+  owner?: SessionOwner;
+  participants?: SessionCreatedActor[];
+  participantCount?: number;
   archivedBy?: SessionCreatedActor;
   label: string;
   /**
@@ -69,6 +77,7 @@ export type SidebarRecentSession = {
   userLabel?: string;
   /** Compact repo/branch/node line for work sessions. */
   subtitle?: string;
+  workContext?: SessionWorkContext;
   href: string;
   active: boolean;
   visuallyActive: boolean;
@@ -84,6 +93,7 @@ export type SidebarRecentSession = {
   draftOwnedBySelf?: boolean;
   category?: string;
   icon?: string;
+  channelAvatarUrl?: string;
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
@@ -91,13 +101,14 @@ export type SidebarRecentSession = {
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
   worktreeId?: string;
+  execNode?: string;
   placementState?: SessionPlacementState;
   diskSpaceStatus?: SessionPlacementDiskSpace["status"];
   workspaceConflictCount?: number;
   cloudWorkerStopAction: CloudWorkerStopAction | null;
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
-  outboxCount?: number;
+  outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
   lastMessagePreview?: string;
@@ -111,6 +122,7 @@ export type SidebarRecentSession = {
   spawnedBy?: string;
   forkSource?: { sessionKey: string; sessionId: string; entryId?: string };
   status?: SessionRunStatus;
+  createdAt?: number;
   startedAt?: number;
   updatedAt?: number | null;
   endedAt?: number;
@@ -125,10 +137,26 @@ export type SidebarRecentSession = {
   failedChildCount: number;
 };
 
+export type SidebarSessionHovercardRow = Pick<
+  SidebarRecentSession,
+  | "createdActor"
+  | "createdAt"
+  | "channelAvatarUrl"
+  | "endedAt"
+  | "label"
+  | "lastMessagePreview"
+  | "participantCount"
+  | "participants"
+  | "status"
+  | "startedAt"
+  | "updatedAt"
+  | "workContext"
+>;
+
 export const enum RowVisibilityReason {
-  Any,
-  ActiveRun,
-  Attention,
+  Any = 0,
+  ActiveRun = 1,
+  Attention = 2,
 }
 
 export function rowDemandsVisibility(
@@ -160,6 +188,10 @@ export type SidebarSessionGroupMenuState = {
 
 export type SidebarSessionSortMode = "created" | "updated" | "people";
 export type SidebarSessionStatusFilter = "active" | "archived" | "all";
+export type SidebarSessionOwnerFilter = {
+  ownerId: string | null;
+  involvingMe: boolean;
+};
 export type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 
 export function resolveSidebarSessionsScrollState(
@@ -221,6 +253,7 @@ export function sidebarSessionStateId(key: string): string {
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_SESSION_CATALOG_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:catalog-grouping";
+const SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY = "openclaw:sidebar:sessions:show-preview";
 const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY = "openclaw:sidebar:sessions:show-system";
 const SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY = "openclaw:sidebar:sessions:status-filter";
@@ -228,25 +261,10 @@ const SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY = "openclaw:sidebar:sessions:sort-mo
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 const SIDEBAR_HIDDEN_SESSION_CATALOGS_STORAGE_KEY = "openclaw:sidebar:sessions:hidden-catalogs";
+const SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX =
+  "openclaw.control.sidebarSessionOwnerFilter.v1:";
 export const SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT =
   "openclaw:sidebar-hidden-catalogs-changed";
-
-export function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
-  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
-  let optionalSlots = Math.max(0, limit - requiredCount);
-  // Active and pinned sessions remain reachable without changing their
-  // relative order, even when their sort position falls outside the page.
-  return rows.filter((row) => {
-    if (row.active || row.pinned) {
-      return true;
-    }
-    if (optionalSlots === 0) {
-      return false;
-    }
-    optionalSlots -= 1;
-    return true;
-  });
-}
 
 export function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
@@ -264,6 +282,10 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
 
+export function loadStoredSidebarSessionsShowPreview(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY) !== "false";
+}
+
 export function loadStoredSidebarSessionsShowSystem(): boolean {
   return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY) === "true";
 }
@@ -271,6 +293,29 @@ export function loadStoredSidebarSessionsShowSystem(): boolean {
 export function loadStoredSidebarSessionStatusFilter(): SidebarSessionStatusFilter {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY);
   return stored === "archived" || stored === "all" ? stored : "active";
+}
+
+function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: string): string {
+  return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
+}
+
+export function loadStoredSidebarSessionOwnerFilter(
+  gatewayUrl: string,
+  selfUserId: string,
+): SidebarSessionOwnerFilter {
+  try {
+    const stored = getSafeLocalStorage()?.getItem(
+      sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
+    );
+    const ownerId = stored?.startsWith("owner:") ? stored.slice("owner:".length).trim() : "";
+    return {
+      ownerId: stored === "involving-me" ? null : ownerId || null,
+      involvingMe: stored === "involving-me",
+    };
+  } catch {
+    // Privacy mode or a disabled store should not break sidebar rendering.
+    return { ownerId: null, involvingMe: false };
+  }
 }
 
 export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
@@ -284,8 +329,8 @@ export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
     if (raw == null) {
-      // First run: the Coding zone starts collapsed so dev sessions stay muted
-      // until the user opts in; expanding persists an empty entry for "work".
+      // First run: Coding stays muted while Online preserves its expanded
+      // default until the user explicitly collapses it.
       return new Set(["work"]);
     }
     const parsed: unknown = JSON.parse(raw);
@@ -326,12 +371,39 @@ export function storeSidebarSessionsShowCron(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
 }
 
+export function storeSidebarSessionsShowPreview(show: boolean) {
+  getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_PREVIEW_STORAGE_KEY, String(show));
+}
+
 export function storeSidebarSessionsShowSystem(show: boolean) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_SYSTEM_STORAGE_KEY, String(show));
 }
 
 export function storeSidebarSessionStatusFilter(value: SidebarSessionStatusFilter) {
   getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_STATUS_FILTER_STORAGE_KEY, value);
+}
+
+export function storeSidebarSessionOwnerFilter(
+  gatewayUrl: string,
+  selfUserId: string,
+  filter: SidebarSessionOwnerFilter,
+): void {
+  try {
+    const storage = getSafeLocalStorage();
+    const key = sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId);
+    const value = filter.involvingMe
+      ? "involving-me"
+      : filter.ownerId
+        ? `owner:${filter.ownerId}`
+        : null;
+    if (value === null) {
+      storage?.removeItem(key);
+    } else {
+      storage?.setItem(key, value);
+    }
+  } catch {
+    // Keep the in-memory filter when persistence is unavailable.
+  }
 }
 
 /** People collapses to Created only where the gateway has authoritatively
@@ -390,10 +462,10 @@ export function setStoredSessionCatalogHidden(catalogId: string, hidden: boolean
 export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
-  { mode: "people", labelKey: "sessionsView.people" },
+  { mode: "people", labelKey: "sessionsView.owners" },
 ] as const satisfies ReadonlyArray<{
   mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.people";
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
 }>;
 
 export const SIDEBAR_SESSION_STATUS_OPTIONS = [

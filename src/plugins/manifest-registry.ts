@@ -34,6 +34,7 @@ import type {
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginFormat,
+  PluginManifestBackupResource,
   PluginManifestDoctorContract,
 } from "./manifest-types.js";
 import {
@@ -74,8 +75,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
-import { satisfiesPluginApiRange } from "./package-compat.js";
-import { resolvePackagePluginApiRange } from "./package-compat.js";
+import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -218,6 +218,7 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
 
 export type PluginManifestRecord = {
   id: string;
+  backupResources?: PluginManifestBackupResource[];
   name?: string;
   description?: string;
   catalog?: PluginManifestCatalog;
@@ -248,6 +249,7 @@ export type PluginManifestRecord = {
   syntheticAuthRefs?: string[];
   nonSecretAuthMarkers?: string[];
   commandAliases?: PluginManifestCommandAlias[];
+  cliCommands?: PluginManifest["cliCommands"];
   providerUsageAuthEnvVars?: Record<string, string[]>;
   providerAuthAliases?: Record<string, string>;
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
@@ -562,6 +564,7 @@ function buildRecord(params: {
   );
   return {
     id: pluginId,
+    backupResources: params.manifest.backupResources,
     doctorContract: params.manifest.doctorContract,
     sessionRouteStateOwners: params.manifest.sessionRouteStateOwners,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
@@ -605,6 +608,7 @@ function buildRecord(params: {
     syntheticAuthRefs: params.manifest.syntheticAuthRefs ?? [],
     nonSecretAuthMarkers: params.manifest.nonSecretAuthMarkers ?? [],
     commandAliases: params.manifest.commandAliases,
+    cliCommands: params.manifest.cliCommands,
     providerUsageAuthEnvVars: params.manifest.providerUsageAuthEnvVars,
     providerAuthAliases: params.manifest.providerAuthAliases,
     providerAuthChoices: params.manifest.providerAuthChoices,
@@ -1112,6 +1116,9 @@ export function loadPluginManifestRegistryCore(
         pluginId: candidate.diagnosticIdHint ?? candidate.idHint,
         message: manifestRes.error,
         source: manifestRes.manifestPath,
+        ...("diagnosticCode" in manifestRes && manifestRes.diagnosticCode
+          ? { code: manifestRes.diagnosticCode }
+          : {}),
       });
       continue;
     }

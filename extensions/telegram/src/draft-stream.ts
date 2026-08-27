@@ -66,13 +66,6 @@ export type TelegramDraftStream = {
   remainingFinalContent?: () => TelegramDraftMessageSnapshot | undefined;
   /** True while a pending or visible draft owns a first/batched reply target. */
   hasConsumedReplyTarget?: () => boolean;
-  /**
-   * Collapse the preview in place: edit the existing window message so its
-   * content becomes `preview`, then stop without deleting. Used at end-of-turn
-   * so the streaming window becomes the summary bar (no delete + repost, which
-   * scroll-jumps the client). Returns the message id if the edit landed.
-   */
-  finalizeToPreview: (preview: TelegramDraftPreview) => Promise<number | undefined>;
   /** Reset internal state so the next update creates a new message instead of editing. */
   forceNewMessage: () => void;
   /**
@@ -918,61 +911,6 @@ export function createTelegramDraftStream(params: {
     return undefined;
   };
 
-  const finalizeToPreview = async (preview: TelegramDraftPreview): Promise<number | undefined> => {
-    const finalizeGeneration = generation;
-    const text = preview.text.trimEnd();
-    if (!text) {
-      return undefined;
-    }
-    // Settle pending updates so we edit the real, current window message.
-    streamState.final = true;
-    await flush();
-    if (generation !== finalizeGeneration) {
-      return undefined;
-    }
-    // A throttled preview can still be pending (the last tool-progress line was
-    // coalesced and never sent), leaving no message id even though the window
-    // "rendered". Materialize it as a final flush would, so the window message
-    // exists and can be edited in place — otherwise on-off collapses missed it
-    // and fell back to a delete + repost.
-    if (typeof streamMessageId !== "number" && !streamState.stopped) {
-      const pending = lastRequestedText.trimEnd();
-      if (pending && pending !== lastDeliveredText.trimEnd()) {
-        const materialized = await sendOrEditStreamMessage(pending);
-        if (generation !== finalizeGeneration) {
-          return undefined;
-        }
-        if (materialized) {
-          loop.resetPending();
-        }
-      }
-    }
-    // Genuinely no live window message (rv mode never rendered): caller posts a
-    // fresh durable bar instead — but it must NOT delete anything.
-    if (typeof streamMessageId !== "number") {
-      return undefined;
-    }
-    // Collapse takes ownership of the live window. A stale throttled edit must
-    // not replay after either this edit or the caller's durable fallback.
-    loop.resetPending();
-    // Replace the whole message with the bar line.
-    finalPagePlan = undefined;
-    lastSentPreviewKey = "";
-    lastRequestedText = text;
-    lastRequestedPreview = { ...preview, text };
-    // The edit can fail to apply (flood-wait 429 or a terminal error both return
-    // false). Report that as "not collapsed in place" so the caller falls back to
-    // posting a durable bar instead of assuming the tall window became the bar.
-    const edited = await sendOrEditStreamMessage(text);
-    if (generation !== finalizeGeneration) {
-      return undefined;
-    }
-    streamState.stopped = true;
-    observeCurrentProviderMessage();
-    await drainProviderMessageObservations();
-    return edited ? streamMessageId : undefined;
-  };
-
   params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
@@ -993,7 +931,6 @@ export function createTelegramDraftStream(params: {
     },
     remainingFinalContent,
     hasConsumedReplyTarget: () => replyTargetState.kind !== "available",
-    finalizeToPreview,
     forceNewMessage: () => resetStreamToNewMessage(false, true),
     rotateToNewMessageDeferringDelete,
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",

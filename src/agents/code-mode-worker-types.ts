@@ -4,7 +4,6 @@ import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 type CodeModeBridgeMethod =
   | "search"
   | "describe"
-  | "call"
   | "callValue"
   | "nodes"
   | "yield"
@@ -13,6 +12,7 @@ type CodeModeBridgeMethod =
   | "agentWait"
   | "skillsList"
   | "skillsRead"
+  | "sleep"
   | "swarmNote";
 
 export type CodeModeConfig = {
@@ -82,6 +82,7 @@ export type CodeModeWorkerThreadResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      canceledRequestIds: string[];
       settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }

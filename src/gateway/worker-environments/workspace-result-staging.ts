@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { runBestEffortCleanup } from "../../infra/non-fatal-cleanup.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandBuffered, runCommandWithTimeout } from "../../process/exec.js";
 import type { WorkerWorkspaceReconcileRequest } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 import {
   activeWorkspaceHashContext,
   withWorkspaceHashContext,
@@ -36,12 +39,22 @@ const WORKER_RESULT_CLEANUP_REF_PREFIX = "refs/openclaw/worker-result-cleanup";
 const WORKER_RESULT_CLAIM_ID_PATTERN = /^[A-Za-z0-9-]+$/u;
 const STAGED_RESULT_MESSAGE = "OpenClaw worker workspace result";
 const STAGED_RESULT_METADATA_LIMIT = 128 * 1024 * 1024 + 4_096;
+const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 // Git documents the platform null device as the per-command way to disable
 // hooks. An unowned path under a shared temp dir could be populated by another user.
 const DISABLED_GIT_HOOKS_PATH = os.devNull;
 
 function gitCommand(cwd: string, args: string[]): string[] {
-  return ["git", "-c", `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`, "-C", cwd, ...args];
+  return [
+    "git",
+    "-c",
+    `core.hooksPath=${DISABLED_GIT_HOOKS_PATH}`,
+    "-c",
+    "core.fsmonitor=false",
+    "-C",
+    cwd,
+    ...args,
+  ];
 }
 
 export function workerWorkspaceTransferPaths(
@@ -529,7 +542,11 @@ async function applyStagedWorkerWorkspaceResultWithMemo(
     });
     return { ...applied, changed: staged.changed };
   } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true });
+    await runBestEffortCleanup({
+      cleanup: () => fs.rm(stagingRoot, { recursive: true, force: true }),
+      onError: (error) =>
+        workspaceLog.warn(`worker workspace staging cleanup failed: ${boundedWorkerError(error)}`),
+    });
   }
 }
 
@@ -655,7 +672,7 @@ export async function restoreStagedWorkerWorkspaceResultFromCleanup(params: {
 
 export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
   root: string;
-  retainedRefs?: ReadonlySet<string>;
+  retainedRefs?: () => ReadonlySet<string>;
 }): Promise<void> {
   const root = await fs.realpath(params.root);
   const output = await requireGit(root, [
@@ -663,9 +680,13 @@ export async function deleteWorkerWorkspaceResultCleanupRefs(params: {
     "--format=%(refname)",
     `${WORKER_RESULT_CLEANUP_REF_PREFIX}/`,
   ]);
-  for (const cleanupRef of output.split("\n").filter(Boolean)) {
+  const cleanupRefs = output.split("\n").filter(Boolean);
+  // A post-start turn can stage a result during the Git scan. Read its fence
+  // after inventory; later claims cannot appear in these immutable claim refs.
+  const retainedRefs = cleanupRefs.length > 0 ? params.retainedRefs?.() : undefined;
+  for (const cleanupRef of cleanupRefs) {
     requireWorkerResultStorageRef(cleanupRef);
-    if (!params.retainedRefs?.has(cleanupRef)) {
+    if (!retainedRefs?.has(cleanupRef)) {
       await requireGit(root, ["update-ref", "-d", cleanupRef]);
     }
   }

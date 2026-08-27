@@ -26,6 +26,7 @@ const directCronCompletionRetention = {
 
 const {
   appendAssistantMessageToSessionTranscriptMock,
+  commitBackgroundResultToSessionMock,
   countActiveDescendantRunsMock,
   deliverOutboundPayloadsMock,
   ensureOutboundSessionEntryMock,
@@ -38,6 +39,10 @@ const {
     ok: true,
     sessionFile: "session.jsonl",
     messageId: "mirror-message",
+  }),
+  commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
+    ok: true,
+    messageId: "current-completion-message",
   }),
   countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
   deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
@@ -129,6 +134,10 @@ vi.mock("../../infra/outbound/outbound-session.js", () => ({
 
 vi.mock("../../config/sessions/transcript.runtime.js", () => ({
   appendAssistantMessageToSessionTranscript: appendAssistantMessageToSessionTranscriptMock,
+}));
+
+vi.mock("../../sessions/background-session-result.js", () => ({
+  commitBackgroundResultToSession: commitBackgroundResultToSessionMock,
 }));
 
 vi.mock("./session.js", () => ({
@@ -247,11 +256,15 @@ function makeBaseParams(overrides: {
       id: "test-job",
       name: "Test Job",
       sessionTarget: overrides.sessionTarget ?? "isolated",
+      sessionKey:
+        overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main",
+    sourceSessionKey:
+      overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
     runSessionKey: overrides.runSessionKey ?? "agent:main",
     sessionId: "test-session-id",
     lifecycleRevision: "test-lifecycle-revision",
@@ -349,6 +362,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         storePath: "/tmp/sessions.json",
       },
       messageId: "mirror-message",
+    });
+    commitBackgroundResultToSessionMock.mockResolvedValue({
+      ok: true,
+      messageId: "current-completion-message",
     });
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",
@@ -888,6 +905,50 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:telegram:direct:123456:thread:42",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:42",
+      },
+    );
+  });
+
+  it("defers same-source message-tool awareness until requested", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:webchat:direct:owner",
+      baseSessionKey: "agent:main:webchat:direct:owner",
+      to: "webchat:owner",
+    });
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 1_000 });
+
+    const queueSourceAwareness = await queueCronMessageToolDeliveryAwareness({
+      ...params,
+      deferredTargetSessionKey: params.sourceSessionKey,
+      resolvedDelivery: makeResolvedDelivery({ channel: "webchat", to: "owner" }),
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            target: {
+              tool: "message",
+              provider: "webchat",
+              to: "owner",
+              text: "Current-session completion.",
+            },
+            verifiedTarget: true,
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+
+    await queueSourceAwareness?.();
+
+    expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+      "A scheduled automation delivered this message to this channel:\nCurrent-session completion.",
+      {
+        sessionKey: "agent:main:webchat:direct:owner",
+        contextKey: "cron-direct-delivery:v1:cron:test-job:1000:webchat::owner:",
       },
     );
   });
@@ -1908,11 +1969,16 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
+    const deliveryError = expect.stringContaining(
+      "scheduled at 2026-03-18T13:59:59.999Z, started 180m late",
+    );
     expectResultFields(state.result, {
       status: "ok",
       delivered: false,
       deliveryAttempted: true,
+      deliveryError,
     });
+    expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -2509,6 +2575,44 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("commits the outbound route when adopting a concurrently completed receipt (#112710)", async () => {
+    // The local send fails because another process already owns the fenced
+    // recipient intent, but that intent is reported "completed" — so this
+    // process adopts the receipt. The resolved route must still be persisted,
+    // because the concurrent completion IS a delivery success and later
+    // conversation sends to this target need the route. The local send never
+    // fired onDeliveryResult (it failed), so the early-commit callback did
+    // not run — the adoption branch must commit explicitly.
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
+      new Error("Stable delivery intent is already queued"),
+    );
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("completed");
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ synthesizedText: "Concurrent completed cron update." }),
+    );
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    // The route MUST be persisted exactly once when a concurrently completed
+    // receipt is adopted — the adoption branch commits the resolved route
+    // before returning, since the local failed send never invoked
+    // onDeliveryResult.
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      channel: "telegram",
+      route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
+    });
+  });
+
   it("adopts completion when a competing pending owner disappears during lookup", async () => {
     vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
       new Error("Stable delivery intent is already queued"),
@@ -2846,6 +2950,31 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("does not persist the outbound route when direct cron delivery fails (#112710)", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const deliveryError = new Error("open_id cross app");
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(deliveryError);
+
+    const params = makeBaseParams({
+      synthesizedText: "This delivery will fail.",
+      runStartedAt: 1_000,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error: deliveryError.message,
+      deliveryAttempted: true,
+    });
+    // The route must NOT be persisted when delivery fails — a failed send
+    // must not mint a conversation identity or rebind the session route.
+    expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
+  });
+
   it("does not claim no delivery when direct cron delivery partially fails", async () => {
     mockResolvedOutboundRoute({
       sessionKey: "agent:main:telegram:direct:123456",
@@ -2891,6 +3020,118 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456::failure",
       },
     );
+    // The first payload ("tg-first") already reached the recipient before the
+    // second failed, so the route MUST be persisted even though the batch
+    // threw — later sends to this target need the route to continue the
+    // conversation. Matches the partial-failure safety net in gateway send.ts.
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      channel: "telegram",
+      route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
+    });
+  });
+
+  it("persists the outbound route when a best-effort partial batch reaches the recipient (#112710)", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const deliveryError = new Error("second payload failed");
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error: deliveryError,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      return [{ channel: "telegram", messageId: "tg-first" }] as never;
+    });
+
+    const params = makeBaseParams({
+      synthesizedText: undefined,
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
+    params.outputText = "Second payload.";
+    params.summary = "Second payload.";
+    params.deliveryBestEffort = true;
+    await dispatchCronDelivery(params);
+
+    // Best-effort swallows the partial failure, so the batch does not throw
+    // and no full receipt is minted. But the first payload ("tg-first") already
+    // reached the recipient, so the route MUST still be persisted — later
+    // sends to this target need it to continue the conversation. Matches the
+    // partial-failure safety net in gateway server-methods/send.ts.
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      channel: "telegram",
+      route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
+    });
+  });
+
+  it("commits the route from the first platform result before a later sub-send failure throws (#112710)", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:telegram:direct:123456",
+      baseSessionKey: "agent:main:telegram:direct:123456",
+      to: "telegram:123456",
+    });
+    const deliveryError = new Error("second payload failed");
+    // Tracks whether the route was committed BEFORE the durable batch mock
+    // returned (i.e. via the onDeliveryResult early-commit callback), which is
+    // the ordering the post-success-only commit could not guarantee.
+    let committedBeforeBatchReturned = false;
+    vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
+      // The durable sender fires onDeliveryResult after the first identified
+      // platform result, before later fallible work in the batch. Simulate a
+      // first successful sub-send reaching the recipient.
+      await deliveryParams.onDeliveryResult?.({
+        channel: "telegram",
+        messageId: "tg-first",
+      });
+      // The early commit must have persisted the route by this point — before
+      // the second payload fails and the batch throws.
+      committedBeforeBatchReturned = vi.mocked(ensureOutboundSessionEntry).mock.calls.length > 0;
+      // Second payload fails after the first already reached the recipient.
+      deliveryParams.onPayloadDeliveryOutcome?.({
+        index: 1,
+        status: "failed",
+        error: deliveryError,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      return [{ channel: "telegram", messageId: "tg-first" }] as never;
+    });
+
+    const params = makeBaseParams({
+      synthesizedText: undefined,
+      runStartedAt: 1_000,
+    });
+    params.deliveryPayloads = [{ text: "First payload." }, { text: "Second payload." }];
+    params.outputText = "Second payload.";
+    params.summary = "Second payload.";
+    const state = await dispatchCronDelivery(params);
+
+    expectResultFields(state.result, {
+      status: "error",
+      error: deliveryError.message,
+      deliveryAttempted: true,
+    });
+    // The route MUST be committed from the first platform result (early), not
+    // only after the batch returns/throws — a later sub-send failure must not
+    // leave an already-reached recipient without its route. Matches the
+    // onDeliveryResult early commit in gateway server-methods/send.ts.
+    expect(committedBeforeBatchReturned).toBe(true);
+    // Once-only: the throw-path safety net must not double-commit.
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
+    expect(ensureOutboundSessionEntry).toHaveBeenCalledWith({
+      cfg: expect.anything(),
+      channel: "telegram",
+      route: expect.objectContaining({ to: "telegram:123456", from: "telegram:123456" }),
+    });
   });
 
   it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
@@ -3065,6 +3306,134 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
       payloads: [{ text: "hello from cron" }],
     });
+  });
+
+  it("commits a current-target completion without requiring an outbound adapter", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable WebChat completion",
+      sessionTarget: "current",
+      runStartedAt: 1_000,
+    });
+    params.resolvedDelivery = {
+      ok: false,
+      channel: "webchat",
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error("webchat has no outbound adapter"),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:webchat:direct:owner",
+      text: "durable WebChat completion",
+      idempotencyKey: "cron-current-completion:cron:test-job:1000",
+      provenance: { kind: "cron", jobId: "test-job", runId: "cron:test-job:1000" },
+      config: params.cfgWithAgentDefaults,
+      signal: undefined,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("requires the current-session commit in addition to one external delivery", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "durable external completion",
+      sessionTarget: "current",
+      runStartedAt: 2_000,
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("commits a safe media projection and still sends the current-target payload once", async () => {
+    const params = makeBaseParams({ sessionTarget: "current", runStartedAt: 2_500 });
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ mediaUrl: "https://example.com/report.png?token=redacted" }];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "report.png" }),
+    );
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
+    });
+  });
+
+  it("does not mark or send a current-target delivery when its session commit fails", async () => {
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    commitBackgroundResultToSessionMock.mockResolvedValueOnce({
+      ok: false,
+      reason: "source session was archived",
+    });
+    const params = makeBaseParams({
+      synthesizedText: "must not escape before commit",
+      sessionTarget: "current",
+    });
+    params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({
+      delivered: false,
+      deliveryAttempted: true,
+      deliveryError: "source session was archived",
+    });
+    expect(queueSourceAwareness).toHaveBeenCalledOnce();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("keeps same-source awareness unavailable while the durable commit is in flight", async () => {
+    const queueSourceAwareness = vi.fn().mockResolvedValue(undefined);
+    commitBackgroundResultToSessionMock.mockImplementationOnce(async () => {
+      expect(queueSourceAwareness).not.toHaveBeenCalled();
+      return { ok: true, messageId: "current-completion-message" };
+    });
+    const params = makeBaseParams({
+      synthesizedText: "message-tool completion",
+      sessionTarget: "current",
+    });
+    params.sourceDeliveryOutcome = {
+      visibleDeliveries: [
+        {
+          via: "message_tool",
+          target: {
+            tool: "message",
+            provider: "webchat",
+            to: "owner",
+            text: "message-tool completion",
+          },
+          verifiedTarget: true,
+        },
+      ],
+      verifiedMessageToolDelivery: true,
+      satisfiesSourceDelivery: true,
+      unverifiedMessageToolDelivery: false,
+    };
+    params.queueSourceSessionMessageToolAwareness = queueSourceAwareness;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+    expect(queueSourceAwareness).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("keeps unresolved message-tool delivery out of delivered status", async () => {

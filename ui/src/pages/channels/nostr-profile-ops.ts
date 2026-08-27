@@ -1,6 +1,7 @@
 // Nostr profile HTTP operations for the channels page: gateway REST calls for
 // publishing and importing the relay profile, plus validation-error parsing.
 import type { NostrProfile } from "../../api/types.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
 
@@ -53,7 +54,7 @@ export function parseValidationErrors(details: unknown): Record<string, string> 
     const field = rawField.trim();
     const message = rest.join(":").trim();
     if (field && message) {
-      errors[field] = message;
+      errors[field] = formatUiExternalText(message);
     }
   }
   return errors;

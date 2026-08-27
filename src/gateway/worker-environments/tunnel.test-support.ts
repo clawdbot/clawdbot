@@ -319,14 +319,6 @@ export function localWorkspaceRunner(
         return await runCommandWithTimeout(localArgv, options);
       }
       if (argv[0] === "ssh") {
-        if (
-          typeof options.input === "string" &&
-          options.input.includes("unsafe worker tunnel directory")
-        ) {
-          const result = success();
-          onCommandCompleted?.(argv, result);
-          return result;
-        }
         const remoteCommand = argv.at(-1);
         if (!remoteCommand) {
           throw new Error("missing test SSH remote command");
@@ -360,8 +352,7 @@ export async function waitForStarts(starts: unknown[], count: number) {
   await waitForFast(() => expect(starts).toHaveLength(count));
 }
 
-type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner" | "starts">;
-type TunnelManagerOptions = NonNullable<Parameters<typeof createWorkerTunnelManager>[0]>;
+type TunnelTestFake = Pick<ReturnType<typeof fakeRunner>, "runner">;
 type TunnelManager = ReturnType<typeof createWorkerTunnelManager>;
 
 export function startTestTunnel(
@@ -377,7 +368,6 @@ export function startTestTunnel(
     bundleHash: BUNDLE_HASH,
     ssh,
     sharedHost,
-    gateway: { host: "127.0.0.1", port: 18789 },
     resolveIdentity,
   });
 }
@@ -389,21 +379,15 @@ export async function startConnectedTunnel(
   options: {
     ssh?: WorkerSshEndpoint;
     sharedHost?: boolean;
-    manager?: Omit<TunnelManagerOptions, "runner">;
-    beforeReady?: (start: TunnelTestFake["starts"][number]) => void;
   } = {},
 ) {
-  const manager = createWorkerTunnelManager({ ...options.manager, runner: fake.runner });
-  const starting = startTestTunnel(
+  const manager = createWorkerTunnelManager({ runner: fake.runner });
+  const handle = await startTestTunnel(
     manager,
     environmentId,
     ownerEpoch,
     options.ssh,
     options.sharedHost,
   );
-  await waitForStarts(fake.starts, 1);
-  const start = fake.starts[0]!;
-  options.beforeReady?.(start);
-  start.process.becomeReady();
-  return { manager, handle: await starting, start };
+  return { manager, handle };
 }

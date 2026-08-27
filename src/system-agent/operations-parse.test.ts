@@ -33,6 +33,13 @@ describe("parseSystemAgentOperation", () => {
       kind: "set-default-model",
       model: "openai/gpt-5.2",
     });
+    expect(parseSystemAgentOperation("set default model openai/gpt-5.2 for agent агент✨")).toEqual(
+      {
+        kind: "set-default-model",
+        model: "openai/gpt-5.2",
+        agentId: "агент✨",
+      },
+    );
   });
 
   it("parses interactive model provider setup", () => {

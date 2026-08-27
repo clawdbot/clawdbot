@@ -150,7 +150,7 @@ extension CronSettings {
                     LazyVStack(alignment: .leading, spacing: 4) {
                         ForEach(self.store.jobs) { job in
                             Button {
-                                self.selectJob(job.id)
+                                self.store.selectJob(job.id)
                             } label: {
                                 self.jobRow(job)
                                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,11 +182,6 @@ extension CronSettings {
             self.detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-    }
-
-    private func selectJob(_ id: String) {
-        self.store.selectedJobId = id
-        Task { await self.store.refreshRuns(jobId: id) }
     }
 
     @ViewBuilder

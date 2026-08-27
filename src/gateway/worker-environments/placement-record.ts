@@ -23,6 +23,49 @@ export type WorkerSessionTurnClaim = {
   owner: WorkerSessionTurnOwner;
 };
 
+export function serializeWorkerSessionTurnClaim(claim: WorkerSessionTurnClaim): string {
+  if (claim.owner.kind !== "worker") {
+    throw new Error("Worker claim identity requires a worker-owned claim");
+  }
+  return JSON.stringify([
+    claim.sessionId,
+    claim.owner.environmentId,
+    claim.owner.ownerEpoch,
+    claim.runId,
+    claim.claimId,
+    claim.placementGeneration,
+  ]);
+}
+
+export function sameWorkerSessionTurnClaim(
+  left: WorkerSessionTurnClaim,
+  right: WorkerSessionTurnClaim,
+): boolean {
+  if (left.owner.kind !== "worker" || right.owner.kind !== "worker") {
+    throw new Error("Worker claim identity requires a worker-owned claim");
+  }
+  return (
+    left.sessionId === right.sessionId &&
+    left.owner.environmentId === right.owner.environmentId &&
+    left.owner.ownerEpoch === right.owner.ownerEpoch &&
+    left.runId === right.runId &&
+    left.claimId === right.claimId &&
+    left.placementGeneration === right.placementGeneration
+  );
+}
+
+export function placementTurnOwner(placement: {
+  executionMode: WorkerPlacementExecutionMode;
+  environmentId: string;
+  activeOwnerEpoch: number;
+}): WorkerSessionTurnOwner {
+  return {
+    kind: placement.executionMode === "remote-exec" ? "local" : "worker",
+    environmentId: placement.environmentId,
+    ownerEpoch: placement.activeOwnerEpoch,
+  };
+}
+
 export type PersistedTurnClaim =
   | {
       owner: "local";
@@ -193,6 +236,28 @@ export type WorkerSessionPlacementRecord =
   | ReconcilingPlacementRecord
   | ReclaimedPlacementRecord
   | FailedPlacementRecord;
+
+export function projectWorkerSessionTurnClaim(
+  record: WorkerSessionPlacementRecord,
+): WorkerSessionTurnClaim | undefined {
+  const claim = record.turnClaim;
+  return claim?.owner === "worker" &&
+    (record.state === "active" || record.state === "draining") &&
+    record.environmentId &&
+    record.activeOwnerEpoch === claim.ownerEpoch
+    ? {
+        sessionId: record.sessionId,
+        claimId: claim.claimId,
+        runId: claim.runId,
+        placementGeneration: claim.generation,
+        owner: {
+          kind: "worker",
+          environmentId: record.environmentId,
+          ownerEpoch: claim.ownerEpoch,
+        },
+      }
+    : undefined;
+}
 
 export type WorkerSessionPlacementTransitionPatch = {
   environmentId?: string | null;

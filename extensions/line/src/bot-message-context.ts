@@ -296,7 +296,8 @@ async function finalizeLineInboundContext(params: {
   });
 
   const agentBody = params.agentBody ?? params.rawBody;
-  const media = await toInboundMediaFactsWithMetadata(params.media);
+  const media =
+    params.media.length === 0 ? [] : await toInboundMediaFactsWithMetadata(params.media);
   const body = formatInboundEnvelope({
     channel: "LINE",
     from: conversationLabel,

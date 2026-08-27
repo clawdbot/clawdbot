@@ -3,7 +3,10 @@ import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-cont
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { OpenClawPluginApi } from "../api.js";
-import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import {
+  dispatchAndStartWorkboardCards,
+  type WorkboardDispatchStartOptions,
+} from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import {
   resolveAgentWorkboardWorkspaceRuntime,
@@ -16,12 +19,37 @@ export type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
 type GatewayRespond = GatewayMethodContext["respond"];
+type WorkboardGatewayResultHandler = (context: GatewayMethodContext) => unknown;
+type WorkboardGatewayScope = NonNullable<
+  NonNullable<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2]>["scope"]
+>;
 
 export function respondError(respond: GatewayRespond, error: unknown) {
   respond(false, undefined, {
     code: "workboard_error",
     message: formatErrorMessage(error),
   });
+}
+
+export function registerWorkboardResultMethods(
+  api: OpenClawPluginApi,
+  methods: ReadonlyArray<
+    readonly [method: string, scope: WorkboardGatewayScope, handler: WorkboardGatewayResultHandler]
+  >,
+): void {
+  for (const [method, scope, handler] of methods) {
+    api.registerGatewayMethod(
+      method,
+      async (context) => {
+        try {
+          context.respond(true, await handler(context));
+        } catch (error) {
+          respondError(context.respond, error);
+        }
+      },
+      { scope },
+    );
+  }
 }
 
 export function readId(params: Record<string, unknown>): string {
@@ -85,6 +113,36 @@ export function resolveGatewayWorkboardWorkspaceAccess(params: {
   });
 }
 
+function gatewayDispatchOptions(params: {
+  api: OpenClawPluginApi;
+  request: Pick<GatewayMethodContext, "client" | "context">;
+  input: Pick<
+    WorkboardDispatchStartOptions,
+    "boardId" | "cardId" | "maxStarts" | "provider" | "model"
+  >;
+}): WorkboardDispatchStartOptions {
+  const { context, client } = params.request;
+  return {
+    ...params.input,
+    materializeWorktree: true,
+    resolveAgentWorkspace: (agentId) =>
+      resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
+    resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) => {
+      const config = context.getRuntimeConfig();
+      return resolveAgentWorkboardWorkspaceRuntime({
+        config,
+        agentId,
+        sessionKey,
+        workspaceDir,
+        modelProvider,
+        modelId,
+        prepareSandboxWorkspaceAuthority: params.api.runtime.sandbox.prepareWorkspaceAuthority,
+      });
+    },
+    workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({ context, client }),
+  };
+}
+
 export function createWorkboardDispatchHandler(params: {
   api: OpenClawPluginApi;
   store: WorkboardStore;
@@ -92,9 +150,10 @@ export function createWorkboardDispatchHandler(params: {
 }) {
   return async (
     { params: requestParams, respond, client, context }: GatewayMethodContext,
-    options: { supportsMaxStarts: boolean },
+    options: { supportsMaxStarts: boolean; directCard?: boolean },
   ) => {
     try {
+      const cardId = options.directCard ? readId(requestParams) : undefined;
       const boardId =
         requestParams && typeof requestParams === "object" && "boardId" in requestParams
           ? requestParams.boardId
@@ -109,39 +168,40 @@ export function createWorkboardDispatchHandler(params: {
       const maxStarts = options.supportsMaxStarts
         ? readOptionalPositiveInteger(rawMaxStarts, "maxStarts")
         : undefined;
-      const workspaceAccess = resolveGatewayWorkboardWorkspaceAccess({ context, client });
+      const provider =
+        options.directCard &&
+        typeof requestParams.provider === "string" &&
+        requestParams.provider.trim()
+          ? requestParams.provider.trim()
+          : undefined;
+      const model =
+        options.directCard && typeof requestParams.model === "string" && requestParams.model.trim()
+          ? requestParams.model.trim()
+          : undefined;
       const result = await dispatchAndStartWorkboardCards({
         store: params.store,
         subagent: params.api.runtime.subagent,
         worktrees: params.api.runtime.worktrees,
-        options: {
-          boardId: typeof boardId === "string" ? boardId : undefined,
-          ...(maxStarts !== undefined ? { maxStarts } : {}),
-          materializeWorktree: true,
-          resolveAgentWorkspace: (agentId) =>
-            resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
-          resolveAgentWorkspaceRuntime: (
-            agentId,
-            sessionKey,
-            workspaceDir,
-            modelProvider,
-            modelId,
-          ) => {
-            const config = context.getRuntimeConfig();
-            return resolveAgentWorkboardWorkspaceRuntime({
-              config,
-              agentId,
-              sessionKey,
-              workspaceDir,
-              modelProvider,
-              modelId,
-              prepareSandboxWorkspaceAuthority:
-                params.api.runtime.sandbox.prepareWorkspaceAuthority,
-            });
+        options: gatewayDispatchOptions({
+          api: params.api,
+          request: { context, client },
+          input: {
+            ...(cardId ? { cardId, maxStarts: 1 } : {}),
+            boardId: typeof boardId === "string" ? boardId : undefined,
+            ...(maxStarts !== undefined ? { maxStarts } : {}),
+            ...(provider ? { provider } : {}),
+            ...(model ? { model } : {}),
           },
-          workspaceAccess,
-        },
+        }),
       });
+      if (cardId) {
+        const started = result.started[0];
+        if (!started?.card) {
+          throw new Error(result.startFailures[0]?.error ?? "Workboard card did not start.");
+        }
+        respond(true, { ...started, card: params.redactCard(started.card) });
+        return;
+      }
       respond(true, {
         ...result,
         promoted: result.promoted.map(params.redactCard),

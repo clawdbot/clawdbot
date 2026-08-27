@@ -19,7 +19,10 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
-import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
+import {
+  listExternalCliSyncProviderIds,
+  resolveExternalCliAuthProfiles,
+} from "./auth-profiles/external-cli-sync.js";
 import {
   type AuthProfileOrderResolution,
   isConfiguredAwsSdkAuthProfileForProvider,
@@ -31,6 +34,7 @@ import {
   resolveSecretRefReadOnlyAvailability,
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
+import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
@@ -76,6 +80,9 @@ import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+const EXTERNAL_CLI_REFRESH_PROVIDER_IDS = new Set(
+  listExternalCliSyncProviderIds().map(normalizeProviderIdForAuth),
+);
 
 export type ModelAuthAvailability = boolean | undefined;
 type ModelAuthAvailabilityEvidence = Exclude<ProviderModelAuthEvidence, "none">;
@@ -165,10 +172,15 @@ export function createModelAuthAvailabilityResolver(
 ): ModelAuthAvailabilityResolver {
   const env = params.env ?? process.env;
   const now = Date.now();
-  const external = params.externalCliProviderIds?.length
+  const isExternalCliProvider = (provider: string) =>
+    EXTERNAL_CLI_REFRESH_PROVIDER_IDS.has(normalizeProviderIdForAuth(provider));
+  const externalCliProviderIds = (params.externalCliProviderIds ?? []).filter(
+    isExternalCliProvider,
+  );
+  const external = externalCliProviderIds.length
     ? resolveExternalCliAuthProfiles(params.authStore, {
         allowKeychainPrompt: false,
-        providerIds: [...params.externalCliProviderIds],
+        providerIds: externalCliProviderIds,
       })
     : [];
   const store: AuthProfileStore = external.length
@@ -283,6 +295,13 @@ export function createModelAuthAvailabilityResolver(
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
+  // Refresh authority follows exact profiles marked by the external-auth
+  // lifecycle. Provider-wide authority could bless an unrelated stale profile.
+  const externalCliRefreshProfileIds = new Set([
+    ...external.map((profile) => profile.profileId),
+    ...getRuntimeExternalCliProfileIds(runtimeStore ?? store),
+  ]);
+  const readOnlyAuthConfig = params.cfg;
   const providerConfig = (provider: string) =>
     resolveMergedModelProviderConfig(params.cfg, provider);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -336,7 +355,7 @@ export function createModelAuthAvailabilityResolver(
       return cached;
     }
     const resolution = resolveAuthProfileOrderWithMetadata({
-      cfg: params.cfg,
+      cfg: readOnlyAuthConfig,
       store: orderStore,
       provider: normalized,
       preferredProfile: preferredProfileId,
@@ -364,7 +383,7 @@ export function createModelAuthAvailabilityResolver(
         ? store
         : { ...store, profiles: { ...store.profiles, [profileId]: credential } };
     const eligibility = resolveAuthProfileEligibility({
-      cfg: params.cfg,
+      cfg: readOnlyAuthConfig,
       store: effectiveStore,
       provider: normalizeProvider(provider),
       profileId,
@@ -376,6 +395,7 @@ export function createModelAuthAvailabilityResolver(
   };
   const credentialAvailability = (
     provider: string,
+    profileId: string,
     credential: AuthProfileCredential,
     target: AuthTarget,
   ): ModelAuthAvailability => {
@@ -387,7 +407,8 @@ export function createModelAuthAvailabilityResolver(
       cfg: params.cfg,
       env,
       now,
-      canRefreshOAuth: provider === OPENAI_PROVIDER_ID,
+      canRefreshOAuth:
+        provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
     });
   };
   const resolvedProfileAvailability = (
@@ -397,7 +418,7 @@ export function createModelAuthAvailabilityResolver(
     target: AuthTarget,
   ) => {
     if (!hydratedProfileIds.has(profileId)) {
-      return credentialAvailability(provider, credential, target);
+      return credentialAvailability(provider, profileId, credential, target);
     }
     if (!modeAllowed(provider, target, credential.type)) {
       return false;
@@ -601,7 +622,9 @@ export function createModelAuthAvailabilityResolver(
         evidence: "aws-sdk",
       };
     }
-    const preparedRuntimeAuthMode = params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
+    const preparedRuntimeAuthMode =
+      params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(provider)] ??
+      params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
     if (preparedRuntimeAuthMode) {
       return {
         availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
@@ -1057,6 +1080,10 @@ export function createModelAuthAvailabilityResolver(
       sourcePlan,
       configuredAuthMode: automaticRouteAuthMode,
       ...(syntheticCodexOwnsAuth ? { runtimeAuthOwner: { id: "codex" } } : {}),
+      ...(syntheticCodexOwnsAuth &&
+      resolveMergedModelProviderConfig(params.cfg, provider) === undefined
+        ? { allowNativeAuthOnSingleRoute: true }
+        : {}),
     });
     if (routeAuthDecision.kind === "deferred" && syntheticCodexOwnsAuth) {
       return { availability: undefined, routeResolution, evidence: "synthetic" };

@@ -5,7 +5,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
-const spawnSyncMock = vi.hoisted(() => vi.fn());
+const runQaWindowsTaskkillMock = vi.hoisted(() => vi.fn());
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
 const waitForGatewayHealthyMock = vi.hoisted(() => vi.fn(async () => undefined));
 const waitForTransportReadyMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -13,7 +13,11 @@ const readSessionTranscriptSummaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
-  spawnSync: spawnSyncMock,
+}));
+
+vi.mock("./windows-system-tools.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./windows-system-tools.js")>()),
+  runQaWindowsTaskkill: runQaWindowsTaskkillMock,
 }));
 
 vi.mock("./node-exec.js", () => ({
@@ -141,7 +145,7 @@ function createAgentPromptEnv(gatewayCall: ReturnType<typeof vi.fn>) {
 describe("qa suite runtime agent process helpers", () => {
   beforeEach(() => {
     spawnMock.mockReset();
-    spawnSyncMock.mockReset();
+    runQaWindowsTaskkillMock.mockReset();
     resolveQaNodeExecPathMock.mockClear();
     waitForGatewayHealthyMock.mockClear();
     waitForTransportReadyMock.mockClear();
@@ -274,53 +278,44 @@ describe("qa suite runtime agent process helpers", () => {
     },
   );
 
-  it("force-kills timed-out Windows qa cli process trees with taskkill", async () => {
-    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    const originalSystemRoot = process.env.SystemRoot;
-    const originalWindir = process.env.WINDIR;
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-    process.env.SystemRoot = "C:\\Windows";
-    delete process.env.WINDIR;
-    try {
-      const child = createSpawnedProcess({ pid: 12345 });
-      spawnSyncMock.mockReturnValue({ status: 0 });
-      const { pending } = startMockQaCli({
-        args: ["qa", "suite"],
-        child,
-        options: { timeoutMs: 1 },
-      });
-      const timeoutAssertion = expect(pending).rejects.toThrow(
-        "qa cli timed out: openclaw qa suite",
-      );
+  it.each([
+    { label: "succeeds", taskkillSucceeded: true },
+    { label: "falls back", taskkillSucceeded: false },
+  ])(
+    "preserves the Windows timeout result when canonical cleanup $label",
+    async ({ taskkillSucceeded }) => {
+      const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+      try {
+        const child = createSpawnedProcess({ pid: 12345 });
+        runQaWindowsTaskkillMock.mockReturnValue(taskkillSucceeded);
+        const { pending } = startMockQaCli({
+          args: ["qa", "suite"],
+          child,
+          options: { timeoutMs: 1 },
+        });
+        const timeoutAssertion = expect(pending).rejects.toThrow(
+          "qa cli timed out: openclaw qa suite",
+        );
 
-      await waitForSpawnCount(1);
-      await timeoutAssertion;
-      expect(spawnSyncMock).toHaveBeenCalledWith(
-        path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
-        ["/PID", "12345", "/T", "/F"],
-        {
-          stdio: "ignore",
-          windowsHide: true,
-          timeout: 5_000,
-        },
-      );
-      expect(child.kill).not.toHaveBeenCalled();
-    } finally {
-      if (platformDescriptor) {
-        Object.defineProperty(process, "platform", platformDescriptor);
+        await waitForSpawnCount(1);
+        await timeoutAssertion;
+        expect(runQaWindowsTaskkillMock).toHaveBeenCalledWith({
+          pid: 12345,
+          signal: "SIGKILL",
+        });
+        if (taskkillSucceeded) {
+          expect(child.kill).not.toHaveBeenCalled();
+        } else {
+          expect(child.kill).toHaveBeenCalledWith("SIGKILL");
+        }
+      } finally {
+        if (platformDescriptor) {
+          Object.defineProperty(process, "platform", platformDescriptor);
+        }
       }
-      if (originalSystemRoot === undefined) {
-        delete process.env.SystemRoot;
-      } else {
-        process.env.SystemRoot = originalSystemRoot;
-      }
-      if (originalWindir === undefined) {
-        delete process.env.WINDIR;
-      } else {
-        process.env.WINDIR = originalWindir;
-      }
-    }
-  });
+    },
+  );
 
   it("merges isolated env overrides into qa cli runs", async () => {
     const { child, pending } = startMockQaCli({

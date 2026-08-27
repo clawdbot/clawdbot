@@ -3,8 +3,8 @@ function isTtyStream(stream: { isTTY?: boolean }): boolean {
   return stream.isTTY === true;
 }
 
-export function isTerminalInteractive(): boolean {
-  return isTtyStream(process.stdin) && isTtyStream(process.stdout);
+export function isTerminalInteractive(output: { isTTY?: boolean } = process.stdout): boolean {
+  return isTtyStream(process.stdin) && isTtyStream(output);
 }
 
 export const NON_INTERACTIVE_GATEWAY_STOP_MESSAGE =

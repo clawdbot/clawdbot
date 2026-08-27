@@ -3,6 +3,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveImplicitMessageActionTarget } from "../infra/outbound/message-action-normalization.js";
 import {
   createDirectDmPreCryptoGuardPolicy,
   createPreCryptoDirectDmAuthorizer,
@@ -242,16 +243,16 @@ describe("channel-inbound direct-message helpers", () => {
     });
   });
 
-  it("dispatches direct DMs through the standard route/session/reply pipeline", async () => {
+  it("routes a targetless contextual reply to the inbound Reef peer", async () => {
     const { recordInboundSession, dispatchReplyWithBufferedBlockDispatcher, runtime } =
       createDirectDmRuntime();
     const deliver = vi.fn(async () => {});
     const channelIngress = await resolveStableChannelMessageIngress({
-      channelId: "nostr",
+      channelId: "reef",
       accountId: "default",
-      subject: { stableId: "sender-1" },
-      conversation: { kind: "direct", id: "sender-1" },
-      dmPolicy: "open",
+      subject: { stableId: "clawstudio" },
+      conversation: { kind: "direct", id: "clawstudio" },
+      dmPolicy: "allowlist",
     });
 
     const result = await dispatchInboundDirectDmWithRuntime({
@@ -260,14 +261,14 @@ describe("channel-inbound direct-message helpers", () => {
         session: { store: { type: "jsonl" } },
       } as never,
       runtime,
-      channel: "nostr",
-      channelLabel: "Nostr",
+      channel: "reef",
+      channelLabel: "Reef",
       accountId: "default",
-      peer: { kind: "direct", id: "sender-1" },
-      senderId: "sender-1",
-      senderAddress: "nostr:sender-1",
-      recipientAddress: "nostr:bot-1",
-      conversationLabel: "sender-1",
+      peer: { kind: "direct", id: "clawstudio" },
+      senderId: "clawstudio",
+      senderAddress: "reef:clawstudio",
+      recipientAddress: "reef:roboclaw",
+      conversationLabel: "@clawstudio's agent",
       rawBody: "hello world",
       messageId: "event-123",
       extraContext: {
@@ -284,19 +285,23 @@ describe("channel-inbound direct-message helpers", () => {
 
     expect(result.route.agentId).toBe("agent-main");
     expect(result.route.accountId).toBe("default");
-    expect(result.route.sessionKey).toBe("dm:sender-1");
+    expect(result.route.sessionKey).toBe("dm:clawstudio");
     expect(result.storePath).toBe("/tmp/direct-dm-session-store");
     expect(result.ctxPayload.Body).toBe("env:hello world");
     expect(result.ctxPayload.BodyForAgent).toBe("hello world");
-    expect(result.ctxPayload.From).toBe("nostr:sender-1");
-    expect(result.ctxPayload.To).toBe("nostr:bot-1");
-    expect(result.ctxPayload.SenderId).toBe("sender-1");
+    expect(result.ctxPayload.From).toBe("reef:clawstudio");
+    expect(result.ctxPayload.To).toBe("reef:roboclaw");
+    expect(result.ctxPayload.SenderId).toBe("clawstudio");
     expect(result.ctxPayload.MessageSid).toBe("event-123");
     expect(result.ctxPayload.ReplyToId).toBe("event-parent");
     expect(result.ctxPayload.MessageThreadId).toBe("thread-7");
-    expect(result.ctxPayload.NativeDirectUserId).toBe("sender-1");
-    expect(result.ctxPayload.OriginatingTo).toBe("nostr:bot-1");
+    expect(result.ctxPayload.NativeDirectUserId).toBe("clawstudio");
+    expect(result.ctxPayload.OriginatingTo).toBe("reef:clawstudio");
     expect(result.ctxPayload.CommandAuthorized).toBe(true);
+    const currentChannelId = result.ctxPayload.OriginatingTo ?? result.ctxPayload.To;
+    expect(
+      resolveImplicitMessageActionTarget({ currentChannelId, currentChannelProvider: "reef" }),
+    ).toBe("reef:clawstudio");
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
     expect(deliver).toHaveBeenCalledWith({ text: "reply text" });

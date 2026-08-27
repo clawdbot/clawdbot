@@ -113,15 +113,26 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
+  "prerelease-plugin-registry",
   "tilde-log-path",
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
   "cron-scheduled-authority",
+  "sqlite-volume",
 ];
 
+// Prerelease registry proof requires an explicit artifact contract and must not
+// join broad survivor sweeps that do not supply one.
+const UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS = UPGRADE_SURVIVOR_SCENARIOS.filter(
+  (scenario) => scenario !== "prerelease-plugin-registry",
+);
+
 const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
-  ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
-  ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
+  [
+    "reported-issues",
+    UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS.filter((scenario) => scenario !== "sqlite-volume"),
+  ],
+  ["far-reaching", UPGRADE_SURVIVOR_AGGREGATE_SCENARIOS],
 ]);
 
 // Upgrade recipes select an OpenAI model whose runtime is supplied by the
@@ -131,6 +142,14 @@ const UPGRADE_SURVIVOR_RUNTIME_COMPANION_PACKAGES = ["@openclaw/codex"];
 // Pre-protocol catalogs are content-addressed. Unknown legacy blocks fail
 // closed instead of requiring a dependency or reimplementing a JavaScript parser.
 const LEGACY_UPGRADE_SURVIVOR_SCENARIO_CATALOGS = new Map([
+  [
+    "f886fb3ca6232eb97cdfe93a9ab7fc8e8cd4a39658c5518bfb736a2242d0c949",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow prerelease-plugin-registry tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume auth-profile-v2026-7-2-beta-5",
+  ],
+  [
+    "0c5d3ce3533c035033890923aae7e210f4fdb24e7b8af32371930cdf12a00fd5",
+    "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority sqlite-volume auth-profile-v2026-7-2-beta-5",
+  ],
   [
     "837ab1c89821d52519f385e0f3d2067e0b923f730e3a4791e67f578bf5d29f8e",
     "base acpx-openclaw-tools-bridge feishu-channel bootstrap-persona channel-post-core-restore codex-allowlist-survival plugin-deps-cleanup configured-plugin-installs stale-source-plugin-shadow tilde-log-path meeting-transcripts-sqlite versioned-runtime-deps cron-scheduled-authority auth-profile-v2026-7-2-beta-5",
@@ -312,7 +331,7 @@ function normalizeUpgradeSurvivorScenario(raw: string | undefined): string | und
     throw new Error(
       `invalid published upgrade survivor scenario: ${JSON.stringify(
         value,
-      )}. Expected one of: ${UPGRADE_SURVIVOR_SCENARIOS.join(", ")}, reported-issues.`,
+      )}. Expected one of: ${UPGRADE_SURVIVOR_SCENARIOS.join(", ")}, reported-issues, or far-reaching.`,
     );
   }
   return value;
@@ -738,6 +757,9 @@ export function requiredPrepublishPluginPackagesForLanes(poolLanes: DockerE2eLan
   const configuredChannelIds = new Set<string>();
   const requiredPackages = new Set<string>();
   for (const poolLane of poolLanes) {
+    for (const packageName of poolLane.prepublishPluginPackages ?? []) {
+      requiredPackages.add(packageName);
+    }
     const scenario = upgradeSurvivorScenarioForLane(poolLane);
     if (!scenario) {
       continue;

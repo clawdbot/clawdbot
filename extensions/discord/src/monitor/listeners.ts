@@ -18,9 +18,8 @@ import {
   ThreadUpdateListener,
 } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
-import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
-export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
+import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
 import {
@@ -37,6 +36,7 @@ import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
 import { getThreadBindingManager } from "./thread-bindings.manager.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
+export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 

@@ -15,9 +15,9 @@ export type MemoryConfig = {
   dbPath?: string;
   autoCapture?: boolean;
   autoRecall?: boolean;
-  captureMaxChars?: number;
+  captureMaxChars: number;
   customTriggers?: string[];
-  recallMaxChars?: number;
+  recallMaxChars: number;
   storageOptions?: Record<string, string>;
 };
 

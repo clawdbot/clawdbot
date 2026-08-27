@@ -1,18 +1,15 @@
 // Control UI view renders dreaming screen content.
-import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { renderHubTabs } from "../../../components/hub-tabs.ts";
-import {
-  createLobsterPetLook,
-  lobsterPetSeed,
-  renderLobsterSvg,
-} from "../../../components/lobster-pet.ts";
-import "../../../components/modal-dialog.ts";
+import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
+import { createLobsterPetLook, renderLobsterSvg } from "../../../components/lobster-pet-look.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
+import "../../../components/modal-dialog.ts";
 import { t } from "../../../i18n/index.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import "../../../styles/dreams.css";
 import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
 
@@ -588,7 +585,7 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
     state.wikiPreviewTruncated = preview.truncated === true;
   } catch (error) {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {
-      state.wikiPreviewError = String(error);
+      state.wikiPreviewError = formatUiError(error);
     }
   } finally {
     if (state.wikiPreviewRequestId === requestId && state.wikiPreviewOpen) {

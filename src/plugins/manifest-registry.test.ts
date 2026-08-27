@@ -2471,6 +2471,7 @@ describe("loadPluginManifestRegistry", () => {
         },
         memory_get: {
           replaySafe: true,
+          profiles: ["coding", "messaging", "invalid"],
         },
         memory_store: {
           sideEffecting: true,
@@ -2553,6 +2554,7 @@ describe("loadPluginManifestRegistry", () => {
       },
       memory_get: {
         replaySafe: true,
+        profiles: ["coding", "messaging"],
       },
       memory_store: {
         sideEffecting: true,

@@ -1,9 +1,14 @@
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
 import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -128,7 +133,33 @@ describe("node worker launch store pruning", () => {
       completedAtMs: NOW_MS - 1_000,
     });
     insertLaunch({ database, launchId: "pending", state: "pending" });
-    insertLaunch({ database, launchId: "running", state: "running" });
+    insertLaunch({ database, launchId: "running", state: "pending" });
+    const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+    const container = {
+      engine: "docker",
+      containerId: "a".repeat(64),
+      engineTarget: "b".repeat(64),
+    } as const;
+    store.markRunning({
+      launchId: "running",
+      planHash: "a".repeat(64),
+      supervisor,
+      worker: supervisor,
+      container,
+      nowMs: NOW_MS,
+    });
+    const insertContainer = database.prepare(
+      "INSERT INTO node_worker_launch_containers (launch_id, container_json) VALUES (?, ?)",
+    );
+    for (const launchId of ["old-completed", "old-failed", "old-cancelled", "recent-completed"]) {
+      insertContainer.run(launchId, JSON.stringify(container));
+    }
+    const containerLaunchIds = () =>
+      (
+        database
+          .prepare("SELECT launch_id FROM node_worker_launch_containers ORDER BY launch_id")
+          .all() as Array<{ launch_id: string }>
+      ).map((row) => row.launch_id);
 
     expect(store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(2);
     expect(launchIds(database)).toEqual([
@@ -137,9 +168,11 @@ describe("node worker launch store pruning", () => {
       "recent-completed",
       "running",
     ]);
+    expect(containerLaunchIds()).toEqual(["old-cancelled", "recent-completed", "running"]);
 
     expect(store.pruneExpiredTerminal({ nowMs: NOW_MS, limit: 2 })).toBe(1);
     expect(launchIds(database)).toEqual(["pending", "recent-completed", "running"]);
+    expect(containerLaunchIds()).toEqual(["recent-completed", "running"]);
   });
 
   it("prunes expired terminal receipts after restart reconciliation", async () => {
@@ -195,5 +228,240 @@ describe("node worker launch store pruning", () => {
       ),
     ).toMatchObject({ action: "replay", receipt: { state: "completed" } });
     expect(launchIds(database)).toEqual(["replayed-launch"]);
+  });
+});
+
+describe("node worker launch store container identity", () => {
+  function claimLaunch(store: NodeWorkerLaunchStore, launchId: string) {
+    const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+    const planHash = "a".repeat(64);
+    const result = store.claim(
+      {
+        launchId,
+        planHash,
+        gatewayNamespace: "gateway-1",
+        environmentId: "environment-1",
+        sessionId: "session-1",
+        ownerEpoch: 3,
+        placementGeneration: 4,
+        runId: "run-1",
+      },
+      supervisor,
+      2,
+      NOW_MS,
+    );
+    expect(result.action).toBe("start");
+    return { planHash, supervisor };
+  }
+
+  function hasContainerIdentityTable(database: ReturnType<typeof fixture>["database"]): boolean {
+    return Boolean(
+      database
+        .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+        .get("node_worker_launch_containers"),
+    );
+  }
+
+  it("keeps the container companion table absent for existing bare-worker journals", () => {
+    const { database, env, store } = fixture();
+    expect(hasContainerIdentityTable(database)).toBe(false);
+    const { planHash, supervisor } = claimLaunch(store, "bare-launch");
+
+    const receipt = store.markRunning({
+      launchId: "bare-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      nowMs: NOW_MS,
+    });
+
+    expect(hasContainerIdentityTable(database)).toBe(false);
+    expect(Object.hasOwn(receipt, "container")).toBe(false);
+    expect(store.get("bare-launch")).toEqual(receipt);
+    closeOpenClawStateDatabaseForTest();
+
+    expect(new NodeWorkerLaunchStore({ env }).get("bare-launch")).toEqual(receipt);
+    expect(hasContainerIdentityTable(openOpenClawStateDatabase({ env }).db)).toBe(false);
+  });
+
+  it("lazily persists container identity across reopen without advancing the schema", () => {
+    const { database, env, store } = fixture();
+    expect(hasContainerIdentityTable(database)).toBe(false);
+    const initialSchemaVersion = database.prepare("PRAGMA user_version").get();
+    const { planHash, supervisor } = claimLaunch(store, "container-launch");
+    const container = {
+      engine: "docker",
+      containerId: "a".repeat(64),
+      engineTarget: "b".repeat(64),
+    } as const;
+
+    const receipt = store.markRunning({
+      launchId: "container-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      container,
+      nowMs: NOW_MS,
+    });
+
+    expect(receipt.container).toEqual(container);
+    expect(hasContainerIdentityTable(database)).toBe(true);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual(initialSchemaVersion);
+    closeOpenClawStateDatabaseForTest();
+
+    expect(new NodeWorkerLaunchStore({ env }).get("container-launch")).toEqual(receipt);
+  });
+
+  it("lets the exact v12 predecessor read and write a populated candidate container journal before candidate reopen", () => {
+    const { database, env, store } = fixture();
+    const databasePath = openOpenClawStateDatabase({ env }).path;
+    const { planHash, supervisor } = claimLaunch(store, "candidate-container-launch");
+    const container = {
+      engine: "docker",
+      containerId: "a".repeat(64),
+      engineTarget: "b".repeat(64),
+    } as const;
+    store.markRunning({
+      launchId: "candidate-container-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      container,
+      nowMs: NOW_MS,
+    });
+    expect(hasContainerIdentityTable(database)).toBe(true);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(12);
+    expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 12 });
+    closeOpenClawStateDatabaseForTest();
+
+    const companionStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
+      "CREATE TABLE IF NOT EXISTS node_worker_launch_containers (",
+    );
+    const companionEndMarker = "\n) STRICT;";
+    const companionEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(companionEndMarker, companionStart);
+    expect(companionStart).toBeGreaterThanOrEqual(0);
+    expect(companionEnd).toBeGreaterThan(companionStart);
+    const predecessorSchema = `${OPENCLAW_STATE_SCHEMA_SQL.slice(
+      0,
+      companionStart,
+    )}${OPENCLAW_STATE_SCHEMA_SQL.slice(companionEnd + companionEndMarker.length)}`;
+    const predecessorCompatibility = {
+      ...OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+      allowedMissingTables:
+        OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingTables?.filter(
+          (table) => table !== "node_worker_launch_containers",
+        ),
+    };
+    expect(predecessorSchema).not.toContain("node_worker_launch_containers");
+    expect(predecessorCompatibility.allowedMissingTables).not.toContain(
+      "node_worker_launch_containers",
+    );
+
+    const predecessor = new DatabaseSync(databasePath);
+    try {
+      expect(predecessor.prepare("PRAGMA user_version").get()).toEqual({ user_version: 12 });
+      expect(() =>
+        assertSqliteSchemaContains(
+          predecessor,
+          "predecessor v12 global schema",
+          predecessorSchema,
+          predecessorCompatibility,
+        ),
+      ).not.toThrow();
+      expect(
+        predecessor
+          .prepare(
+            "SELECT launch_id, state, worker_pid FROM node_worker_launches WHERE launch_id = ?",
+          )
+          .get("candidate-container-launch"),
+      ).toMatchObject({
+        launch_id: "candidate-container-launch",
+        state: "running",
+        worker_pid: supervisor.pid,
+      });
+      insertLaunch({
+        database: predecessor,
+        launchId: "predecessor-bare-launch",
+        state: "pending",
+      });
+      predecessor
+        .prepare("UPDATE node_worker_launches SET updated_at_ms = ? WHERE launch_id = ?")
+        .run(NOW_MS + 1, "candidate-container-launch");
+    } finally {
+      predecessor.close();
+    }
+
+    const candidate = new NodeWorkerLaunchStore({ env });
+    expect(candidate.get("candidate-container-launch")).toMatchObject({
+      state: "running",
+      container,
+      updatedAtMs: NOW_MS + 1,
+    });
+    expect(candidate.get("predecessor-bare-launch")).toMatchObject({ state: "pending" });
+    expect(candidate.get("predecessor-bare-launch")).not.toHaveProperty("container");
+  });
+
+  it.each([
+    ["missing container id", JSON.stringify({ engine: "docker", engineTarget: "b".repeat(64) })],
+    ["missing engine target", JSON.stringify({ engine: "docker", containerId: "a".repeat(64) })],
+    [
+      "unknown engine",
+      JSON.stringify({
+        engine: "runc",
+        containerId: "a".repeat(64),
+        engineTarget: "b".repeat(64),
+      }),
+    ],
+    [
+      "ambiguous container id prefix",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "a".repeat(12),
+        engineTarget: "b".repeat(64),
+      }),
+    ],
+    [
+      "invalid container id",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "container-123",
+        engineTarget: "b".repeat(64),
+      }),
+    ],
+    [
+      "invalid engine target",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "a".repeat(64),
+        engineTarget: "b".repeat(12),
+      }),
+    ],
+    [
+      "unexpected identity field",
+      JSON.stringify({
+        engine: "docker",
+        containerId: "a".repeat(64),
+        engineTarget: "b".repeat(64),
+        extra: true,
+      }),
+    ],
+  ])("fails closed when a persisted container identity has %s", (_reason, malformed) => {
+    const { database, store } = fixture();
+    const { planHash, supervisor } = claimLaunch(store, "corrupt-container-launch");
+    store.markRunning({
+      launchId: "corrupt-container-launch",
+      planHash,
+      supervisor,
+      worker: supervisor,
+      container: { engine: "docker", containerId: "a".repeat(64), engineTarget: "b".repeat(64) },
+      nowMs: NOW_MS,
+    });
+    database
+      .prepare("UPDATE node_worker_launch_containers SET container_json = ? WHERE launch_id = ?")
+      .run(malformed, "corrupt-container-launch");
+
+    expect(() => store.listNonterminal()).toThrow(
+      /node worker container (identity|id|engine target)/u,
+    );
   });
 });

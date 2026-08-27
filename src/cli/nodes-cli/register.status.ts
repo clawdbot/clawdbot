@@ -160,26 +160,14 @@ function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string 
   return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
-function parseSinceMs(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  const value = normalizeOptionalString(raw) ?? (typeof raw === "number" ? String(raw) : null);
-  if (value === null) {
-    defaultRuntime.error(`${label}: invalid duration value`);
-    defaultRuntime.exit(1);
-    return undefined;
-  }
-  if (!value) {
+function parseSinceMs(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) {
     return undefined;
   }
   try {
-    return parseDurationMs(value);
+    return parseDurationMs(raw);
   } catch (err) {
-    const message = formatErrorMessage(err);
-    defaultRuntime.error(`${label}: ${message}`);
-    defaultRuntime.exit(1);
-    return undefined;
+    throw new Error(`${label}: ${formatErrorMessage(err)}`, { cause: err });
   }
 }
 
@@ -231,8 +219,16 @@ function mergePairedNodesWithEffectiveNodes(
 
 async function tryReadNodeList(opts: NodesRpcOpts): Promise<NodeListNode[] | null> {
   try {
-    return parseNodeList(await callNodesGatewayCli("node.list", opts, {}));
-  } catch {
+    return parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}));
+  } catch (error) {
+    // Best-effort enrichment may degrade to pairing-only rows, but never
+    // silently: without this notice the table looks authoritative while
+    // omitting connected/commands state. Stderr keeps --json output clean.
+    defaultRuntime.error(
+      getNodesTheme().muted(
+        `live node view unavailable (${formatErrorMessage(error)}); showing paired-only data`,
+      ),
+    );
     return null;
   }
 }
@@ -493,7 +489,7 @@ export function registerNodesStatusCommands(nodes: Command) {
             defaultRuntime.log(muted("- (none effective)"));
           } else {
             for (const c of commands) {
-              defaultRuntime.log(`- ${c}`);
+              defaultRuntime.log(`- ${sanitizeTerminalText(c)}`);
             }
           }
           if (pendingCommands.length > 0) {
@@ -527,7 +523,7 @@ export function registerNodesStatusCommands(nodes: Command) {
           // them under --connected printed "Pending: 0" while requests waited.
           const pendingRows = pending;
           const effectiveNodes = hasFilters
-            ? parseNodeList(await callNodesGatewayCli("node.list", opts, {}))
+            ? parseNodeList(await callNodeDiagnosticsGatewayCli("node.list", opts, {}))
             : await tryReadNodeList(opts);
           const effectivePairedRows = mergePairedNodesWithEffectiveNodes(paired, effectiveNodes);
           const filteredPaired = effectivePairedRows.filter((node) => {

@@ -18,6 +18,7 @@ export type StatusScanResult = Omit<
   | "skipColdStartNetworkChecks"
   | "gatewaySnapshot"
   | "channelsStatus"
+  | "runtimeDegradation"
 > &
   StatusScanGatewayResult & {
     summary: Awaited<ReturnType<typeof getStatusSummaryFn>>;

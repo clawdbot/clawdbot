@@ -582,7 +582,10 @@ export async function noteMemorySearchHealth(
       ...opts,
       noteFn,
       includeWorkspaceMemoryHealth: false,
-      gatewayMemoryProbe: scope.agentId === defaultAgentId ? opts?.gatewayMemoryProbe : undefined,
+      gatewayMemoryProbe:
+        scope.agentId === defaultAgentId || opts?.gatewayMemoryProbe?.skipped
+          ? opts?.gatewayMemoryProbe
+          : undefined,
     });
   }
 }

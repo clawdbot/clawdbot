@@ -13,7 +13,6 @@ import {
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
@@ -23,7 +22,6 @@ import {
   resolveRunPlanConcurrency,
   resolveRunPlans,
   runReportPlans,
-  signalTestGroupReportChild,
   spawnText,
 } from "../../scripts/test-group-report.mts";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -71,10 +69,6 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
     await sleep(5);
   }
   throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
 }
 
 function waitForChildClose(
@@ -936,75 +930,6 @@ describe("scripts/test-group-report arg parsing", () => {
 });
 
 describe("scripts/test-group-report child process guard", () => {
-  it("signals Windows child process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalTestGroupReportChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalTestGroupReportChild(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows child process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalTestGroupReportChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
   it.concurrent("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;

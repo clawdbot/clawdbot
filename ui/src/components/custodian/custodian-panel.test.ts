@@ -5,6 +5,7 @@ import { createContext } from "../../pages/custodian/custodian-page.test-harness
 import { CustodianSessionStore } from "../../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import "./custodian-panel.ts";
 
 type TestCustodianPanel = HTMLElement & {
@@ -108,6 +109,34 @@ describe("custodian panel", () => {
 
     panel.suppressed = true;
     await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it("opens and closes from the global toggle event", async () => {
+    const { panel, store } = await mountPanel();
+    const refresh = vi.spyOn(store, "refreshTranscriptIfIdle");
+    panel.suppressed = false;
+    await panel.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(true);
+    expect(refresh).toHaveBeenCalled();
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT));
+    await panel.updateComplete;
+    expect(panel.custodianPanelOpen).toBe(false);
+  });
+
+  it("ignores toggle requests while unavailable", async () => {
+    const { panel } = await mountPanel();
+    panel.available = false;
+    panel.suppressed = false;
+    await panel.updateComplete;
+
+    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
+    await panel.updateComplete;
+
     expect(panel.custodianPanelOpen).toBe(false);
   });
 

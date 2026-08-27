@@ -3,9 +3,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupTempDirs,
-  makeTempRepoRoot,
-  writeJsonFile,
-} from "../../../test/helpers/temp-repo.js";
+  makeTempDir as makeTempRepoRoot,
+} from "../../../test/helpers/temp-dir.js";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 
 const packageRootMock = vi.hoisted(() => ({ value: "" }));
 const channelPluginMocks = vi.hoisted(() => ({

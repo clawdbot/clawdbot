@@ -11,9 +11,11 @@ import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "./lib/bundled-plugin-build
 import { toErrorObject } from "./lib/error-format.mts";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
+import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmRunner } from "./npm-runner.mts";
 import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
+import { validateBundledPackageDependencyAlignment } from "./package-source-dependencies.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -65,6 +67,7 @@ type PackageManifestLifecycle = {
 type PackageOptions = RunOptions & {
   allowUnreleasedChangelog?: unknown;
   extractAiRuntime?: (tarballPath: string, destination: string) => Promise<unknown>;
+  normalizeTarballModes?: (tarballPath: string) => Promise<unknown>;
   outputName?: string;
   packJsonPath?: string;
   pnpmPack?: boolean;
@@ -473,16 +476,6 @@ function run(command: string, args: string[], cwd: string, options: RunOptions =
   });
 }
 
-const PACKAGE_ARTIFACT_BUILD_STEPS = [
-  {
-    label: "Building OpenClaw package artifacts",
-    command: "pnpm",
-    // Let the frozen source own its build entrypoint while the packaging env
-    // keeps canonical declaration emission enabled.
-    args: ["run", "build"],
-  },
-];
-
 export async function buildPackageArtifacts(
   sourceDir: string,
   packageOptions: PackageOptions = {},
@@ -496,18 +489,18 @@ export async function buildPackageArtifacts(
   for (const envName of PACKAGE_BUILD_PLUGIN_SELECTION_ENV_NAMES) {
     delete buildEnv[envName];
   }
-  for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
-    console.error(`==> ${step.label}`);
-    await runImpl(step.command, step.args, sourceDir, {
-      env: {
-        ...buildEnv,
-      },
-      timeoutMs: resolveTimeoutMs(
-        "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
-        DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
-      ),
-    });
-  }
+  const timeoutMs = resolveTimeoutMs(
+    "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
+    DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
+  );
+  const distDir = path.join(sourceDir, "dist");
+  assertRealOutputRoot(distDir);
+  console.error("==> Cleaning OpenClaw package artifacts");
+  await fs.rm(distDir, { force: true, recursive: true });
+
+  // Frozen sources own their build entrypoint and may predate clean:dist.
+  console.error("==> Building OpenClaw package artifacts");
+  await runImpl("pnpm", ["run", "build"], sourceDir, { env: buildEnv, timeoutMs });
 }
 
 async function runCapture(command: string, args: string[], cwd: string, options: RunOptions = {}) {
@@ -518,22 +511,6 @@ export { run as runCommandForTest, runCapture as runCaptureForTest };
 
 async function newestOpenClawTarball(outputDir: string, packOutput: string) {
   let fromOutput = "";
-  try {
-    const parsed = JSON.parse(packOutput);
-    for (const entry of resolveNpmJsonEntries(parsed)) {
-      if (!entry || typeof entry !== "object" || !("filename" in entry)) {
-        continue;
-      }
-      const filenameValue = entry.filename;
-      if (typeof filenameValue !== "string") {
-        continue;
-      }
-      const filename = resolvePackedOpenClawFileName(filenameValue);
-      if (filename) {
-        fromOutput = filename;
-      }
-    }
-  } catch {}
   for (const line of packOutput.split(/\r?\n/u)) {
     const filename = resolvePackedOpenClawFileName(line);
     if (filename) {
@@ -564,12 +541,9 @@ async function newestOpenClawTarball(outputDir: string, packOutput: string) {
 async function writePackJson(
   packOutput: string,
   tarball: string,
-  packJsonPath: string | undefined,
+  packJsonPath: string,
   sourceDir: string,
 ) {
-  if (!packJsonPath) {
-    return;
-  }
   let parsed;
   try {
     parsed = JSON.parse(packOutput);
@@ -648,12 +622,18 @@ export async function prepareBundledAiRuntimePackage(
     ((tarballPath: string, destination: string) =>
       // Source-ref validation runs this trusted harness outside the candidate's dependency tree.
       // Keep extraction on the system tar contract so only the candidate checkout needs install.
-      run("tar", ["-xzf", tarballPath, "-C", destination, "--strip-components=1"], destination, {
-        timeoutMs: resolveTimeoutMs(
-          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
-          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
-        ),
-      }));
+      // Use an archive basename so GNU tar cannot treat a Windows drive as a remote host.
+      run(
+        "tar",
+        ["-xzf", path.basename(tarballPath), "-C", destination, "--strip-components=1"],
+        path.dirname(tarballPath),
+        {
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        },
+      ));
   const prepareManifest = packageOptions.prepareManifest ?? (async () => false);
   const restoreManifest = packageOptions.restoreManifest ?? (async () => false);
   const originalPackageJson = await fs.readFile(packageJsonPath, "utf8");
@@ -796,19 +776,12 @@ export async function prepareBundledAiRuntimePackage(
     if (typeof stagedPackageJson.version !== "string" || !stagedPackageJson.version) {
       throw new Error("packed @openclaw/ai package must declare a version");
     }
-    for (const [name, version] of Object.entries(stagedPackageJson.dependencies ?? {})) {
-      if (typeof version !== "string") {
-        throw new Error(`packed @openclaw/ai dependency ${name} must declare a string version`);
-      }
-      if (version === "0.0.0-private") {
-        continue;
-      }
-      const rootVersion = packageJson.dependencies?.[name];
-      if (rootVersion !== version && rootVersion !== `workspace:${version}`) {
-        throw new Error(
-          `root package.json must declare ${name}@${version} to bundle @openclaw/ai without duplicate dependencies`,
-        );
-      }
+    const alignedDependencies = validateBundledPackageDependencyAlignment({
+      bundledDependencies: stagedPackageJson.dependencies,
+      bundledPackageLabel: "packed @openclaw/ai",
+      rootDependencies: packageJson.dependencies,
+    });
+    for (const [name, version] of alignedDependencies) {
       packageJson.dependencies![name] = version;
     }
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
@@ -828,6 +801,65 @@ export async function prepareBundledAiRuntimePackage(
   } catch (error) {
     await cleanup();
     throw error;
+  }
+}
+
+async function normalizeOpenClawTarballModes(tarballPath: string) {
+  // npm/pnpm pack copy on-disk modes into the tarball (node-tar's portable
+  // mode-fix never adds read bits), so a restrictive-umask build host ships
+  // owner-only 0600/0700 entries that leave a root-installed CLI unreadable
+  // for non-root users under system tar and mode-preserving installers.
+  // Rewrite every entry to 0644/0755 the way a umask-022 host would have
+  // packed it, keeping executable bits. Stays on the system tar contract like
+  // the bundled AI runtime extraction above.
+  const timeoutMs = resolveTimeoutMs(
+    "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+    DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+  );
+  const stageDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-package-modes-"));
+  try {
+    await run(
+      "tar",
+      ["-xzf", path.basename(tarballPath), "-C", stageDir],
+      path.dirname(tarballPath),
+      { timeoutMs },
+    );
+    let stagedFileCount = 0;
+    const normalizeStagedModes = async (dir: string): Promise<void> => {
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          await fs.chmod(entryPath, 0o755);
+          await normalizeStagedModes(entryPath);
+        } else if (entry.isFile()) {
+          // Umask masking on extraction only clears group/other bits, so the
+          // owner exec bit still says whether the packed entry was executable.
+          const executable = ((await fs.stat(entryPath)).mode & 0o100) !== 0;
+          await fs.chmod(entryPath, executable ? 0o755 : 0o644);
+          stagedFileCount += 1;
+        }
+      }
+    };
+    await normalizeStagedModes(stageDir);
+    if (stagedFileCount === 0) {
+      throw new Error(`packed OpenClaw tarball has no file entries: ${tarballPath}`);
+    }
+    const stageRootEntries = await fs.readdir(stageDir);
+    const normalizedPath = `${tarballPath}.modes-tmp`;
+    await fs.rm(normalizedPath, { force: true });
+    await run(
+      "tar",
+      ["-czf", path.basename(normalizedPath), "-C", stageDir, ...stageRootEntries],
+      path.dirname(normalizedPath),
+      {
+        // macOS bsdtar must not add AppleDouble (._*) sidecar entries.
+        env: { ...process.env, COPYFILE_DISABLE: "1" },
+        timeoutMs,
+      },
+    );
+    await fs.rename(normalizedPath, tarballPath);
+  } finally {
+    await fs.rm(stageDir, { force: true, recursive: true });
   }
 }
 
@@ -972,26 +1004,18 @@ export async function packOpenClawPackageForDocker(
           ? ["pack", "--silent", "--config.ignore-scripts=true", "--pack-destination", outputPath]
           : [
               "pack",
-              ...(packageOptions.packJsonPath ? ["--json"] : []),
               "--silent",
               "--ignore-scripts",
               "--pack-destination",
               outputPath,
+              "--json=false",
             ];
-      if (packTool === "npm" && packageOptions.packJsonPath) {
-        packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
-      }
-      const packReceiptPath = packReceiptDir ? path.join(packReceiptDir, "pack.json") : undefined;
       packOutput = await runCaptureImpl(packTool, packArgs, sourcePath, {
-        stdoutFilePath: packReceiptPath,
         timeoutMs: resolveTimeoutMs(
           "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
           DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
         ),
       });
-      if (packReceiptPath) {
-        packOutput = await fs.readFile(packReceiptPath, "utf8");
-      }
     } finally {
       try {
         await cleanupBundledAiRuntime();
@@ -1017,7 +1041,31 @@ export async function packOpenClawPackageForDocker(
         tarball = target;
       }
     }
-    await writePackJson(packOutput, tarball, packageOptions.packJsonPath, sourcePath);
+    await (packageOptions.normalizeTarballModes ?? normalizeOpenClawTarballModes)(tarball);
+    if (packageOptions.packJsonPath) {
+      // npm's original receipt predates normalization. Inspect the finished bytes;
+      // dry-run preserves the archive while npm owns hashes, modes, and inventory.
+      packReceiptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-pack-receipt-"));
+      const packReceiptPath = path.join(packReceiptDir, "pack.json");
+      await runCaptureImpl(
+        "npm",
+        ["pack", tarball, "--dry-run", "--json", "--ignore-scripts", "--offline", "--silent"],
+        sourcePath,
+        {
+          stdoutFilePath: packReceiptPath,
+          timeoutMs: resolveTimeoutMs(
+            "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+            DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+          ),
+        },
+      );
+      await writePackJson(
+        await fs.readFile(packReceiptPath, "utf8"),
+        tarball,
+        packageOptions.packJsonPath,
+        sourcePath,
+      );
+    }
     return tarball;
   } catch (error) {
     packageError = error;

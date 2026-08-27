@@ -1,3 +1,4 @@
+import { formatUiError } from "../format-error.ts";
 import type { BoardWidget } from "./types.ts";
 import type { BoardWidgetFrameUrl } from "./view-types.ts";
 import {
@@ -14,6 +15,7 @@ type BoardWidgetSandboxHostOptions = {
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
+  controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
@@ -256,13 +258,7 @@ export class BoardWidgetSandboxHost {
         this.completeRequest(data.id, generation, true, result);
       })
       .catch((error: unknown) => {
-        this.completeRequest(
-          data.id,
-          generation,
-          false,
-          undefined,
-          error instanceof Error ? error.message : String(error),
-        );
+        this.completeRequest(data.id, generation, false, undefined, formatUiError(error));
       });
   }
 
@@ -351,7 +347,15 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.offeredTicket = ticket;
-    this.bridgePort.postMessage({ type: "openclaw:widget-host-init", ticket }, []);
+    const controlUiBaseUrl = this.options.controlUiBaseUrl?.trim();
+    this.bridgePort.postMessage(
+      {
+        type: "openclaw:widget-host-init",
+        ticket,
+        ...(controlUiBaseUrl ? { controlUiBaseUrl } : {}),
+      },
+      [],
+    );
   }
 
   private async loadDocument(): Promise<void> {

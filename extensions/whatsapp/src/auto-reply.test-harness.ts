@@ -1,5 +1,9 @@
-// Whatsapp plugin module implements auto reply harness behavior.
-import "./test-helpers.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  resetBaileysMocks as _resetBaileysMocks,
+  resetLoadConfigMock as _resetLoadConfigMock,
+} from "./test-helpers.js";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -15,10 +19,7 @@ import type { WhatsAppSendResult } from "./inbound/send-result.js";
 import { createAcceptedWhatsAppSendResult as createAcceptedWhatsAppSendResultForHarness } from "./inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 import { setWhatsAppRuntime } from "./runtime.js";
-import {
-  resetBaileysMocks as _resetBaileysMocks,
-  resetLoadConfigMock as _resetLoadConfigMock,
-} from "./test-helpers.js";
+// Whatsapp plugin module implements auto reply harness behavior.
 
 export { resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
 

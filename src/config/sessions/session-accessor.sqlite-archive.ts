@@ -58,6 +58,8 @@ export type TranscriptArchiveWorkerMessage = {
   results: TranscriptArchiveWorkerResult[];
 };
 
+export const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
+
 export type TranscriptArchivePublishPlan = {
   agentId: string;
   archiveDirectory: string;
@@ -312,11 +314,11 @@ function spawnSqliteTranscriptArchiveWorker<Result>(params: {
   return new Promise((resolve, reject) => {
     let results: Result[] | undefined;
     let workerError: Error | undefined;
-    worker.once(
+    worker.on(
       "message",
       (message: TranscriptArchiveWorkerMessage | TranscriptArchivePublishWorkerMessage) => {
         if (message.type === params.expectedMessageType) {
-          results = message.results as Result[];
+          (results ??= []).push(...(message.results as Result[]));
         }
       },
     );
@@ -399,12 +401,9 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const archivePlans = deduped.filter((plan) => plan.archiveTranscript);
   const workerResults: TranscriptArchiveWorkerResult[] = [];
-  let materializedBytes = 0;
-  // Archive bytes must never accumulate for an unbounded cleanup batch. One
-  // generation crosses the Worker boundary at a time, then becomes transaction input.
-  for (const archivePlan of archivePlans) {
+  const workerPlans: TranscriptArchiveWorkerPlan[] = [];
+  for (const archivePlan of deduped.filter((plan) => plan.archiveTranscript)) {
     if (archivePlan.snapshot.lastSeq === null) {
       // Empty transcripts still need a fresh snapshot fence, but have no bytes
       // to encode off-thread and should not pay Worker startup latency.
@@ -412,16 +411,10 @@ export async function materializeSessionStateDeletePlans(
       workerResults.push({ archive: null, sessionId: archivePlan.sessionId });
       continue;
     }
-    const [result] = await runSqliteTranscriptArchiveWorker([archivePlan]);
-    if (result) {
-      materializedBytes += result.archive?.bytes.byteLength ?? 0;
-      if (materializedBytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
-        throw new Error(
-          `SQLite transcript archive batch exceeds ${MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES} bytes; retry with fewer sessions.`,
-        );
-      }
-      workerResults.push(result);
-    }
+    workerPlans.push(archivePlan);
+  }
+  if (workerPlans.length > 0) {
+    workerResults.push(...(await runSqliteTranscriptArchiveWorker(workerPlans)));
   }
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
@@ -451,10 +444,6 @@ export async function materializeSessionStateDeletePlans(
     return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
   });
 }
-
-// Bulk cleanup plans retain encoded bytes until one atomic lifecycle commit.
-// Bound that retained input while still allowing exceptionally large single transcripts.
-const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
 // Multiple removed entries can point at one transcript session. If any owner
 // asked to keep an archive, the shared row gets exported once.

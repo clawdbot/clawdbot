@@ -46,7 +46,8 @@ const sessionPath = (sessionKey: string) =>
   sessionNavigationTarget({ face: "chat", sessionKey, fallbackAgentId: "main" }).options.pathname;
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SplitDropZone } from "./split-drop-zone.ts";
-import { insertPane, type ChatSplitLayout } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
+import { insertPane } from "./split-layout.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -151,7 +152,7 @@ function setNavigationContext(page: ChatPage) {
     basePath: "",
     sessions: { state: { result: null }, subscribe: () => () => undefined, patch },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: { snapshot: { hello: null } },
+    gateway: { snapshot: { hello: null }, subscribe: () => () => undefined },
     navigate,
     replace,
     agentSelection: { state: agentSelectionState, set: setAgent },
@@ -186,6 +187,7 @@ function setViewerPresenceContext(page: ChatPage) {
       lastErrorCode: null,
     },
     connection: { gatewayUrl: "ws://example.test", token: "", bootstrapToken: "", password: "" },
+    connectionRevision: 0,
     eventLog: [],
     connect: vi.fn(),
     setSessionKey: vi.fn(),
@@ -411,6 +413,7 @@ describe("chat page split layout host", () => {
   });
 
   it("hands each route-provided draft to the active pane only once", async () => {
+    window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
@@ -418,14 +421,13 @@ describe("chat page split layout host", () => {
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
 
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
-    expect(navigation.replace).toHaveBeenCalledOnce();
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: sessionPath("main"),
+      search: "?panel=details",
+      hash: "#pane",
     });
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
@@ -552,6 +554,8 @@ describe("chat page split layout host", () => {
   });
 
   it("keeps catalog identity when consuming a route draft", async () => {
+    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
+    window.history.replaceState({}, "", `/chat/research${expectedSearch}&draft=ship`);
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -560,14 +564,12 @@ describe("chat page split layout host", () => {
       draft: "one-shot catalog draft",
     };
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
-    const expectedSearch = catalogSessionSearch(CATALOG_KEY);
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/research",
       search: expectedSearch,
+      hash: "",
     });
     await expect(
       loadChatRoute(
@@ -604,6 +606,7 @@ describe("chat page split layout host", () => {
   });
 
   it("preserves a resolved long prefix through drafts and face changes", async () => {
+    window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship");
     const page = new ChatPage();
     const navigation = setNavigationContext(page);
     page.data = {
@@ -613,12 +616,12 @@ describe("chat page split layout host", () => {
       face: "chat",
     };
     document.body.append(page);
-    await page.updateComplete;
-    await Promise.resolve();
-    await page.updateComplete;
+    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
     expect(navigation.replace).toHaveBeenCalledWith("chat", {
       pathname: "/chat/main/1234567890",
+      search: "",
+      hash: "",
     });
     navigation.navigate.mockClear();
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
@@ -653,9 +656,11 @@ describe("chat page split layout host", () => {
     await page.updateComplete;
 
     const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    const cells = [...page.querySelectorAll<HTMLElement>(".chat-split-view__cell")];
     const dividers = page.querySelectorAll<RenderedDivider>("resizable-divider");
     expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
     expect(panes.map((pane) => pane.active)).toEqual([false, true]);
+    expect(cells.map((cell) => cell.getAttribute("aria-current"))).toEqual([null, "true"]);
     expect(dividers).toHaveLength(1);
     expect(itemAt(dividers, 0, "split divider").orientation).toBe("vertical");
     expect(
@@ -665,6 +670,27 @@ describe("chat page split layout host", () => {
     ).toBe(true);
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
     expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
+
+    itemAt(dividers, 0, "split divider").dispatchEvent(
+      new CustomEvent("resize", { detail: { splitRatio: 0.7 } }),
+    );
+    await page.updateComplete;
+    expect(getLayout(page)?.columnWeights[0]).toBeCloseTo(0.7);
+    expect(getLayout(page)?.columnWeights[1]).toBeCloseTo(0.3);
+    expect(loadSettings().chatSplitLayout).toBeUndefined();
+
+    itemAt(dividers, 0, "split divider").dispatchEvent(new CustomEvent("resize-end"));
+    expect(loadSettings().chatSplitLayout?.columnWeights[0]).toBeCloseTo(0.7);
+    expect(loadSettings().chatSplitLayout?.columnWeights[1]).toBeCloseTo(0.3);
+
+    itemAt(cells, 0, "split cell").dispatchEvent(new Event("pointerdown"));
+    await page.updateComplete;
+
+    expect(
+      [...page.querySelectorAll<HTMLElement>(".chat-split-view__cell")].map((cell) =>
+        cell.getAttribute("aria-current"),
+      ),
+    ).toEqual(["true", null]);
   });
 
   it("declares split panes, session switches, pane closes, and page disposal", async () => {
@@ -784,7 +810,13 @@ describe("chat page split layout host", () => {
     };
     let notify = () => {};
     (page as unknown as { context: unknown }).context = {
+      agents: { state: { agentsList: null } },
+      gateway: {
+        snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
+        subscribe: () => () => undefined,
+      },
       sessions: {
+        canonicalListRevision: 0,
         state: sessionsState,
         subscribe: (listener: () => void) => {
           notify = listener;
@@ -806,6 +838,8 @@ describe("chat page split layout host", () => {
     // the label anyway — including non-default agent ids.
     (page as unknown as { context: { gateway?: unknown; sessions: unknown } }).context.gateway = {
       snapshot: {
+        assistantAgentId: "dev",
+        client: null,
         hello: {
           snapshot: {
             sessionDefaults: {
@@ -815,7 +849,9 @@ describe("chat page split layout host", () => {
             },
           },
         },
+        phase: "stopped",
       },
+      subscribe: () => () => undefined,
     };
     sessionsState.result = {
       sessions: [{ key: "agent:dev:main", displayName: "Main desk" }],
@@ -849,12 +885,25 @@ describe("chat page split layout host", () => {
       }),
     };
     const page = new ChatPage();
-    (page as unknown as { context: unknown }).context = { sessions: firstSessions };
+    const sharedContext = {
+      agents: { state: { agentsList: null } },
+      gateway: {
+        snapshot: { assistantAgentId: "main", client: null, hello: null, phase: "stopped" },
+        subscribe: () => () => undefined,
+      },
+    };
+    (page as unknown as { context: unknown }).context = {
+      ...sharedContext,
+      sessions: firstSessions,
+    };
     document.body.append(page);
     await page.updateComplete;
 
     expect(firstSessions.subscribe).toHaveBeenCalledOnce();
-    (page as unknown as { context: unknown }).context = { sessions: secondSessions };
+    (page as unknown as { context: unknown }).context = {
+      ...sharedContext,
+      sessions: secondSessions,
+    };
     page.requestUpdate();
     await page.updateComplete;
 

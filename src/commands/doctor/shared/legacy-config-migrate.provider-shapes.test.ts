@@ -29,6 +29,7 @@ describe("legacy migrate provider-shaped config", () => {
       {
         talk: {
           provider: "openai",
+          voiceId: "legacy-voice",
           providers: {
             openai: {
               apiKey: "test-key",
@@ -40,6 +41,7 @@ describe("legacy migrate provider-shaped config", () => {
           brain: "agent-consult",
           model: "gpt-realtime",
           voice: "alloy",
+          unknown: "discarded",
         } as never,
       },
       changes,
@@ -51,6 +53,7 @@ describe("legacy migrate provider-shaped config", () => {
     ]);
     expect(migrated.talk).toEqual({
       provider: "openai",
+      voiceId: "legacy-voice",
       providers: {
         openai: {
           apiKey: "test-key",
@@ -72,6 +75,12 @@ describe("legacy migrate provider-shaped config", () => {
         speakerVoice: "alloy",
       },
     });
+    const conflicting = {
+      ...migrated,
+      talk: { ...migrated.talk, model: "obsolete", voice: "obsolete" },
+    } as OpenClawConfig;
+    expect(normalizeLegacyTalkConfig(conflicting, [])).toEqual(migrated);
+    expect(normalizeLegacyTalkConfig(migrated, [])).toBe(migrated);
   });
 
   it("does not copy plain Talk speech provider config into talk.realtime", () => {

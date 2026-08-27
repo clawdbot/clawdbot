@@ -1,4 +1,9 @@
+import os from "node:os";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../infra/node-commands.js";
+import {
+  NODE_WORKER_CAPACITY_MAX,
+  type NodeWorkerCapacitySnapshot,
+} from "../infra/node-runner-inventory.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchClaim,
@@ -10,20 +15,25 @@ import {
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
 
-const DEFAULT_WORKER_CAPACITY = 2;
 const DEFAULT_CAPACITY_WAIT_MS = 10_000;
 const CAPACITY_POLL_MS = 100;
 
 type NodeWorkerCapacityOptions = {
   capacity?: number;
   capacityWaitMs?: number;
-  onAvailabilityChanged?: (available: boolean) => void;
+  onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
 };
 
 function capacityAbortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
     : new Error("node worker admission aborted");
+}
+
+function resolveDefaultWorkerCapacity(): number {
+  const availableParallelism =
+    typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length;
+  return Math.min(NODE_WORKER_CAPACITY_MAX, Math.max(1, availableParallelism));
 }
 
 export class NodeWorkerCapacityExhaustedError extends Error {
@@ -35,25 +45,30 @@ export class NodeWorkerCapacityExhaustedError extends Error {
   }
 }
 
-/** Owns durable worker slot admission and live full/free publication edges. */
+/** Owns durable worker slot admission and exact live capacity publication. */
 export class NodeWorkerCapacity {
   private readonly capacity: number;
   private readonly waitMs: number;
-  private readonly onAvailabilityChanged?: (available: boolean) => void;
+  private readonly onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
   private readonly waiters = new Set<() => void>();
   private readonly closeAbort = new AbortController();
-  private availability?: boolean;
+  private publishedCapacity: NodeWorkerCapacitySnapshot;
 
   constructor(
     private readonly store: NodeWorkerLaunchStore,
     options: NodeWorkerCapacityOptions = {},
   ) {
-    this.capacity = options.capacity ?? DEFAULT_WORKER_CAPACITY;
+    this.capacity = options.capacity ?? resolveDefaultWorkerCapacity();
     this.waitMs = options.capacityWaitMs ?? DEFAULT_CAPACITY_WAIT_MS;
-    this.onAvailabilityChanged = options.onAvailabilityChanged;
-    if (!Number.isSafeInteger(this.capacity) || this.capacity < 1) {
-      throw new Error("node worker capacity must be a positive safe integer");
+    this.onCapacityChanged = options.onCapacityChanged;
+    if (
+      !Number.isSafeInteger(this.capacity) ||
+      this.capacity < 1 ||
+      this.capacity > NODE_WORKER_CAPACITY_MAX
+    ) {
+      throw new Error(`node worker capacity must be between 1 and ${NODE_WORKER_CAPACITY_MAX}`);
     }
+    this.publishedCapacity = Object.freeze({ total: this.capacity, available: 0 });
     if (!Number.isSafeInteger(this.waitMs) || this.waitMs < 0) {
       throw new Error("node worker capacity wait must be a non-negative safe integer");
     }
@@ -62,7 +77,7 @@ export class NodeWorkerCapacity {
   async initialize(
     recoverRunning: (receipt: NodeWorkerLaunchReceipt) => Promise<void>,
   ): Promise<void> {
-    this.publish(false);
+    this.onCapacityChanged?.(this.publishedCapacity);
     for (const receipt of this.store.listNonterminal()) {
       if (receipt.state === "pending") {
         const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
@@ -84,7 +99,7 @@ export class NodeWorkerCapacity {
       await recoverRunning(receipt);
     }
     this.store.pruneExpiredTerminal();
-    this.refresh();
+    this.refresh(true);
   }
 
   async claim(
@@ -99,7 +114,7 @@ export class NodeWorkerCapacity {
       }
       signal?.throwIfAborted();
       const result = this.store.claim(claim, supervisor, this.capacity);
-      this.publish(result.nonterminalCount < this.capacity);
+      this.publishCount(result.nonterminalCount);
       if (result.action !== "at-capacity") {
         return result;
       }
@@ -133,17 +148,18 @@ export class NodeWorkerCapacity {
     this.wake();
   }
 
-  private publish(available: boolean): void {
-    if (this.availability === available) {
+  private publishCount(nonterminalCount: number, force = false): void {
+    const available = Math.max(0, this.capacity - nonterminalCount);
+    if (!force && this.publishedCapacity.available === available) {
       return;
     }
-    this.availability = available;
-    this.onAvailabilityChanged?.(available);
+    this.publishedCapacity = Object.freeze({ total: this.capacity, available });
+    this.onCapacityChanged?.(this.publishedCapacity);
   }
 
-  private refresh(): void {
+  private refresh(force = false): void {
     const count = this.store.nonterminalCount();
-    this.publish(count < this.capacity);
+    this.publishCount(count, force);
     if (count < this.capacity) {
       this.wake();
     }
@@ -154,7 +170,7 @@ export class NodeWorkerCapacity {
     try {
       this.refresh();
     } catch {
-      this.publish(false);
+      this.publishCount(this.capacity);
     }
   }
 

@@ -323,6 +323,19 @@ export async function probeWorkspaceGitMode(params: {
   throw workspaceSyncError(gitBaseResult);
 }
 
+export async function resolveWorkerWorkspaceGitAuthor(
+  request: Pick<WorkerWorkspaceSyncRequest, "localPath" | "gitAuthor">,
+  runTask: (argv: string[]) => Promise<SpawnResult>,
+): Promise<{ name: string; email: string }> {
+  const git = ["git", "-C", request.localPath, "config", "--get"];
+  const read = async (key: "name" | "email") => {
+    const result = await runTask([...git, `user.${key}`]);
+    return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
+  };
+  const [name, email] = await Promise.all([read("name"), read("email")]);
+  return { name: request.gitAuthor?.name ?? name, email: request.gitAuthor?.email ?? email };
+}
+
 export function stableWorkerPathComponent(value: string, length: number): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
@@ -336,6 +349,14 @@ export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest
   }
   if (!Number.isSafeInteger(request.generation) || request.generation < 0) {
     throw new Error("Worker workspace generation must be a non-negative safe integer");
+  }
+  for (const value of [request.gitAuthor?.name, request.gitAuthor?.email]) {
+    if (
+      value !== undefined &&
+      (!value.trim() || value.length > 256 || value.includes("\u0000") || /[\r\n]/u.test(value))
+    ) {
+      throw new Error("Worker workspace Git author metadata is invalid");
+    }
   }
 }
 

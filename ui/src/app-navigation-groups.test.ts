@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
-  SETTINGS_NAVIGATION_GROUPS,
   SIDEBAR_NAV_ROUTES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
@@ -11,9 +10,12 @@ import {
   serializeSidebarEntry,
   settingsNavigationOwnerRoute,
   sidebarMoreRoutes,
+  visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
+import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 
-const settingsRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+const settingsGroups = visibleSettingsNavigationGroups(true);
+const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
 
 describe("sidebar entries", () => {
   it("keeps operational destinations visible by default", () => {
@@ -31,21 +33,25 @@ describe("sidebar entries", () => {
     expect(normalizeSidebarEntries(["route:worktrees", "route:usage"])).toEqual(["route:usage"]);
   });
 
+  it("preserves the shipped Workboard placement slot outside customizable routes", () => {
+    expect(normalizeSidebarEntries(["route:workboard", "workboard:ops"])).toEqual([
+      "route:workboard",
+      "workboard:ops",
+    ]);
+    expect(sidebarMoreRoutes([])).not.toContain("workboard");
+  });
+
   it("recognizes every settings navigation route", () => {
     expect(settingsRoutes.every((routeId) => isSettingsNavigationRoute(routeId))).toBe(true);
   });
 
   it("places Updates in the System group immediately before About", () => {
-    const system = SETTINGS_NAVIGATION_GROUPS.find(
-      (group) => group.labelKey === "nav.settingsGroupSystem",
-    );
+    const system = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSystem");
     expect(system?.routes.slice(-2)).toEqual(["updates", "about"]);
   });
 
   it("places team secrets between Privacy & Security and Approvals", () => {
-    const security = SETTINGS_NAVIGATION_GROUPS.find(
-      (group) => group.labelKey === "nav.settingsGroupSecurity",
-    );
+    const security = settingsGroups.find((group) => group.labelKey === "nav.settingsGroupSecurity");
     expect(security?.routes).toEqual(["security", "secrets", "approvals"]);
   });
 
@@ -57,6 +63,22 @@ describe("sidebar entries", () => {
   it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
     expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
     expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
+  });
+
+  it("filters admin-only settings while preserving legacy fail-open visibility", () => {
+    const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
+    expect(nonAdminRoutes).toContain("approvals");
+    expect(nonAdminRoutes).toContain("channels");
+    expect(nonAdminRoutes).not.toContain("security");
+    expect(nonAdminRoutes).not.toContain("communications");
+
+    const legacyCanAdmin = readGatewayOperatorAccess({
+      hello: { auth: { role: "operator" } },
+    } as Parameters<typeof readGatewayOperatorAccess>[0]).canAdmin;
+    expect(legacyCanAdmin).toBe(true);
+    expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
+      visibleSettingsNavigationGroups(true),
+    );
   });
 
   it("drops stale device pins", () => {

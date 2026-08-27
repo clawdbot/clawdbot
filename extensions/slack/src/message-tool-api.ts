@@ -21,12 +21,16 @@ function createSlackFileActionSchema(): Record<string, TSchema> {
   };
 }
 
-function createSlackReactionEmojiSchema(): Record<string, TSchema> {
+function createSlackReactionEmojiSchema(emojiListAvailable: boolean): Record<string, TSchema> {
+  const discoveryHint = emojiListAvailable
+    ? ' Discover workspace custom emoji with action:"emoji-list".'
+    : "";
   return {
     emoji: Type.Optional(
       Type.String({
         description:
-          'Slack emoji shortcode name (for example "white_check_mark" or "+1") or common emoji character (for example "✅"). Colons are optional around shortcodes.',
+          'Slack standard or workspace custom emoji shortcode (for example "white_check_mark" or "+1") or common emoji character (for example "✅"). Colons are optional.' +
+          discoveryHint,
       }),
     ),
   };
@@ -114,7 +118,7 @@ export function describeSlackMessageTool({
   }
   if (actions.includes("react")) {
     schema.push({
-      properties: createSlackReactionEmojiSchema(),
+      properties: createSlackReactionEmojiSchema(actions.includes("emoji-list")),
       actions: ["react", "reactions"],
     });
   }

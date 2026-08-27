@@ -23,6 +23,13 @@ const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
 const createDoctorPluginMetadataSnapshotScopeParamsMock = vi.hoisted(() => vi.fn());
 const runDoctorConfigPreflightOptionsMock = vi.hoisted(() => vi.fn());
 const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
+const prepareTailscaleConfigMigrationMock = vi.hoisted(() =>
+  vi.fn(({ cfg }: { cfg: OpenClawConfig }) => ({
+    config: cfg,
+    changes: [] as string[],
+    warnings: [] as string[],
+  })),
+);
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
 );
@@ -263,6 +270,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("./doctor-tailscale.js", () => ({
+  prepareTailscaleConfigMigration: prepareTailscaleConfigMigrationMock,
 }));
 
 vi.mock("./doctor/repair-sequencing.js", async () => {
@@ -1648,6 +1659,12 @@ describe("doctor config flow", () => {
     runDoctorRepairSequenceMock.mockReset();
     createDoctorPluginMetadataSnapshotScopeParamsMock.mockClear();
     collectDoctorPreviewNotesParamsMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockClear();
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
+      config: cfg,
+      changes: [],
+      warnings: [],
+    }));
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
@@ -1666,6 +1683,45 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("previews and applies the legacy Tailscale Serve migration through Doctor", async () => {
+    const config: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "secret" },
+        tailscale: { mode: "off" },
+      },
+    };
+    prepareTailscaleConfigMigrationMock.mockImplementation(({ cfg }) => ({
+      config: {
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          bind: "loopback" as const,
+          tailscale: { ...cfg.gateway?.tailscale, mode: "serve" as const },
+        },
+      },
+      changes: ["Migrated legacy Tailscale Serve to managed ingress."],
+      warnings: [],
+    }));
+
+    const preview = await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const repair = await runDoctorConfigWithInput({
+      config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(preview.shouldWriteConfig).toBe(false);
+    expect(preview.cfg.gateway?.bind).toBe("lan");
+    expect(repair.shouldWriteConfig).toBe(true);
+    expect(repair.cfg.gateway?.bind).toBe("loopback");
+    expect(repair.cfg.gateway?.tailscale?.mode).toBe("serve");
+    expect(prepareTailscaleConfigMigrationMock).toHaveBeenCalledTimes(2);
   });
 
   it("plans persistence of the injected main roster during doctor repair", async () => {
@@ -1694,6 +1750,70 @@ describe("doctor config flow", () => {
     expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
       false,
+    );
+  });
+
+  it("previews and persists pre-parse context-budget cleanup with every path reported", async () => {
+    const canonical = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                contextTokens: 64_000,
+                contextWindow: 128_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: { defaults: {}, entries: { ops: {} } },
+    };
+    const legacy = {
+      models: {
+        providers: {
+          openai: {
+            contextTokens: 64_000,
+            contextWindow: 128_000,
+            models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+          },
+        },
+      },
+      agents: { defaults: { contextTokens: 48_000 }, entries: { ops: { contextTokens: 32_000 } } },
+    };
+
+    await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
+    expect(previewText).toContain(
+      "models.providers.openai.contextTokens → models.providers.openai.models[0].contextTokens",
+    );
+    expect(previewText).toContain("Removed agents.defaults.contextTokens");
+    expect(previewText).toContain("Removed agents.entries.ops.contextTokens");
+    expect(previewText).toContain("models.providers.<provider>.models[].contextTokens");
+
+    terminalNoteMock.mockClear();
+    const repaired = await runDoctorConfigWithInput({
+      config: canonical,
+      parsedConfig: legacy,
+      sourceConfigBeforeMigrations: legacy,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repaired.shouldWriteConfig).toBe(true);
+    expect(repaired.cfg).toMatchObject(canonical);
+    expect(repaired.pendingChangePanels?.join("\n")).toContain(
+      "Removed models.providers.openai.contextWindow after baking it into explicit model entries.",
+    );
+    expect(terminalNoteMock.mock.calls.map(([message]) => message).join("\n")).toContain(
+      "agents.entries.ops.contextTokens cannot be represented per model",
     );
   });
 
@@ -1736,6 +1856,33 @@ describe("doctor config flow", () => {
     expect(result.cfg.agents?.ownership).toBe("explicit");
     expect(result.cfg.agents?.entries?.ops).not.toHaveProperty("default");
     expect(result.cfg.agents).not.toHaveProperty("list");
+  });
+
+  it("stamps explicit ownership when Doctor migrates a markerless multi-agent list", async () => {
+    const rawConfig = {
+      agents: {
+        list: [{ id: "ops" }, { id: "research", model: "openai/research" }],
+      },
+    };
+    const result = await runDoctorConfigWithInput({
+      config: migratePersistedImplicitMainRoster(rawConfig).config as OpenClawConfig,
+      parsedConfig: rawConfig,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.shouldWriteConfig).toBe(true);
+    expect(result.explicitSetPaths).toEqual([
+      ["agents", "entries"],
+      ["agents", "ownership"],
+    ]);
+    expect(result.cfg.agents).toEqual({
+      ownership: "explicit",
+      entries: {
+        ops: {},
+        research: { model: "openai/research" },
+      },
+    });
   });
 
   it("materializes ambient roles for a multi-agent configured default", async () => {

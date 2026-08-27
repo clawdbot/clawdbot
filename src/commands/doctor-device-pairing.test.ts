@@ -8,12 +8,9 @@ import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  requestDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { revokeDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 

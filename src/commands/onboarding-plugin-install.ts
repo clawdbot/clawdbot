@@ -15,6 +15,7 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   findBundledPluginSourceInMap,
@@ -72,6 +73,8 @@ export type OnboardingPluginInstallEntry = {
   label: string;
   install: PluginPackageInstall;
   trustedSourceLinkedOfficialInstall?: boolean;
+  /** Keep this official runtime package on the same release cohort as OpenClaw. */
+  versionBoundToOpenClaw?: boolean;
   preferRemoteInstall?: boolean;
 };
 
@@ -175,14 +178,6 @@ function resolveGitDirectoryMarker(dir: string): string | null {
   }
 }
 
-function isWithinBaseDirectory(baseDir: string, targetPath: string): boolean {
-  const relative = path.relative(baseDir, targetPath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
 function hasTrustedGitWorkspace(root: string): boolean {
   const realRoot = resolveRealDirectory(root);
   if (!realRoot) {
@@ -241,11 +236,8 @@ function formatPortableLocalPath(localPath: string, workspaceDir?: string): stri
     if (!realBase) {
       continue;
     }
-    const relative = path.relative(realBase, localPath);
-    if (
-      relative === "" ||
-      (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-    ) {
+    if (isPathInside(realBase, localPath)) {
+      const relative = path.relative(realBase, localPath);
       const portable = relative.split(path.sep).join("/");
       return portable ? `./${portable}` : ".";
     }
@@ -302,7 +294,7 @@ function resolveLocalPath(params: {
       if (
         !bases.some((base) => {
           const realBase = resolveRealDirectory(base);
-          return realBase ? isWithinBaseDirectory(realBase, resolved) : false;
+          return realBase ? isPathInside(realBase, resolved) : false;
         })
       ) {
         continue;
@@ -1155,6 +1147,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           ? parseRegistryNpmSpec(npmSpec)?.name
           : undefined,
         coreVersion: VERSION,
+        versionBoundToCore: entry.versionBoundToOpenClaw,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;

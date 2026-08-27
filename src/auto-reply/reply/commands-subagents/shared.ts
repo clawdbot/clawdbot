@@ -12,8 +12,7 @@ import {
   resolveMainSessionAlias,
 } from "../../../agents/tools/sessions-helpers.js";
 import { callGateway } from "../../../gateway/call.js";
-import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { parseAgentSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { looksLikeSessionId } from "../../../sessions/session-id.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { commandReply } from "../command-gates.js";

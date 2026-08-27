@@ -1,5 +1,4 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -11,12 +10,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { parsePositiveInteger } from "./transport-utils.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
   baseUrl?: unknown;
   id?: unknown;
   provider?: unknown;
+  contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
 };
@@ -275,20 +276,18 @@ function resolveOpenAIResponsesPayloadCapabilities(
   };
 }
 
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    return parseStrictPositiveInteger(value);
-  }
-  return undefined;
-}
-
-function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+function resolveOpenAIResponsesCompactThreshold(model: {
+  contextTokens?: unknown;
+  contextWindow?: unknown;
+}): number {
+  const contextTokens = parsePositiveInteger(model.contextTokens);
   const contextWindow = parsePositiveInteger(model.contextWindow);
-  if (contextWindow) {
-    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+  const effectiveBudget =
+    contextTokens && contextWindow
+      ? Math.min(contextTokens, contextWindow)
+      : contextTokens || contextWindow;
+  if (effectiveBudget) {
+    return Math.max(1_000, Math.floor(effectiveBudget * 0.7));
   }
   return 80_000;
 }

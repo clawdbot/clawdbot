@@ -8,6 +8,11 @@ import {
   addTimerTimeoutGraceMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "../../lib/managed-child-process.mts";
 import { resolveNpmRunner } from "../../npm-runner.mts";
 import { resolvePnpmRunner } from "../../pnpm-runner.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../../windows-cmd-helpers.mjs";
@@ -20,7 +25,6 @@ const HOST_COMMAND_WRAPPER_EXTRA_BUFFER_BYTES = 1024 * 1024;
 const HOST_COMMAND_WRAPPER_BACKSTOP_MS = 5_000;
 const HOST_COMMAND_TIMEOUT_KILL_GRACE_MS = 100;
 const HOST_COMMAND_STREAMING_TIMEOUT_KILL_GRACE_MS = 2_000;
-const HOST_COMMAND_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const HOST_COMMAND_POST_FORCE_KILL_WAIT_MS = 100;
 const HOST_COMMAND_CHILD_PID_PREFIX = "__OPENCLAW_HOST_COMMAND_CHILD_PID__";
 const HOST_COMMAND_SPAWN_ERROR_PREFIX = "__OPENCLAW_HOST_COMMAND_SPAWN_ERROR__";
@@ -79,36 +83,31 @@ function signalHostCommandProcess(pid: number | undefined, signal: NodeJS.Signal
   if (!pid) {
     return;
   }
-  if (process.platform === "win32") {
-    try {
-      process.kill(pid, signal);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ESRCH") {
-        warn(`failed to send ${signal} to host command process ${pid}: ${code ?? String(error)}`);
-      }
-    }
-    return;
-  }
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ESRCH") {
-      return;
-    }
-    try {
-      process.kill(pid, signal);
-    } catch (fallbackError) {
-      const fallbackCode = (fallbackError as NodeJS.ErrnoException).code;
-      if (fallbackCode === "ESRCH") {
-        return;
-      }
-      warn(
-        `failed to send ${signal} to host command process ${pid}: group ${code ?? String(error)}, leader ${fallbackCode ?? String(fallbackError)}`,
-      );
-    }
-  }
+  let processGroupError: NodeJS.ErrnoException | undefined;
+  terminateManagedChild(
+    {
+      kill: (childSignal) => process.kill(pid, childSignal),
+      pid,
+    },
+    signal,
+    {
+      onChildSignalError(error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ESRCH") {
+          return;
+        }
+        const reason = processGroupError
+          ? `group ${processGroupError.code ?? processGroupError.toString()}, leader ${code ?? String(error)}`
+          : (code ?? String(error));
+        warn(`failed to send ${signal} to host command process ${pid}: ${reason}`);
+      },
+      onProcessGroupSignalError(error) {
+        processGroupError = error as NodeJS.ErrnoException;
+      },
+      processGroupFallback: "nonmissing",
+      useWindowsTaskkill: false,
+    },
+  );
 }
 
 const POSIX_TIMEOUT_WRAPPER = String.raw`
@@ -604,40 +603,16 @@ export async function runStreaming(
         }
       }
     };
-    const streamingProcessGroupAlive = (): boolean => {
-      if (!detached || !childPid) {
-        return false;
-      }
-      try {
-        process.kill(-childPid, 0);
-        return true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EPERM") {
-          return false;
-        }
-        if (child.exitCode !== null || child.signalCode !== null) {
-          return false;
-        }
-        try {
-          process.kill(childPid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      }
-    };
-    const waitForStreamingProcessGroupExit = async (timeoutBudgetMs: number): Promise<boolean> => {
-      const deadlineAt = Date.now() + timeoutBudgetMs;
-      while (Date.now() < deadlineAt) {
-        if (!streamingProcessGroupAlive()) {
-          return true;
-        }
-        await new Promise((resolvePoll) => {
-          setTimeout(resolvePoll, HOST_COMMAND_PROCESS_GROUP_EXIT_POLL_MS);
-        });
-      }
-      return !streamingProcessGroupAlive();
-    };
+    const streamingProcessGroupAlive = (): boolean =>
+      inspectManagedProcessGroup(child, {
+        errorPolicy: "verify-leader",
+        useProcessGroup: detached,
+      }) === "live";
+    const waitForStreamingProcessGroupExit = (timeoutBudgetMs: number): Promise<boolean> =>
+      waitForManagedProcessGroupExit(child, timeoutBudgetMs, {
+        errorPolicy: "verify-leader",
+        useProcessGroup: detached,
+      });
     logStream?.on("error", (error) => {
       logStreamError = error;
       signalStreamingChild("SIGTERM");

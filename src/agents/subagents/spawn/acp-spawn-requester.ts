@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionMeta } from "../../../acp/runtime/session-meta.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
@@ -206,6 +209,7 @@ function sessionEntryIsOwnedByRequester(params: {
 export function validateAcpResumeSessionOwnership(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
+  backendId?: string;
   requesterSessionKey?: string;
   resumeSessionId?: string;
 }): { ok: true } | { ok: false; error: string } {
@@ -221,12 +225,17 @@ export function validateAcpResumeSessionOwnership(params: {
     };
   }
 
+  const configuredBackend = normalizeOptionalLowercaseString(params.backendId);
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.targetAgentId,
   });
   for (const { sessionKey, entry } of listSessionEntriesReadOnly({ storePath, clone: false })) {
     const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
-    if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
+    // Resume identifiers are backend-local; requester ownership cannot authorize another backend.
+    if (
+      (configuredBackend && normalizeOptionalLowercaseString(acp?.backend) !== configuredBackend) ||
+      !sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)
+    ) {
       continue;
     }
     if (

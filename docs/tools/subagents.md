@@ -71,6 +71,15 @@ Agents start background sub-agents with the `sessions_spawn` tool.
 Completions return as internal parent-session events; the parent/requester
 agent decides whether a user-facing update is needed.
 
+When [execution identity auditing](/gateway/audit#run-identity-inspection) is
+enabled, each native or ACP child receives a new immutable identity context.
+Its lineage links the exact parent context/run when available and records
+bounded references for the parent grant, local policy, runtime assurance, and
+target policy that constrained the spawn. Neither the private identity token
+nor task text appears in the tool schema, result, transcript-derived evidence,
+or public plugin API. External ACP-native actions without a callback remain
+explicitly unsupported even though the ACP spawn and child are observable.
+
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
     - `sessions_spawn` is non-blocking; it returns a run id immediately.
@@ -159,12 +168,14 @@ in the tool result: `resolvedModel` contains the applied model ref and
 
 ### Delegation prompt mode
 
-`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation.
+`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation. With no explicit setting, OpenClaw uses `prefer` in each agent's main session and `suggest` in every other session.
 
-- `suggest` (default): keep the standard prompt nudge to use sub-agents for larger or slower work.
-- `prefer`: tell the main agent to stay responsive and delegate anything more involved than a direct reply through `sessions_spawn`.
+- `suggest`: keep the standard prompt nudge to use sub-agents for larger or slower work.
+- `prefer`: tell the agent to stay responsive and delegate anything more involved than a direct reply through `sessions_spawn`.
 
-Per-agent override: `agents.entries.*.subagents.delegationMode`.
+An explicit default or per-agent setting always wins, including `suggest` in a main session and `prefer` elsewhere. Per-agent overrides use `agents.entries.*.subagents.delegationMode`.
+
+In `prefer` mode, hidden sub-agents are for internal legwork that the user does not need to follow. Work the user will watch or return to, or work with its own deliverable such as a URL, PR, or report, should use `sessions_spawn` with `visible: true` so it remains in the sidebar.
 
 ```json5
 {
@@ -238,7 +249,10 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
   `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`. A visible fork must target the same agent as the requester.
 </ParamField>
 <ParamField path="visible" type="boolean" default="false">
-  Create a persistent dashboard session that the user can open in the Control UI. Visible spawns support only `runtime: "subagent"` and always keep the created session.
+  Create a persistent dashboard session for work the user will watch or return to, or when they ask for a thread. Visible spawns support only `runtime: "subagent"` and always keep the created session.
+</ParamField>
+<ParamField path="category" type="string">
+  Optional sidebar category for a visible session. Omit it or pass an empty string to leave the session ungrouped. Requires `visible: true`.
 </ParamField>
 <ParamField path="worktree" type="boolean" default="false">
   Provision a managed git worktree for the new dashboard session. Requires `visible: true`.
@@ -257,7 +271,9 @@ their latest assistant turn back to the requester; external delivery stays with
 the parent/requester agent.
 </Warning>
 
-With `visible: true`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this mode when the user asks to create or open a thread that should appear in the sidebar. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. Omit `cwd` to use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree. See [Managed worktrees](/concepts/managed-worktrees) for checkout naming, setup, cleanup, and restore behavior.
+With `visible: true`, `category`, `model`, `cwd`, and a same-agent `context: "fork"` are supported. Use this durable mode for coding, multi-step work, or results the user may revisit, steer, or keep; it appears in the sidebar when the web UI is available and still works without it. Pass `category` to place the new session in that sidebar group atomically; omission and an empty string leave it ungrouped. A sandboxed target restricts `cwd` to that agent's workspace. Non-admin callers may use `cwd` only inside a configured agent workspace. Omit `cwd` to use the target agent workspace; for another repository, ask the operator to start the session from a registered project. Do not replace a rejected persistent spawn with the synchronous `openclaw agent` CLI, whose command deadline defaults to 600 seconds. Thread binding, `mode`, thinking overrides, `lightContext`, `attachments`, and `attachAs` are unavailable on this path because visible sessions are persistent dashboard sessions created through `sessions.create`. The new dashboard child inherits the requester's effective tool-policy ceiling before its first turn. Session listing and addressing obey `tools.sessions.visibility`; the default `tree` scope covers the current session and its own spawn subtree, while the main session can reach every same-agent session unless `self` or the sandbox spawned-only clamp applies. See [Session tools](/concepts/session-tool#visibility) and [Managed worktrees](/concepts/managed-worktrees).
+
+A visible spawn is attributed to the requesting agent: the new session's creator and initial owner is that agent, shown with its configured identity name and avatar in the sidebar. The accepted result doubles as a receipt with `childSessionKey`, `runId`, a Control UI `sessionUrl` (omitted when the Control UI is disabled), and an `owner` record. When acknowledging the spawn in a channel, put the session URL on the first line and `Owner: <label>` on the second so the user can open the session and see who is responsible. Owners can be reassigned later; see [Multi-user mode](/concepts/multi-user#agent-spawned-sessions).
 
 ### Task names and targeting
 
@@ -286,6 +302,14 @@ answer until those completions arrive.
 `sessions_yield` is the waiting primitive. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
+
+Use the optional `message` field for private context that the resumed turn
+should receive. Use `acknowledgment` for a waiting reply when an interactive
+parent turn would otherwise end silently. The acknowledgment is not sent from
+sub-agent, heartbeat, or silent turns, and it does not replace a reply or
+message already delivered during the turn. This host-owned waiting status
+bypasses message-tool-only source suppression; ordinary model replies remain
+private unless the model sends them through the message tool.
 
 On native Codex harness turns, `wait_agent` keeps the current turn active and
 is reserved for an intentional same-turn wait when the immediate next step is

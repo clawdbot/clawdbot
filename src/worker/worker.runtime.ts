@@ -1,8 +1,18 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  WORKER_PORTAL_PROTOCOL_FEATURE,
+  type WorkerHelloOk,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  WorkerAdmissionDeadlineExceededError,
+  type WorkerAdmissionDeadlineResult,
+} from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
@@ -13,6 +23,7 @@ import {
 // Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
 // gateway worker turn launcher.
 export type WorkerRuntimeResult =
+  | WorkerAdmissionDeadlineResult
   | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
   | {
       status: "failed";
@@ -38,11 +49,11 @@ function fencedResult(state: WorkerConnectionState): WorkerRuntimeResult | undef
   return undefined;
 }
 
-async function assertWorkspaceDirectory(workspaceDir: string): Promise<string> {
-  const resolved = await realpath(workspaceDir);
+async function assertWorkerDirectory(pathname: string, label: string): Promise<string> {
+  const resolved = await realpath(pathname);
   const workspaceStat = await stat(resolved);
   if (!workspaceStat.isDirectory()) {
-    throw new Error("worker workspace path must be a directory");
+    throw new Error(`worker ${label} path must be a directory`);
   }
   return resolved;
 }
@@ -55,7 +66,26 @@ export async function runWorkerDescriptor(
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<WorkerRuntimeResult> {
-  const workspaceDir = await assertWorkspaceDirectory(descriptor.assignment.workspaceDir);
+  if (
+    descriptor.connectionEndpoint.kind === "websocket" &&
+    descriptor.connectionEndpoint.cloudflareAccess
+  ) {
+    registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientId);
+    registerSecretValueForRedaction(descriptor.connectionEndpoint.cloudflareAccess.clientSecret);
+  }
+  const workspaceDir = await assertWorkerDirectory(descriptor.assignment.workspaceDir, "workspace");
+  const workerContainmentRoot = descriptor.assignment.workerContainmentRoot
+    ? await assertWorkerDirectory(descriptor.assignment.workerContainmentRoot, "containment root")
+    : workspaceDir;
+  if (
+    descriptor.assignment.permissionMode &&
+    workspaceDir !== workerContainmentRoot &&
+    !isPathInside(workerContainmentRoot, workspaceDir)
+  ) {
+    throw new Error(
+      "worker workspace path escapes its assigned containment root; reprovision the worker workspace and retry",
+    );
+  }
   const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
   await chmod(stateDir, 0o700);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -70,7 +100,9 @@ export async function runWorkerDescriptor(
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
-    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
+    onConnectionFailure: (error) => {
+      options.onConnectionFailure?.(error?.message);
+    },
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
@@ -106,12 +138,22 @@ export async function runWorkerDescriptor(
   });
 
   try {
+    let hello: WorkerHelloOk;
     try {
-      await connection.start();
+      hello = await connection.start();
     } catch (error) {
       const fenced = fencedResult(connection.state);
       if (fenced) {
         return fenced;
+      }
+      if (error instanceof WorkerAdmissionDeadlineExceededError && !options.signal?.aborted) {
+        return {
+          status: "not-started",
+          reason: "admission-deadline",
+          // The deadline error message already carries the formatted, redacted
+          // last-failure diagnosis (see WorkerConnection.failAdmissionDeadline).
+          errorText: error.message,
+        };
       }
       throw error;
     }
@@ -134,6 +176,10 @@ export async function runWorkerDescriptor(
         operationalRunInstance: descriptor.assignment.operationalRunInstance,
         agentRuntimeIdentityToken: descriptor.assignment.agentRuntimeIdentityToken,
         cwd: workspaceDir,
+        workerContainmentRoot,
+        ...(descriptor.assignment.permissionMode
+          ? { permissionMode: descriptor.assignment.permissionMode }
+          : {}),
         stateDir,
         sessionId: descriptor.admission.sessionId,
         sessionKey: `worker:${descriptor.admission.sessionId}`,
@@ -146,7 +192,10 @@ export async function runWorkerDescriptor(
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
+          (name) =>
+            name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
+        ),
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },

@@ -116,6 +116,19 @@ export interface AuthRateLimiter {
   dispose(): void;
 }
 
+const authRateLimiterExemptionChecks = new WeakMap<
+  AuthRateLimiter,
+  (ip: string | undefined) => boolean
+>();
+
+/** Whether a limiter created by this module exempts the prepared client identity. */
+export function isAuthRateLimitClientExempt(
+  limiter: AuthRateLimiter,
+  ip: string | undefined,
+): boolean {
+  return authRateLimiterExemptionChecks.get(limiter)?.(ip) ?? false;
+}
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------
@@ -442,5 +455,9 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     }
   }
 
-  return { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  const limiter = { check, recordFailure, recordFailureAndDelay, reset, size, prune, dispose };
+  // Credential-fallback owners use the exact limiter policy to avoid holding
+  // exempt loopback penalty delays inside a per-identity serialization queue.
+  authRateLimiterExemptionChecks.set(limiter, (rawIp) => isExempt(normalizeIp(rawIp)));
+  return limiter;
 }

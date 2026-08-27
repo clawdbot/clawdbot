@@ -21,8 +21,13 @@ export function createWorkerWorkspaceQuiescence(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
 }): (remoteWorkspaceDir: string) => Promise<WorkerWorkspaceQuiescence> {
   return async (remoteWorkspaceDir) => {
-    if (!path.posix.isAbsolute(remoteWorkspaceDir)) {
+    const posixAbsolute = path.posix.isAbsolute(remoteWorkspaceDir);
+    const windowsAbsolute = path.win32.isAbsolute(remoteWorkspaceDir);
+    if (!posixAbsolute && !windowsAbsolute) {
       throw new Error("Worker workspace quiescence path must be absolute");
+    }
+    if (!posixAbsolute && windowsAbsolute && !params.sharedHost) {
+      throw new Error("Windows worker workspace quiescence requires a shared host");
     }
     const hostMode = params.sharedHost ? "shared-host" : "dedicated";
     const run = async (argv: string[]) => {
@@ -46,6 +51,7 @@ export function createWorkerWorkspaceQuiescence(params: {
     }
     const nonce = acknowledgement[1]!;
     let resumed = false;
+    let releasePromise: Promise<void> | undefined;
     let renewalFailure: unknown;
     const renewalAbort = new AbortController();
     const abortRenewal = () => renewalAbort.abort(params.ownerSignal.reason);
@@ -92,7 +98,7 @@ export function createWorkerWorkspaceQuiescence(params: {
     })();
     return {
       assertActive: async () => {
-        if (resumed) {
+        if (resumed || renewalAbort.signal.aborted) {
           throw new Error("Worker workspace quiescence was already released");
         }
         if (renewalFailure) {
@@ -106,11 +112,18 @@ export function createWorkerWorkspaceQuiescence(params: {
         if (resumed) {
           return;
         }
-        params.ownerSignal.removeEventListener("abort", abortRenewal);
-        renewalAbort.abort();
-        await renewalLoop;
-        await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce]);
-        resumed = true;
+        releasePromise ??= (async () => {
+          params.ownerSignal.removeEventListener("abort", abortRenewal);
+          renewalAbort.abort();
+          await renewalLoop;
+          await renewalQueue;
+          await run(["node", "-e", REMOTE_WORKSPACE_RESUME_JS, remoteWorkspaceDir, nonce]);
+          resumed = true;
+        })().catch((error: unknown) => {
+          releasePromise = undefined;
+          throw error;
+        });
+        await releasePromise;
       },
     };
   };

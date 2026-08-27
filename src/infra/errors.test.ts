@@ -128,8 +128,7 @@ describe("error helpers", () => {
       cause: rootCause,
     });
     const formatted = formatErrorMessage(httpError);
-    expect(formatted).toContain("Network request for 'sendMessage' failed!");
-    expect(formatted).toContain("ECONNRESET");
+    expect(formatted).toBe("Network request for 'sendMessage' failed! | ECONNRESET");
   });
 
   it("handles circular .cause references without infinite loop", () => {

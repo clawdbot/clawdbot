@@ -20,10 +20,6 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
-  "models.providers.*.contextWindow":
-    "Default native context window applied to models under this provider when a model entry does not set contextWindow. Use model-level contextWindow for per-model overrides.",
-  "models.providers.*.contextTokens":
-    "Default effective runtime context cap applied to models under this provider when a model entry does not set contextTokens. Use this when runtime should budget below the native contextWindow.",
   "models.providers.*.maxTokens":
     "Default maximum output token budget applied to models under this provider when a model entry does not set maxTokens.",
   "models.providers.*.timeoutSeconds":
@@ -120,7 +116,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.request.tls.insecureSkipVerify":
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
   "models.providers.*.request.allowPrivateNetwork":
-    "When true, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard (fetchWithSsrFGuard). Custom/local provider base URLs already trust the exact configured origin, except metadata/link-local origins; set this to false to opt out of that trust. OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use true only for operator-controlled self-hosted endpoints that must reach private origins outside the configured baseUrl origin.",
+    "When true, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard (fetchWithSsrFGuard). Custom/local provider base URLs already trust the exact configured origin, except metadata, link-local, and local-use NAT64 (64:ff9b:1::/48) origins; set this to false to opt out of that trust. OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use true only for operator-controlled self-hosted endpoints that must reach private origins outside the configured baseUrl origin.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.providers.*.models[].agentRuntime":
@@ -187,6 +183,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Optional repository root shown in the system prompt runtime line (overrides auto-detect).",
   "agents.defaults.models":
     "Configured model catalog and per-model settings. Entries provide aliases, params, and runtime metadata; they do not restrict model overrides.",
+  "agents.defaults.modelSelectionScope":
+    'Optional scope for chat commands and Gateway session model updates without an explicit scope: "session" changes only the current session, "agent" also updates that agent\'s primary, and "global" also updates the shared agents.defaults.model fallback. Omit to preserve existing behavior. Explicit scope flags take precedence; configured-default writes still require owner/admin authority. Telegram callback pickers and the embedded local TUI stay session-only.',
   "agents.defaults.modelPolicy":
     "Explicit policy for model overrides. Omit it or leave allow empty to permit any model.",
   "agents.defaults.modelPolicy.allow":
@@ -229,7 +227,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.outputDimensionality":
-    "Provider-specific output vector size override for memory embeddings. Gemini embedding-2 supports 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+    "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "memory.search.remote.baseUrl":
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
   "memory.search.remote.apiKey":

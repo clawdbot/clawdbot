@@ -274,15 +274,6 @@ afterEach(async () => {
 });
 
 describe("telegramPlugin gateway startup", () => {
-  it("routes message actions through the gateway", () => {
-    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
-      "gateway",
-    );
-    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
-      "gateway",
-    );
-  });
-
   it.each([401, 404] as const)(
     "stops before monitor startup when getMe rejects the token with %s",
     async (status) => {

@@ -81,6 +81,18 @@ describe("TTS runtime native voice-note routing", () => {
     );
   });
 
+  it("uses structured speech guidance for message-tool-only replies", () => {
+    const hint = buildTtsSystemPromptHint(
+      createTtsConfig("openclaw-speech-core-structured-tts-hint-test"),
+      undefined,
+      { messageToolOnly: true },
+    );
+
+    expect(hint).toContain("message(action=send) with voiceText");
+    expect(hint).toContain("voiceProvider/voiceId");
+    expect(hint).not.toContain("[[tts:");
+  });
+
   it("prepares deep-merged surface config and directive inputs", () => {
     const cfg: OpenClawConfig = {
       tts: {

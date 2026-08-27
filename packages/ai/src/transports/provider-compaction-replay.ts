@@ -4,7 +4,11 @@ import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
 export function isCompactionReplayCheckpoint(replay: unknown): replay is ProviderReplayState {
   const type =
     replay && typeof replay === "object" ? (replay as { type?: unknown }).type : undefined;
-  return type === "anthropic-compaction" || type === "openai-responses-compaction";
+  return (
+    type === "anthropic-compaction" ||
+    type === "openai-responses-compaction" ||
+    type === "openai-responses-retained-compaction"
+  );
 }
 
 /** Strip prefix-bound checkpoints after local history rewrites. */
@@ -36,8 +40,15 @@ export function replaceCompactionReplayOwnerContent(
   if (!isCompactionReplayCheckpoint(replay)) {
     return next;
   }
+  if (replay.type === "openai-responses-retained-compaction") {
+    // This checkpoint is anchored to retained user turns, not assistant content indexes.
+    return next;
+  }
   const replayIndex = replay.replayIndex ?? 0;
-  if (content.length === 0 || replayIndex > message.content.length) {
+  if (
+    (content.length === 0 && message.content.length > 0) ||
+    replayIndex > message.content.length
+  ) {
     return stripCompactionReplayCheckpoint(next);
   }
   let sourceIndex = 0;

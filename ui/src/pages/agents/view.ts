@@ -31,6 +31,7 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
+import type { GitHubIdentityController } from "./github-identity-controller.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
@@ -122,6 +123,7 @@ type AgentsProps = {
   agentSkills: AgentSkillsState;
   toolsCatalog: ToolsCatalogState;
   toolsEffective: ToolsEffectiveState;
+  githubIdentity: GitHubIdentityController;
   runtimeSessionKey: string;
   runtimeSessionMatchesSelectedAgent: boolean;
   modelCatalog: ModelCatalogEntry[];
@@ -162,6 +164,45 @@ type AgentsProps = {
   onSetDefault: (agentId: string) => void;
 };
 
+type AgentRosterRow = AgentsListResult["agents"][number];
+
+function buildAgentRosterTree(agents: AgentRosterRow[]) {
+  const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+  const childrenById = new Map<string, AgentRosterRow[]>();
+  const roots: AgentRosterRow[] = [];
+
+  for (const agent of agents) {
+    const creatorAgentId = agent.creatorAgentId;
+    if (creatorAgentId && creatorAgentId !== agent.id && agentById.has(creatorAgentId)) {
+      const children = childrenById.get(creatorAgentId) ?? [];
+      children.push(agent);
+      childrenById.set(creatorAgentId, children);
+    } else {
+      roots.push(agent);
+    }
+  }
+
+  const entries: Array<{ agent: AgentRosterRow; creatorAgentId?: string }> = [];
+  const visited = new Set<string>();
+  const append = (agent: AgentRosterRow, depth: number): void => {
+    if (visited.has(agent.id)) {
+      return;
+    }
+    visited.add(agent.id);
+    entries.push({
+      agent,
+      ...(depth > 0 && agent.creatorAgentId ? { creatorAgentId: agent.creatorAgentId } : {}),
+    });
+    for (const child of childrenById.get(agent.id) ?? []) {
+      append(child, depth + 1);
+    }
+  };
+  roots.forEach((agent) => append(agent, 0));
+  // Match the CLI tree: malformed cycles cannot make configured agents disappear.
+  agents.forEach((agent) => append(agent, 0));
+  return entries;
+}
+
 export function renderAgents(props: AgentsProps) {
   const agents = props.agentsList?.agents ?? [];
   const defaultId = props.agentsList?.defaultId ?? null;
@@ -169,10 +210,11 @@ export function renderAgents(props: AgentsProps) {
   const selectedAgent = selectedId
     ? (agents.find((agent) => agent.id === selectedId) ?? null)
     : null;
-  const agentOptions = agents.map((agent) => ({
+  const agentOptions = buildAgentRosterTree(agents).map(({ agent, creatorAgentId }) => ({
     value: agent.id,
     label: normalizeAgentLabel(agent),
     agent,
+    description: creatorAgentId ? t("agents.createdBy", { id: creatorAgentId }) : undefined,
     badge: agentBadgeText(agent.id, defaultId) ?? undefined,
   }));
   const selectedSkillCount =
@@ -288,6 +330,7 @@ export function renderAgents(props: AgentsProps) {
               )}
               <div
                 id="agent-panel"
+                class="settings-stack"
                 role="tabpanel"
                 aria-labelledby=${`agents-tab-${props.activePanel}`}
               >
@@ -362,6 +405,7 @@ export function renderAgents(props: AgentsProps) {
                       runtimeSessionKey: props.runtimeSessionKey,
                       runtimeSessionMatchesSelectedAgent: props.runtimeSessionMatchesSelectedAgent,
                       canUpdateConfig: props.access.canUpdateConfig,
+                      githubIdentity: props.githubIdentity,
                       onProfileChange: props.onToolsProfileChange,
                       onOverridesChange: props.onToolsOverridesChange,
                       onConfigReload: props.onConfigReload,

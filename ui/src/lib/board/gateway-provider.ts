@@ -7,6 +7,7 @@ import type {
   BoardWidgetAppViewResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { formatUiError } from "../format-error.ts";
 import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
@@ -28,8 +29,10 @@ type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListen
 
 export class GatewayBoardProvider implements BoardProvider {
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
+  private readonly loadErrorSignal = new ValueSignal<string | null>(null);
   private readonly eventStream = new EventStream<BoardCommandEvent>();
   private client: BoardGatewayClient;
   private readonly retiredClients = new WeakSet<BoardGatewayClient>();
@@ -57,6 +60,7 @@ export class GatewayBoardProvider implements BoardProvider {
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(sessionKey));
     this.snapshot$ = this.snapshotSignal;
+    this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
     this.client = client;
     this.connected = connected;
@@ -70,12 +74,19 @@ export class GatewayBoardProvider implements BoardProvider {
     if (this.disposed || (client !== this.client && this.retiredClients.has(client))) {
       return;
     }
+    const connectionChanged = connected !== this.connected;
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
     if (!connected) {
       this.wakeRetryDelay?.();
     }
     if (client === this.client) {
+      if (connectionChanged) {
+        this.clientGeneration += 1;
+        this.stateGeneration += 1;
+        this.appViews.clear();
+        this.publishAppViewGeneration();
+      }
       if (connectionActivated) {
         void this.activate();
       }
@@ -90,6 +101,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.changedWidgets.clear();
     this.appViews.clear();
     this.snapshotLoaded = false;
+    this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
     this.subscribe(client);
     if (connected) {
@@ -103,6 +115,10 @@ export class GatewayBoardProvider implements BoardProvider {
 
   get hasLoadedSnapshot(): boolean {
     return this.snapshotLoaded;
+  }
+
+  get appViewGeneration(): number {
+    return this.clientGeneration;
   }
 
   dispose(): void {
@@ -210,6 +226,9 @@ export class GatewayBoardProvider implements BoardProvider {
     revision: number,
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
+    if (this.disposed || !this.connected) {
+      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+    }
     const widget = this.snapshotSignal.value.widgets.find(
       (candidate) =>
         candidate.name === name &&
@@ -220,7 +239,8 @@ export class GatewayBoardProvider implements BoardProvider {
       return { status: "stale", error: "Dashboard MCP App widget unavailable" };
     }
     const client = this.client;
-    return await this.appViews.resolve(
+    const clientGeneration = this.clientGeneration;
+    const result = await this.appViews.resolve(
       widget,
       async () =>
         await client.request<BoardWidgetAppViewResult>("board.widget.appView", {
@@ -231,6 +251,15 @@ export class GatewayBoardProvider implements BoardProvider {
         }),
       force,
     );
+    if (
+      this.disposed ||
+      !this.connected ||
+      client !== this.client ||
+      clientGeneration !== this.clientGeneration
+    ) {
+      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+    }
+    return result;
   }
 
   private subscribe(client: BoardGatewayClient): void {
@@ -331,7 +360,7 @@ export class GatewayBoardProvider implements BoardProvider {
         this.refreshRequested = false;
         this.setSnapshot(snapshot, changedWidgets);
         retry.delayMs = 1_000;
-      } catch {
+      } catch (error) {
         if (this.disposed) {
           return;
         }
@@ -339,6 +368,7 @@ export class GatewayBoardProvider implements BoardProvider {
         if (client !== this.client) {
           continue;
         }
+        this.setLoadError(formatUiError(error));
         for (const name of changedWidgets) {
           this.changedWidgets.add(name);
         }
@@ -455,6 +485,27 @@ export class GatewayBoardProvider implements BoardProvider {
     this.appViews.prune(widgets);
     this.snapshotLoaded = true;
     this.snapshotSignal.set({ ...snapshot, widgets });
+    this.setLoadError(null);
+  }
+
+  private setLoadError(error: string | null): void {
+    if (this.loadErrorSignal.value !== error) {
+      this.loadErrorSignal.set(error);
+    }
+  }
+
+  private publishAppViewGeneration(): void {
+    const snapshot = this.snapshotSignal.value;
+    if (snapshot.widgets.some((widget) => widget.contentKind === "mcp-app")) {
+      // Retained cells need a new widget identity to observe the connection
+      // generation and cancel pending loads or renewals from the retired socket.
+      this.snapshotSignal.set({
+        ...snapshot,
+        widgets: snapshot.widgets.map((widget) =>
+          widget.contentKind === "mcp-app" ? Object.assign({}, widget) : widget,
+        ),
+      });
+    }
   }
 }
 

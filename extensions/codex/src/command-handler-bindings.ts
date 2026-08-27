@@ -234,13 +234,28 @@ export async function describeConversationBinding(
   const identity = conversationBindingIdentity(data.bindingId);
   const threadBinding = await deps.bindingStore.read(identity);
   const active = deps.readCodexConversationActiveTurn(identity);
+  const sessionKey = ctx.sessionKey?.trim();
+  const { agentId } = resolveCodexConversationControlScope(ctx);
+  const sessionEntry = sessionKey
+    ? getSessionEntry({
+        agentId,
+        storePath: resolveStorePath(ctx.config.session?.store, { agentId }),
+        sessionKey,
+        hydrateSkillPromptRefs: false,
+        readConsistency: "latest",
+      })
+    : undefined;
+  const permissionMode =
+    !ctx.sessionId || sessionEntry?.sessionId === ctx.sessionId
+      ? sessionEntry?.permissionMode
+      : undefined;
   return [
     "Codex conversation binding:",
     `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
     `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
     `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
     `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
-    `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
+    `- Permissions: ${formatPermissionsMode(permissionMode)}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
     `- Binding: ${formatCodexDisplayText(data.bindingId)}`,
   ].join("\n");

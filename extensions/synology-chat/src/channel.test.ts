@@ -45,8 +45,11 @@ function makeSecurityAccount(
   return { ...securityAccountDefaults, ...overrides };
 }
 
-function expectIncludesSubstring(values: readonly string[], expected: string): void {
-  expect(values.join("\n")).toContain(expected);
+function expectIncludesSubstring(values: unknown[], text: string, severity?: string): void {
+  expect(JSON.stringify(values)).toContain(text);
+  if (severity) {
+    expect(values).toContainEqual(expect.objectContaining({ severity }));
+  }
 }
 
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
@@ -447,21 +450,21 @@ describe("createSynologyChatPlugin", () => {
       const plugin = synologyChatPlugin;
       const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: ["*"] });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expectIncludesSubstring(warnings, "open");
+      expectIncludesSubstring(warnings, "open", "critical");
     });
 
     it("warns when dmPolicy is open and allowedUserIds is empty", () => {
       const plugin = synologyChatPlugin;
       const account = makeSecurityAccount({ dmPolicy: "open", allowedUserIds: [] });
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expectIncludesSubstring(warnings, "empty allowedUserIds");
+      expectIncludesSubstring(warnings, "empty allowedUserIds", "critical");
     });
 
     it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
       const plugin = synologyChatPlugin;
       const account = makeSecurityAccount();
       const warnings = plugin.security.collectWarnings({ cfg: {}, account });
-      expectIncludesSubstring(warnings, "empty allowedUserIds");
+      expectIncludesSubstring(warnings, "empty allowedUserIds", "critical");
     });
 
     it("warns when named multi-account routes inherit a shared webhookPath", () => {
@@ -501,7 +504,7 @@ describe("createSynologyChatPlugin", () => {
       cfg.channels["synology-chat"].webhookUrl = "https://gateway.example.com/synology?b=2&a=1";
       const account = plugin.config.resolveAccount(cfg, "alerts");
       const warnings = plugin.security.collectWarnings({ cfg, account });
-      expectIncludesSubstring(warnings, "conflicts on webhookUrl");
+      expectIncludesSubstring(warnings, "conflicts on webhookUrl", "critical");
     });
 
     it("returns no warnings for fully configured account", () => {
@@ -647,7 +650,7 @@ describe("createSynologyChatPlugin", () => {
         to: "user1",
       });
       expect(result.channel).toBe("synology-chat");
-      expect(result.chatId).toBe("user1");
+      expect(result.target).toEqual({ kind: "chat", id: "user1" });
       expect(result.messageId).toBe("");
       expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
       expect(result.receipt.platformMessageIds).toHaveLength(0);
@@ -680,7 +683,7 @@ describe("createSynologyChatPlugin", () => {
       });
 
       expect(result.channel).toBe("synology-chat");
-      expect(result.chatId).toBe("user1");
+      expect(result.target).toEqual({ kind: "chat", id: "user1" });
       expect(result.messageId).toBe("");
       expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
       expect(result.receipt.platformMessageIds).toHaveLength(0);

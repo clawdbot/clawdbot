@@ -55,7 +55,7 @@ function mockAgentConfigWithCopilotModel(): void {
           model: { primary: `${AGENT_CONFIGURED_PROVIDER}/${AGENT_CONFIGURED_MODEL}` },
         },
       ],
-      defaults: { contextTokens: 200_000 },
+      defaults: {},
     },
   }));
 }

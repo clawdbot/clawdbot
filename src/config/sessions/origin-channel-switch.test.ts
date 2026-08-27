@@ -35,6 +35,7 @@ const slackTurn = {
   To: "slack:D111SLACK",
   NativeChannelId: "D111SLACK",
   NativeDirectUserId: "U0001",
+  ConversationAvatar: "/media/inbound/slack-avatar.png",
   AccountId: "slack-team-1",
   MessageThreadId: "1700000000.000100",
 } satisfies Partial<MsgContext>;
@@ -53,6 +54,7 @@ describe("session origin across a channel switch", () => {
     const afterSlack = applyOrigin(undefined, slackTurn);
     expect(afterSlack.origin?.nativeChannelId).toBe("D111SLACK");
     expect(afterSlack.origin?.threadId).toBe("1700000000.000100");
+    expect(afterSlack.origin?.avatar).toBe("/media/inbound/slack-avatar.png");
 
     const afterTelegram = applyOrigin(afterSlack, telegramTurn);
 
@@ -62,6 +64,7 @@ describe("session origin across a channel switch", () => {
     expect(afterTelegram.origin?.accountId).toBe("telegram-bot-1");
     expect(afterTelegram.origin?.nativeChannelId).toBeUndefined();
     expect(afterTelegram.origin?.nativeDirectUserId).toBeUndefined();
+    expect(afterTelegram.origin?.avatar).toBeUndefined();
     expect(afterTelegram.origin?.threadId).toBeUndefined();
   });
 

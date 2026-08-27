@@ -3,7 +3,10 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -38,18 +41,9 @@ async function dragAcross(page: Page, locator: Locator): Promise<string> {
 async function readFocusOutline(locator: Locator) {
   return locator.evaluate((element) => {
     const styles = getComputedStyle(element);
-    const colorProbe = document.createElement("span");
-    colorProbe.style.color = "var(--muted-strong)";
-    document.body.append(colorProbe);
-    const mutedStrongColor = getComputedStyle(colorProbe).color;
-    colorProbe.remove();
     return {
       focusVisible: element.matches(":focus-visible"),
-      mutedStrongColor,
-      outlineColor: styles.outlineColor,
-      outlineOffset: styles.outlineOffset,
       outlineStyle: styles.outlineStyle,
-      outlineWidth: styles.outlineWidth,
     };
   });
 }
@@ -66,7 +60,7 @@ async function captureUiProof(page: Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("uses one canonical scrollbar profile and keeps selection in chat and inputs", async () => {
+  it("keeps canonical scrollbars without horizontal model-picker overflow and preserves selection", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
@@ -88,7 +82,12 @@ suite.define(() => {
             },
           ],
           models: [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+            {
+              contextWindow: 1_000_000,
+              id: "gpt-5.6-sol-openclaw",
+              name: "openai/gpt-5.6-sol-openclaw",
+              provider: "openai",
+            },
             ...Array.from({ length: 24 }, (_value, index) => ({
               id: `scroll-model-${index + 1}`,
               name: `Scroll Model ${index + 1}`,
@@ -117,6 +116,8 @@ suite.define(() => {
             sidebarSelection: getComputedStyle(sidebar).userSelect,
             sidebarScrollbar: getComputedStyle(sessions, "::-webkit-scrollbar").width,
             modelPickerScrollbar: getComputedStyle(modelPicker, "::-webkit-scrollbar").width,
+            modelPickerOverflowX: getComputedStyle(modelPicker).overflowX,
+            modelPickerHorizontalOverflow: modelPicker.scrollWidth - modelPicker.clientWidth,
           };
         });
         // One canonical width everywhere: the sidebar no longer overrides
@@ -129,6 +130,8 @@ suite.define(() => {
           sidebarSelection: "none",
           sidebarScrollbar: "12px",
           modelPickerScrollbar: "12px",
+          modelPickerOverflowX: "hidden",
+          modelPickerHorizontalOverflow: 0,
         });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
@@ -155,11 +158,8 @@ suite.define(() => {
         const focusedOutline = await readFocusOutline(thread);
         expect(focusedOutline).toMatchObject({
           focusVisible: true,
-          outlineOffset: "-2px",
-          outlineStyle: "solid",
-          outlineWidth: "2px",
+          outlineStyle: "none",
         });
-        expect(focusedOutline.outlineColor).toBe(focusedOutline.mutedStrongColor);
         await captureUiProof(page, "02-chat-thread-keyboard-focus.png");
 
         await page.setViewportSize({ height: 650, width: 1440 });
@@ -167,11 +167,10 @@ suite.define(() => {
         // 650px even against the mock gateway's tiny config fixture; General
         // became short enough to fit once the host panel moved to Gateway.
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        const settingsSidebar = page.locator(".settings-sidebar");
+        const { search: settingsSearch, sidebar: settingsSidebar } =
+          await waitForControlUiSettingsTakeover(page);
         const settingsTitle = settingsSidebar.locator(".settings-sidebar__title");
-        const settingsSearch = settingsSidebar.locator(".settings-sidebar__search-input");
         const content = page.locator(".content");
-        await settingsSidebar.waitFor();
         await expect
           .poll(() => content.evaluate((element) => element.scrollHeight))
           .toBeGreaterThan(await content.evaluate((element) => element.clientHeight));

@@ -133,6 +133,21 @@ describe("describePluginInstallSource", () => {
     });
   });
 
+  it("preserves local as the default install source", () => {
+    expect(
+      describePluginInstallSource({
+        localPath: "extensions/demo",
+        defaultChoice: "local",
+      }),
+    ).toEqual({
+      defaultChoice: "local",
+      local: {
+        path: "extensions/demo",
+      },
+      warnings: [],
+    });
+  });
+
   it("warns when defaultChoice is not a supported install source", () => {
     expect(
       describePluginInstallSource({

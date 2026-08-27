@@ -20,6 +20,7 @@ import {
 import { t } from "../../i18n/index.ts";
 import type { McpServerSummary } from "../../lib/config/mcp-servers.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/plugins.css";
 import {
   CLAWHUB_BROWSE_URL,
@@ -433,7 +434,9 @@ function renderRowMessage(
     const findings = details.findings ?? [];
     const reviewBody =
       findings.length === 0
-        ? t("pluginsPage.policyReviewBodyReason", { reason: details.reason })
+        ? t("pluginsPage.policyReviewBodyReason", {
+            reason: formatUiExternalText(details.reason),
+          })
         : t("pluginsPage.policyReviewBodyKnown", { count: String(findings.length) });
     return html`
       <div
@@ -447,7 +450,9 @@ function renderRowMessage(
           <div>
             <strong>${t("pluginsPage.policyReviewTitle")}</strong>
             ${findings.length > 0
-              ? html`<span class="plugins-policy-review__reason">${details.reason}</span>`
+              ? html`<span class="plugins-policy-review__reason"
+                  >${formatUiExternalText(details.reason)}</span
+                >`
               : nothing}
             <span>${reviewBody}</span>
           </div>
@@ -467,7 +472,7 @@ function renderRowMessage(
                             class="plugins-policy-review__severity plugins-policy-review__severity--${finding.severity}"
                             >${policyFindingSeverityLabel(finding.severity)}</span
                           >
-                          <span>${finding.message}</span>
+                          <span>${formatUiExternalText(finding.message)}</span>
                         </span>
                       </li>
                     `,
@@ -831,7 +836,7 @@ function renderPluginRow(
       </div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-            ${plugin.error}
+            ${formatUiExternalText(plugin.error)}
           </div>`
         : nothing}
       ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}
@@ -1307,7 +1312,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
           </div>
           ${plugin.error
             ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
-                ${plugin.error}
+                ${formatUiExternalText(plugin.error)}
               </div>`
             : nothing}
           ${renderRowMessage(key, props.messages[key], busy, props, installIdentity)}

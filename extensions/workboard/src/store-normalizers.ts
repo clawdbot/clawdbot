@@ -15,7 +15,6 @@ import {
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardArtifact,
   type WorkboardAttachment,
-  type WorkboardAttemptStatus,
   type WorkboardAutomation,
   type WorkboardBoardMetadata,
   type WorkboardClaim,
@@ -23,14 +22,12 @@ import {
   type WorkboardDiagnostic,
   type WorkboardDiagnosticAction,
   type WorkboardDiagnosticKind,
-  type WorkboardDiagnosticSeverity,
   type WorkboardEvent,
-  type WorkboardEventKind,
   type WorkboardExecution,
   type WorkboardExecutionMode,
-  type WorkboardExecutionStatus,
   type WorkboardLink,
   type WorkboardLinkType,
+  type WorkboardLaunchState,
   type WorkboardMetadata,
   type WorkboardNotification,
   type WorkboardNotificationKind,
@@ -38,7 +35,6 @@ import {
   type WorkboardOrchestrationSettings,
   type WorkboardPriority,
   type WorkboardProof,
-  type WorkboardProofStatus,
   type WorkboardRunAttempt,
   type WorkboardStatus,
   type WorkboardTemplateId,
@@ -48,6 +44,7 @@ import {
 } from "@openclaw/workboard-contract";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   MAX_ATTACHMENT_BYTES,
   MAX_CARD_ARTIFACTS,
@@ -101,6 +98,16 @@ export function normalizeBoardMetadata(
   );
   const icon = normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
   const color = normalizeBoundedString(input.color, fallback?.color, 40, "board color");
+  let automationJobId = fallback?.automationJobId;
+  if (Object.hasOwn(input, "automationJobId")) {
+    automationJobId = normalizeOptionalString(input.automationJobId);
+    if (!automationJobId) {
+      throw new Error("automation job id must be a non-empty string.");
+    }
+    if (automationJobId.length > 128) {
+      throw new Error("automation job id must be 128 characters or fewer.");
+    }
+  }
   const defaultWorkspace = Object.hasOwn(input, "defaultWorkspace")
     ? normalizeWorkspace(input.defaultWorkspace, fallback?.defaultWorkspace)
     : fallback?.defaultWorkspace;
@@ -118,6 +125,7 @@ export function normalizeBoardMetadata(
     ...(description ? { description } : {}),
     ...(icon ? { icon } : {}),
     ...(color ? { color } : {}),
+    ...(automationJobId ? { automationJobId } : {}),
     ...(defaultWorkspace ? { defaultWorkspace } : {}),
     ...(orchestration ? { orchestration } : {}),
     createdAt: fallback?.createdAt ?? now,
@@ -264,9 +272,18 @@ export function normalizeBoundedString(
     return fallback;
   }
   if (normalized.length > maxLength) {
-    throw new Error(`${fieldName} must be ${maxLength} characters or fewer.`);
+    throw new Error(
+      `${fieldName} must be ${maxLength} characters or fewer (got ${normalized.length}).`,
+    );
   }
   return normalized;
+}
+
+export function capText(value: string | undefined, max: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value.length <= max ? value : `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }
 
 export function normalizeStatus(value: unknown, fallback: WorkboardStatus): WorkboardStatus {
@@ -373,10 +390,16 @@ function normalizeWorkspace(
   if (kind === "dir" && (!workspacePath || !isAbsoluteWorkspacePath(workspacePath))) {
     throw new Error("dir workspace path must be absolute.");
   }
-  const branch = normalizeBoundedString(record.branch, fallback?.branch, 160, "workspace branch");
+  const workspaceFallback = workspacePath === fallback?.path ? fallback : undefined;
+  const branch = normalizeBoundedString(
+    record.branch,
+    workspaceFallback?.branch,
+    160,
+    "workspace branch",
+  );
   const sourcePath = normalizeBoundedString(
     record.sourcePath,
-    fallback?.sourcePath,
+    workspaceFallback?.sourcePath,
     2000,
     "workspace source path",
   );
@@ -385,7 +408,7 @@ function normalizeWorkspace(
   }
   const sourceBranch = normalizeBoundedString(
     record.sourceBranch,
-    fallback?.sourceBranch,
+    workspaceFallback?.sourceBranch,
     160,
     "workspace source branch",
   );
@@ -401,11 +424,9 @@ function normalizeWorkspace(
 export function normalizeAutomation(
   value: unknown,
   fallback: WorkboardAutomation = {},
+  options: { allowLaunchState?: boolean } = {},
 ): WorkboardAutomation | undefined {
-  if (!isRecord(value)) {
-    return Object.keys(fallback).length ? fallback : undefined;
-  }
-  const record = value;
+  const record = isRecord(value) ? value : {};
   const tenant = normalizeBoundedString(record.tenant, fallback.tenant, 80, "tenant");
   const boardId = Object.hasOwn(record, "boardId")
     ? normalizeBoardId(record.boardId, fallback.boardId)
@@ -447,8 +468,11 @@ export function normalizeAutomation(
   const workspace = Object.hasOwn(record, "workspace")
     ? normalizeWorkspace(record.workspace, fallback.workspace)
     : fallback.workspace;
-  // Raw metadata preserves host-issued authority but cannot mint or widen it.
+  // Raw metadata preserves host-issued authority/state but cannot mint or widen either.
   const workspaceAccess = fallback.workspaceAccess;
+  const launch = normalizeLaunchState(
+    options.allowLaunchState && Object.hasOwn(record, "launch") ? record.launch : fallback.launch,
+  );
   const next = removeUndefinedAutomationFields({
     ...(tenant ? { tenant } : {}),
     ...(boardId ? { boardId } : {}),
@@ -464,8 +488,58 @@ export function normalizeAutomation(
     ...(createdCardIds?.length ? { createdCardIds } : {}),
     ...(dispatchCount ? { dispatchCount } : {}),
     ...(lastDispatchAt ? { lastDispatchAt } : {}),
+    ...(launch ? { launch } : {}),
   });
   return Object.keys(next).length ? next : undefined;
+}
+
+function normalizeLaunchTimestamp(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
+function normalizeLaunchString(value: unknown, maxLength: number): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  return normalized && normalized.length <= maxLength ? normalized : undefined;
+}
+
+function normalizeLaunchState(value: unknown): WorkboardLaunchState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const requestedSessionKey = normalizeLaunchString(value.requestedSessionKey, 240);
+  const provisionalRunId = normalizeLaunchString(value.provisionalRunId, 160);
+  const preparedAt = normalizeLaunchTimestamp(value.preparedAt);
+  if (!requestedSessionKey || !provisionalRunId || preparedAt === undefined) {
+    return undefined;
+  }
+  const identity = { requestedSessionKey, provisionalRunId, preparedAt };
+  if (value.phase === "prepared") {
+    return { phase: "prepared", ...identity };
+  }
+  if (value.phase === "accepted") {
+    const acceptedAt = normalizeLaunchTimestamp(value.acceptedAt);
+    const acceptedSessionKey = normalizeLaunchString(value.acceptedSessionKey, 240);
+    const acceptedRunId = normalizeLaunchString(value.acceptedRunId, 160);
+    return acceptedAt === undefined || !acceptedSessionKey
+      ? undefined
+      : {
+          phase: "accepted",
+          ...identity,
+          acceptedAt,
+          acceptedSessionKey,
+          ...(acceptedRunId ? { acceptedRunId } : {}),
+        };
+  }
+  if (value.phase === "failed") {
+    const failedAt = normalizeLaunchTimestamp(value.failedAt);
+    const reason = normalizeLaunchString(value.reason, 800);
+    return failedAt === undefined || !reason
+      ? undefined
+      : { phase: "failed", ...identity, failedAt, reason };
+  }
+  return undefined;
 }
 
 export function deriveChildIdempotencyKey(
@@ -479,69 +553,20 @@ export function deriveChildIdempotencyKey(
   return key.length <= 160 ? key : undefined;
 }
 
-function normalizeExecutionMode(
+function normalizeEnumValue<T extends string, TFallback extends T | undefined>(
   value: unknown,
-  fallback: WorkboardExecutionMode,
-): WorkboardExecutionMode {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_EXECUTION_MODES.includes(value as WorkboardExecutionMode)
-  ) {
-    return value as WorkboardExecutionMode;
-  }
-  return fallback;
-}
-
-function normalizeExecutionStatus(
-  value: unknown,
-  fallback: WorkboardExecutionStatus,
-): WorkboardExecutionStatus {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_EXECUTION_STATUSES.includes(value as WorkboardExecutionStatus)
-  ) {
-    return value as WorkboardExecutionStatus;
-  }
-  return fallback;
-}
-
-function normalizeAttemptStatus(
-  value: unknown,
-  fallback: WorkboardAttemptStatus,
-): WorkboardAttemptStatus {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_ATTEMPT_STATUSES.includes(value as WorkboardAttemptStatus)
-  ) {
-    return value as WorkboardAttemptStatus;
-  }
-  return fallback;
+  allowed: readonly T[],
+  fallback: TFallback,
+): T | TFallback {
+  return typeof value === "string" && allowed.includes(value as T) ? (value as T) : fallback;
 }
 
 export function normalizeLinkType(value: unknown, fallback: WorkboardLinkType): WorkboardLinkType {
-  if (typeof value === "string" && WORKBOARD_LINK_TYPES.includes(value as WorkboardLinkType)) {
-    return value as WorkboardLinkType;
-  }
-  return fallback;
-}
-
-function normalizeProofStatus(
-  value: unknown,
-  fallback: WorkboardProofStatus,
-): WorkboardProofStatus {
-  if (
-    typeof value === "string" &&
-    WORKBOARD_PROOF_STATUSES.includes(value as WorkboardProofStatus)
-  ) {
-    return value as WorkboardProofStatus;
-  }
-  return fallback;
+  return normalizeEnumValue(value, WORKBOARD_LINK_TYPES, fallback);
 }
 
 export function normalizeTemplateId(value: unknown): WorkboardTemplateId | undefined {
-  return typeof value === "string" && WORKBOARD_TEMPLATE_IDS.includes(value as WorkboardTemplateId)
-    ? (value as WorkboardTemplateId)
-    : undefined;
+  return normalizeEnumValue(value, WORKBOARD_TEMPLATE_IDS, undefined);
 }
 
 export function normalizeTimestamp(value: unknown, fallback: number): number {
@@ -556,23 +581,13 @@ function normalizeEvent(value: unknown): WorkboardEvent | null {
   }
   const record = value;
   const id = normalizeOptionalString(record.id);
-  const kind = WORKBOARD_EVENT_KINDS.includes(record.kind as WorkboardEventKind)
-    ? (record.kind as WorkboardEventKind)
-    : null;
+  const kind = normalizeEnumValue(record.kind, WORKBOARD_EVENT_KINDS, undefined);
   const at = normalizeTimestamp(record.at, 0);
   if (!id || !kind || !at) {
     return null;
   }
-  const fromStatus =
-    typeof record.fromStatus === "string" &&
-    WORKBOARD_STATUSES.includes(record.fromStatus as WorkboardStatus)
-      ? (record.fromStatus as WorkboardStatus)
-      : undefined;
-  const toStatus =
-    typeof record.toStatus === "string" &&
-    WORKBOARD_STATUSES.includes(record.toStatus as WorkboardStatus)
-      ? (record.toStatus as WorkboardStatus)
-      : undefined;
+  const fromStatus = normalizeEnumValue(record.fromStatus, WORKBOARD_STATUSES, undefined);
+  const toStatus = normalizeEnumValue(record.toStatus, WORKBOARD_STATUSES, undefined);
   const sessionKey = normalizeOptionalString(record.sessionKey);
   const runId = normalizeOptionalString(record.runId);
   return {
@@ -614,7 +629,7 @@ function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
   return {
     id,
-    status: normalizeAttemptStatus(record.status, "running"),
+    status: normalizeEnumValue(record.status, WORKBOARD_ATTEMPT_STATUSES, "running"),
     startedAt,
     ...(endedAt ? { endedAt } : {}),
     ...(engine ? { engine } : {}),
@@ -690,7 +705,7 @@ function normalizeProof(value: unknown): WorkboardProof | null {
   const note = normalizeBoundedString(record.note, undefined, 2000, "proof note");
   return {
     id,
-    status: normalizeProofStatus(record.status, "unknown"),
+    status: normalizeEnumValue(record.status, WORKBOARD_PROOF_STATUSES, "unknown"),
     createdAt,
     ...(label ? { label } : {}),
     ...(command ? { command } : {}),
@@ -787,14 +802,11 @@ function normalizeWorkerProtocol(
     return fallback;
   }
   const record = value;
-  const state =
-    record.state === "idle" ||
-    record.state === "running" ||
-    record.state === "completed" ||
-    record.state === "blocked" ||
-    record.state === "violated"
-      ? record.state
-      : fallback?.state;
+  const state = normalizeEnumValue(
+    record.state,
+    ["idle", "running", "completed", "blocked", "violated"],
+    fallback?.state,
+  );
   if (!state) {
     return undefined;
   }
@@ -899,14 +911,8 @@ function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
     return null;
   }
   const record = value;
-  const kind = WORKBOARD_DIAGNOSTIC_KINDS.includes(record.kind as WorkboardDiagnosticKind)
-    ? (record.kind as WorkboardDiagnosticKind)
-    : undefined;
-  const severity = WORKBOARD_DIAGNOSTIC_SEVERITIES.includes(
-    record.severity as WorkboardDiagnosticSeverity,
-  )
-    ? (record.severity as WorkboardDiagnosticSeverity)
-    : "warning";
+  const kind = normalizeEnumValue(record.kind, WORKBOARD_DIAGNOSTIC_KINDS, undefined);
+  const severity = normalizeEnumValue(record.severity, WORKBOARD_DIAGNOSTIC_SEVERITIES, "warning");
   const title = normalizeBoundedString(record.title, undefined, 160, "diagnostic title");
   const detail = normalizeBoundedString(record.detail, undefined, 800, "diagnostic detail");
   const firstSeenAt = normalizeTimestamp(record.firstSeenAt, Date.now());
@@ -940,12 +946,10 @@ function normalizeNotification(value: unknown): WorkboardNotification | null {
   }
   const record = value;
   const id = normalizeOptionalString(record.id) ?? randomUUID();
-  const kind = WORKBOARD_NOTIFICATION_KINDS.includes(record.kind as WorkboardNotificationKind)
-    ? (record.kind as WorkboardNotificationKind)
-    : undefined;
+  const kind = normalizeEnumValue(record.kind, WORKBOARD_NOTIFICATION_KINDS, undefined);
   const createdAt = normalizeTimestamp(record.createdAt, Date.now());
   const sequence = normalizeTimestamp(record.sequence, 0) || undefined;
-  const message = normalizeBoundedString(record.message, undefined, 240, "notification message");
+  const message = capText(normalizeOptionalString(record.message), 240);
   if (!kind || !message) {
     return null;
   }
@@ -969,7 +973,7 @@ export function normalizeProofInput(input: WorkboardProofInput, now: number): Wo
   const note = normalizeBoundedString(input.note, undefined, 2000, "proof note");
   return {
     id: randomUUID(),
-    status: normalizeProofStatus(input.status, "unknown"),
+    status: normalizeEnumValue(input.status, WORKBOARD_PROOF_STATUSES, "unknown"),
     createdAt: now,
     ...(label ? { label } : {}),
     ...(command ? { command } : {}),
@@ -1016,12 +1020,27 @@ export function appendCompletionProof(
   return entries.slice(-MAX_CARD_PROOF);
 }
 
+function normalizeList<T>(
+  value: unknown,
+  normalize: (entry: unknown) => T | null,
+  limit: number,
+  fallback?: T[],
+): T[] | undefined {
+  return Array.isArray(value)
+    ? value
+        .map(normalize)
+        .filter((entry): entry is T => entry !== null)
+        .slice(-limit)
+    : fallback;
+}
+
 export function normalizeMetadata(
   value: unknown,
   fallback: WorkboardMetadata = {},
   options: {
     allowDependencyLinks?: boolean;
     allowArchivedAt?: boolean;
+    allowAutomationLaunch?: boolean;
     preserveProofId?: string;
   } = {},
 ): WorkboardMetadata {
@@ -1059,68 +1078,63 @@ export function normalizeMetadata(
           })()
         : links.slice(-MAX_CARD_LINKS);
   const normalized = {
-    attempts: Array.isArray(record.attempts)
-      ? record.attempts
-          .map(normalizeAttempt)
-          .filter((attempt): attempt is WorkboardRunAttempt => attempt !== null)
-          .slice(-MAX_CARD_ATTEMPTS)
-      : fallback.attempts,
-    comments: Array.isArray(record.comments)
-      ? record.comments
-          .map(normalizeComment)
-          .filter((comment): comment is WorkboardComment => comment !== null)
-          .slice(-MAX_CARD_COMMENTS)
-      : fallback.comments,
+    attempts: normalizeList(
+      record.attempts,
+      normalizeAttempt,
+      MAX_CARD_ATTEMPTS,
+      fallback.attempts,
+    ),
+    comments: normalizeList(
+      record.comments,
+      normalizeComment,
+      MAX_CARD_COMMENTS,
+      fallback.comments,
+    ),
     links: normalizedLinks,
-    proof: Array.isArray(record.proof)
-      ? record.proof
-          .map(normalizeProof)
-          .filter((proof): proof is WorkboardProof => proof !== null)
-          .slice(-MAX_CARD_PROOF)
-      : fallback.proof,
-    artifacts: Array.isArray(record.artifacts)
-      ? record.artifacts
-          .map(normalizeArtifact)
-          .filter((artifact): artifact is WorkboardArtifact => artifact !== null)
-          .slice(-MAX_CARD_ARTIFACTS)
-      : fallback.artifacts,
-    attachments: Array.isArray(record.attachments)
-      ? record.attachments
-          .map(normalizeAttachment)
-          .filter((attachment): attachment is WorkboardAttachment => attachment !== null)
-          .slice(-MAX_CARD_ATTACHMENTS)
-      : fallback.attachments,
-    workerLogs: Array.isArray(record.workerLogs)
-      ? record.workerLogs
-          .map(normalizeWorkerLog)
-          .filter((log): log is WorkboardWorkerLog => log !== null)
-          .slice(-MAX_CARD_WORKER_LOGS)
-      : fallback.workerLogs,
+    proof: normalizeList(record.proof, normalizeProof, MAX_CARD_PROOF, fallback.proof),
+    artifacts: normalizeList(
+      record.artifacts,
+      normalizeArtifact,
+      MAX_CARD_ARTIFACTS,
+      fallback.artifacts,
+    ),
+    attachments: normalizeList(
+      record.attachments,
+      normalizeAttachment,
+      MAX_CARD_ATTACHMENTS,
+      fallback.attachments,
+    ),
+    workerLogs: normalizeList(
+      record.workerLogs,
+      normalizeWorkerLog,
+      MAX_CARD_WORKER_LOGS,
+      fallback.workerLogs,
+    ),
     workerProtocol: Object.hasOwn(record, "workerProtocol")
       ? normalizeWorkerProtocol(record.workerProtocol, fallback.workerProtocol)
       : fallback.workerProtocol,
-    automation: Object.hasOwn(record, "automation")
-      ? normalizeAutomation(record.automation, fallback.automation)
-      : fallback.automation,
+    automation: normalizeAutomation(
+      Object.hasOwn(record, "automation") ? record.automation : {},
+      fallback.automation,
+      { allowLaunchState: options.allowAutomationLaunch },
+    ),
     claim: Object.hasOwn(record, "claim")
       ? record.claim
         ? normalizeClaim(record.claim, fallback.claim)
         : undefined
       : fallback.claim,
-    diagnostics: Array.isArray(record.diagnostics)
-      ? record.diagnostics
-          .map(normalizeDiagnostic)
-          .filter(
-            (diagnosticLocal): diagnosticLocal is WorkboardDiagnostic => diagnosticLocal !== null,
-          )
-          .slice(-MAX_CARD_DIAGNOSTICS)
-      : fallback.diagnostics,
-    notifications: Array.isArray(record.notifications)
-      ? record.notifications
-          .map(normalizeNotification)
-          .filter((notification): notification is WorkboardNotification => notification !== null)
-          .slice(-MAX_CARD_NOTIFICATIONS)
-      : fallback.notifications,
+    diagnostics: normalizeList(
+      record.diagnostics,
+      normalizeDiagnostic,
+      MAX_CARD_DIAGNOSTICS,
+      fallback.diagnostics,
+    ),
+    notifications: normalizeList(
+      record.notifications,
+      normalizeNotification,
+      MAX_CARD_NOTIFICATIONS,
+      fallback.notifications,
+    ),
     templateId: normalizeTemplateId(record.templateId) ?? fallback.templateId,
     archivedAt: hasArchivedAt
       ? normalizeTimestamp(record.archivedAt, 0) || undefined
@@ -1168,8 +1182,8 @@ export function normalizeExecution(value: unknown): WorkboardExecution | undefin
   return {
     id,
     kind: "agent-session",
-    mode: normalizeExecutionMode(record.mode, "autonomous"),
-    status: normalizeExecutionStatus(record.status, "idle"),
+    mode: normalizeEnumValue(record.mode, WORKBOARD_EXECUTION_MODES, "autonomous"),
+    status: normalizeEnumValue(record.status, WORKBOARD_EXECUTION_STATUSES, "idle"),
     startedAt,
     updatedAt,
     ...(engine ? { engine } : {}),
@@ -1195,17 +1209,10 @@ export function syncExecutionSessionKey(
 
 function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
   const next = { ...execution };
-  if (next.engine === undefined) {
-    delete next.engine;
-  }
-  if (next.model === undefined) {
-    delete next.model;
-  }
-  if (next.sessionKey === undefined) {
-    delete next.sessionKey;
-  }
-  if (next.runId === undefined) {
-    delete next.runId;
+  for (const key of ["engine", "model", "sessionKey", "runId"] as const) {
+    if (next[key] === undefined) {
+      delete next[key];
+    }
   }
   return next;
 }
@@ -1227,6 +1234,7 @@ function removeUndefinedAutomationFields(automation: WorkboardAutomation): Workb
     "createdCardIds",
     "dispatchCount",
     "lastDispatchAt",
+    "launch",
   ] as const) {
     const value = next[key];
     if (

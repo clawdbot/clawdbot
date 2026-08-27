@@ -27,7 +27,6 @@ function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
     storePath: "/tmp/cron",
     cronEnabled: true,
     reconcileExitWatchers: vi.fn(async () => {}),
-    stopExitWatchers: vi.fn(),
     reconcileStreamWatchers: vi.fn(async () => {}),
     stopStreamWatchers: vi.fn(async () => {}),
     reconcileHeartbeatJobs: vi.fn(async () => {}),
@@ -49,6 +48,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    getGatewayMethodRegistry: vi.fn(() => ({}) as never),
     sessionCompanion: {} as never,
     sessionObserver: {} as never,
     resolveTerminalLaunchPolicy: vi.fn(() => ({
@@ -86,6 +86,7 @@ function makeContextParams(
     nodeUnsubscribeAll: vi.fn(),
     hasConnectedTalkNode: vi.fn(async () => false),
     clients: new Set(),
+    isConnectionActive: vi.fn(() => false),
     enforceSharedGatewayAuthGenerationForConfigWrite: vi.fn(),
     nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
     agentRunSeq: new Map(),
@@ -118,6 +119,10 @@ function makeContextParams(
     getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
     unavailableGatewayMethods: new Set(),
     ...overrides,
+    configRevisionProjector: overrides.configRevisionProjector ?? {
+      projectRawHash: (hash) => hash,
+      projectResolvedHash: (hash) => hash,
+    },
   };
 }
 
@@ -151,6 +156,16 @@ function makeGatewayClient(params: {
 }
 
 describe("createGatewayRequestContext", () => {
+  it("reuses the canonical connection liveness predicate", () => {
+    const isConnectionActive = vi.fn(() => true);
+    const params = makeContextParams();
+    Object.assign(params, { isConnectionActive });
+
+    const context = createGatewayRequestContext(params);
+
+    expect(context.isConnectionActive).toBe(isConnectionActive);
+  });
+
   it("cleans connection-scoped replace-sets with the other session subscriptions", () => {
     const unsubscribeAllSessionEvents = vi.fn();
     const unsubscribePullRequests = vi.fn();
@@ -671,6 +686,54 @@ describe("createGatewayRequestContext", () => {
     expect((target as { invalidatedReason?: string }).invalidatedReason).toBe("device-removed");
     expect(target.socket.close).toHaveBeenCalledWith(4001, "device removed");
     expect(disconnectDeviceTransports).toHaveBeenCalledWith("device-1", undefined);
+  });
+
+  it("disconnects only clients authenticated as the reassigned durable profile", () => {
+    const target = {
+      ...makeGatewayClient({
+        connId: "profile-target",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        scopes: ["operator.admin"],
+      }),
+      authenticatedUserProfile: {
+        profileId: "profile-ada",
+        displayName: "Ada",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const unrelated = {
+      ...makeGatewayClient({
+        connId: "profile-unrelated",
+        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      }),
+      authenticatedUserProfile: {
+        profileId: "profile-grace",
+        displayName: "Grace",
+        hasAvatar: false,
+        updatedAt: 1,
+      },
+    };
+    const unidentified = makeGatewayClient({
+      connId: "shared-secret",
+      clientId: GATEWAY_CLIENT_IDS.CLI,
+      scopes: ["operator.admin"],
+    });
+    const clients = new Set([target, unrelated, unidentified]) as never;
+    const context = createGatewayRequestContext(makeContextParams({ clients }));
+    target.socket.close.mockImplementation(() => {
+      expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+    });
+
+    context.disconnectClientsForUserProfile?.("profile-ada");
+
+    expect((target as { invalidated?: boolean }).invalidated).toBe(true);
+    expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
+      "operator-role-changed",
+    );
+    expect(target.socket.close).toHaveBeenCalledWith(4001, "operator role changed");
+    expect(unrelated.socket.close).not.toHaveBeenCalled();
+    expect(unidentified.socket.close).not.toHaveBeenCalled();
   });
 
   it("invalidateClientsForDevice filters by role when provided", () => {

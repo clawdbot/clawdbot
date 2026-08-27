@@ -45,6 +45,36 @@ describe("worker environment service", () => {
     expect(prune).toHaveBeenCalledOnce();
   });
 
+  it.each(["SQLITE_BUSY", "SQLITE_LOCKED"])(
+    "continues reconciliation when terminal cleanup fails with %s",
+    async (code) => {
+      const prune = vi
+        .spyOn(support.testState.store, "pruneTerminalEnvironments")
+        .mockImplementation(() => {
+          throw Object.assign(new Error("database is locked"), { code });
+        });
+
+      await expect(
+        support.createService(support.createProvider()).reconcileOnce(),
+      ).resolves.toBeUndefined();
+      expect(prune).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("propagates non-lock terminal cleanup failures", async () => {
+    const error = Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" });
+    const prune = vi
+      .spyOn(support.testState.store, "pruneTerminalEnvironments")
+      .mockImplementation(() => {
+        throw error;
+      });
+
+    await expect(support.createService(support.createProvider()).reconcileOnce()).rejects.toBe(
+      error,
+    );
+    expect(prune).toHaveBeenCalledOnce();
+  });
+
   it("waits for timed-out provider work during shutdown", async () => {
     let finishProvision: (() => void) | undefined;
     const provisionPending = new Promise<void>((resolve) => {
@@ -88,17 +118,130 @@ describe("worker environment service", () => {
 
   it("owns and clears one periodic reconciliation timer", async () => {
     vi.useFakeTimers();
+    const environmentId = "worker-guarded-reconcile";
+    support.seedReady(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
     const liveEvents = support.createLiveEvents();
-    const workerService = support.createService(support.createProvider(), { liveEvents });
+    const unsubscribeTurnClaimClosed = vi.fn();
+    const placementStore = {
+      readWorkerTurnClaim: vi.fn(),
+      readWorkerTurnLiveAckCursor: vi.fn(() => 0),
+      validateWorkerTurn: vi.fn(() => false),
+      isWorkerTurnToolAuthorized: vi.fn(() => false),
+      updateAckCursors: vi.fn(),
+      registerTurnClaimClosedHandler: vi.fn(() => unsubscribeTurnClaimClosed),
+    };
+    const workerService = support.createService(support.createProvider({ inspect }), {
+      liveEvents,
+      placementStore,
+    });
+    const guardedEnvironmentIds: string[] = [];
+    const uninstallGuard = workerService.installReconcileEnvironmentGuard(
+      async (guardedEnvironmentId, reconcileCore) => {
+        guardedEnvironmentIds.push(guardedEnvironmentId);
+        await reconcileCore();
+      },
+    );
 
+    expect(placementStore.registerTurnClaimClosedHandler).toHaveBeenCalledOnce();
+    await workerService.reconcileEnvironment(environmentId);
     workerService.start();
     workerService.start();
+    await vi.advanceTimersByTimeAsync(0);
     expect(liveEvents.start).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(guardedEnvironmentIds).toEqual([environmentId, environmentId, environmentId]);
+    expect(inspect).toHaveBeenCalledTimes(3);
+    await uninstallGuard();
+    await workerService.reconcileEnvironment(environmentId);
+    expect(guardedEnvironmentIds).toHaveLength(3);
+    expect(inspect).toHaveBeenCalledTimes(4);
     await workerService.stop();
 
     expect(liveEvents.clear).toHaveBeenCalledTimes(2);
+    expect(unsubscribeTurnClaimClosed).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("closes new guarded reconciliation and drains the admitted operation on uninstall", async () => {
+    const environmentId = "worker-guard-uninstall";
+    support.seedReady(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const workerService = support.createService(support.createProvider({ inspect }));
+    let releaseGuard: (() => void) | undefined;
+    const guardPending = new Promise<void>((resolve) => {
+      releaseGuard = resolve;
+    });
+    let signalGuardStarted: (() => void) | undefined;
+    const guardStarted = new Promise<void>((resolve) => {
+      signalGuardStarted = resolve;
+    });
+    const uninstallGuard = workerService.installReconcileEnvironmentGuard(
+      async (_guardedEnvironmentId, reconcileCore) => {
+        signalGuardStarted?.();
+        await guardPending;
+        await reconcileCore();
+      },
+    );
+    const reconciliation = workerService.reconcileEnvironment(environmentId);
+    await guardStarted;
+    let uninstalled = false;
+    const uninstalling = uninstallGuard().then(() => {
+      uninstalled = true;
+    });
+    await workerService.reconcileEnvironment(environmentId);
+    await Promise.resolve();
+    expect(uninstalled).toBe(false);
+    expect(inspect).not.toHaveBeenCalled();
+
+    releaseGuard?.();
+    await Promise.all([reconciliation, uninstalling]);
+    expect(inspect).toHaveBeenCalledOnce();
+    await workerService.reconcileEnvironment(environmentId);
+    expect(inspect).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes guarded reconciliation admission and drains admitted recovery during stop", async () => {
+    const environmentId = "worker-guard-stop";
+    support.seedReady(environmentId);
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
+    const workerService = support.createService(support.createProvider({ inspect }));
+    let releaseGuard: (() => void) | undefined;
+    const guardPending = new Promise<void>((resolve) => {
+      releaseGuard = resolve;
+    });
+    let signalGuardStarted: (() => void) | undefined;
+    const guardStarted = new Promise<void>((resolve) => {
+      signalGuardStarted = resolve;
+    });
+    let guardCompleted = false;
+    const uninstallGuard = workerService.installReconcileEnvironmentGuard(
+      async (_guardedEnvironmentId, reconcileCore) => {
+        signalGuardStarted?.();
+        await guardPending;
+        await reconcileCore();
+        guardCompleted = true;
+      },
+    );
+    const admitted = workerService.reconcileEnvironment(environmentId);
+    await guardStarted;
+
+    let stopped = false;
+    const stopping = workerService.stop().then(() => {
+      stopped = true;
+    });
+    await workerService.reconcileEnvironment(environmentId);
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    expect(guardCompleted).toBe(false);
+    expect(inspect).not.toHaveBeenCalled();
+
+    releaseGuard?.();
+    await Promise.all([admitted, stopping]);
+    await uninstallGuard();
+    expect(guardCompleted).toBe(true);
+    expect(inspect).not.toHaveBeenCalled();
   });
 
   it("rejects a create queued before service shutdown once its lock is acquired", async () => {

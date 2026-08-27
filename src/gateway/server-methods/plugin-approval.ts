@@ -7,11 +7,12 @@ import {
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-scope.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "../../infra/exec-approval-command-display.js";
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+} from "../../infra/exec-approval-text-sanitize.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
   PluginApprovalRequest,
@@ -59,8 +60,17 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: PluginApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond, client }) => {
-      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
+    "plugin.approval.list": async ({ respond, client, context }) => {
+      respond(
+        true,
+        listVisiblePendingApprovalRequests({
+          manager,
+          client,
+          approvalKind: "plugin",
+          ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
+        }),
+        undefined,
+      );
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (
@@ -79,6 +89,7 @@ export function createPluginApprovalHandlers(
         description: string;
         detail?: string | null;
         severity?: string | null;
+        scope?: ApprovalScope;
         toolName?: string | null;
         toolCallId?: string | null;
         allowedDecisions?: string[] | null;
@@ -179,6 +190,7 @@ export function createPluginApprovalHandlers(
         pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
         description: sanitizedDescription,
+        scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
         detail:
           rawDetail === null
             ? null
@@ -243,7 +255,7 @@ export function createPluginApprovalHandlers(
         return;
       }
 
-      const requestEvent = buildRequestedApprovalEvent(record);
+      const requestEvent = buildRequestedApprovalEvent(record, "plugin");
       const forwardRequest = opts?.forwarder?.handlePluginApprovalRequested?.bind(opts.forwarder);
       const iosPushRequest = opts?.iosPushDelivery?.handleRequested?.bind(opts.iosPushDelivery);
 
@@ -281,11 +293,12 @@ export function createPluginApprovalHandlers(
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond, client }) => {
+    "plugin.approval.waitDecision": async ({ params, respond, client, context }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
         client,
+        ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         respond,
       });
     },

@@ -1,14 +1,13 @@
 // Whatsapp plugin module implements on message behavior.
 import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
-import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
+import type { getReplyFromConfig, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveAgentRoute, buildGroupHistoryKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
@@ -45,6 +44,7 @@ export function createWebOnMessageHandler(params: {
   baseMentionConfig: MentionConfig;
   account: { authDir?: string; accountId?: string; selfChatMode?: boolean };
   buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  dispatchReplyFromConfig?: NonNullable<ChannelInboundTurnPlan["dispatchReplyFromConfig"]>;
 }) {
   const hasExplicitlyPassedInboundAccess = (msg: AdmittedWebInboundMessage): boolean =>
     msg.admission.ingress.decision === "allow";
@@ -105,6 +105,7 @@ export function createWebOnMessageHandler(params: {
       replyLogger: params.replyLogger,
       backgroundTasks: params.backgroundTasks,
       buildContext: params.buildContext,
+      dispatchReplyFromConfig: params.dispatchReplyFromConfig,
     };
     if (opts?.groupHistory !== undefined) {
       processParams.groupHistory = opts.groupHistory;

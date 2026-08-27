@@ -7,6 +7,8 @@ import type {
   MemorySearchConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
@@ -154,7 +156,6 @@ vi.mock("./sqlite-vec.js", () => ({
 }));
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
@@ -163,7 +164,7 @@ vi.mock("./embeddings.js", () => ({
     provider: {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => [1, 0],
+      embed: async () => [1, 0],
       embedBatch: async (texts: string[]) => texts.map(() => [1, 0]),
     },
   }),
@@ -208,6 +209,10 @@ describe("memory watcher config", () => {
     await closeAllMemorySearchManagers();
     clearRegistry();
     restoreWatcherStateDir();
+    // The agent close releases its leases through shared state and reopens it, so the
+    // shared handle is released second; otherwise Windows fails the removal with EBUSY.
+    closeOpenClawAgentDatabasesForTest();
+    resetPluginStateStoreForTests();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";

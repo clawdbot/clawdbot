@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   adaptMessagePresentationForChannel,
@@ -11,13 +14,23 @@ import {
   type MessagePresentationAction,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import type { ClawdbotConfig, ReplyPayload } from "../runtime-api.js";
+import {
+  FEISHU_SELECTED_SECRET_ENV,
+  FEISHU_SIBLING_SECRET_ENV,
+  createFeishuSecretRefPolicyConfig,
+  feishuSecretRefPolicyCases,
+} from "./bot.test-support.js";
+import type { FeishuClientCredentials } from "./client.js";
 
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
 const sendCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
+const createFeishuClientMock = vi.hoisted(() =>
+  vi.fn((_account: FeishuClientCredentials) => ({ request: vi.fn() })),
+);
 const deliverCommentThreadTextMock = vi.hoisted(() => vi.fn());
 const cleanupAmbientCommentTypingReactionMock = vi.hoisted(() => vi.fn(async () => false));
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
@@ -54,6 +67,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
+  sendStickerFeishu: vi.fn(),
   shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
 
@@ -95,7 +109,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 vi.mock("./client.js", () => ({
-  createFeishuClient: vi.fn(() => ({ request: vi.fn() })),
+  createFeishuClient: createFeishuClientMock,
 }));
 
 vi.mock("./drive.js", () => ({
@@ -109,7 +123,7 @@ vi.mock("./comment-reaction.js", () => ({
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { feishuPlugin } from "./channel.js";
 import { buildFeishuPostMessageContent } from "./markdown.js";
-import { feishuOutbound } from "./outbound.js";
+import { FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER, feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
 async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
@@ -840,6 +854,48 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "native_card_msg");
   });
+
+  it.each(["title", "text", "context"] as const)(
+    "delivers complete authored %s through native presentation cards",
+    async (kind) => {
+      const text = `${"x".repeat(3999)} \n  TAIL_NOT_DELIVERED`;
+      const original: MessagePresentation =
+        kind === "title" ? { title: text, blocks: [] } : { blocks: [{ type: kind, text }] };
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: original,
+        capabilities: feishuOutbound.presentationCapabilities,
+      });
+      const payload = { presentation };
+      const rendered = await feishuOutbound.renderPresentation?.({
+        payload,
+        presentation,
+        ctx: { cfg: emptyConfig, to: "chat_1", text: "", accountId: "main", payload },
+      });
+      if (!rendered) {
+        throw new Error("expected native Feishu presentation");
+      }
+      expect(rendered.text).toBe(text);
+      const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+      await feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: rendered.text ?? "",
+        accountId: "main",
+        payload: coreRenderedPayload,
+      });
+      const card = sendCardCall()?.card;
+      expect(JSON.stringify(card)).toContain("TAIL_NOT_DELIVERED");
+      expect(
+        [
+          card?.header?.title?.content ?? "",
+          ...(card?.body?.elements ?? []).map((element: { content?: string }) =>
+            (element.content ?? "").replace(/<\/?font[^>]*>/gu, ""),
+          ),
+        ].join(""),
+      ).toBe(text);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders webApp presentation buttons into Feishu channelData link buttons", async () => {
     const presentation: MessagePresentation = {
@@ -1999,6 +2055,59 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expectFeishuResult(result, "reply_msg");
   });
 
+  it.each(["direct", "core-rendered"] as const)(
+    "preserves select command guidance for %s document-comment delivery",
+    async (deliveryPath) => {
+      const presentation: MessagePresentation = {
+        blocks: [
+          {
+            type: "select",
+            placeholder: "Choose deployment",
+            options: [
+              {
+                label: "Deploy",
+                action: { type: "command", command: "/deploy staging" },
+              },
+            ],
+          },
+        ],
+      };
+      const originalPayload = { presentation };
+      let payload: ReplyPayload = originalPayload;
+      if (deliveryPath === "core-rendered") {
+        const rendered = await feishuOutbound.renderPresentation?.({
+          payload: originalPayload,
+          presentation,
+          ctx: {
+            cfg: emptyConfig,
+            to: "comment:docx:doxcn123:7623358762119646411",
+            text: "",
+            accountId: "main",
+            payload: originalPayload,
+          },
+        });
+        if (!rendered) {
+          throw new Error("expected Feishu-rendered select presentation");
+        }
+        const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+        payload = coreRenderedPayload;
+      }
+
+      const result = await feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "comment:docx:doxcn123:7623358762119646411",
+        text: "",
+        accountId: "main",
+        payload,
+      });
+
+      expect(commentThreadParams()?.content).toBe(
+        "Choose deployment:\n- Deploy: `/deploy staging`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+      );
+      expectFeishuResult(result, "reply_msg");
+    },
+  );
+
   it("keeps TTS supplements on the document-comment delivery path", async () => {
     await feishuOutbound.sendPayload?.({
       cfg: emptyConfig,
@@ -2195,6 +2304,54 @@ describe("feishuOutbound comment-thread routing", () => {
     resetOutboundMocks();
   });
 
+  it.each(feishuSecretRefPolicyCases)(
+    "permits document-comment delivery only under configured SecretRef policy: $name",
+    async (testCase) => {
+      vi.stubEnv(FEISHU_SELECTED_SECRET_ENV, "selected-secret");
+      vi.stubEnv(FEISHU_SIBLING_SECRET_ENV, "sibling-secret");
+      createFeishuClientMock.mockImplementationOnce((account) => {
+        if (!account.appId || !account.appSecret) {
+          throw new Error(`Feishu credentials not configured for account "${account.accountId}"`);
+        }
+        return { request: vi.fn() };
+      });
+      const cfg = createFeishuSecretRefPolicyConfig(testCase);
+
+      try {
+        const delivery = sendText({
+          cfg,
+          to: "comment:docx:doxcn123:7623358762119646411",
+          text: "handled in thread",
+          accountId: "selected",
+        });
+
+        if (!testCase.configured) {
+          await expect(delivery).rejects.toThrow(
+            'Feishu credentials not configured for account "selected"',
+          );
+          expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
+          expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+          expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+          return;
+        }
+
+        expectFeishuResult(await delivery, "reply_msg");
+        expect(createFeishuClientMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            accountId: "selected",
+            appId: "selected-app",
+            appSecret: "selected-secret", // pragma: allowlist secret
+            configured: true,
+          }),
+        );
+        expect(deliverCommentThreadTextMock).toHaveBeenCalledOnce();
+        expect(commentThreadParams()?.content).toBe("handled in thread");
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it("routes comment-thread text through deliverCommentThreadText", async () => {
     const result = await sendText({
       cfg: emptyConfig,
@@ -2280,6 +2437,7 @@ describe("feishuOutbound comment-thread routing", () => {
   });
 
   it("preserves comment-thread routing when deliverCommentThreadText falls back to add_comment", async () => {
+    const onDeliveryResult = vi.fn();
     deliverCommentThreadTextMock.mockResolvedValueOnce({
       delivery_mode: "add_comment",
       comment_id: "comment_msg",
@@ -2291,13 +2449,15 @@ describe("feishuOutbound comment-thread routing", () => {
       to: "comment:docx:doxcn123:7623358762119646411",
       text: "whole-comment follow-up",
       accountId: "main",
+      onDeliveryResult,
     });
 
     expect(commentThreadParams()?.file_token).toBe("doxcn123");
     expect(commentThreadParams()?.file_type).toBe("docx");
     expect(commentThreadParams()?.comment_id).toBe("7623358762119646411");
     expect(commentThreadParams()?.content).toBe("whole-comment follow-up");
-    expectFeishuResult(result, "reply_from_add_comment");
+    expectFeishuResult(result, "comment_msg");
+    expect(onDeliveryResult.mock.calls[0]?.[0]?.messageId).toBe("comment_msg");
   });
 
   it("does not wait for ambient comment typing cleanup before sending comment-thread replies", async () => {
@@ -2431,6 +2591,7 @@ describe("feishuOutbound.sendText replyToId forwarding", () => {
     });
 
     expect(sendMessageCall()?.text).toBe("first line  \nsecond line");
+    expect(sendMessageCall()?.preparedPostText).toBe(true);
   });
 
   it("re-chunks expanded post-md text and scopes reply metadata to the first send", async () => {
@@ -3079,6 +3240,234 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     });
 
     expect(sendMessageCall()?.replyToMessageId).toBe("om_reply_target");
+  });
+
+  // Regression for #112244 (second-review P1): when the direct `send` action
+  // requests `propagateMediaUploadFailure`, a media-upload failure must re-throw
+  // to the caller instead of being converted to a fallback text success —
+  // otherwise the agent receives an `ok:true` receipt for a message whose
+  // attachment never arrived. No fallback "Media upload failed" text is emitted.
+  // When the caption was already delivered, the re-thrown error preserves that
+  // caption's receipt as the existing partial-delivery outcome (seventeenth-review
+  // P1) so the caller knows the text is visible and does not retry it.
+  it("propagates a media-upload failure instead of falling back to text when requested", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "caption_msg",
+      chatId: "chat_1",
+    });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await expect(
+      feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "see attachment",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+        propagateMediaUploadFailure: true,
+      } as never),
+    ).rejects.toThrow("upload failed");
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    // No fallback "Media upload failed" text is emitted on top of any caption.
+    expect(sendMessageCall()?.text).not.toContain("Media upload failed");
+  });
+
+  // Regression for #112244 (seventeenth-review P1): when the caption was already
+  // delivered before the media upload failed, the propagated error must preserve
+  // the caption's receipt as the repository's existing partial-delivery outcome
+  // — otherwise the caller treats it as a wholly failed send, retries, and
+  // duplicates the already-visible caption. Pre-fix the catch block threw a plain
+  // Error with no receipt; post-fix it throws a ChannelPartialDeliveryError
+  // carrying the caption's messageId.
+  it("preserves a delivered caption as partial delivery when media upload fails", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "caption_msg",
+      chatId: "chat_1",
+    });
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    let caught: unknown;
+    try {
+      await feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "see attachment",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+        propagateMediaUploadFailure: true,
+      } as never);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(true);
+    const partial = caught as ReturnType<typeof createChannelPartialDeliveryError>;
+    expect(partial.deliveryResult.visibleReplySent).toBe(true);
+    expect(partial.deliveryResult.messageIds).toEqual(["caption_msg"]);
+    // The caption was delivered exactly once; no retry/duplicate send occurred.
+    expect(sendMessageFeishuMock).toHaveBeenCalledOnce();
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+  });
+
+  // Regression for #112244 (seventeenth-review P1, scope guard): a media-upload
+  // failure with NO delivered caption is a wholly failed send, so the propagated
+  // error stays a plain Error (no partial-delivery receipt to preserve).
+  it("propagates a plain error when media upload fails with no delivered caption", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    let caught: unknown;
+    try {
+      await feishuOutbound.sendMedia?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        mediaUrl: "https://example.com/file.png",
+        accountId: "main",
+        propagateMediaUploadFailure: true,
+      } as never);
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(isChannelPartialDeliveryError(caught)).toBe(false);
+    expect(caught).toBeInstanceOf(Error);
+    expect(String(caught)).toContain(
+      "Feishu send could not deliver the requested media attachment",
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("still falls back to text on upload failure when propagation is not requested", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "see attachment",
+      // A private/local media URL cannot be resolved to a public reference, so
+      // the fallback renders the generic "Media upload failed" text.
+      mediaUrl: path.join(os.tmpdir(), "openclaw-feishu-fallback-not-requested.png"),
+      accountId: "main",
+    });
+
+    // Default behavior is unchanged: the caption is sent first, then the
+    // fallback text, and a success receipt is returned (other outbound callers
+    // rely on this). The fallback is the second sendMessage call.
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageCall(1)?.text).toContain("Media upload failed. Please try again.");
+    expectFeishuResult(result, "text_msg");
+  });
+
+  // Regression for #112244 (third-review P1): the direct `send` action routes
+  // an attachment through the presentation-fallback path (sendPayload →
+  // sendFeishuFallbackPayload → sendMedia) when a card falls back. That path
+  // cannot carry `propagateMediaUploadFailure` through the shared sendPayload
+  // signature, so the action stamps the marker on channelData.feishu and the
+  // fallback payload must honor it — re-throwing the upload failure instead of
+  // returning a fallback-text `ok:true` receipt.
+  it("propagates a media-upload failure through the presentation-fallback path when the marker is set", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await expect(
+      feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: "see attachment",
+        accountId: "main",
+        payload: {
+          text: "see attachment",
+          mediaUrl: "https://example.com/file.png",
+          channelData: {
+            feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
+          },
+        },
+      }),
+    ).rejects.toThrow("Feishu send could not deliver the requested media attachment");
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledOnce();
+    // No fallback "Media upload failed" text is emitted on top of any caption.
+    expect(
+      sendMessageFeishuMock.mock.calls
+        .map(([args]) => (args as { text?: string })?.text ?? "")
+        .some((text) => text.includes("Media upload failed")),
+    ).toBe(false);
+  });
+
+  it("still falls back to text on the presentation-fallback path when the marker is absent", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "see attachment",
+      accountId: "main",
+      payload: {
+        text: "see attachment",
+        // A private/local media URL cannot be resolved to a public reference,
+        // so the fallback renders the generic "Media upload failed" text.
+        mediaUrl: path.join(os.tmpdir(), "openclaw-feishu-fallback-no-marker.png"),
+      },
+    });
+
+    // Default behavior is unchanged: the caption is sent first, then the
+    // fallback text, and a success receipt is returned.
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageCall(1)?.text).toContain("Media upload failed. Please try again.");
+    expectFeishuResult(result, "text_msg");
+  });
+
+  // Regression for #112244 (fourteenth-review P1): the direct `send` action
+  // stamps the propagation marker on channelData.feishu before routing an
+  // attachment through sendPayload. The document-comment sendPayload branch
+  // preserves the marker (so the fallback helper requests propagation), but a
+  // comment target must NOT throw on the strength of that marker alone: the
+  // comment-target media-link fallback renders the media URL as a visible
+  // clickable link, which is established main behavior and NOT the silent
+  // text-only `ok:true` drop issue #112244 removes. Propagation is reserved for
+  // actual media-upload failures (the `sendMediaFeishu` catch), which a comment
+  // target never reaches because it never uploads. With the marker set, the
+  // comment target still renders the visible media-link fallback and returns a
+  // success receipt — the same outcome as the marker-absent case below.
+  it("renders the visible media-link fallback on a document-comment target even when the propagation marker is set", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      accountId: "main",
+      payload: {
+        text: "see attachment",
+        mediaUrl: "https://example.com/pipeline.png",
+        channelData: {
+          feishu: { [FEISHU_PROPAGATE_MEDIA_UPLOAD_FAILURE_MARKER]: true },
+        },
+      },
+    });
+
+    // The media URL is delivered as a visible comment text link (not a silent
+    // text-only ok), and a success receipt is returned — comment targets keep
+    // their established media-link fallback regardless of the propagation flag.
+    expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
+    expectFeishuResult(result, "reply_msg");
+    // No media upload is attempted for a comment target.
+    expect(sendMediaFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("still degrades a comment attachment to text when the propagation marker is absent", async () => {
+    const result = await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "see attachment",
+      accountId: "main",
+      payload: {
+        text: "see attachment",
+        mediaUrl: "https://example.com/pipeline.png",
+      },
+    });
+
+    // Default comment behavior is unchanged: the media link is rendered as a
+    // fallback text comment and a success receipt is returned.
+    expect(commentThreadParams()?.content).toBe("https://example.com/pipeline.png");
+    expectFeishuResult(result, "reply_msg");
   });
 });
 

@@ -130,6 +130,8 @@ export type DiscordVoiceAutoJoinConfig = {
   guildId: string;
   /** Voice channel ID to join. */
   channelId: string;
+  /** Join and remain connected only while at least one human is in the channel. Default: false. */
+  whenOccupied?: boolean;
 };
 
 export type DiscordVoiceAllowedChannelConfig = {
@@ -196,7 +198,7 @@ export type DiscordVoiceConfig = {
   model?: string;
   /** Realtime provider settings for agent-proxy or bidi modes. */
   realtime?: DiscordVoiceRealtimeConfig;
-  /** Voice channels to auto-join on startup. */
+  /** Voice channels to join automatically, optionally only while occupied. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** If false, configured followUsers are ignored without removing the saved user list. */
   followUsersEnabled?: boolean;
@@ -316,9 +318,6 @@ export type DiscordAccountConfig = Omit<
     slashCommand?: DiscordSlashCommandConfig;
     /** Thread binding lifecycle settings. */
     threadBindings?: DiscordThreadBindingsConfig;
-    /** Show subagent count reactions and typing on the source message. Default: false. */
-    /** @deprecated Doctor-only legacy input. */
-    subagentProgress?: boolean;
     /** Privileged Gateway Intents (must also be enabled in Discord Developer Portal). */
     intents?: DiscordIntentsConfig;
     /** Voice channel conversation settings. */

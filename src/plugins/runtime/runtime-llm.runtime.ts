@@ -165,8 +165,8 @@ async function resolveAgentId(params: {
     }
     return requestedAgentId;
   }
-  const { resolveDefaultAgentId } = await import("../../agents/agent-scope.js");
-  return resolveDefaultAgentId(params.cfg);
+  const { resolveAmbientOwnerAgentId } = await import("../../agents/agent-scope.js");
+  return resolveAmbientOwnerAgentId(params.cfg);
 }
 
 function buildSystemPrompt(params: LlmCompleteParams): string | undefined {

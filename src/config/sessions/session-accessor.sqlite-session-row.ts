@@ -6,7 +6,10 @@ import {
 import { normalizeSessionRowChatType, normalizeText } from "./session-accessor.sqlite-normalize.js";
 import { bindSessionEntryProvenance } from "./session-accessor.sqlite-provenance.js";
 import { normalizeStatus } from "./session-accessor.sqlite-status.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
+import {
+  projectCanonicalSessionEntryShape,
+  stripRuntimeOnlySessionSkillsFields,
+} from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
@@ -91,7 +94,7 @@ export function bindSessionNode(params: {
   return {
     session_key: params.sessionKey,
     current_session_id: params.entry.sessionId,
-    entry_json: JSON.stringify(canonicalEntry),
+    entry_json: JSON.stringify(stripRuntimeOnlySessionSkillsFields(canonicalEntry)),
     entry_valid: 1,
     updated_at: params.updatedAt,
     status: normalizeStatus(params.entry.status),

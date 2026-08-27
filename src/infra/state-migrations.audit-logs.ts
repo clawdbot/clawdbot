@@ -99,7 +99,9 @@ async function secureAuditArchiveFile(params: {
   warnings: string[];
 }): Promise<boolean> {
   try {
-    const opened = await params.root.open(params.relativePath);
+    const opened = await params.root.openWritable(params.relativePath, {
+      writeMode: "update",
+    });
     try {
       await opened.handle.chmod(0o600);
       await opened.handle.sync();

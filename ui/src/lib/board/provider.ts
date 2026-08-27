@@ -85,10 +85,12 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
 }
 
 class NullProvider implements BoardProvider {
+  readonly appViewGeneration = 0;
   readonly canMutate = false;
   readonly canGrant = false;
   readonly canPinWidgets = false;
   readonly canPinMcpApps = false;
+  readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
@@ -124,10 +126,12 @@ class NullProvider implements BoardProvider {
 }
 
 class MockBoardProvider implements BoardProvider {
+  readonly appViewGeneration = 0;
   readonly canMutate = true;
   readonly canGrant = true;
   readonly canPinWidgets = true;
   readonly canPinMcpApps = true;
+  readonly loadError$ = new ValueSignal<string | null>(null);
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private readonly snapshotSignal: ValueSignal<BoardSnapshot>;
@@ -242,6 +246,7 @@ type BoardProviderCapabilities = Pick<
 // Snapshots and gateway subscriptions are session-owned, but authority belongs
 // to each live consumer; sharing it would let another dashboard widen an action.
 class ScopedGatewayBoardProvider implements BoardProvider {
+  readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;
   private active = true;
@@ -250,12 +255,17 @@ class ScopedGatewayBoardProvider implements BoardProvider {
     private readonly transport: GatewayBoardProvider,
     private capabilities: BoardProviderCapabilities,
   ) {
+    this.loadError$ = transport.loadError$;
     this.snapshot$ = transport.snapshot$;
     this.events = transport.events;
   }
 
   get sessionKey(): string {
     return this.transport.sessionKey;
+  }
+
+  get appViewGeneration(): number {
+    return this.transport.appViewGeneration;
   }
 
   get canPinWidgets(): boolean {

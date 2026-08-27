@@ -1,9 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import {
+  GATEWAY_RESTART_UNAVAILABLE_REASON,
+  GATEWAY_SUSPEND_UNAVAILABLE_REASON,
+} from "../../packages/gateway-protocol/src/restart-unavailable.js";
 import {
   gatewayStartupUnavailableDetails,
   GATEWAY_STARTUP_RETRY_AFTER_MS,
@@ -45,6 +50,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { createLazyCoreHandlers, lazyHandlerModule } from "./server-methods/lazy-core-handlers.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
 import type {
@@ -54,6 +60,10 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
+import {
+  resolveDirectIncognitoTargets,
+  sessionMutationTargetFields,
+} from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -94,7 +104,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     ),
   diagnostics: () =>
     import("./server-methods/diagnostics.js").then((module) => module.diagnosticsHandlers),
-  doctor: () => import("./server-methods/doctor.js").then((module) => module.doctorHandlers),
+  doctor: () =>
+    import("./server-methods/doctor.js").then((module) => module.createDoctorHandlers()),
   environments: () =>
     import("./server-methods/environments.js").then((module) => module.environmentsHandlers),
   worktrees: () =>
@@ -130,6 +141,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   plugins: () => import("./server-methods/plugins.js").then((module) => module.pluginsHandlers),
   projects: () => import("./server-methods/projects.js").then((module) => module.projectsHandlers),
   portals: () => import("./server-methods/portals.js").then((module) => module.portalHandlers),
+  "progress-card": () =>
+    import("./server-methods/progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () =>
     import("./server-methods/migrations.js").then((module) => module.migrationsHandlers),
   push: () => import("./server-methods/push.js").then((module) => module.pushHandlers),
@@ -138,6 +151,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   send: () => import("./server-methods/send.js").then((module) => module.sendHandlers),
   "sessions-files": () =>
     import("./server-methods/sessions-files.js").then((module) => module.sessionsFilesHandlers),
+  "sessions-github": () =>
+    import("./server-methods/sessions-github.js").then((module) => module.sessionsGitHubHandlers),
   "sessions-diff": () =>
     import("./server-methods/sessions-diff.js").then((module) => module.sessionsDiffHandlers),
   "sessions-abort": () =>
@@ -206,6 +221,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./server-methods/task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
   "tools-catalog": () =>
     import("./server-methods/tools-catalog.js").then((module) => module.toolsCatalogHandlers),
+  "tools-github": () =>
+    import("./server-methods/tools-github.js").then((module) => module.toolsGitHubHandlers),
   "tools-effective": () =>
     import("./server-methods/tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () =>
@@ -282,6 +299,86 @@ const SUSPEND_CONTROL_METHODS = new Set([
 
 function isGatewayMethodAllowedDuringSuspension(method: string): boolean {
   return SUSPEND_CONTROL_METHODS.has(method);
+}
+
+function runGatewayPendingWorkContinuation<T>(params: {
+  method: string;
+  client: GatewayRequestOptions["client"];
+  requestParams: unknown;
+  context: GatewayRequestContext;
+  run: () => Promise<T>;
+}): Promise<T> | null {
+  if (getGatewaySuspendAdmissionPhase() !== "draining" || !isRecord(params.requestParams)) {
+    return null;
+  }
+  const request = params.requestParams;
+  if (params.client?.connect.role === "node") {
+    const invokeId =
+      params.method === "node.invoke.progress"
+        ? request.invokeId
+        : params.method === "node.invoke.result"
+          ? request.id
+          : undefined;
+    if (typeof invokeId !== "string" || typeof request.nodeId !== "string") {
+      return null;
+    }
+    return params.context.nodeRegistry.runPendingInvokeContinuation({
+      invokeId,
+      nodeId: request.nodeId,
+      connId: params.client.connId,
+      run: params.run,
+    });
+  }
+  if (params.client?.connect.role !== "operator" || typeof request.id !== "string") {
+    return null;
+  }
+  if (params.method === "question.resolve" || params.method === "question.get") {
+    return params.context.questionManager?.runPendingContinuation(request.id, params.run) ?? null;
+  }
+  const manager =
+    params.method === "exec.approval.resolve"
+      ? params.context.execApprovalManager
+      : params.method === "plugin.approval.resolve"
+        ? params.context.pluginApprovalManager
+        : params.method === "approval.resolve"
+          ? request.kind === "exec"
+            ? params.context.execApprovalManager
+            : request.kind === "plugin"
+              ? params.context.pluginApprovalManager
+              : request.kind === "system-agent"
+                ? params.context.systemAgentApprovalManager
+                : undefined
+          : undefined;
+  return manager?.runPendingContinuation(request.id, params.run) ?? null;
+}
+
+async function authorizeAuthenticatedProfileForMethod(params: {
+  client: GatewayRequestOptions["client"];
+  method: string;
+  requestParams: unknown;
+  methodRegistry: GatewayMethodRegistry;
+  context: GatewayRequestContext;
+}): Promise<ErrorShape | null> {
+  const sync = params.client?.authenticatedGitHubIdentitySync;
+  if (!sync || params.client?.authenticatedUserProfile?.profileId.trim()) {
+    return null;
+  }
+  const requiresProfile =
+    params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
+    resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
+    (sessionMutationTargetFields(params.method).length > 0 &&
+      params.context.getRuntimeConfig().gateway?.roles !== undefined);
+  if (!requiresProfile) {
+    return null;
+  }
+  try {
+    await sync();
+  } catch {
+    return authenticatedProfileUnavailableError();
+  }
+  return params.client?.authenticatedUserProfile?.profileId.trim()
+    ? null
+    : authenticatedProfileUnavailableError();
 }
 
 const coreGatewayHandlerMethodNames = listCoreGatewayHandlerMethodNames();
@@ -364,6 +461,27 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   if (authError) {
     return { error: authError };
   }
+  // GitHub-backed connections receive hello before remote account resolution. Profile-owned
+  // methods must cross this single router fence before session authorization or handler work.
+  const profileError = await authorizeAuthenticatedProfileForMethod(params);
+  if (profileError) {
+    return { error: profileError };
+  }
+  // Startup gating precedes session authorization: session stores are not loaded yet,
+  // so an authorization read here would deny with a misleading non-retryable error.
+  if (params.context.unavailableGatewayMethods?.has(params.method)) {
+    return {
+      error: errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `${params.method} unavailable during gateway startup`,
+        {
+          retryable: true,
+          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+        },
+      ),
+    };
+  }
   const sessionMutation = resolveSessionMutationAuthorization({
     client: params.client ?? null,
     method: params.method,
@@ -383,19 +501,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         retryable: true,
         details: { code: "PAIRING_CHANGED" },
       }),
-    };
-  }
-  if (params.context.unavailableGatewayMethods?.has(params.method)) {
-    return {
-      error: errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${params.method} unavailable during gateway startup`,
-        {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        },
-      ),
     };
   }
   return {
@@ -461,6 +566,20 @@ export async function runWithGatewayRequestEnvelope<T>(
     isTargetedNonSafeGatewayRestartRequest(options.requestParams)
       ? tryBeginGatewayPreparedRestartRootWorkAdmission()
       : null);
+  if (!rootWorkAdmission) {
+    // Completion frames arrive on their own socket chains. Only their exact
+    // live owner can re-enter the already-admitted root that is waiting for them.
+    const continuation = runGatewayPendingWorkContinuation({
+      method,
+      client,
+      requestParams: options.requestParams,
+      context: options.context,
+      run: () => runWithGatewayRequestEnvelope(method, client, fn, options),
+    });
+    if (continuation) {
+      return await continuation;
+    }
+  }
   if (isSuspendPrepare && rootWorkAdmission && !rootWorkAdmission.ownsRoot) {
     return await options.reject(
       errorShape(ErrorCodes.UNAVAILABLE, "gateway suspension cannot begin from a nested request", {
@@ -481,7 +600,9 @@ export async function runWithGatewayRequestEnvelope<T>(
           retryAfterMs: 1_000,
           details: {
             method,
-            reason: restartDraining ? "gateway-restarting" : "gateway-suspending",
+            reason: restartDraining
+              ? GATEWAY_RESTART_UNAVAILABLE_REASON
+              : GATEWAY_SUSPEND_UNAVAILABLE_REASON,
             phase: getGatewaySuspendAdmissionPhase(),
           },
         },

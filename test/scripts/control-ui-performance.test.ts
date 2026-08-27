@@ -205,9 +205,9 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it("allows CI-measured startup JS growth within the ratchet tolerance", () => {
+  it("allows startup JS growth exactly at the ratchet tolerance", () => {
     const violations = evaluateControlUiPerformanceBudgets(
-      createMetrics(326_672),
+      createMetrics(326_187),
       { ...looseBudgets, startupJsGzipBytes: 319 * 1024, largestJsGzipBytes: 400_000 },
       startupBaseline(325_675),
     );
@@ -215,8 +215,8 @@ describe("Control UI performance budgets", () => {
     expect(violations).toEqual([]);
   });
 
-  it("fails startup JS growth over the ratchet tolerance with update guidance", () => {
-    const metrics = createMetrics(326_732);
+  it("fails startup JS growth one byte beyond the ratchet tolerance", () => {
+    const metrics = createMetrics(326_188);
     const baseline = startupBaseline(325_675);
     const budgets = {
       ...looseBudgets,
@@ -228,10 +228,10 @@ describe("Control UI performance budgets", () => {
       evaluateControlUiPerformanceBudgets(metrics, budgets, baseline).map((entry) => entry.metric),
     ).toContain("startup JS gzip");
     expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "startup JS gzip: 319.1 KiB exceeds 319.1 KiB (326732 B vs 326731 B)",
+      "startup JS gzip: 318.5 KiB exceeds 318.5 KiB (326188 B vs 326187 B)",
     );
     expect(formatControlUiPerformanceReport(metrics, budgets, baseline)).toContain(
-      "limits: 10 requests, 319.1 KiB gzip",
+      "limits: 10 requests, 318.5 KiB gzip",
     );
   });
 
@@ -260,7 +260,7 @@ describe("Control UI performance budgets", () => {
 
     expect(
       evaluateControlUiPerformanceBudgets(
-        createMetrics(319 * 1024 + 1057),
+        createMetrics(319 * 1024 + 513),
         budgets,
         startupBaseline(319 * 1024),
       ).map((entry) => entry.metric),
@@ -321,7 +321,7 @@ describe("Control UI performance budgets", () => {
     );
   });
 
-  it("updates the baseline from local or explicit CI metrics", () => {
+  it("updates the baseline from generated or explicitly measured metrics", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-control-ui-budget-cli-"));
     tempDirs.push(rootDir);
     const scriptsDir = path.join(rootDir, "scripts");
@@ -376,7 +376,7 @@ describe("Control UI performance budgets", () => {
     fs.rmSync(distDir, { recursive: true });
     const explicitBytesResult = runControlUiPerformanceCli(
       scriptPath,
-      ["--update-baseline", "--startup-js-bytes", "321", "--reason", "CI measurement"],
+      ["--update-baseline", "--startup-js-bytes", "321", "--reason", "explicit measurement"],
       rootDir,
     );
     expect(explicitBytesResult.status, explicitBytesResult.stderr).toBe(0);
@@ -384,7 +384,7 @@ describe("Control UI performance budgets", () => {
       JSON.parse(
         fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
       ),
-    ).toMatchObject({ startupJsGzipBytes: 321, reason: "CI measurement" });
+    ).toMatchObject({ startupJsGzipBytes: 321, reason: "explicit measurement" });
 
     const beyondRatchetResult = runControlUiPerformanceCli(
       scriptPath,
@@ -399,7 +399,7 @@ describe("Control UI performance budgets", () => {
       JSON.parse(
         fs.readFileSync(path.join(configDir, "control-ui-startup-budget-baseline.json"), "utf8"),
       ),
-    ).toMatchObject({ startupJsGzipBytes: 321, reason: "CI measurement" });
+    ).toMatchObject({ startupJsGzipBytes: 321, reason: "explicit measurement" });
   });
 
   it("fails when a compressed sidecar is missing", () => {

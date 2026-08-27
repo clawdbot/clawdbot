@@ -654,6 +654,26 @@ describe("resolveAgentSessionStoreTargetsSync", () => {
 });
 
 describe("resolveExistingAgentSessionStoreTargetsSync", () => {
+  it("resolves configured stores without broad directory discovery", async () => {
+    await withTempHome(async (home) => {
+      const customRoot = path.join(home, "custom-state");
+      const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
+      const cfg: OpenClawConfig = {
+        ...createCustomRootCfg(customRoot, "main"),
+        agents: { list: [{ id: "main", default: true }, { id: "codex" }] },
+      };
+      const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
+      try {
+        expect(
+          resolveExistingAgentSessionStoreTargetsSync(cfg, "codex", { env: process.env }),
+        ).toEqual([{ agentId: "codex", storePath: storePaths.codex }]);
+        expect(enumerateAgentDirs).not.toHaveBeenCalled();
+      } finally {
+        enumerateAgentDirs.mockRestore();
+      }
+    });
+  });
+
   it("requires agent-specific rows instead of fixed-store file existence", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "shared", "sessions.json");

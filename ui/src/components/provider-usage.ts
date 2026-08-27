@@ -4,6 +4,7 @@
 import { html, nothing } from "lit";
 import type { ProviderUsageSnapshot } from "../../../src/infra/provider-usage.types.js";
 import { t } from "../i18n/index.ts";
+import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatCompactTokenCount } from "../lib/format.ts";
 
 function formatProviderAmount(amount: number, unit: string): string {
@@ -181,7 +182,7 @@ function renderProviderCostHistory(snapshot: ProviderUsageSnapshot) {
  */
 export function renderProviderUsageDetails(snapshot: ProviderUsageSnapshot) {
   if (snapshot.error) {
-    return html`<div class="provider-usage-error">${snapshot.error}</div>`;
+    return html`<div class="provider-usage-error">${formatUiExternalText(snapshot.error)}</div>`;
   }
   return html`
     ${snapshot.windows.length > 0

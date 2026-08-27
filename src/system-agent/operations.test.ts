@@ -503,7 +503,11 @@ describe("system agent operations", () => {
       ),
     ).rejects.toThrow("Run openclaw doctor --fix before creating main.");
 
-    expect(createAgent).toHaveBeenCalledWith({ name: "main", workspace: "/tmp/main" });
+    expect(createAgent).toHaveBeenCalledWith({
+      name: "main",
+      workspace: "/tmp/main",
+      provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
+    });
   });
 
   it("keeps the retired agent identity reserved", async () => {

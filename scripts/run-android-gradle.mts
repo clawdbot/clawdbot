@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -74,32 +74,24 @@ export function resolveAndroidSdkEnv(options: SdkOptions = {}) {
   return { ...env, ANDROID_HOME: defaultSdkDir };
 }
 
-export function run(
+export async function run(
   command: string,
   args: readonly string[],
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  return new Promise<number>((resolve) => {
-    const child = spawn(command, args, {
+  try {
+    return await runManagedCommand({
+      args: [...args],
+      bin: command,
       cwd,
       env,
-      stdio: "inherit",
+      shell: false,
     });
-    child.on("close", (status, signal) => {
-      if (typeof status === "number") {
-        resolve(status);
-      } else if (signal) {
-        resolve(128);
-      } else {
-        resolve(1);
-      }
-    });
-    child.on("error", (error) => {
-      console.error(error instanceof Error ? error.message : String(error));
-      resolve(1);
-    });
-  });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
 }
 
 export async function main(argv: string[] = process.argv.slice(2)) {

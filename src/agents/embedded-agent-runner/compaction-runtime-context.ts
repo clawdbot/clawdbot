@@ -6,17 +6,17 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { resolveAgentConfig } from "../agent-scope.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
-  resolveModelRefFromString,
+  listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
@@ -72,8 +72,9 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   sessionKey?: string;
   agentRuntime?: string | null;
 }): ThinkLevel {
+  const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -186,22 +187,21 @@ export function resolveEmbeddedCompactionTarget(params: {
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
+    allowManifestNormalization: false,
   });
   if (inferredLiteralProvider) {
     return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasResolution = resolveModelRefFromString({
-    cfg: config,
-    raw: override,
-    defaultProvider,
-    aliasIndex: buildModelAliasIndex({
-      cfg: config,
-      defaultProvider,
-    }),
-  });
-  if (aliasResolution?.alias) {
-    return assembleTarget(aliasResolution.ref.provider, aliasResolution.ref.model);
+  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  // Unrelated aliases must not cold-load provider runtime for a literal override.
+  const alias = listModelAliasCandidates(config).some(
+    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+  )
+    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
+    : undefined;
+  if (alias) {
+    return assembleTarget(alias.ref.provider, alias.ref.model);
   }
   return assembleTarget(provider, override);
 }
@@ -282,10 +282,7 @@ export function resolveCompactionContextTokenBudget(params: {
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
-  // Caller budgets stay bounded by the selected agent and model ceilings.
-  const agentContextTokens = params.agentId
-    ? resolveAgentConfig(params.config ?? {}, params.agentId)?.contextTokens
-    : undefined;
+  // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -294,7 +291,6 @@ export function resolveCompactionContextTokenBudget(params: {
         modelId: params.modelId,
         modelContextTokens: readAgentModelContextTokens(params.model),
         modelContextWindow: params.model?.contextWindow,
-        agentContextTokens,
         defaultTokens: DEFAULT_CONTEXT_TOKENS,
       }).tokens,
     ) ?? DEFAULT_CONTEXT_TOKENS;
@@ -351,9 +347,12 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,
+    toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
@@ -363,6 +362,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
+    execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

@@ -35,6 +35,7 @@ describe("resolveCommandConfigWithSecrets", () => {
       config,
       commandName: "status",
       targetIds,
+      agentId: "ops",
       mode: "read_only_status",
       runtime,
     });
@@ -43,6 +44,7 @@ describe("resolveCommandConfigWithSecrets", () => {
       config,
       commandName: "status",
       targetIds,
+      agentId: "ops",
       mode: "read_only_status",
     });
     expect(runtime.error).toHaveBeenCalledWith("[secrets] resolved channels.telegram.token");

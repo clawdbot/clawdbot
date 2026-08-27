@@ -51,8 +51,6 @@ const { sendDurableMessageBatch } = vi.hoisted(() => ({
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
-  sessionAccessorMocks.actualAppendTranscriptMessage = actual.appendTranscriptMessage;
-  sessionAccessorMocks.appendTranscriptMessage.mockImplementation(actual.appendTranscriptMessage);
   return { ...actual, appendTranscriptMessage: sessionAccessorMocks.appendTranscriptMessage };
 });
 vi.mock("../channels/message/runtime.js", () => ({
@@ -114,11 +112,14 @@ describe("client voice session", () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     sendDurableMessageBatch.mockReset().mockResolvedValue({ status: "sent" });
     sessionAccessorMocks.appendTranscriptMessage.mockReset();
-    if (sessionAccessorMocks.actualAppendTranscriptMessage) {
-      sessionAccessorMocks.appendTranscriptMessage.mockImplementation(
-        sessionAccessorMocks.actualAppendTranscriptMessage,
-      );
-    }
+    // Resolve the real append here rather than capturing it inside the mock factory:
+    // Vitest runs that factory on first import of the mocked module, so on a warm
+    // module graph it can still be unrun when this hook fires.
+    const { appendTranscriptMessage } = await vi.importActual<
+      typeof import("../config/sessions/session-accessor.js")
+    >("../config/sessions/session-accessor.js");
+    sessionAccessorMocks.actualAppendTranscriptMessage = appendTranscriptMessage;
+    sessionAccessorMocks.appendTranscriptMessage.mockImplementation(appendTranscriptMessage);
   });
 
   afterEach(async () => {

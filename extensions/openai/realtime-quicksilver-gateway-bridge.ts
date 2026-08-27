@@ -5,6 +5,8 @@ import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { type RawData } from "ws";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
@@ -180,8 +182,8 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
 
   acknowledgeMark(): void {}
 
-  close(): void {
-    this.teardown("completed");
+  close(options?: RealtimeVoiceCloseOptions): void {
+    this.teardown("completed", undefined, options?.disposition ?? "abort");
   }
 
   isConnected(): boolean {
@@ -298,7 +300,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         throw new Error(describeSidebandClose(terminalEvent.code, reason));
       }
     } catch (error) {
-      this.releaseResources();
+      this.releaseResources("abort");
       throw toErrorObject(error, "OpenAI GPT-Live gateway relay failed");
     }
   }
@@ -335,14 +337,18 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     this.teardown("error", () => this.config.onError?.(error));
   }
 
-  private teardown(reason: "completed" | "error", beforeClose?: () => void): void {
+  private teardown(
+    reason: "completed" | "error",
+    beforeClose?: () => void,
+    disposition: RealtimeVoiceCloseDisposition = "abort",
+  ): void {
     if (this.closed) {
       return;
     }
     // Claim terminal ownership and release resources before callbacks so reentrant close
     // cannot replace the outcome, while finally preserves error-before-close ordering.
     this.closed = true;
-    this.releaseResources();
+    this.releaseResources(disposition);
     try {
       beforeClose?.();
     } finally {
@@ -353,12 +359,16 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     }
   }
 
-  private releaseResources(): void {
+  private releaseResources(disposition: RealtimeVoiceCloseDisposition): void {
     releaseOpenAIQuicksilverSession(this);
     this.connected = false;
     this.pendingAudio.clear();
+    if (disposition === "detach") {
+      this.delegations?.detach();
+    } else {
+      this.delegations?.stop(new Error("GPT-Live delegation stopped"));
+    }
     this.abortController.abort(new Error("GPT-Live gateway relay bridge closed"));
-    this.delegations?.stop(new Error("GPT-Live delegation stopped"));
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = undefined;

@@ -43,6 +43,7 @@ const nodeSnapshot = [
 
 let applyCodeModeCatalog: typeof import("./code-mode.js").applyCodeModeCatalog;
 let createCodeModeTools: typeof import("./code-mode.js").createCodeModeTools;
+let consumeRepairableCodeModeFailure: typeof import("./code-mode-repair-provenance.js").consumeRepairableCodeModeFailure;
 let createToolSearchCatalogRef: typeof import("./tool-search.js").createToolSearchCatalogRef;
 let createNodesTool: typeof import("./tools/nodes-tool.js").createNodesTool;
 let testing: typeof import("./code-mode.test-support.js").testing;
@@ -114,6 +115,7 @@ describe("Code Mode nodes", () => {
   beforeAll(async () => {
     vi.resetModules();
     ({ applyCodeModeCatalog, createCodeModeTools } = await import("./code-mode.js"));
+    ({ consumeRepairableCodeModeFailure } = await import("./code-mode-repair-provenance.js"));
     ({ createToolSearchCatalogRef } = await import("./tool-search.js"));
     ({ createNodesTool } = await import("./tools/nodes-tool.js"));
     ({ testing } = await import("./code-mode.test-support.js"));
@@ -280,5 +282,48 @@ describe("Code Mode nodes", () => {
     });
 
     expect(details.value).toBe('node "shadow-id" is not paired (paired node ids: node-1, node-2)');
+  });
+
+  it.each([
+    {
+      label: "list",
+      code: `await nodes.list(); return missingAfterList();`,
+    },
+    {
+      label: "get",
+      code: `return (await nodes.get("Desk")).describe();`,
+    },
+  ])("keeps a guest error after nodes.$label eligible for ordinary recovery", async ({ code }) => {
+    const details = await runUntilCompleted({ ...createHarness(), code });
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(consumeRepairableCodeModeFailure(details)).toBe(true);
+  });
+
+  it("keeps a guest error after nodes.invoke restricted", async () => {
+    const details = await runUntilCompleted({
+      ...createHarness(),
+      code: `
+        const node = await nodes.get("Desk");
+        await node.invoke("device.status");
+        return node.describe();
+      `,
+    });
+
+    expect(details).toMatchObject({
+      status: "failed",
+      failurePhase: "bridge",
+      bridgeDispatchStarted: true,
+    });
+    expect(consumeRepairableCodeModeFailure(details)).toBe(false);
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ nodeId: "node-1", command: "device.status" }),
+    );
   });
 });

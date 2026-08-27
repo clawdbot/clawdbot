@@ -48,6 +48,7 @@ import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { isDuplicateRestartRecoverySource } from "./restart-recovery-claim.js";
 import { resolveStableMessageToolAvailability } from "./session-stable-reply-mode.js";
 import {
+  isDirectedSourceReplyTurn,
   isExplicitSourceReplyCommand,
   isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
@@ -378,18 +379,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
   const unauthorizedTextSlashSourceReplyCtx =
     (chatType === "group" || chatType === "channel") && isUnauthorizedTextSlashCommand(ctx);
-  // The no-visible-reply fallback exists for a user who asked and got nothing.
-  // Only positively directed turns qualify: direct chats, explicit mentions
-  // (channels fold reply-to-bot into WasMentioned), and command turns. Ambient
-  // group chatter, room events, and turns whose classification facts were lost
-  // upstream (queued followups, rebuilt contexts) can never draw a visible
-  // failure notice, even when silence policy is disallow. A command turn is the
-  // one directed room_event (mirrors the room_event source-reply suppression
-  // bypass below); every other room_event stays undirected regardless of a
-  // stray WasMentioned/direct classification.
-  const noVisibleReplyFallbackDirected =
-    explicitCommandTurnCtx ||
-    (ctx.InboundEventKind !== "room_event" && (chatType === "direct" || ctx.WasMentioned === true));
+  const noVisibleReplyFallbackDirected = isDirectedSourceReplyTurn(ctx, cfg, chatType === "direct");
   const shouldDeliverPluginBindingReply =
     !suppressAutomaticSourceDelivery ||
     explicitCommandTurnCtx ||
@@ -484,13 +474,18 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
           isError: true,
         })
       : false;
-    commitInboundDedupeIfClaimed();
-    recordProcessed("completed", { reason: "reply_operation_aborted" });
+    if (state.turnAdoptionState && !state.turnAdoptionState.adopted) {
+      releaseInboundDedupeIfClaimed();
+    } else {
+      commitInboundDedupeIfClaimed();
+    }
+    recordProcessed("skipped", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     state.completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts: dispatcher.getQueuedCounts(),
+      ...(state.turnLedger.hasVisibleDelivery() ? { observedReplyDelivery: true } : {}),
     });
   };
 

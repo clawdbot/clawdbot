@@ -90,13 +90,54 @@ export function computeFileLists(fileOps: FileOperations): {
   return { readFiles: readOnly, modifiedFiles };
 }
 
-/** Format file lists as summary metadata tags. */
+// File lists ratchet across compactions (prior summary entries merge into the
+// next accumulation), so an unbounded join grows without limit in long
+// sessions. Hard caps keep the model-visible section bounded per the
+// context-budget invariant; overflow collapses to a "...and N more" line.
+export const MAX_FILE_OPS_SECTION_CHARS = 2_000;
+export const MAX_FILE_OPS_LIST_CHARS = 900;
+
+function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
+  if (files.length === 0 || maxChars <= 0) {
+    return "";
+  }
+  const openTag = `<${tag}>\n`;
+  const closeTag = `\n</${tag}>`;
+  const lines: string[] = [];
+  let usedChars = openTag.length + closeTag.length;
+
+  for (let i = 0; i < files.length; i++) {
+    const line = `${files[i]}\n`;
+    const remaining = files.length - i - 1;
+    const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
+    const projected = usedChars + line.length + overflowLine.length;
+    if (projected > maxChars) {
+      const overflow = `...and ${files.length - i} more\n`;
+      if (usedChars + overflow.length <= maxChars) {
+        lines.push(overflow);
+      }
+      break;
+    }
+    lines.push(line);
+    usedChars += line.length;
+  }
+
+  return lines.length > 0 ? `${openTag}${lines.join("").trimEnd()}${closeTag}` : "";
+}
+
+/** Format file lists as bounded summary metadata tags. */
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
   const sections = [
-    readFiles.length ? `<read-files>\n${readFiles.join("\n")}\n</read-files>` : "",
-    modifiedFiles.length ? `<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>` : "",
+    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
+    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
   ].filter(Boolean);
-  return sections.length ? `\n\n${sections.join("\n\n")}` : "";
+  if (sections.length === 0) {
+    return "";
+  }
+  const joined = `\n\n${sections.join("\n\n")}`;
+  return joined.length > MAX_FILE_OPS_SECTION_CHARS
+    ? joined.slice(0, MAX_FILE_OPS_SECTION_CHARS)
+    : joined;
 }
 
 /** Extract visible summary text without normalizing valid model output. */

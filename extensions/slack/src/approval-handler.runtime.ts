@@ -3,9 +3,6 @@ import type { App } from "@slack/bolt";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type {
   ChannelApprovalCapabilityHandlerContext,
-  ExecApprovalExpiredView,
-  ExecApprovalPendingView,
-  ExecApprovalResolvedView,
   ExpiredApprovalView,
   PendingApprovalView,
   PluginApprovalExpiredView,
@@ -20,6 +17,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { SLACK_APPROVAL_HEADER_BLOCK_ID } from "./approval-actions.js";
 import {
   isSlackAnyNativeApprovalClientEnabled,
   shouldHandleSlackNativeApprovalRequest,
@@ -187,232 +185,78 @@ function buildSlackPluginRequestBlocks(view: SlackPluginApprovalView): SlackBloc
   ];
 }
 
-function buildSlackExecPendingApprovalText(view: ExecApprovalPendingView): string {
-  const metadataLines = buildSlackMetadataLines(view.metadata);
-  const lines = [
-    "*Exec approval required*",
-    "A command needs your approval.",
+type SlackApprovalRenderInput =
+  | { phase: "pending"; view: PendingApprovalView }
+  | { phase: "resolved"; view: ResolvedApprovalView }
+  | { phase: "expired"; view: ExpiredApprovalView };
+
+function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendingDelivery {
+  const { phase, view } = input;
+  const isPlugin = view.approvalKind === "plugin";
+  const approvalName = isPlugin ? "Plugin" : "Exec";
+  let heading: string;
+  let description: string;
+  if (phase === "pending") {
+    heading = `*${approvalName} approval required*`;
+    description =
+      view.approvalKind === "plugin"
+        ? resolveSlackPluginDescription(view)
+        : "A command needs your approval.";
+  } else if (phase === "resolved") {
+    heading = `*${approvalName} approval: ${resolveSlackApprovalDecisionLabel(view.decision)}*`;
+    const resolvedBy = formatSlackApprover(view.resolvedBy);
+    description = resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.";
+  } else {
+    heading = `*${approvalName} approval expired*`;
+    description = "This approval request expired before it was resolved.";
+  }
+
+  const metadata = isPlugin ? buildSlackPluginMetadata(view) : view.metadata;
+  const bodyLabel = isPlugin ? "*Request*" : "*Command*";
+  const bodyText = isPlugin ? view.title : buildSlackCodeBlock(view.commandText);
+  const includeMetadata = isPlugin || phase === "pending";
+  const text = [
+    heading,
+    description,
     "",
-    "*Command*",
-    buildSlackCodeBlock(view.commandText),
-    ...metadataLines,
-  ];
-  return lines.join("\n");
-}
-
-function buildSlackPluginPendingApprovalText(view: PluginApprovalPendingView): string {
-  const metadataLines = buildSlackMetadataLines(buildSlackPluginMetadata(view));
-  const lines = [
-    "*Plugin approval required*",
-    resolveSlackPluginDescription(view),
-    "",
-    "*Request*",
-    view.title,
-    ...metadataLines,
-  ];
-  return lines.join("\n");
-}
-
-function buildSlackPendingApprovalText(view: PendingApprovalView): string {
-  return view.approvalKind === "plugin"
-    ? buildSlackPluginPendingApprovalText(view)
-    : buildSlackExecPendingApprovalText(view);
-}
-
-function buildSlackExecPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBlock[] {
-  const interactiveBlocks =
-    resolveSlackReplyBlocks({
-      text: "",
-      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
-    }) ?? [];
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "*Exec approval required*\nA command needs your approval.",
-      },
-    },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Command*\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
-      },
-    },
-    ...buildSlackMetadataContextBlocks(view.metadata),
-    ...interactiveBlocks,
-  ];
-}
-
-function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView): SlackBlock[] {
-  const interactiveBlocks =
-    resolveSlackReplyBlocks({
-      text: "",
-      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
-    }) ?? [];
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Plugin approval required*\n${truncateSlackMrkdwn(
-          resolveSlackPluginDescription(view),
-          2600,
-        )}`,
-      },
-    },
-    ...buildSlackPluginRequestBlocks(view),
-    ...interactiveBlocks,
-  ];
-}
-
-function buildSlackPendingApprovalBlocks(view: PendingApprovalView): SlackBlock[] {
-  return view.approvalKind === "plugin"
-    ? buildSlackPluginPendingApprovalBlocks(view)
-    : buildSlackExecPendingApprovalBlocks(view);
-}
-
-function buildSlackExecResolvedText(view: ExecApprovalResolvedView): string {
-  const resolvedBy = formatSlackApprover(view.resolvedBy);
-  const lines = [
-    `*Exec approval: ${resolveSlackApprovalDecisionLabel(view.decision)}*`,
-    resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.",
-    "",
-    "*Command*",
-    buildSlackCodeBlock(view.commandText),
-  ];
-  return lines.join("\n");
-}
-
-function buildSlackPluginResolvedText(view: PluginApprovalResolvedView): string {
-  const resolvedBy = formatSlackApprover(view.resolvedBy);
-  const metadataLines = buildSlackMetadataLines(buildSlackPluginMetadata(view));
-  const lines = [
-    `*Plugin approval: ${resolveSlackApprovalDecisionLabel(view.decision)}*`,
-    resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved.",
-    "",
-    "*Request*",
-    view.title,
-    ...metadataLines,
-  ];
-  return lines.join("\n");
-}
-
-function buildSlackResolvedText(view: ResolvedApprovalView): string {
-  return view.approvalKind === "plugin"
-    ? buildSlackPluginResolvedText(view)
-    : buildSlackExecResolvedText(view);
-}
-
-function buildSlackExecResolvedBlocks(view: ExecApprovalResolvedView): SlackBlock[] {
-  const resolvedBy = formatSlackApprover(view.resolvedBy);
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Exec approval: ${resolveSlackApprovalDecisionLabel(view.decision)}*\n${
-          resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved."
-        }`,
-      },
-    },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Command*\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
-      },
-    },
-  ];
-}
-
-function buildSlackPluginResolvedBlocks(view: PluginApprovalResolvedView): SlackBlock[] {
-  const resolvedBy = formatSlackApprover(view.resolvedBy);
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Plugin approval: ${resolveSlackApprovalDecisionLabel(view.decision)}*\n${
-          resolvedBy ? `Resolved by ${resolvedBy}.` : "Resolved."
-        }`,
-      },
-    },
-    ...buildSlackPluginRequestBlocks(view),
-  ];
-}
-
-function buildSlackResolvedBlocks(view: ResolvedApprovalView): SlackBlock[] {
-  return view.approvalKind === "plugin"
-    ? buildSlackPluginResolvedBlocks(view)
-    : buildSlackExecResolvedBlocks(view);
-}
-
-function buildSlackExecExpiredText(view: ExecApprovalExpiredView): string {
-  return [
-    "*Exec approval expired*",
-    "This approval request expired before it was resolved.",
-    "",
-    "*Command*",
-    buildSlackCodeBlock(view.commandText),
+    bodyLabel,
+    bodyText,
+    ...(includeMetadata ? buildSlackMetadataLines(metadata) : []),
   ].join("\n");
-}
 
-function buildSlackPluginExpiredText(view: PluginApprovalExpiredView): string {
-  const metadataLines = buildSlackMetadataLines(buildSlackPluginMetadata(view));
-  return [
-    "*Plugin approval expired*",
-    "This approval request expired before it was resolved.",
-    "",
-    "*Request*",
-    view.title,
-    ...metadataLines,
-  ].join("\n");
-}
-
-function buildSlackExpiredText(view: ExpiredApprovalView): string {
-  return view.approvalKind === "plugin"
-    ? buildSlackPluginExpiredText(view)
-    : buildSlackExecExpiredText(view);
-}
-
-function buildSlackExecExpiredBlocks(view: ExecApprovalExpiredView): SlackBlock[] {
-  return [
+  const headerDescription =
+    isPlugin && phase === "pending" ? truncateSlackMrkdwn(description, 2600) : description;
+  const blocks: SlackBlock[] = [
     {
       type: "section",
+      ...(phase === "pending" ? { block_id: SLACK_APPROVAL_HEADER_BLOCK_ID } : {}),
       text: {
         type: "mrkdwn",
-        text: "*Exec approval expired*\nThis approval request expired before it was resolved.",
+        text: `${heading}\n${headerDescription}`,
       },
     },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `*Command*\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
-      },
-    },
+    ...(view.approvalKind === "plugin"
+      ? buildSlackPluginRequestBlocks(view)
+      : [
+          {
+            type: "section" as const,
+            text: {
+              type: "mrkdwn" as const,
+              text: `*Command*\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
+            },
+          },
+          ...(phase === "pending" ? buildSlackMetadataContextBlocks(view.metadata) : []),
+        ]),
   ];
-}
-
-function buildSlackPluginExpiredBlocks(view: PluginApprovalExpiredView): SlackBlock[] {
-  return [
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: "*Plugin approval expired*\nThis approval request expired before it was resolved.",
-      },
-    },
-    ...buildSlackPluginRequestBlocks(view),
-  ];
-}
-
-function buildSlackExpiredBlocks(view: ExpiredApprovalView): SlackBlock[] {
-  return view.approvalKind === "plugin"
-    ? buildSlackPluginExpiredBlocks(view)
-    : buildSlackExecExpiredBlocks(view);
+  if (phase === "pending") {
+    blocks.push(
+      ...(resolveSlackReplyBlocks({
+        text: "",
+        presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
+      }) ?? []),
+    );
+  }
+  return { text, blocks };
 }
 
 async function updateMessage(params: {
@@ -466,23 +310,14 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
     },
   },
   presentation: {
-    buildPendingPayload: ({ view }) => ({
-      text: buildSlackPendingApprovalText(view),
-      blocks: buildSlackPendingApprovalBlocks(view),
-    }),
+    buildPendingPayload: ({ view }) => buildSlackApprovalPayload({ phase: "pending", view }),
     buildResolvedResult: ({ view }) => ({
       kind: "update",
-      payload: {
-        text: buildSlackResolvedText(view),
-        blocks: buildSlackResolvedBlocks(view),
-      },
+      payload: buildSlackApprovalPayload({ phase: "resolved", view }),
     }),
     buildExpiredResult: ({ view }) => ({
       kind: "update",
-      payload: {
-        text: buildSlackExpiredText(view),
-        blocks: buildSlackExpiredBlocks(view),
-      },
+      payload: buildSlackApprovalPayload({ phase: "expired", view }),
     }),
   },
   transport: {

@@ -262,7 +262,22 @@ export type PluginHookRegistrationOptions<K extends PluginHookName> = {
   : { eligibleTriggers?: never }) &
   (K extends "before_tool_call" | "after_tool_call"
     ? { matcher?: PluginToolMatcher }
-    : { matcher?: never });
+    : { matcher?: never }) &
+  (K extends "before_prompt_build"
+    ? {
+        /** Run only after the host has finalized the turn's policy-filtered tool surface. */
+        requiresToolAuthority?: true;
+      }
+    : { requiresToolAuthority?: never });
+
+export type PluginHookToolAuthority = {
+  /** Opaque host fingerprint for the exact turn, route, policy, and active tool surface. */
+  readonly fingerprint: string;
+  /** Checks whether the finalized turn surface contains this exact tool. */
+  allows(toolName: string): boolean;
+  /** Rejects retained or timed-out capabilities after the host dispatch closes. */
+  assertActive(): void;
+};
 
 export type PluginHookAgentContext = {
   runId?: string;
@@ -300,6 +315,8 @@ export type PluginHookAgentContext = {
   senderExternalId?: string;
   /** Channel-owned sender/chat details. Plugins may augment the nested interfaces. */
   channelContext?: PluginHookChannelContext;
+  /** Present only for post-policy prompt enrichment hooks that requested tool authority. */
+  toolAuthority?: PluginHookToolAuthority;
 };
 
 export type PluginHookContextWindowSource =
@@ -985,6 +1002,7 @@ export type PluginHookCronChangedEvent = {
   runAtMs?: number;
   durationMs?: number;
   status?: PluginHookGatewayCronRunStatus;
+  completionStatus?: "succeeded" | "failed" | "unknown";
   error?: string;
   summary?: string;
   delivered?: boolean;
@@ -1078,6 +1096,7 @@ type PluginHookBeforeInstallSkillInstallSpec = {
   package?: string;
   module?: string;
   url?: string;
+  sha256?: string;
   archive?: string;
   extract?: boolean;
   stripComponents?: number;
@@ -1347,6 +1366,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   priority?: number;
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
+  requiresToolAuthority?: true;
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -16,6 +16,7 @@ import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
+import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   configureSqlitePreSchemaPragmas,
@@ -351,7 +352,7 @@ export function openOpenClawAgentDatabase(
         db.close();
         if (
           err instanceof Error &&
-          (err.name === "SqliteSchemaVersionError" || isTerminalSqliteIntegrityError(err))
+          (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
         ) {
           recordOpenClawAgentDatabaseOpenFailure(pathname, err);
         }

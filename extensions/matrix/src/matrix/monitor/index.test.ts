@@ -129,7 +129,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.getMemberDisplayName.mockReset().mockResolvedValue("Bot");
     hoisted.registeredOnRoomMessage = null;
     hoisted.registeredHealthySyncGetter = undefined;
-    hoisted.stopThreadBindingManager.mockReset();
+    hoisted.stopThreadBindingManager.mockReset().mockResolvedValue(undefined);
     hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
     hoisted.client.drainPendingDecryptions.mockReset().mockResolvedValue(undefined);
@@ -592,6 +592,7 @@ describe("monitorMatrixProvider", () => {
   it("detaches listeners, closes admission, waits for handlers, then releases", async () => {
     const abortController = new AbortController();
     const pendingHandlers = new Map<string, () => void>();
+    let finishManagerStop: (() => void) | undefined;
 
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(
       vi.fn((_roomId: string, event: unknown) => {
@@ -608,8 +609,14 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.drainPendingDecryptions.mockImplementation(async () => {
       hoisted.callOrder.push("drain-decrypts");
     });
-    hoisted.stopThreadBindingManager.mockImplementation(() => {
+    hoisted.stopThreadBindingManager.mockImplementation(async () => {
       hoisted.callOrder.push("stop-manager");
+      await new Promise<void>((resolve) => {
+        finishManagerStop = () => {
+          hoisted.callOrder.push("manager-stopped");
+          resolve();
+        };
+      });
     });
     hoisted.releaseSharedClientInstance.mockImplementation(async () => {
       await hoisted.client.drainPendingDecryptions();
@@ -632,6 +639,10 @@ describe("monitorMatrixProvider", () => {
 
     pendingHandlers.get("$event")?.();
     await roomMessagePromise;
+    await waitForCallOrderEntry("stop-manager");
+    expect(hoisted.callOrder).not.toContain("release-client");
+
+    finishManagerStop?.();
     await monitorPromise;
 
     expect(hoisted.callOrder.indexOf("drain-decrypts")).toBeLessThan(
@@ -647,6 +658,9 @@ describe("monitorMatrixProvider", () => {
       hoisted.callOrder.indexOf("stop-manager"),
     );
     expect(hoisted.callOrder.indexOf("stop-manager")).toBeLessThan(
+      hoisted.callOrder.indexOf("manager-stopped"),
+    );
+    expect(hoisted.callOrder.indexOf("manager-stopped")).toBeLessThan(
       hoisted.callOrder.indexOf("release-client"),
     );
   });

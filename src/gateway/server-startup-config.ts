@@ -3,6 +3,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { hasLegacyAuthProfileSourcesForStartup } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { copyConfigResolutionFacts, hasUnresolvedConfigPath } from "../config/resolution-facts.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -50,15 +51,15 @@ import {
   logPreparedSecretDegradations,
   logThrownSecretDegradations,
 } from "./server-startup-secret-diagnostics.js";
-export {
-  loadGatewayStartupConfigSnapshot,
-  type GatewayStartupConfigSnapshotLoadResult,
-} from "./server-startup-config-helpers.js";
 import {
   resolveGatewayStartupSecretProjection,
   resolveGatewayStartupSourceConfig,
 } from "./server-startup-secret-surfaces.js";
 import { ensureGatewayStartupAuth } from "./startup-auth.js";
+export {
+  loadGatewayStartupConfigSnapshot,
+  type GatewayStartupConfigSnapshotLoadResult,
+} from "./server-startup-config-helpers.js";
 
 type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED";
 
@@ -624,6 +625,7 @@ export async function prepareGatewayStartupConfig(params: {
   const runtimeConfig = await measure("config.auth.runtime-overrides", () =>
     applyConfigOverrides(params.configSnapshot.config),
   );
+  copyConfigResolutionFacts(params.configSnapshot.config, runtimeConfig);
   const startupPreflightConfig = await measure("config.auth.startup-overrides", () =>
     applyGatewayAuthOverridesForStartupPreflight(runtimeConfig, {
       auth: params.authOverride,
@@ -671,20 +673,22 @@ export async function prepareGatewayStartupConfig(params: {
       activate: true,
     });
   };
-  const preflightAuthOverride = await measure("config.auth.preflight-override", () =>
-    typeof preflightConfig.gateway?.auth?.token === "string" ||
-    typeof preflightConfig.gateway?.auth?.password === "string"
+  const preflightAuthOverride = await measure("config.auth.preflight-override", () => {
+    const token = preflightConfig.gateway?.auth?.token;
+    const password = preflightConfig.gateway?.auth?.password;
+    const resolvedToken =
+      typeof token === "string" && !hasUnresolvedConfigPath(preflightConfig, "gateway.auth.token");
+    const resolvedPassword =
+      typeof password === "string" &&
+      !hasUnresolvedConfigPath(preflightConfig, "gateway.auth.password");
+    return resolvedToken || resolvedPassword
       ? {
           ...params.authOverride,
-          ...(typeof preflightConfig.gateway?.auth?.token === "string"
-            ? { token: preflightConfig.gateway.auth.token }
-            : {}),
-          ...(typeof preflightConfig.gateway?.auth?.password === "string"
-            ? { password: preflightConfig.gateway.auth.password }
-            : {}),
+          ...(resolvedToken ? { token } : {}),
+          ...(resolvedPassword ? { password } : {}),
         }
-      : params.authOverride,
-  );
+      : params.authOverride;
+  });
 
   const authBootstrap = await measure("config.auth.ensure", () =>
     ensureGatewayStartupAuth({
@@ -710,8 +714,7 @@ export async function prepareGatewayStartupConfig(params: {
       { omitErrorMessage: true },
     )
   ).config;
-  return {
-    ...authBootstrap,
-    cfg: inheritLegacyDefaultAgentId(params.configSnapshot.config, activatedConfig),
-  };
+  const config = inheritLegacyDefaultAgentId(params.configSnapshot.config, activatedConfig);
+  copyConfigResolutionFacts(activatedConfig, config);
+  return { ...authBootstrap, cfg: config };
 }

@@ -2,6 +2,7 @@
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   getPluginCommandExecutionCount,
   isPluginCommandExecutionActiveHere,
@@ -63,13 +64,19 @@ function isRegistryLive(registry: PluginRegistry): boolean {
   return state.activeRegistry === registry;
 }
 
-async function cleanupPreviousPluginHostRegistry(params: {
-  previousRegistry: PluginRegistry;
-}): Promise<void> {
+const loadPluginHostCleanupRuntime = createLazyRuntimeModule(async () => {
   const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
     import("../config/config.js"),
     import("./host-hook-cleanup.js"),
   ]);
+  return { getRuntimeConfig, cleanupReplacedPluginHostRegistry };
+});
+
+async function cleanupPreviousPluginHostRegistry(params: {
+  previousRegistry: PluginRegistry;
+}): Promise<void> {
+  const { getRuntimeConfig, cleanupReplacedPluginHostRegistry } =
+    await loadPluginHostCleanupRuntime();
   const nextRegistry = asPluginRegistry(state.activeRegistry);
   if (nextRegistry === params.previousRegistry) {
     return;
@@ -77,12 +84,20 @@ async function cleanupPreviousPluginHostRegistry(params: {
   // Async cleanup must not clear state for a registry that has been restored
   // active, but later swaps should not strand cleanup for the retiring registry.
   const shouldCleanup = () => state.activeRegistry !== params.previousRegistry;
-  await cleanupReplacedPluginHostRegistry({
+  const { failures } = await cleanupReplacedPluginHostRegistry({
     cfg: getRuntimeConfig(),
     previousRegistry: params.previousRegistry,
     nextRegistry,
     shouldCleanup,
   });
+  // Per-hook cleanup errors are collected instead of thrown (host-hook-cleanup
+  // must finish every plugin); dropping them here would hide broken
+  // session-extension/scheduler teardown from operators entirely.
+  for (const failure of failures) {
+    log.warn(
+      `plugin host cleanup failed for ${failure.pluginId} hook ${failure.hookId}: ${String(failure.error)}`,
+    );
+  }
 }
 
 function cleanupRetiredPluginHostRegistry(previousRegistry: PluginRegistry): void {
@@ -185,16 +200,34 @@ export function restoreActivePluginRegistrySnapshot(
   });
 }
 
+/** Rolls back a staged registry without reactivating the prior committed generation. */
+export function rollbackStagedPluginRegistry(
+  snapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>,
+): void {
+  installActivePluginRegistry({
+    registry: snapshot.activeRegistry,
+    key: snapshot.key,
+    runtimeSubagentMode: snapshot.runtimeSubagentMode,
+    workspaceDir: snapshot.workspaceDir,
+    // Staging never retired the prior registry. Reactivating it here would mint a
+    // new epoch and revoke closures that remained authoritative through rollback.
+    activateRegistry: false,
+  });
+}
+
 function installActivePluginRegistry(params: {
   registry: PluginRegistry | null;
   key: string | null;
   runtimeSubagentMode: RegistryState["runtimeSubagentMode"];
   workspaceDir: string | null;
   retirePrevious?: boolean;
+  activateRegistry?: boolean;
 }): void {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
   state.activeRegistry = params.registry;
-  markPluginRegistryActive(params.registry);
+  if (params.activateRegistry !== false) {
+    markPluginRegistryActive(params.registry);
+  }
   state.activeVersion += 1;
   if (params.registry) {
     settlePreparedMessageToolCatalog(params.registry, state.activeVersion);
@@ -428,6 +461,10 @@ export async function clearActivePluginRegistry(): Promise<void> {
     return;
   }
   await completion;
+}
+
+export async function prepareActivePluginRegistryShutdown(): Promise<void> {
+  await loadPluginHostCleanupRuntime();
 }
 
 export function resetPluginRuntimeStateForTest(): void {

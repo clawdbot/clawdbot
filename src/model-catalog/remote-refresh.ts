@@ -12,13 +12,13 @@ import {
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { bundledCatalogGeneratedAt } from "./bundled-catalog-stamp.js";
+import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./remote-config.js";
 import {
   markRemoteModelCatalogChecked,
   readRemoteModelCatalog,
   writeRemoteModelCatalog,
 } from "./remote-store.js";
 
-const DEFAULT_REMOTE_MODEL_CATALOG_URL = "https://catalog.openclaw.ai/models/v1/catalog.json";
 export const REMOTE_MODEL_CATALOG_TTL_MS = 6 * 60 * 60_000;
 const REMOTE_MODEL_CATALOG_TIMEOUT_MS = 15_000;
 const REMOTE_MODEL_CATALOG_MAX_BYTES = 4 * 1024 * 1024;
@@ -29,14 +29,6 @@ type RemoteModelCatalogRefreshResult =
   | ({ status: "fresh"; generatedAt: number; nextCheckInMs: number } & RefreshCounts)
   | { status: "disabled"; providers: 0; models: 0 }
   | { status: "error"; error: string; providers: 0; models: 0 };
-
-export function isRemoteModelCatalogRefreshEnabled(config: OpenClawConfig): boolean {
-  return config.models?.catalogRefresh?.enabled !== false;
-}
-
-export function resolveRemoteCatalogUrl(config: OpenClawConfig): string {
-  return config.models?.catalogRefresh?.url?.trim() || DEFAULT_REMOTE_MODEL_CATALOG_URL;
-}
 
 function bundleCounts(bundle: RemoteModelCatalogBundle): RefreshCounts {
   const providers = Object.values(bundle.providers);

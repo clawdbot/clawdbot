@@ -24,6 +24,7 @@ import type {
 } from "./io.types.js";
 import { ConfigRuntimeRefreshError, configWritePostCommitRollback } from "./io.types.js";
 import { rollbackConfigFileWriteIfUnchanged } from "./io.write-safety.js";
+import { formatConfigIssueSummary } from "./issue-format.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
@@ -132,12 +133,14 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 export async function readConfigFileSnapshot(
   options: ConfigSnapshotReadOptions = {},
 ): Promise<ConfigFileSnapshot> {
+  const pluginValidation =
+    options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined);
   return await createConfigIO({
     ...(options.measure ? { measure: options.measure } : {}),
     ...(options.observe === false ? { observe: false } : {}),
     ...(options.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
-    ...(options.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(pluginValidation ? { pluginValidation } : {}),
     ...(options.suppressFutureVersionWarning ? { suppressFutureVersionWarning: true } : {}),
     ...(options.preservedLegacyRootKeys
       ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
@@ -158,6 +161,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     | "measure"
     | "observe"
     | "recoverSuspicious"
+    | "skipPluginValidation"
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
@@ -165,6 +169,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   }).readConfigFileSnapshotWithPluginMetadata({
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
@@ -183,12 +188,6 @@ export async function recoverConfigFromLastKnownGood(params: {
   reason: string;
 }): Promise<boolean> {
   return await createConfigIO().recoverConfigFromLastKnownGood(params);
-}
-
-export async function preserveConfigSnapshotAsClobbered(
-  snapshot: ConfigFileSnapshot,
-): Promise<string | null> {
-  return await createConfigIO().preserveConfigSnapshotAsClobbered(snapshot);
 }
 
 export async function recoverConfigFromJsonRootSuffix(
@@ -388,6 +387,16 @@ async function finalizeCommittedConfigWrite(params: {
       if (freshSnapshot.exists && freshSnapshot.valid) {
         canonicalSourceConfig = freshSnapshot.sourceConfig;
         canonicalRuntimeConfig = freshSnapshot.config;
+      } else {
+        // An invalid or vanished reread means a concurrent edit beat us to the
+        // file; runtime keeps the just-written config, but that divergence must
+        // be recorded or the on-disk config silently stops matching runtime.
+        const issueSummary = formatConfigIssueSummary(freshSnapshot.issues);
+        io.logger.warn(
+          `Config (${io.configPath}): canonical reread after write was ${
+            freshSnapshot.exists ? "invalid" : "missing"
+          }; runtime keeps the written config${issueSummary ? `: ${issueSummary}` : ""}`,
+        );
       }
       if (
         !deferRuntimeActivation ||

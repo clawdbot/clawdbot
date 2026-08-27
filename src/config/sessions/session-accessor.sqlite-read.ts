@@ -403,14 +403,14 @@ export function findTranscriptEventInDatabase(
   match: (event: TranscriptEvent) => boolean,
 ): { event: TranscriptEvent } | undefined {
   const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
+  const rows = iterateSqliteQuerySync(
     database.db,
     db
       .selectFrom("transcript_events")
       .select(["event_json"])
       .where("session_id", "=", sessionId)
       .orderBy("seq", "desc"),
-  ).rows;
+  );
   for (const row of rows) {
     try {
       const event = JSON.parse(row.event_json) as TranscriptEvent;

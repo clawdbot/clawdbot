@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
@@ -27,6 +28,24 @@ export function attachCodexMirrorAttestation(
     },
   };
   return attested;
+}
+
+export function attachCodexMirrorRunId<T extends AgentMessage>(
+  message: T,
+  runId: string,
+  terminal = false,
+): T {
+  const existing = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
+  const metadata = asOptionalRecord(existing) ?? {};
+  const { runTerminal: _staleTerminal, ...current } = metadata;
+  return {
+    ...message,
+    [CODEX_META_KEY]: {
+      ...current,
+      runId,
+      ...(terminal ? { runTerminal: true } : {}),
+    },
+  } as T; // SAFETY: AgentMessage variants permit provider metadata at runtime; preserve T.
 }
 
 export function readCodexMirrorSourceFingerprint(message: AgentMessage): string | undefined {

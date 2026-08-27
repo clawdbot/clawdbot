@@ -2,6 +2,10 @@
  * Prepares the attempt-local tool catalog, schema projection, and diagnostics.
  */
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import {
+  isCodeModeDiagnosticEnabled,
+  logCodeModeDiagnostic,
+} from "../../../logging/code-mode-diagnostic.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -11,8 +15,10 @@ import {
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { logAgentRuntimeToolDiagnostics } from "../../runtime-plan/tools.js";
 import { buildEmptyExplicitToolAllowlistError } from "../../tool-allowlist-guard.js";
+import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -20,6 +26,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import { applyAgentToolSurfaceCatalog } from "../../tool-surface-plan.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { collectAttemptExplicitToolAllowlistSources } from "./attempt-tool-allowlist.js";
@@ -58,7 +65,13 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     toolsEnabled,
   } = preparedToolBase;
   const { clientTools, uncompactedEffectiveTools } = input.bundleTools;
-  let effectiveTools = uncompactedEffectiveTools;
+  // Detached skill review keeps every foreground schema for prompt-cache reuse
+  // but executes only the allowed tools. Wrap before catalog compaction so a
+  // tool hidden behind tool_call/exec is gated too; the catalog controls stay
+  // callable because they only dispatch into the gated tools.
+  let effectiveTools = attempt.toolExecutionAllow
+    ? gateToolExecution(uncompactedEffectiveTools, attempt.toolExecutionAllow)
+    : uncompactedEffectiveTools;
   const catalogToolHookContext = {
     agentId: input.sessionAgentId,
     config: attempt.config,
@@ -87,6 +100,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         abortSignal: input.abortSignal,
         forceRestartSafeTools: attempt.forceRestartSafeTools,
+        toolExecutionAllow: attempt.toolExecutionAllow,
         executeTool: input.executeCodeModeTool,
         codeModeSkills,
       })
@@ -127,6 +141,14 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   effectiveTools = toolSearchSchemaProjection.tools.map((tool) =>
     wrapEmbeddedAttemptToolWithActivity(tool, attempt.runId),
   );
+  if (codeModeControlsEnabledForRun && isCodeModeDiagnosticEnabled()) {
+    logCodeModeDiagnostic(log, "final-surface", {
+      runId: attempt.runId,
+      fallbackActive: attempt.fallbackActive === true,
+      catalogToolCount: toolSearch.catalogToolCount,
+      visibleToolNames: effectiveTools.map((tool) => tool.name),
+    });
+  }
   if (toolSearch.compacted && !toolSearch.catalogReused) {
     input.markStage(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
     log.info(
@@ -193,4 +215,20 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     toolSearch,
     toolSearchRunPlan,
   };
+}
+
+function gateToolExecution(
+  tools: readonly AnyAgentTool[],
+  allowNames: readonly string[],
+): AnyAgentTool[] {
+  return tools.map((tool) =>
+    isToolExecutionAllowed(allowNames, tool.name) || TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)
+      ? tool
+      : {
+          ...tool,
+          execute: async () => {
+            throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
+          },
+        },
+  );
 }

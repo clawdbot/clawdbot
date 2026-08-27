@@ -12,7 +12,7 @@ import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar agent chip", () => {
-  it("loads and expands child sessions inline without root session controls", async () => {
+  it("loads and expands child sessions with menus but without root placement controls", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:parent"]);
     harness.list.mockResolvedValue({
@@ -98,7 +98,10 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Check tests"),
     ]);
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
-    expect(childRows.every((row) => row.querySelector(".session-row-actions") === null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("[data-session-menu]") !== null)).toBe(true);
+    expect(childRows.every((row) => row.querySelector("[data-sidebar-session-pin]") === null)).toBe(
+      true,
+    );
     expect(childRows.every((row) => row.querySelector(".session-row-state") === null)).toBe(true);
     expect(childRows.every((row) => row.querySelector(".sidebar-session-indicator") !== null)).toBe(
       true,
@@ -347,6 +350,11 @@ describe("AppSidebar agent chip", () => {
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
+    await waitForFast(() =>
+      expect(
+        sidebar.querySelector('[data-child-session-error="agent:main:parent"]')?.textContent,
+      ).toContain("child session list returned no result"),
+    );
 
     publishParent(11);
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(3));
@@ -424,6 +432,7 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')?.textContent).toContain(
       "Replacement child",
     );
+    expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
   });
 
   it("nests the selected child under its parent and reveals the active path", async () => {

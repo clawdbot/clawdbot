@@ -6,7 +6,7 @@ import {
   type OpenClawConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -21,19 +21,24 @@ export async function requireValidConfigFileSnapshot(
     includeCompatibilityAdvisory?: boolean;
     observe?: boolean;
     skipPluginValidation?: boolean;
+    adoptPluginMetadata?: boolean;
   },
 ): Promise<ConfigFileSnapshot | null> {
   const readOptions = {
     ...(opts?.observe === false ? { observe: false } : {}),
     ...(opts?.skipPluginValidation ? { skipPluginValidation: true } : {}),
   };
-  const snapshot = await readConfigFileSnapshot(
-    Object.keys(readOptions).length > 0 ? readOptions : undefined,
-  );
+  const snapshot = opts?.adoptPluginMetadata
+    ? (
+        await (
+          await import("../cli/command-config-snapshot.js")
+        ).readCommandConfigSnapshot(readOptions)
+      ).snapshot
+    : await readConfigFileSnapshot(Object.keys(readOptions).length > 0 ? readOptions : undefined);
   if (snapshot.exists && !snapshot.valid) {
     const issues =
       snapshot.issues.length > 0
-        ? formatConfigIssueLines(snapshot.issues, "-").join("\n")
+        ? renderConfigValidationIssueLines(snapshot).join("\n")
         : "Unknown validation issue.";
     runtime.error(`OpenClaw config is invalid: ${snapshot.path}\n${issues}`);
     runtime.error(
@@ -71,6 +76,7 @@ export async function requireValidConfig(
     includeCompatibilityAdvisory?: boolean;
     observe?: boolean;
     skipPluginValidation?: boolean;
+    adoptPluginMetadata?: boolean;
   },
 ): Promise<OpenClawConfig | null> {
   return (await requireValidConfigFileSnapshot(runtime, opts))?.config ?? null;

@@ -80,6 +80,7 @@ export function resolveSessionModelIdentityRef(
     const inferredProvider = inferUniqueProviderFromConfiguredModels({
       cfg,
       model: runtimeModel,
+      agentId,
     });
     if (inferredProvider) {
       return { provider: inferredProvider, model: runtimeModel };
@@ -106,6 +107,7 @@ export function resolveSessionModelIdentityRef(
     const inferredProvider = inferUniqueProviderFromConfiguredModels({
       cfg,
       model: fallbackRef,
+      agentId,
     });
     if (inferredProvider) {
       return { provider: inferredProvider, model: fallbackRef };

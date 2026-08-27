@@ -74,7 +74,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       authMode: "token",
       gatewayToken: "test-token",
       tailscaleMode: "off",
-      tailscaleResetOnExit: false,
     },
   }),
 }));

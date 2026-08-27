@@ -1,6 +1,6 @@
 // PTY adapter wraps pseudo-terminal processes for the process supervisor.
 import type { IDisposable } from "@lydell/node-pty";
-import { signalProcessTree } from "../../kill-tree.js";
+import { signalPtySessionTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
   readPtyTerminalName,
@@ -176,7 +176,7 @@ export async function createPtyAdapter(params: {
         typeof pty.pid === "number" &&
         pty.pid > 0
       ) {
-        signalProcessTree(pty.pid, signal, { detached: true });
+        signalPtySessionTree(pty.pid, signal);
       } else if (process.platform === "win32") {
         pty.kill();
       } else {

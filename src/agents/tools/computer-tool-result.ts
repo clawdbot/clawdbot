@@ -208,6 +208,7 @@ export async function projectComputerActResult(params: {
   const content: AgentToolResult<unknown>["content"] = [
     { type: "text", text: computerActResultText(params.action, params.result) },
   ];
+  // Observation images have no context-presence tracking, so they must never be deduplicated.
   if (observation?.base64 && params.modelHasVision !== false) {
     content.push({
       type: "image",

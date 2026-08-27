@@ -3,7 +3,11 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
@@ -17,6 +21,7 @@ import {
   normalizeMessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
+import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
@@ -165,9 +170,12 @@ export async function buildMessagePayload(params: {
       ? undefined
       : normalizeOutboundLocation(rawLocation);
   const caption = readToolStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
+  const voiceText = readToolStringParam(actionParams, "voiceText");
+  const voiceProvider = readToolStringParam(actionParams, "voiceProvider");
+  const voiceId = readToolStringParam(actionParams, "voiceId");
   let message =
     readToolStringParam(actionParams, "message", {
-      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive && !location && !voiceText,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -202,6 +210,7 @@ export async function buildMessagePayload(params: {
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
   });
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
@@ -225,6 +234,7 @@ export async function buildMessagePayload(params: {
   const hasLocationConflict = Boolean(
     location &&
     (message.trim() ||
+      voiceText ||
       hasBuffer ||
       mergedMediaUrls.length > 0 ||
       hasPresentation ||
@@ -263,6 +273,7 @@ export async function buildMessagePayload(params: {
 
   const mediaUrl = readToolStringParam(actionParams, "media", { trim: false });
   if (
+    !voiceText &&
     !hasReplyPayloadContent({
       text: message,
       mediaUrl,
@@ -305,20 +316,40 @@ export async function buildMessagePayload(params: {
       : undefined;
   const presentation = normalizeMessagePresentation(actionParams.presentation);
   const interactive = normalizeLegacyInteractiveReply(actionParams.interactive);
+  const payload: ReplyPayload = {
+    text: message,
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
+    ...(asVoice ? { audioAsVoice: true } : {}),
+    ...(asVideoNote ? { videoAsNote: true } : {}),
+    ...(location ? { location } : {}),
+    ...(presentation ? { presentation } : {}),
+    ...(interactive ? { interactive } : {}),
+    ...(delivery ? { delivery } : {}),
+    ...(channelData ? { channelData } : {}),
+  };
+  const ttsFacts: AssistantDeliveryTtsFacts | undefined =
+    voiceText || voiceProvider || voiceId
+      ? {
+          tagged: true as const,
+          ...(voiceText ? { text: voiceText } : {}),
+          ...(voiceProvider || voiceId
+            ? {
+                directives: [
+                  {
+                    ...(voiceProvider ? { provider: voiceProvider.toLowerCase() } : {}),
+                    values: voiceId ? { voiceid: voiceId } : {},
+                  },
+                ],
+              }
+            : {}),
+        }
+      : undefined;
   return {
     message,
-    payload: {
-      text: message,
-      ...(mediaUrl ? { mediaUrl } : {}),
-      ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
-      ...(asVoice ? { audioAsVoice: true } : {}),
-      ...(asVideoNote ? { videoAsNote: true } : {}),
-      ...(location ? { location } : {}),
-      ...(presentation ? { presentation } : {}),
-      ...(interactive ? { interactive } : {}),
-      ...(delivery ? { delivery } : {}),
-      ...(channelData ? { channelData } : {}),
-    },
+    payload: ttsFacts
+      ? setReplyPayloadMetadata(payload, { tts: ttsFacts, ttsExplicit: true })
+      : payload,
     ...(mediaUrl ? { mediaUrl } : {}),
     ...(mirrorMediaUrls ? { mediaUrls: mirrorMediaUrls } : {}),
     asVoice,
@@ -387,13 +418,15 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendPayload = {
       ...sendPayload,
       message: prefixedMessage,
-      payload: { ...sendPayload.payload, text: prefixedMessage },
+      payload: copyReplyPayloadMetadata(sendPayload.payload, {
+        ...sendPayload.payload,
+        text: prefixedMessage,
+      }),
     };
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
 
-  const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
-  resolveAndApplyOutboundReplyToId(params, {
+  const initialReply = resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
     matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
@@ -411,9 +444,14 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     resolvedTarget,
     resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
     resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
-    replyToIsExplicit,
+    replyToIsExplicit: initialReply?.source === "explicit",
     resolveOutboundSessionRoute,
   });
+  const canonicalReplyToId = readToolStringParam(params, "replyTo");
+  const reply =
+    initialReply && canonicalReplyToId && canonicalReplyToId !== initialReply.replyToId
+      ? { ...initialReply, replyToId: canonicalReplyToId }
+      : initialReply;
   // Durable route/session persistence commits only on send success. A failed
   // probe (missing channel credentials above all) must not rebind the folded
   // main session's delivery route or mint a conversation identity. Once-only:
@@ -426,7 +464,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     outboundRoutePersisted = true;
     await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
   };
-  const resolvedReplyToId = readToolStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -443,21 +480,26 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, ttsPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
+  delete params.voiceText;
+  delete params.voiceProvider;
+  delete params.voiceId;
   throwIfAborted(abortSignal);
-  const mediaAccess = resolveAgentScopedOutboundMediaAccess({
-    cfg,
-    agentId,
-    mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
-      structuredAttachments: "all",
-    }),
-    sessionKey: input.sessionKey,
-    messageProvider: input.sessionKey ? undefined : channel,
-    accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
-    requesterSenderId: input.requesterSenderId,
-    requesterSenderName: input.requesterSenderName,
-    requesterSenderUsername: input.requesterSenderUsername,
-    requesterSenderE164: input.requesterSenderE164,
-  });
+  const mediaAccess =
+    input.mediaAccess ??
+    resolveAgentScopedOutboundMediaAccess({
+      cfg,
+      agentId,
+      mediaSources: collectActionMediaSourceHints(params, ctx.extraActionMediaSourceParamKeys, {
+        structuredAttachments: "all",
+      }),
+      sessionKey: input.sessionKey,
+      messageProvider: input.sessionKey ? undefined : channel,
+      accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
+      requesterSenderId: input.requesterSenderId,
+      requesterSenderName: input.requesterSenderName,
+      requesterSenderUsername: input.requesterSenderUsername,
+      requesterSenderE164: input.requesterSenderE164,
+    });
 
   // Required queue persistence is itself an ownership decision: neither the
   // remote gateway action nor a provider-native action may bypass core queueing.
@@ -474,6 +516,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         channel,
         channelPlugin,
         action,
+        reply,
         accountId,
         dryRun,
         gateway,
@@ -500,7 +543,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         accountId,
         input,
         agentId,
-        replyToIsExplicit,
+        replyToIsExplicit: reply?.source === "explicit",
       },
     );
   }
@@ -543,6 +586,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       accountId: accountId ?? undefined,
       conversationType: outboundRoute?.chatType,
       sessionId: input.sessionId,
+      runId: input.runId,
+      executionIdentityToken: input.executionIdentityToken,
       inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,
@@ -554,7 +599,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       requireQueuePersistence: input.requireQueuePersistence,
       deliveryIntentId: input.deliveryIntentId,
       deliveryCompletion: input.deliveryCompletion,
+      // Model-authored sends get the failure back and resend it themselves; every
+      // other caller only reports the error, so recovery keeps its replay right.
+      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
       onDeliveryIntent: input.onDeliveryIntent,
+      onPlatformSendDispatch: input.onPlatformSendDispatch,
+      skipQueue: input.skipQueue,
+      onDeliveryAttempt: input.onDeliveryAttempt,
       // Identified platform evidence is the first success proof on the core
       // path; commit the route here so the transcript mirror (which runs later
       // in the same delivery) can resolve a just-created session entry.
@@ -594,8 +645,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: resolvedReplyToId ?? undefined,
-    replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
+    reply,
     threadId: resolvedThreadId ?? undefined,
   });
 
@@ -626,6 +676,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     accountId,
     input,
     agentId,
-    replyToIsExplicit,
+    replyToIsExplicit: reply?.source === "explicit",
   });
 }

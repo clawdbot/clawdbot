@@ -1,5 +1,17 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { HeartbeatRunOptions } from "../../infra/heartbeat-runner-execution.js";
+import { resolveHeartbeatRunPrompt } from "../../infra/heartbeat-runner-prompt.js";
+import { startHeartbeatRunner } from "../../infra/heartbeat-runner-scheduler.js";
+import { resolveHeartbeatWakePayloadFlags } from "../../infra/heartbeat-wake-policy.js";
+import { requestHeartbeat as requestHeartbeatWake } from "../../infra/heartbeat-wake.js";
+import {
+  drainSystemEvents,
+  enqueueSystemEvent as queueSystemEvent,
+  peekSystemEventEntries,
+} from "../../infra/system-events.js";
 import * as cronSchedule from "../schedule.js";
 import type { CronJob } from "../types.js";
 import { markInterruptedStartupRun, restoreFinalizedStartupRun } from "./startup-run-repair.js";
@@ -76,6 +88,134 @@ describe("startup run repair auto-disable", () => {
     expect(requestHeartbeat).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    {
+      name: "the default owner",
+      creatorSessionKey: undefined,
+      executionSessionTarget: "isolated" as const,
+    },
+    {
+      name: "its creator instead of a different execution conversation",
+      creatorSessionKey: "agent:main:telegram:group:42:topic:77",
+      executionSessionTarget: "session:agent:main:telegram:group:99" as const,
+    },
+  ])("delivers an auto-disable safety notice to $name with cadence disabled", async (testCase) => {
+    vi.useFakeTimers();
+    const nowMs = Date.parse("2026-08-01T16:00:00.000Z");
+    vi.setSystemTime(nowMs);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { heartbeat: { every: "0m" } },
+        list: [{ id: "main" }, { id: "other" }],
+      },
+    };
+    const sessionKey =
+      testCase.creatorSessionKey ?? resolveAgentMainSessionKey({ cfg, agentId: "main" });
+    const prompts: string[] = [];
+    const runOnce = vi.fn(async (options: HeartbeatRunOptions) => {
+      const pendingEventEntries = peekSystemEventEntries(options.sessionKey ?? "");
+      const preflight = {
+        ...resolveHeartbeatWakePayloadFlags(options),
+        session: {
+          sessionKey,
+          storePath: "/tmp/auto-disable-notification-proof.json",
+          suppressOriginatingContext: false,
+          entry: undefined,
+        },
+        pendingEventEntries,
+        turnSourceDeliveryContext: undefined,
+        hasTaggedCronEvents: pendingEventEntries.some((event) =>
+          event.contextKey?.startsWith("cron:"),
+        ),
+        shouldInspectPendingEvents: true,
+        authoritativeScheduledTick: false,
+      };
+      prompts.push(
+        resolveHeartbeatRunPrompt({
+          cfg,
+          preflight,
+          canRelayToUser: true,
+          startedAt: nowMs,
+          scheduledTasks: [],
+          useHeartbeatResponseTool: false,
+        }).prompt,
+      );
+      return { status: "ran" as const, durationMs: 1 };
+    });
+    const runner = startHeartbeatRunner({
+      cfg,
+      readCurrentConfig: () => cfg,
+      runOnce,
+    });
+    try {
+      const state = createCronServiceState({
+        storePath: "/tmp/startup-run-repair-auto-disable-notification.json",
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        nowMs: () => nowMs,
+        enqueueSystemEvent: (text, options) =>
+          queueSystemEvent(text, {
+            sessionKey: options?.sessionKey ?? sessionKey,
+            contextKey: options?.contextKey,
+          }),
+        requestHeartbeat: (wake) =>
+          requestHeartbeatWake({
+            ...wake,
+            sessionKey: wake.sessionKey ?? sessionKey,
+            coalesceMs: 0,
+          }),
+        runIsolatedAgentJob: vi.fn(),
+      });
+      const job: CronJob = {
+        id: "restart-auto-disable-notification",
+        name: "Important report",
+        agentId: "main",
+        enabled: true,
+        createdAtMs: nowMs - 60_000,
+        updatedAtMs: nowMs,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs - 60_000 },
+        sessionTarget: testCase.executionSessionTarget,
+        ...(testCase.creatorSessionKey ? { sessionKey: testCase.creatorSessionKey } : {}),
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "check important report" },
+        state: { runningAtMs: nowMs, consecutiveErrors: 9 },
+      };
+      const deferredNotifications: Array<() => void> = [];
+
+      markInterruptedStartupRun({
+        state,
+        job,
+        runningAtMs: nowMs,
+        nowMs,
+        deferredNotifications,
+      });
+      expect(job.sessionKey).toBe(testCase.creatorSessionKey);
+      expect(deferredNotifications).toHaveLength(1);
+      deferredNotifications[0]?.();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runOnce).toHaveBeenCalledOnce();
+      expect(runOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey,
+          source: "notifications-event",
+          intent: "immediate",
+          reason: "wake",
+        }),
+      );
+      expect(prompts[0]).toContain('Automation "Important report" was auto-disabled');
+      expect(prompts[0]).toContain("10 consecutive run failures");
+      expect(prompts[0]).toContain("openclaw automations enable restart-auto-disable-notification");
+      expect(prompts[0]).toContain("Please relay this reminder to the user");
+    } finally {
+      runner.stop();
+      drainSystemEvents(sessionKey);
+      vi.useRealTimers();
+    }
+  });
+
   it("disables a job instead of restoring an invalid finalized next run", () => {
     const runningAtMs = Date.parse("2026-08-01T16:00:00.000Z");
     const state = createCronServiceState({
@@ -136,6 +276,76 @@ describe("startup run repair auto-disable", () => {
     deferredNotifications[0]?.();
     expect(state.deps.enqueueSystemEvent).toHaveBeenCalledOnce();
     expect(state.deps.requestHeartbeat).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "required delivery failed",
+      completionStatus: "failed" as const,
+      deliveryStatus: "not-delivered" as const,
+    },
+    {
+      name: "completion evidence unknown",
+      completionStatus: "unknown" as const,
+      deliveryStatus: "unknown" as const,
+    },
+    {
+      name: "legacy row missing completion evidence",
+      completionStatus: undefined,
+      deliveryStatus: "not-delivered" as const,
+    },
+  ])("retains finalized one-shot after $name", ({ completionStatus, deliveryStatus }) => {
+    const runningAtMs = Date.parse("2026-08-01T17:00:00.000Z");
+    const state = createCronServiceState({
+      storePath: "/tmp/startup-run-repair-completion.json",
+      cronEnabled: true,
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      nowMs: () => runningAtMs + 1_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const job: CronJob = {
+      id: "finalized-required-delivery",
+      name: "finalized required delivery",
+      enabled: true,
+      deleteAfterRun: true,
+      createdAtMs: runningAtMs - 60_000,
+      updatedAtMs: runningAtMs,
+      schedule: { kind: "at", at: new Date(runningAtMs).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "do not replay" },
+      // Current policy is intentionally mutable and must not decide replay.
+      delivery: { mode: "announce", bestEffort: true },
+      state: { runningAtMs },
+    };
+
+    const restored = restoreFinalizedStartupRun({
+      state,
+      job,
+      runningAtMs,
+      entry: {
+        ts: runningAtMs + 1_000,
+        jobId: job.id,
+        action: "finished",
+        status: "ok",
+        ...(completionStatus === undefined ? {} : { completionStatus }),
+        deliveryStatus,
+        runAtMs: runningAtMs,
+        durationMs: 1_000,
+      },
+    });
+
+    expect(restored?.shouldDelete).toBe(false);
+    expect(job).toMatchObject({
+      enabled: false,
+      state: {
+        lastRunStatus: "ok",
+        consecutiveErrors: 0,
+      },
+    });
+    expect(job.state.nextRunAtMs).toBeUndefined();
   });
 
   it("buffers quiet-trigger repair notifications until the recovery commit", () => {

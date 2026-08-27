@@ -102,7 +102,7 @@ async function openPullPreviewPage(): Promise<{
   });
   await page.goto(`${server.baseUrl}chat`);
 
-  const pullLink = page.getByRole("link", { name: "openclaw/openclaw#99816" });
+  const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
   const card = page.locator(".github-link-hovercard");
   await pullLink.waitFor({ state: "visible" });
   return { card, page, pullLink };
@@ -194,6 +194,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
                 "then https://github.com/openclaw/openclaw/issues/99815.",
                 "A [missing item](https://github.com/openclaw/openclaw/issues/999999) stays usable.",
                 "The [repository](https://github.com/openclaw/openclaw) has no item preview.",
+                "The skill lives at https://github.com/blader/humanizer/blob/main/SKILL.md.",
                 "Styling notes live in [the docs](https://docs.openclaw.ai/web/control-ui).",
               ].join(" "),
             },
@@ -227,36 +228,23 @@ describeControlUiE2e("GitHub link hover cards", () => {
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
     }
 
-    const longLink = page.getByRole("link", {
-      name: "a-very-long-organization-name/a-very-long-repository-name#99817",
-    });
-    await page.setViewportSize({ height: 800, width: 360 });
-    expect(await longLink.evaluate((element) => getComputedStyle(element).lineBreak)).toBe(
-      "anywhere",
-    );
-    const longMessageBox = await longLink
-      .locator("xpath=ancestor::*[contains(@class, 'chat-text')]")
-      .boundingBox();
-    const longLinkBox = await longLink.boundingBox();
-    expect(longMessageBox).not.toBeNull();
-    expect(longLinkBox).not.toBeNull();
-    expect(longLinkBox!.x).toBeGreaterThanOrEqual(longMessageBox!.x);
-    expect(longLinkBox!.x + longLinkBox!.width).toBeLessThanOrEqual(
-      longMessageBox!.x + longMessageBox!.width,
-    );
-    await page.setViewportSize({ height: 800, width: 1180 });
+    await expect
+      .poll(() => page.getByRole("link", { name: "#99817" }).getAttribute("href"))
+      .toBe(
+        "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
+      );
+    await expect
+      .poll(() => page.getByRole("link", { name: "SKILL.md" }).getAttribute("href"))
+      .toBe("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
-    const pullLink = page.getByRole("link", { name: "openclaw/openclaw#99816" });
+    const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
 
-    // The mark carries the link signal at rest, so the underline only returns on
-    // hover. Non-GitHub links keep the base underline, which keeps the rule scoped.
     const decorationLine = (link: Locator) =>
       link.evaluate((element) => getComputedStyle(element).textDecorationLine);
     expect(await decorationLine(pullLink)).toBe("none");
     expect(await decorationLine(page.getByRole("link", { name: "the docs" }))).toBe("underline");
 
     await pullLink.hover();
-    await expect.poll(() => decorationLine(pullLink)).toBe("underline");
     const card = page.locator(".github-link-hovercard");
     await expectText(card, "Merged");
     await expectText(card, "openclaw/openclaw #99816");
@@ -272,7 +260,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     expect(pullBox!.x + pullBox!.width).toBeLessThanOrEqual(1180);
     expect(pullBox!.y + pullBox!.height).toBeLessThanOrEqual(800);
 
-    const issueLink = page.getByRole("link", { name: "openclaw/openclaw#99815" });
+    const issueLink = page.locator('a.markdown-github-link[href$="/issues/99815"]');
     await issueLink.hover();
     await expectText(card, "Keep hover previews compact");
     await expectText(card, "octocat");

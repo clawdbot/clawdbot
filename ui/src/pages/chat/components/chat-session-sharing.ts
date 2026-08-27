@@ -1,7 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type {
   GatewaySessionRow,
-  SessionMembersListResult,
+  SessionMembersListEvidenceResult,
   SessionVisibility,
 } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
@@ -11,7 +11,7 @@ import { t } from "../../../i18n/index.ts";
 
 export type ChatSessionSharingState = {
   loading: boolean;
-  result?: SessionMembersListResult;
+  result?: SessionMembersListEvidenceResult;
   error?: string;
 };
 
@@ -65,7 +65,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
   }
   const result = props.state?.result;
   const members = new Set(result?.members.map((member) => member.identityId) ?? []);
-  // The shared header owner chip presents createdActor; this picker only manages mutable members.
+  // The shared header owner chip presents effective ownership; this picker manages mutable members.
   const identities =
     result?.identities.filter((identity) => identity.id !== result.owner?.id) ?? [];
   const allowed = result?.allowedVisibilities ?? props.allowedVisibilities ?? [visibility];
@@ -192,7 +192,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps) {
           `
         : nothing}
       ${props.state?.error
-        ? html`<div class="chat-pane__sharing-status chat-pane__sharing-status--error">
+        ? html`<div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
             ${props.state.error}
           </div>`
         : nothing}

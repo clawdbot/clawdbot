@@ -28,6 +28,7 @@ const DEFAULT_HASH_OUTPUT = "docs/.generated/sqlite-session-transcript-schema-ba
 
 const TARGET_TABLES = new Set([
   "session_nodes",
+  "session_participants",
   "session_windows",
   "session_members",
   "conversations",

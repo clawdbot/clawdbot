@@ -1,15 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import type {
-  GatewayBrowserClient,
-  GatewayBrowserClientOptions,
-  GatewayEventFrame,
-  GatewayHelloOk,
-} from "../api/gateway.ts";
 import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
-import { createStorageMock } from "../test-helpers/storage.ts";
-import { createApplicationGateway } from "./gateway-store.ts";
+import {
+  createGatewayEvent,
+  createGatewayStoreTestStore as createStore,
+  GATEWAY_STORE_TEST_HELLO as HELLO,
+  stubGatewayStoreTestGlobals,
+} from "./gateway-store.test-support.ts";
 import { loadSettings } from "./settings.ts";
 
 const { scheduleStaleChunkReloadMock } = vi.hoisted(() => ({
@@ -43,95 +41,10 @@ vi.mock("../build-info.ts", () => ({
         : Boolean(identity.version && identity.version !== "2026.7.19"),
 }));
 
-const HELLO: GatewayHelloOk = {
-  type: "hello-ok",
-  protocol: 1,
-  auth: { role: "operator", scopes: [] },
-};
-
-function createGatewayEvent(event = "chat", payload: unknown = {}, seq = 1): GatewayEventFrame {
-  return {
-    type: "event",
-    event,
-    payload,
-    seq,
-    stateVersion: { presence: seq, health: seq },
-  };
-}
-
-class FakeGatewayClient {
-  started = 0;
-  stopped = 0;
-  readonly instanceId: string;
-
-  constructor(readonly opts: GatewayBrowserClientOptions) {
-    this.instanceId = opts.instanceId ?? "";
-  }
-
-  start() {
-    this.started += 1;
-  }
-
-  stop() {
-    this.stopped += 1;
-  }
-
-  request = vi.fn(
-    (_method: string, _params: unknown): Promise<unknown> =>
-      Promise.reject(new Error("unexpected gateway request")),
-  );
-
-  addEventListener() {
-    return () => {};
-  }
-}
-
-function createStore(
-  params: {
-    settings?: ReturnType<typeof loadSettings>;
-    persistDefaultConnectionSettings?: boolean;
-    basePath?: string;
-  } = {},
-) {
-  const clients: FakeGatewayClient[] = [];
-  const gateway = createApplicationGateway(
-    params.settings ?? loadSettings(),
-    "",
-    "",
-    (opts) => {
-      const client = new FakeGatewayClient(opts);
-      clients.push(client);
-      return client as unknown as GatewayBrowserClient;
-    },
-    {
-      persistDefaultConnectionSettings: params.persistDefaultConnectionSettings,
-      basePath: params.basePath,
-    },
-  );
-  const current = () => {
-    const client = clients.at(-1);
-    if (!client) {
-      throw new Error("expected a gateway client");
-    }
-    return client;
-  };
-  return { gateway, clients, current };
-}
-
 describe("createApplicationGateway connection phase", () => {
   beforeEach(() => {
     scheduleStaleChunkReloadMock.mockClear();
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
-    vi.stubGlobal("location", {
-      protocol: "http:",
-      host: "127.0.0.1:18789",
-      hostname: "127.0.0.1",
-      origin: "http://127.0.0.1:18789",
-      pathname: "/",
-      href: "http://127.0.0.1:18789/",
-    } as Location);
+    stubGatewayStoreTestGlobals();
   });
 
   afterEach(() => {
@@ -141,9 +54,9 @@ describe("createApplicationGateway connection phase", () => {
     vi.restoreAllMocks();
   });
 
-  it("passes the explicit same-origin base path to avatar resolution", () => {
+  it("passes the explicit same-origin resource base to avatar resolution", () => {
     const settings = { ...loadSettings(), gatewayUrl: "ws://127.0.0.1:18789/ws" };
-    const { gateway } = createStore({ settings, basePath: "/wilfred" });
+    const { gateway } = createStore({ settings, resourceBasePath: "/wilfred" });
 
     gateway.start();
 
@@ -349,6 +262,34 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.snapshot.lastError).toContain("1006");
   });
 
+  it("keeps retryable startup unavailable in the initial progress state", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    const startupClose = {
+      code: 4013,
+      reason: "gateway starting",
+      willRetry: true,
+      error: {
+        code: "UNAVAILABLE",
+        message: "gateway starting; retry shortly",
+        details: { reason: "startup-sidecars" },
+        retryable: true,
+        retryAfterMs: 250,
+      },
+    };
+    current().opts.onClose?.(startupClose);
+
+    expect(gateway.snapshot.phase).toBe("starting");
+    expect(gateway.snapshot.lastError).toBeNull();
+    expect(gateway.snapshot.lastErrorCode).toBeNull();
+
+    const listener = vi.fn();
+    gateway.subscribe(listener);
+    current().opts.onClose?.(startupClose);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("returns a never-connected terminal close to stopped", () => {
     const { gateway, current } = createStore();
     gateway.start();
@@ -357,6 +298,29 @@ describe("createApplicationGateway connection phase", () => {
 
     expect(gateway.snapshot.phase).toBe("stopped");
     expect(gateway.snapshot.lastError).toContain("4008");
+  });
+
+  it("redacts a secret-shaped WebSocket close reason", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1006,
+      reason: "OPENAI_API_KEY=sk-1234567890abcdef",
+      willRetry: true,
+    });
+
+    expect(gateway.snapshot.lastError).toContain("OPENAI_API_KEY=sk-123...cdef");
+    expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
+  });
+
+  it("uses translated fallback copy for an empty WebSocket close reason", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({ code: 1006, reason: "", willRetry: true });
+
+    expect(gateway.snapshot.lastError).toBe("disconnected (1006): Unknown");
   });
 
   it("starts a newly selected Gateway as a fresh connection", () => {
@@ -370,6 +334,19 @@ describe("createApplicationGateway connection phase", () => {
     expect(current().opts.url).toBe("wss://other-gateway.example.test");
     expect(current().opts.token).toBe("other-token");
     expect(gateway.snapshot.phase).toBe("connecting");
+  });
+
+  it("advances the connection revision only when credentials change", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().opts.onHello?.(HELLO);
+
+    expect(gateway.connectionRevision).toBe(0);
+    gateway.connect({ sessionKey: "agent:main:other" });
+    expect(gateway.connectionRevision).toBe(0);
+
+    gateway.connect({ token: "replacement-token" });
+    expect(gateway.connectionRevision).toBe(1);
   });
 
   it("keeps a newly selected Gateway's first retry at the login gate", () => {
@@ -522,6 +499,80 @@ describe("createApplicationGateway connection phase", () => {
     current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
 
     expect(gateway.snapshot.phase).toBe("offline");
+  });
+
+  it("schedules the guarded reload and publishes a terminal phase for a stale build", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+      },
+      willRetry: false,
+    });
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
+      buildId: "replacement-build",
+    });
+    expect(gateway.snapshot.phase).toBe("reload-required");
+  });
+
+  it("keeps reload-required ahead of retryable startup presentation", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch: Control UI updated; reload this page to continue",
+      error: {
+        code: "UNAVAILABLE",
+        message: "protocol mismatch: Control UI updated; reload this page to continue",
+        details: {
+          code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+          reason: "startup-sidecars",
+          gatewayBuildId: "replacement-build",
+          reloadRequired: true,
+        },
+        retryable: true,
+      },
+      willRetry: true,
+    });
+
+    expect(scheduleStaleChunkReloadMock).toHaveBeenCalledExactlyOnceWith({
+      buildId: "replacement-build",
+    });
+    expect(gateway.snapshot.phase).toBe("reload-required");
+    expect(gateway.snapshot.lastError).toContain("Control UI updated");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
+  });
+
+  it("keeps a bare protocol mismatch in the login-gate path", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+
+    current().opts.onClose?.({
+      code: 1008,
+      reason: "protocol mismatch",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "protocol mismatch",
+        details: { code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH },
+      },
+      willRetry: false,
+    });
+
+    expect(scheduleStaleChunkReloadMock).not.toHaveBeenCalled();
+    expect(gateway.snapshot.phase).toBe("stopped");
+    expect(gateway.snapshot.lastErrorCode).toBe(ConnectErrorDetailCodes.PROTOCOL_MISMATCH);
   });
 
   it("keeps reconnecting across event-gap recovery with a fresh client", () => {

@@ -1,6 +1,7 @@
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import {
+  buildOpencodeGoLiveProviderConfig,
   buildStaticOpencodeGoProviderConfig,
   listOpencodeGoModelCatalogEntries,
 } from "./provider-catalog.js";
@@ -13,8 +14,8 @@ const describeLive = LIVE ? describe : describe.skip;
 
 type ModelsResponse = { data?: Array<{ id?: unknown; object?: unknown }> };
 
-describeLive("OpenCode Go live catalog drift", () => {
-  it("classifies every live id as active, deprecated, or preview", async () => {
+describeLive("OpenCode Go live dynamic catalog", () => {
+  it("loads authorized current models from upstream metadata without expanding its offline seed", async () => {
     const response = await fetch(OPENCODE_GO_MODELS_URL, {
       headers: {
         accept: "application/json",
@@ -30,45 +31,31 @@ describeLive("OpenCode Go live catalog drift", () => {
       .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
       .map((id) => id.trim().toLowerCase())
       .toSorted();
+    const offlineIds = new Set(
+      buildStaticOpencodeGoProviderConfig().models.map((model) => model.id),
+    );
+    const live = await buildOpencodeGoLiveProviderConfig({
+      apiKey: OPENCODE_API_KEY,
+      discoveryApiKey: OPENCODE_API_KEY,
+    });
+    const discoveredIds = live.models.map((model) => model.id);
+    const advertisedIds = new Set(liveIds);
     const trustedRows = listOpencodeGoModelCatalogEntries();
-    const trustedIds = new Set(trustedRows.map((row) => row.id));
-    const activeIds = buildStaticOpencodeGoProviderConfig().models.map((model) => model.id);
 
-    expect(liveIds.filter((id) => !trustedIds.has(id))).toEqual([]);
-    expect(new Set(activeIds).size).toBe(activeIds.length);
-    expect(activeIds.toSorted()).toEqual([
-      "deepseek-v4-flash",
-      "deepseek-v4-pro",
-      "glm-5.1",
-      "glm-5.2",
-      "gpt-5.6-luna",
-      "grok-4.5",
-      "hy3",
-      "kimi-k2.6",
-      "kimi-k2.7-code",
-      "kimi-k3",
-      "mimo-v2.5",
-      "mimo-v2.5-pro",
-      "minimax-m2.7",
-      "minimax-m3",
-      "qwen3.6-plus",
-      "qwen3.7-max",
-      "qwen3.7-plus",
-      "qwen3.8-max",
-    ]);
-    expect(
-      trustedRows
-        .filter((row) => row.status === "deprecated")
-        .map((row) => row.id)
-        .toSorted(),
-    ).toEqual([
-      "glm-5",
-      "kimi-k2.5",
-      "mimo-v2-omni",
-      "mimo-v2-pro",
-      "minimax-m2.5",
-      "qwen3.5-plus",
-    ]);
+    expect(discoveredIds.length).toBeGreaterThan(0);
+    expect(discoveredIds.every((id) => advertisedIds.has(id))).toBe(true);
+    expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
+    expect(discoveredIds.some((id) => !offlineIds.has(id))).toBe(true);
+    expect(discoveredIds).not.toContain("hy3-preview");
     expect(trustedRows.find((row) => row.id === "hy3-preview")?.status).toBe("preview");
+    if (advertisedIds.has("ox-alpha-free")) {
+      expect(live.models.find((model) => model.id === "ox-alpha-free")).toMatchObject({
+        api: "openai-completions",
+        baseUrl: "https://opencode.ai/zen/go/v1",
+        contextWindow: 1_000_000,
+        maxTokens: 131_072,
+        input: ["text", "image"],
+      });
+    }
   }, 30_000);
 });

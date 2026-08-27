@@ -8,15 +8,17 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMsForChannel,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type RuntimeEnv,
-} from "../../runtime-api.js";
+} from "openclaw/plugin-sdk/runtime-group-policy";
+import {
+  resolveThreadBindingIdleTimeoutMsForChannel,
+  resolveThreadBindingMaxAgeMsForChannel,
+} from "openclaw/plugin-sdk/thread-bindings-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import type {
   CoreConfig,
@@ -204,7 +206,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let client: MatrixClient | null = null;
   let clientLease: SharedMatrixClientLease | null = null;
   let monitorLifecycleSignal = opts.abortSignal;
-  let threadBindingManager: { accountId: string; stop: () => void } | null = null;
+  let threadBindingManager: { accountId: string; stop: () => Promise<void> } | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
@@ -444,7 +446,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       logVerboseMessage,
     });
     if (monitorSetupClosed) {
-      createdThreadBindingManager.stop();
+      await createdThreadBindingManager.stop();
       await cleanup("stop");
       return;
     }

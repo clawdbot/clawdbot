@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants, type BigIntStats } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  WORKER_BUNDLE_ARTIFACT_MODE,
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../../shared/worker-bundle-hash.js";
@@ -19,37 +20,11 @@ export type WorkerBundleManifestEntry = {
   sha256: string;
 };
 
-export type WorkerBundleSourceIdentityEntry = {
-  path: string;
-  realPath: string;
-  kind: "directory" | "file";
-  dev: bigint;
-  ino: bigint;
-  mode: bigint;
-  size: bigint;
-  mtimeNs: bigint;
-  ctimeNs: bigint;
-};
-
-function sourceIdentityStats(stats: BigIntStats) {
-  return {
-    dev: stats.dev,
-    ino: stats.ino,
-    mode: stats.mode,
-    size: stats.size,
-    mtimeNs: stats.mtimeNs,
-    ctimeNs: stats.ctimeNs,
-  };
-}
-
 async function stageWorkerDeployArtifact(params: {
   sourceRoot: string;
   stagingRoot: string;
   artifactPath: (typeof WORKER_DEPLOY_ARTIFACT_PATHS)[number];
-}): Promise<{
-  entry: WorkerBundleManifestEntry;
-  sourceIdentity: WorkerBundleSourceIdentityEntry;
-}> {
+}): Promise<WorkerBundleManifestEntry> {
   const relativeSourcePath = `dist/worker/${params.artifactPath}`;
   const sourcePath = path.join(params.sourceRoot, relativeSourcePath);
   let expectedRealPath: string;
@@ -71,10 +46,9 @@ async function stageWorkerDeployArtifact(params: {
   }
   const handle = await fs.open(sourcePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   let contents: Buffer;
-  let openedStats: BigIntStats;
   try {
-    openedStats = await handle.stat({ bigint: true });
-    const currentStats = await fs.lstat(sourcePath, { bigint: true });
+    const openedStats = await handle.stat();
+    const currentStats = await fs.lstat(sourcePath);
     const currentRealPath = await fs.realpath(sourcePath);
     if (
       !openedStats.isFile() ||
@@ -91,50 +65,23 @@ async function stageWorkerDeployArtifact(params: {
     await handle.close();
   }
   const stagedPath = path.join(params.stagingRoot, params.artifactPath);
-  await fs.writeFile(stagedPath, contents, { mode: 0o700 });
-  await fs.chmod(stagedPath, 0o700);
+  await fs.writeFile(stagedPath, contents, { mode: WORKER_BUNDLE_ARTIFACT_MODE });
+  await fs.chmod(stagedPath, WORKER_BUNDLE_ARTIFACT_MODE);
   return {
-    entry: {
-      path: params.artifactPath,
-      mode: 0o700,
-      size: contents.byteLength,
-      sha256: createHash("sha256").update(contents).digest("hex"),
-    },
-    sourceIdentity: {
-      path: expectedRealPath,
-      realPath: expectedRealPath,
-      kind: "file",
-      ...sourceIdentityStats(openedStats),
-    },
+    path: params.artifactPath,
+    mode: WORKER_BUNDLE_ARTIFACT_MODE,
+    size: contents.byteLength,
+    sha256: createHash("sha256").update(contents).digest("hex"),
   };
-}
-
-async function stageWorkerDeployArtifacts(sourceRoot: string, stagingRoot: string) {
-  const staged = [];
-  for (const artifactPath of WORKER_DEPLOY_ARTIFACT_PATHS) {
-    staged.push(await stageWorkerDeployArtifact({ sourceRoot, stagingRoot, artifactPath }));
-  }
-  return staged;
 }
 
 export async function collectWorkerBundleManifest(
   sourceRoot: string,
   stagingRoot: string,
 ): Promise<WorkerBundleManifestEntry[]> {
-  const staged = await stageWorkerDeployArtifacts(sourceRoot, stagingRoot);
-  return staged.map((artifact) => artifact.entry);
-}
-
-export async function collectWorkerBundleManifestWithSourceIdentity(
-  sourceRoot: string,
-  stagingRoot: string,
-): Promise<{
-  manifest: WorkerBundleManifestEntry[];
-  sourceIdentity: WorkerBundleSourceIdentityEntry[];
-}> {
-  const staged = await stageWorkerDeployArtifacts(sourceRoot, stagingRoot);
-  return {
-    manifest: staged.map((artifact) => artifact.entry),
-    sourceIdentity: staged.map((artifact) => artifact.sourceIdentity),
-  };
+  const manifest: WorkerBundleManifestEntry[] = [];
+  for (const artifactPath of WORKER_DEPLOY_ARTIFACT_PATHS) {
+    manifest.push(await stageWorkerDeployArtifact({ sourceRoot, stagingRoot, artifactPath }));
+  }
+  return manifest;
 }

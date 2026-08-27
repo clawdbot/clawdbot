@@ -85,6 +85,7 @@ extension OpenClawChatViewModel {
         guard clearsOverride ? baselineSessionLevel != nil : Self.normalizedVerboseLevel(baselineSessionLevel) != next
         else { return }
 
+        self.errorText = nil
         if self.acceptedVerboseLevelsByTarget[target] == nil {
             self.acceptedVerboseLevelsByTarget[target] = baselineSessionLevel.map(VerboseLevelState.value)
                 ?? VerboseLevelState.none
@@ -133,6 +134,7 @@ extension OpenClawChatViewModel {
                         self.acceptedVerboseLevelsByTarget[target]?.level,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }
@@ -177,6 +179,7 @@ extension OpenClawChatViewModel {
         let baselineEffectiveFastMode = self.currentSessionEntry()?.effectiveFastMode
         guard baselineFastMode != next else { return }
 
+        self.errorText = nil
         if self.acceptedFastModesByTarget[target] == nil {
             self.acceptedFastModesByTarget[target] = FastModeState(
                 override: baselineFastMode,
@@ -225,6 +228,7 @@ extension OpenClawChatViewModel {
                         effective: accepted?.effective,
                         sessionKey: state.key,
                         exactMatchOnly: state.exactMatchOnly)
+                    if !state.exactMatchOnly { self.errorText = error.localizedDescription }
                 }
             }
         }

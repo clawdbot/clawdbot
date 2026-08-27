@@ -390,48 +390,6 @@ describe("agent delivery helpers", () => {
     });
   });
 
-  it("applies binding-level DM isolation to exact provider recipients", async () => {
-    mocks.resolveOutboundChannelPlugin.mockReturnValue({
-      config: { listAccountIds: () => [] },
-      messaging: { resolveOutboundSessionRoute: vi.fn() },
-    });
-    mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
-      sessionKey: "agent:ops:main:thread:topic-1",
-      baseSessionKey: "agent:ops:main",
-      recipientSessionExact: true,
-      peer: { kind: "direct", id: "+15551234567" },
-      chatType: "direct",
-      from: "signal:+15551234567",
-      to: "+15551234567",
-      threadId: "topic-1",
-    });
-
-    const result = await resolveAgentExplicitRecipientSession({
-      cfg: {
-        agents: { entries: { ops: { default: true } } },
-        session: { dmScope: "main" },
-        bindings: [
-          {
-            agentId: "ops",
-            match: { channel: "signal", peer: { kind: "direct", id: "+15551234567" } },
-            session: { dmScope: "per-channel-peer" },
-          },
-        ],
-      } as OpenClawConfig,
-      agentId: "ops",
-      channel: "signal",
-      to: "+15551234567",
-      threadId: "topic-1",
-    });
-
-    expect(result).toMatchObject({
-      sessionKey: "agent:ops:signal:direct:+15551234567:thread:topic-1",
-      channel: "signal",
-      to: "+15551234567",
-      threadId: "topic-1",
-    });
-  });
-
   it("rejects best-effort plugin routes for explicit recipient sessions", async () => {
     mocks.resolveOutboundChannelPlugin.mockReturnValue({
       config: { listAccountIds: () => [] },

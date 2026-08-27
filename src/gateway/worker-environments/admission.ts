@@ -14,10 +14,22 @@ import {
 } from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
+import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
 export type { WorkerConnectionIdentity } from "./connection-identity.js";
 export type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
+
+export const STALE_WORKER_BUILD_REASON =
+  "Worker build does not match the current Gateway build; redispatch the session so its worker can bootstrap the current build before retrying.";
+
+export class StaleWorkerBuildError extends Error {
+  readonly code = "invalid_state";
+
+  constructor() {
+    super(STALE_WORKER_BUILD_REASON);
+  }
+}
 
 /** True only for bundles that accept the exact admitted execution carrier. */
 export function supportsWorkerExecutionContextLaunch(
@@ -44,11 +56,13 @@ export function admitWorkerConnection(params: {
   admission: WorkerConnectParams["admission"];
   expectedBuild: ExpectedWorkerBuild;
   nowMs: number;
+  turnClaim?: WorkerSessionTurnClaim;
   /** Service-only: exact durable turn validation must follow before admission succeeds. */
   allowExpiredCredential?: boolean;
 }): WorkerConnectionAdmissionResult {
   const { admission, store } = params;
-  const credentialHash = hashWorkerCredential(admission.credential);
+  const turnClaim = params.turnClaim;
+  const credentialHash = hashWorkerCredential(admission.credential, turnClaim);
   const credential = store.getCredential(admission.environmentId);
   if (!credential || !safeEqualSecret(credentialHash, credential.credentialHash)) {
     const otherEnvironmentCredential = store.findCredentialByHash(credentialHash);
@@ -59,6 +73,20 @@ export function admitWorkerConnection(params: {
   }
   if (credential.environmentId !== admission.environmentId) {
     return { ok: false, reason: "environment-mismatch" };
+  }
+  if (admission.sessionId !== null) {
+    if (
+      !turnClaim ||
+      turnClaim.owner.kind !== "worker" ||
+      turnClaim.sessionId !== admission.sessionId ||
+      turnClaim.runId !== admission.runId ||
+      turnClaim.owner.environmentId !== admission.environmentId ||
+      turnClaim.owner.ownerEpoch !== admission.ownerEpoch
+    ) {
+      return { ok: false, reason: "placement-mismatch" };
+    }
+  } else if (turnClaim || admission.runId !== null) {
+    return { ok: false, reason: "session-mismatch" };
   }
   if (params.nowMs >= credential.expiresAtMs && params.allowExpiredCredential !== true) {
     return { ok: false, reason: "credential-expired" };
@@ -125,6 +153,7 @@ export function admitWorkerConnection(params: {
       bundleHash: credential.bundleHash,
       sessionId: credential.sessionId,
       runId: admission.runId,
+      turnClaim: turnClaim ?? null,
       ownerEpoch: credential.ownerEpoch,
       rpcSetVersion: credential.rpcSetVersion,
       protocolFeatures: [...environment.bootstrapReceipt.protocolFeatures],

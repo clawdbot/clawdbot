@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 import {
   type WorkerAdmissionHandshake,
   WORKER_PROTOCOL_MAX_FEATURE_LENGTH,
@@ -76,10 +77,8 @@ export function workerBootstrapOperationTimeoutMs(artifact: WorkerInstallationAr
   return nonTransferTimeoutMs + transferTimeoutMs + BOOTSTRAP_OPERATION_HEADROOM_MS;
 }
 
-// Keep these boundaries aligned with package.json engines.node and infra/runtime-guard.ts.
 const NODE_RUNTIME_CHECK_JS = String.raw`const parse = (value) => /^(\d+)\.(\d+)\.(\d+)$/.exec(value)?.slice(1).map(Number); const atLeast = (version, floor) => version[0] > floor[0] || (version[0] === floor[0] && (version[1] > floor[1] || (version[1] === floor[1] && version[2] >= floor[2])));
-const node = parse(process.versions.node); if (!node) process.exit(1);
-const nodeSafe = (node[0] === 22 && atLeast(node, [22, 22, 3])) || (node[0] === 24 && atLeast(node, [24, 15, 0])) || (node[0] === 25 && atLeast(node, [25, 9, 0])) || node[0] >= 26;
+const nodeSafe = ${PROCESS_NODE_VERSION_CHECK};
 if (!nodeSafe) process.exit(1);
 try { const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");
   const sqlite = parse(String(db.prepare("SELECT sqlite_version() AS version").get()?.version ?? ""));

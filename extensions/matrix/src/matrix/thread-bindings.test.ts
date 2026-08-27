@@ -52,10 +52,8 @@ describe("matrix thread bindings", () => {
   const matrixClient = {} as never;
   const trackedManagers = new Set<MatrixThreadBindingManager>();
 
-  function resetThreadBindingAdapters() {
-    for (const manager of trackedManagers) {
-      manager.stop();
-    }
+  async function resetThreadBindingAdapters() {
+    await Promise.all([...trackedManagers].map((manager) => manager.stop()));
     trackedManagers.clear();
     testing.resetSessionBindingAdaptersForTests();
   }
@@ -197,9 +195,9 @@ describe("matrix thread bindings", () => {
     return call;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
     stateDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "matrix-thread-bindings-"));
-    resetThreadBindingAdapters();
+    await resetThreadBindingAdapters();
     resetPluginStateStoreForTests();
     sendMessageMatrixMock.mockClear();
     setMatrixRuntime({
@@ -213,8 +211,8 @@ describe("matrix thread bindings", () => {
     } as PluginRuntime);
   });
 
-  afterEach(() => {
-    resetThreadBindingAdapters();
+  afterEach(async () => {
+    await resetThreadBindingAdapters();
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -433,8 +431,8 @@ describe("matrix thread bindings", () => {
     });
     writeAuthStorageMeta(initialAuth, initialStoragePaths);
 
-    initialManager.stop();
-    resetThreadBindingAdapters();
+    await initialManager.stop();
+    await resetThreadBindingAdapters();
 
     await createBindingManager({ auth: rotatedAuth });
 
@@ -484,8 +482,8 @@ describe("matrix thread bindings", () => {
       targetSessionKey: "agent:ops:subagent:child",
     });
 
-    initialManager.stop();
-    resetThreadBindingAdapters();
+    await initialManager.stop();
+    await resetThreadBindingAdapters();
 
     await createBindingManager({ auth: rotatedAuth });
 
@@ -549,7 +547,7 @@ describe("matrix thread bindings", () => {
       targetSessionKey: "agent:ops:subagent:child",
     });
 
-    initialManager.stop();
+    await initialManager.stop();
 
     expect(
       replacementManager.getByConversation({
@@ -635,13 +633,8 @@ describe("matrix thread bindings", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       vi.useRealTimers();
-      manager.stop();
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
-        },
-        { interval: 1, timeout: 5_000 },
-      );
+      await manager.stop();
+      expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
     } finally {
       vi.useRealTimers();
     }
@@ -656,16 +649,11 @@ describe("matrix thread bindings", () => {
       const touchedAt = Date.parse("2026-03-06T12:00:00.000Z");
       getSessionBindingService().touch(binding.bindingId, touchedAt);
 
-      manager.stop();
+      await manager.stop();
       vi.useRealTimers();
 
       const bindingsPath = resolveBindingsFilePath();
-      await vi.waitFor(
-        async () => {
-          expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
-        },
-        { interval: 1, timeout: 1_000 },
-      );
+      expect(await readPersistedLastActivityAt(bindingsPath)).toBe(touchedAt);
     } finally {
       vi.useRealTimers();
     }

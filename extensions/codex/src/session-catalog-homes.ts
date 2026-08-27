@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
@@ -8,6 +7,7 @@ import {
   resolveCodexAppServerLocalHomeDir,
 } from "./app-server/auth-start-options.js";
 import {
+  readCodexPluginConfig,
   resolveCodexAppServerUserHomeDir,
   resolveCodexSupervisionAppServerRuntimeOptions,
 } from "./app-server/config.js";
@@ -15,6 +15,7 @@ import {
   buildCodexAppServerConnectionFingerprint,
   replaceCodexCatalogConnectionHomes,
 } from "./app-server/plugin-app-cache-key.js";
+import { canonicalCodexCatalogHome, codexCatalogHomeId } from "./session-catalog-home-id.js";
 import { CODEX_LOCAL_SESSION_HOST_ID, MAX_HOST_COUNT } from "./session-catalog-parsing.js";
 import type { CodexCatalogHome } from "./session-catalog-types.js";
 
@@ -23,23 +24,19 @@ export type { CodexCatalogHome } from "./session-catalog-types.js";
 type CatalogHomeCandidate = {
   codexHome: string;
   label: string;
-  usesProcessHomeFallback: boolean;
+  usesProcessHomeFallback?: boolean;
 };
 
-function canonicalCatalogHome(value: string): string {
-  const resolved = path.resolve(value);
+function existingCatalogHomeCandidates(value: string, label?: string): CatalogHomeCandidate[] {
+  const codexHome = canonicalCodexCatalogHome(value);
   try {
-    return fs.realpathSync.native(resolved);
+    if (!fs.statSync(codexHome).isDirectory()) {
+      return [];
+    }
   } catch {
-    return resolved;
+    return [];
   }
-}
-
-function catalogHomeId(codexHome: string): string {
-  return createHash("sha256")
-    .update("openclaw:codex-session-catalog-home:v1\0")
-    .update(codexHome)
-    .digest("hex");
+  return [{ codexHome, label: `Local Codex · ${label ?? path.basename(codexHome)}` }];
 }
 
 /** Resolves every local Codex store the operator already owns, without path disclosure. */
@@ -51,16 +48,17 @@ function resolveCodexCatalogHomes(params: {
 }): CodexCatalogHome[] {
   const { config, env, ownerAgentId, pluginConfig } = params;
   const ownerAgentDir = resolveAgentDir(config, ownerAgentId, env);
+  const configuredHomes = readCodexPluginConfig(pluginConfig).sessionCatalog?.homes ?? [];
   const base = resolveCodexSupervisionAppServerRuntimeOptions({
     pluginConfig,
     env,
     agentDir: ownerAgentDir,
     config,
   });
-  const primaryCodexHome = canonicalCatalogHome(
+  const primaryCodexHome = canonicalCodexCatalogHome(
     resolveCodexAppServerLocalHomeDir(base.start, ownerAgentDir, env),
   );
-  const processUserHome = canonicalCatalogHome(resolveCodexAppServerUserHomeDir(env));
+  const processUserHome = canonicalCodexCatalogHome(resolveCodexAppServerUserHomeDir(env));
   const processHomeConfigured = Boolean(env.CODEX_HOME?.trim());
   const primaryUsesProcessHomeFallback =
     base.start.transport === "stdio" && base.start.homeScope === "user" && !processHomeConfigured;
@@ -82,13 +80,15 @@ function resolveCodexCatalogHomes(params: {
       left === ownerAgentId ? -1 : right === ownerAgentId ? 1 : left.localeCompare(right),
     );
     candidates.push(
-      ...agentIds.flatMap((agentId) => {
-        const codexHome = canonicalCatalogHome(
+      ...agentIds.flatMap((agentId) =>
+        existingCatalogHomeCandidates(
           resolveCodexAppServerHomeDir(resolveAgentDir(config, agentId, env)),
-        );
-        return fs.existsSync(codexHome)
-          ? [{ codexHome, label: `Local Codex · ${agentId}`, usesProcessHomeFallback: false }]
-          : [];
+          agentId,
+        ),
+      ),
+      ...configuredHomes.flatMap((entry) => {
+        const { path: home, label } = typeof entry === "string" ? { path: entry } : entry;
+        return existingCatalogHomeCandidates(home, label);
       }),
     );
   }
@@ -100,7 +100,7 @@ function resolveCodexCatalogHomes(params: {
       continue;
     }
     seen.add(candidate.codexHome);
-    const sourceHomeId = catalogHomeId(candidate.codexHome);
+    const sourceHomeId = codexCatalogHomeId(candidate.codexHome);
     const primary = homes.length === 0;
     homes.push({
       sourceHomeId,
@@ -119,7 +119,10 @@ function resolveCodexCatalogHomes(params: {
               env: { ...base.start.env, CODEX_HOME: candidate.codexHome },
             },
           },
-      usesProcessHomeFallback: candidate.usesProcessHomeFallback,
+      ...(base.connectionClass === "remote"
+        ? {}
+        : { localSessionsRoot: path.join(candidate.codexHome, "sessions") }),
+      usesProcessHomeFallback: candidate.usesProcessHomeFallback ?? false,
     });
     if (homes.length >= MAX_HOST_COUNT) {
       break;

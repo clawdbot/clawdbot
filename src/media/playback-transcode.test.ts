@@ -9,9 +9,14 @@ import {
   waitForPlaybackTranscodeJobsForTest,
 } from "./playback-transcode.test-support.js";
 
-const { probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
+const { playbackWarn, probePlaybackMediaFileDescriptor, runFfmpeg } = vi.hoisted(() => ({
+  playbackWarn: vi.fn(),
   probePlaybackMediaFileDescriptor: vi.fn(),
   runFfmpeg: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: (subsystem: string) => ({ subsystem, warn: playbackWarn }),
 }));
 
 vi.mock("./ffmpeg-exec.js", () => ({
@@ -42,6 +47,7 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  playbackWarn.mockReset();
   runFfmpeg.mockReset();
   probePlaybackMediaFileDescriptor.mockReset();
   probePlaybackMediaFileDescriptor.mockImplementation(async (_fd: number, kind: string) =>
@@ -754,6 +760,113 @@ describe("resolvePlaybackTranscode", () => {
           kind: "transcoded",
         });
       });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      kind: "audio",
+      fileName: "clock-rollback.caf",
+      mimeType: "audio/x-caf",
+      phase: "before resolution",
+      duringCheck: false,
+    },
+    {
+      kind: "video",
+      fileName: "clock-rollback.webm",
+      mimeType: "video/webm",
+      phase: "before resolution",
+      duringCheck: false,
+    },
+    {
+      kind: "audio",
+      fileName: "clock-rollback-during-check.caf",
+      mimeType: "audio/x-caf",
+      phase: "during cooldown check",
+      duringCheck: true,
+    },
+    {
+      kind: "video",
+      fileName: "clock-rollback-during-check.webm",
+      mimeType: "video/webm",
+      phase: "during cooldown check",
+      duringCheck: true,
+    },
+  ] as const)(
+    "retries failed $kind transcodes when the wall clock moves backward $phase",
+    async (media) => {
+      const source = await createSource(media.fileName);
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(120_000);
+      const params = { ...source, mimeType: media.mimeType, kind: media.kind };
+
+      try {
+        runFfmpeg.mockRejectedValueOnce(new Error("ffmpeg temporarily unavailable"));
+        await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+          kind: "preparing",
+        });
+        await vi.waitFor(() => expect(runFfmpeg).toHaveBeenCalledOnce());
+        await vi.waitFor(async () => {
+          await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+            kind: "fallback",
+          });
+        });
+
+        nowSpy.mockReturnValue(1_000);
+        if (media.duringCheck) {
+          nowSpy.mockReturnValueOnce(180_001);
+        }
+        runFfmpeg.mockImplementationOnce(async (args: string[]) => {
+          await fs.writeFile(args.at(-1) ?? "", `normalized-${media.kind}`);
+          return "";
+        });
+
+        await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+          kind: "preparing",
+        });
+        await vi.waitFor(() => expect(runFfmpeg).toHaveBeenCalledTimes(2));
+        await vi.waitFor(async () => {
+          await expect(playback.resolvePlaybackTranscode(params)).resolves.toMatchObject({
+            kind: "transcoded",
+          });
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it("warns once when the same transcode operation fails across cooldown retries", async () => {
+    const source = await createSource("warn-failed.caf", "caff-source");
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1000);
+    runFfmpeg.mockRejectedValue(new Error("ffmpeg unavailable"));
+    const params = {
+      ...source,
+      mimeType: "audio/x-caf",
+      kind: "audio" as const,
+    };
+
+    try {
+      await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await vi.waitFor(() => expect(playbackWarn).toHaveBeenCalledOnce());
+      expect(playbackWarn).toHaveBeenCalledWith(
+        expect.stringContaining(`${source.sourcePath}: ffmpeg unavailable`),
+      );
+
+      nowSpy.mockReturnValue(61_001);
+      await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+        kind: "preparing",
+      });
+      await vi.waitFor(() => expect(runFfmpeg).toHaveBeenCalledTimes(2));
+      await vi.waitFor(async () => {
+        await expect(playback.resolvePlaybackTranscode(params)).resolves.toEqual({
+          kind: "fallback",
+        });
+      });
+      expect(playbackWarn).toHaveBeenCalledOnce();
     } finally {
       nowSpy.mockRestore();
     }

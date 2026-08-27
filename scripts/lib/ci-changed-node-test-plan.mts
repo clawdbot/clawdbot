@@ -9,6 +9,7 @@ import {
   isTestSupportFileTarget,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mts";
+import { listAvailableExtensionIds } from "./changed-extensions.mts";
 import {
   createNodeTestShards,
   isPolicyTestOwnedPath,
@@ -27,6 +28,7 @@ type ChangedNodeTestShard = {
   configs: string[];
   includePatterns?: string[];
   planConcurrency?: number;
+  pretestBuildMode?: "private-qa" | "runtime";
   requiresDist: boolean;
   runner: string;
   shardName: string;
@@ -43,7 +45,28 @@ const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
 // processes starve each other on 4-vCPU runners and push otherwise healthy
 // integration tests past the global timeout.
 const SERIAL_CHANGED_TARGET_RE = /^extensions\/memory-core\//u;
+const PRETEST_RUNTIME_BUILD_TARGETS = new Set([
+  "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+]);
+const PRETEST_PRIVATE_QA_BUILD_TARGETS = new Set([
+  "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+]);
 const BOUNDARY_NODE_TEST_CONFIG = "test/vitest/vitest.boundary.config.ts";
+const DOCKER_SEED_LANE_ORDER = [
+  "mcp-channels",
+  "cron-mcp-cleanup",
+  "mcp-code-mode-gateway",
+] as const;
+type DockerSeedLane = (typeof DOCKER_SEED_LANE_ORDER)[number];
+const DOCKER_SEED_LANES_BY_PATH: Readonly<Record<string, readonly DockerSeedLane[]>> = {
+  ".github/workflows/ci.yml": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/cron-mcp-cleanup-seed.ts": ["cron-mcp-cleanup"],
+  "scripts/e2e/docker-openai-seed.ts": DOCKER_SEED_LANE_ORDER,
+  "scripts/e2e/lib/mcp-code-mode-probe-server.ts": ["mcp-code-mode-gateway"],
+  "scripts/e2e/mcp-channels-seed.ts": ["mcp-channels"],
+  "scripts/e2e/mcp-code-mode-gateway-seed.ts": ["mcp-code-mode-gateway"],
+  "scripts/lib/ci-changed-node-test-plan.mts": DOCKER_SEED_LANE_ORDER,
+};
 const publicPluginSdkEntrySources = Object.values(
   buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
 );
@@ -59,6 +82,17 @@ const configsRequiringFullSuiteMetadata = new Set(
 const splitNodeTestConfigs = new Set(
   fullNodeTestShards.filter((shard) => shard.includePatterns).flatMap((shard) => shard.configs),
 );
+
+export function resolveChangedDockerSeedLanes(changedPaths: string[]) {
+  const selected = new Set<DockerSeedLane>();
+  for (const changedPath of changedPaths) {
+    const normalizedPath = changedPath.replaceAll("\\", "/");
+    for (const lane of DOCKER_SEED_LANES_BY_PATH[normalizedPath] ?? []) {
+      selected.add(lane);
+    }
+  }
+  return DOCKER_SEED_LANE_ORDER.filter((lane) => selected.has(lane));
+}
 
 function isTestOnlyPath(changedPath: string) {
   return (
@@ -118,6 +152,11 @@ const PROMPT_SNAPSHOT_SURFACE_RE =
 // is the snapshot helper's import graph (auto-reply prompts, channel typing,
 // plugin-sdk agent harness, codex catalog fixtures).
 const PROMPT_SNAPSHOT_ENTRY = "test/helpers/agents/happy-path-prompt-snapshots.ts";
+
+// The fallback planner and chunk-policy owner are part of the gate surface; changes to the
+// gate must not be able to skip the gated lane (#124412).
+const CORE_EXTENSION_IMPACT_SURFACE_RE =
+  /^scripts\/lib\/(?:changed-extensions|ci-changed-node-test-plan|extension-test-plan)\.mts$/u;
 
 /**
  * True when a changed path can influence generated prompt snapshots: it
@@ -287,6 +326,11 @@ function createChangedTargetShards(
       shardName: `${names.shardName}${suffix}`,
       targets: chunk,
     };
+    if (chunk.some((target) => PRETEST_PRIVATE_QA_BUILD_TARGETS.has(target))) {
+      shard.pretestBuildMode = "private-qa";
+    } else if (chunk.some((target) => PRETEST_RUNTIME_BUILD_TARGETS.has(target))) {
+      shard.pretestBuildMode = "runtime";
+    }
     if (chunk.some((target) => SERIAL_CHANGED_TARGET_RE.test(target))) {
       shard.planConcurrency = 1;
     }
@@ -331,6 +375,9 @@ function createChangedExtensionConfigShards(extensionRoots: string[]) {
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `changed-extensions-config${suffix}`,
     };
+    if (roots.includes("extensions/qa-lab")) {
+      shard.pretestBuildMode = "private-qa";
+    }
     if (includePatterns) {
       shard.includePatterns = includePatterns;
     }
@@ -351,14 +398,41 @@ function createChangedExtensionConfigShardsForPaths(changedPaths: string[], cwd:
 }
 
 /**
- * The fail-safe cause leaves the non-extension diff's extension impact unbounded,
- * so whole extension configs are required; precise targets would under-cover.
+ * True when core or fallback-gate changes can affect extension consumers beyond
+ * the changed extension paths.
+ */
+export function hasCoreExtensionImpact(changedPaths: string[], options: CwdOptions = {}) {
+  if (changedPaths.some((changedPath) => CORE_EXTENSION_IMPACT_SURFACE_RE.test(changedPath))) {
+    return true;
+  }
+  const cwd = options.cwd ?? process.cwd();
+  const regularLivePaths = changedPaths.filter(
+    (changedPath) =>
+      existsSync(path.join(cwd, changedPath)) &&
+      !changedPath.startsWith("extensions/") &&
+      !isPolicyTestOwnedPath(changedPath),
+  );
+  return (
+    detectChangedLanes(changedPaths).extensionImpactFromCore ||
+    (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
+      hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd))
+  );
+}
+
+/**
+ * Covers changed extensions plus the full core-impact blast radius when precise
+ * planning falls back. See #124412.
  */
 export function createChangedExtensionFallbackShards(
   changedPaths: string[],
   options: CwdOptions = {},
 ): ChangedNodeTestShard[] {
   const cwd = options.cwd ?? process.cwd();
+  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
+    return createChangedExtensionConfigShards(
+      listAvailableExtensionIds().map((extensionId) => `extensions/${extensionId}`),
+    );
+  }
   return createChangedExtensionConfigShardsForPaths(changedPaths, cwd);
 }
 
@@ -405,11 +479,7 @@ export function createChangedNodeTestShards(
 
   // Package-specifier consumers are invisible to the relative import graph.
   // Fail safe when a core change reaches a public SDK entrypoint indirectly.
-  if (
-    detectChangedLanes(changedPaths).extensionImpactFromCore ||
-    (regularLivePaths.some((changedPath) => changedPath.startsWith("src/")) &&
-      hasImportGraphImpactOnTargets(regularLivePaths, publicPluginSdkEntrySources, cwd))
-  ) {
+  if (hasCoreExtensionImpact(changedPaths, { cwd })) {
     return null;
   }
 

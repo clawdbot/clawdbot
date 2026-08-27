@@ -18,6 +18,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 /** Options provided by agent runtime callers when invoking OpenClaw plugin tools. */
 export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
+  runId?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -27,6 +28,8 @@ export type OpenClawPluginToolOptions = {
   currentChannelId?: string;
   agentThreadId?: string | number;
   nativeChannelId?: string;
+  /** Opaque host-issued capability for current-turn channel message actions. */
+  messageActionTurnCapability?: string;
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;

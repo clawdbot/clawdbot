@@ -29,7 +29,7 @@ describe("telegramMessageActions", () => {
     for (const action of ["sendMessage", "editMessage", "deleteMessage", "react", "topic-edit"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
     }
-    for (const action of ["searchSticker", "stickerCacheStats"]) {
+    for (const action of ["searchSticker", "stickerCacheStats", "emoji-list"]) {
       expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
     }
   });
@@ -54,6 +54,7 @@ describe("telegramMessageActions", () => {
       params: {
         messageId: "9001",
         to: "-1001:topic:77",
+        reply: { replyToId: "forged", source: "explicit", mode: "all" },
         conversationReadOrigin: "direct-operator",
         mediaAccess: { localRoots: ["/tmp/forged-root"], workspaceDir: "/tmp/forged-root" },
       },
@@ -63,6 +64,8 @@ describe("telegramMessageActions", () => {
       mediaLocalRoots: ["/tmp/conflicting-root"],
       requesterAccountId: "work",
       conversationReadOrigin: "delegated",
+      deliveryRetryOwner: "caller",
+      reply: { replyToId: "9001", source: "implicit", mode: "first" },
       toolContext: {
         currentChannelProvider: "telegram",
         currentChannelId: "telegram:-1001:topic:77",
@@ -75,7 +78,9 @@ describe("telegramMessageActions", () => {
       expect.anything(),
       expect.objectContaining({
         conversationReadOrigin: "delegated",
+        deliveryRetryOwner: "caller",
         mediaAccess,
+        reply: { replyToId: "9001", source: "implicit", mode: "first" },
         requesterAccountId: "work",
         toolContext: expect.objectContaining({ currentMessageId: "9001" }),
       }),
@@ -85,6 +90,7 @@ describe("telegramMessageActions", () => {
       messageId: "9001",
     });
     expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("mediaAccess");
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).not.toHaveProperty("reply");
     expect(handleTelegramActionMock.mock.calls[0]?.[2]?.mediaAccess).toBe(mediaAccess);
   });
 
@@ -332,8 +338,10 @@ describe("telegramMessageActions", () => {
     expect(defaultActions).toContain("send");
     expect(defaultActions).toContain("poll");
     expect(defaultActions).not.toContain("react");
+    expect(defaultActions).not.toContain("emoji-list");
     expect(workActions).not.toContain("send");
     expect(workActions).toContain("react");
+    expect(workActions).toContain("emoji-list");
     expect(workActions).not.toContain("poll");
   });
 
@@ -488,6 +496,56 @@ describe("telegramMessageActions", () => {
       type: "boolean",
       description: expect.stringContaining("route into the originating agent conversation"),
     });
+  });
+
+  it("advertises Telegram reaction syntax and emoji discovery in message tool schema", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok",
+          actions: { reactions: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+    const contributions = Array.isArray(discovery?.schema)
+      ? discovery.schema
+      : discovery?.schema
+        ? [discovery.schema]
+        : [];
+    const reactionSchema = contributions.find((entry) => "emoji" in entry.properties);
+    const emojiDescription = (
+      reactionSchema?.properties.emoji as { description?: string } | undefined
+    )?.description;
+
+    expect(discovery?.actions).toEqual(expect.arrayContaining(["react", "emoji-list"]));
+    expect(reactionSchema?.actions).toEqual([]);
+    expect(reactionSchema?.properties.emoji).toMatchObject({
+      type: "string",
+      description: expect.stringContaining("custom_emoji_id"),
+    });
+    expect(emojiDescription).toContain('action:"emoji-list"');
+    expect(emojiDescription).toContain("arbitrary Unicode may be rejected");
+
+    const disabledDiscovery = telegramMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "tok",
+            actions: { reactions: false },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    const disabledContributions = Array.isArray(disabledDiscovery?.schema)
+      ? disabledDiscovery.schema
+      : disabledDiscovery?.schema
+        ? [disabledDiscovery.schema]
+        : [];
+    expect(disabledDiscovery?.actions).not.toContain("react");
+    expect(disabledDiscovery?.actions).not.toContain("emoji-list");
+    expect(disabledContributions.find((entry) => "emoji" in entry.properties)).toBeUndefined();
   });
 
   it("matches runtime account-key normalization during SecretRef-tolerant discovery", () => {

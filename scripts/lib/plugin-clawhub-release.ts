@@ -2,70 +2,39 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
-import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { retryClawHubRead } from "../../src/infra/clawhub-retry.js";
 import { runTasksWithConcurrency } from "../../src/utils/run-with-concurrency.js";
 import { readBoundedResponseText } from "./bounded-response.mjs";
 import {
   assertPluginReleaseDependencyFreshness,
-  collectExtensionPackageJsonCandidates,
   collectChangedPathsFromGitRange,
   collectChangedExtensionIdsFromPaths,
-  collectPublishablePluginPackageErrors,
-  collectRequiredLatestDependencies,
-  isPluginExternalPublicationDeferred,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
-  resolvePublishablePluginVersion,
   resolveGitCommitSha,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
   type NpmLatestVersionResolver,
   type PluginReleaseSelectionMode,
-  type RequiredLatestDependency,
 } from "./plugin-npm-release.ts";
+import {
+  collectExtensionPackageJsonCandidates,
+  hasPluginPublicationSharedAuthorityChanges,
+  PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+} from "./plugin-publication-candidates.ts";
+import {
+  collectPublishablePluginPackagesFromCandidates,
+  type PluginPackageJson,
+  type PublishablePluginPackage,
+} from "./plugin-publication-collector.ts";
 
 export {
   assertPluginReleaseDependencyFreshness,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
 };
-
-type PluginPackageJson = {
-  name?: string;
-  version?: string;
-  private?: boolean;
-  openclaw?: {
-    extensions?: string[];
-    install?: {
-      npmSpec?: string;
-    };
-    compat?: {
-      pluginApi?: string;
-      minGatewayVersion?: string;
-    };
-    build?: {
-      bundledDist?: boolean;
-      openclawVersion?: string;
-      pluginSdkVersion?: string;
-    };
-    release?: {
-      publishToClawHub?: boolean;
-      publishToNpm?: boolean;
-    };
-  };
-};
-
-export type PublishablePluginPackage = {
-  extensionId: string;
-  packageDir: string;
-  packageName: string;
-  version: string;
-  channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta" | "extended-stable";
-  requiredLatestDependencies?: RequiredLatestDependency[];
-};
+export type { PublishablePluginPackage } from "./plugin-publication-collector.ts";
 
 type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
@@ -110,16 +79,10 @@ const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 const CLAWHUB_RELEASE_PLAN_CONCURRENCY = 8;
 const OPENCLAW_PLUGIN_CLAWHUB_REPOSITORY = "openclaw/openclaw";
 const OPENCLAW_PLUGIN_CLAWHUB_WORKFLOW_FILENAME = "plugin-clawhub-release.yml";
-const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
-const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
+const CLAWHUB_RELEASE_AUTHORITY_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
   ".github/actions/setup-node-env",
-  "package.json",
-  "pnpm-lock.yaml",
-  "packages/plugin-package-contract/src/index.ts",
   "scripts/lib/bounded-response.mjs",
-  "scripts/lib/npm-publish-plan.mjs",
-  "scripts/lib/release-version.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
   "scripts/openclaw-npm-release-check.ts",
@@ -268,82 +231,11 @@ export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),
   filters: ClawHubPublishablePluginPackageFilters = {},
 ): PublishablePluginPackage[] {
-  const publishable: PublishablePluginPackage[] = [];
-  const validationErrors: string[] = [];
-  const selectedExtensionIds = new Set(filters.extensionIds ?? []);
-  const selectedPackageNames = new Set(filters.packageNames ?? []);
-  const hasSelectedExtensionIds = Array.isArray(filters.extensionIds);
-  const hasSelectedPackageNames = Array.isArray(filters.packageNames);
-
-  for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
-    const { extensionId, packageDir, packageJson } = candidate;
-    if (hasSelectedExtensionIds && !selectedExtensionIds.has(extensionId)) {
-      continue;
-    }
-    const packageName = packageJson.name?.trim() ?? "";
-    if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
-      continue;
-    }
-    if (isPluginExternalPublicationDeferred(packageJson)) {
-      continue;
-    }
-    if (packageJson.openclaw?.release?.publishToClawHub !== true) {
-      continue;
-    }
-    if (!SAFE_EXTENSION_ID_RE.test(extensionId)) {
-      validationErrors.push(
-        `${extensionId}: extension directory name must match ^[a-z0-9][a-z0-9._-]*$ for ClawHub publish.`,
-      );
-      continue;
-    }
-
-    const errors = collectPublishablePluginPackageErrors(candidate);
-    if (errors.length > 0) {
-      validationErrors.push(...errors.map((error) => `${extensionId}: ${error}`));
-      continue;
-    }
-    const contractValidation = validateExternalCodePluginPackageJson(packageJson);
-    if (contractValidation.issues.length > 0) {
-      validationErrors.push(
-        ...contractValidation.issues.map((issue) => `${extensionId}: ${issue.message}`),
-      );
-      continue;
-    }
-
-    const resolvedVersion = resolvePublishablePluginVersion({
-      extensionId,
-      packageJson,
-      validationErrors,
-    });
-    if (!resolvedVersion) {
-      continue;
-    }
-    const { version, parsedVersion } = resolvedVersion;
-    const requiredLatestDependencies = collectRequiredLatestDependencies(packageJson).dependencies;
-
-    publishable.push({
-      extensionId,
-      packageDir,
-      packageName,
-      version,
-      channel: parsedVersion.channel,
-      publishTag:
-        parsedVersion.channel === "alpha"
-          ? "alpha"
-          : parsedVersion.channel === "beta"
-            ? "beta"
-            : "latest",
-      ...(requiredLatestDependencies.length > 0 ? { requiredLatestDependencies } : {}),
-    });
-  }
-
-  if (validationErrors.length > 0) {
-    throw new Error(
-      `Publishable ClawHub plugin metadata validation failed:\n${validationErrors.map((error) => `- ${error}`).join("\n")}`,
-    );
-  }
-
-  return publishable.toSorted((left, right) => left.packageName.localeCompare(right.packageName));
+  return collectPublishablePluginPackagesFromCandidates(
+    collectExtensionPackageJsonCandidates(rootDir),
+    "clawhub",
+    filters,
+  );
 }
 
 export function collectPluginClawHubReleasePathsFromGitRange(params: {
@@ -359,7 +251,8 @@ function collectPluginClawHubRelevantPathsFromGitRange(params: {
 }): string[] {
   return collectPluginClawHubReleasePathsFromGitRangeForPathspecs(params, [
     "extensions",
-    ...CLAWHUB_SHARED_RELEASE_INPUT_PATHS,
+    ...PLUGIN_PUBLICATION_SHARED_AUTHORITY_PATHS,
+    ...CLAWHUB_RELEASE_AUTHORITY_PATHS,
   ]);
 }
 
@@ -378,10 +271,13 @@ function collectPluginClawHubReleasePathsFromGitRangeForPathspecs(
 }
 
 function hasSharedClawHubReleaseInputChanges(changedPaths: readonly string[]) {
-  return changedPaths.some((path) =>
-    CLAWHUB_SHARED_RELEASE_INPUT_PATHS.some(
-      (sharedPath) => path === sharedPath || path.startsWith(`${sharedPath}/`),
-    ),
+  return (
+    hasPluginPublicationSharedAuthorityChanges(changedPaths) ||
+    changedPaths.some((path) =>
+      CLAWHUB_RELEASE_AUTHORITY_PATHS.some(
+        (authorityPath) => path === authorityPath || path.startsWith(`${authorityPath}/`),
+      ),
+    )
   );
 }
 

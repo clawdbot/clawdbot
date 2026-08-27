@@ -14,28 +14,26 @@ import type { FileEntry } from "../agents/sessions/session-manager-types.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import type { SqliteTranscriptStorageRow } from "../config/sessions/session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import type { SessionStoreTarget } from "../config/sessions/targets.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionStoreTarget as ResolvedSessionStoreTarget } from "../config/sessions/targets.js";
+import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessions/targets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { tableExists, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 
-type ReadOnlySqliteSessionSummary = {
-  entry: SessionEntry;
-  sessionKey: string;
+type SessionStoreTarget = ResolvedSessionStoreTarget & { sqlitePath?: string };
+
+export type ReadOnlySqliteValidationSnapshot = {
+  sessionIdsBySessionKey: ReadonlyMap<string, string>;
+  transcriptEventCountsBySessionId: ReadonlyMap<string, number>;
 };
 
-type ReadOnlySqliteSessionEntriesResult =
-  | { exists: false; ok: true; summaries: [] }
-  | { exists: true; ok: true; summaries: ReadOnlySqliteSessionSummary[] }
-  | { error: unknown; exists: true; ok: false };
-
-type ReadOnlySqliteExactSessionEntryResult =
-  | { entry?: ReadOnlySqliteSessionSummary; ok: true }
+type ReadOnlySqliteResult<T> = { ok: true; value: T } | { error: unknown; ok: false };
+type ReadOnlySqliteValidationSnapshotResult =
+  | { ok: true; snapshot: ReadOnlySqliteValidationSnapshot }
   | { error: unknown; ok: false };
-
-type ReadOnlySqliteTranscriptEventCountResult =
-  | { events: number; exists: boolean; ok: true }
-  | { error: unknown; exists: true; ok: false };
+type SessionIdentityRow = { session_id: string; session_key: string };
+type ActiveTranscriptRow = SessionIdentityRow & { session_file?: string | null };
 
 type ReadOnlySqliteDbStatsResult =
   | {
@@ -84,20 +82,16 @@ export function countTranscriptEventsForPath(
 export function createTranscriptEventReader(
   transcriptPath: string,
   sessionId: string,
+  allowMalformedPrefix = false,
+  sourceFingerprint = readTranscriptFingerprint(transcriptPath),
 ): (append: (event: TranscriptEvent) => void) => void {
   return (append) => {
-    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, false)) {
-      append(event as TranscriptEvent);
-    }
-  };
-}
-
-export function createTranscriptEventPrefixReader(
-  transcriptPath: string,
-  sessionId: string,
-): (append: (event: TranscriptEvent) => void) => void {
-  return (append) => {
-    for (const event of readTranscriptEventsForImport(transcriptPath, sessionId, true)) {
+    for (const event of readTranscriptEventsForImport(
+      transcriptPath,
+      sessionId,
+      allowMalformedPrefix,
+      sourceFingerprint,
+    )) {
       append(event as TranscriptEvent);
     }
   };
@@ -107,10 +101,10 @@ function readTranscriptEventsForImport(
   transcriptPath: string,
   sessionId: string,
   allowMalformedPrefix: boolean,
+  sourceFingerprint: TranscriptFileFingerprint,
 ): Iterable<FileEntry> {
   // Production import owns the process-wide Gateway/SQLite-maintenance lock
   // through commit and archive. Fingerprints catch non-cooperating external edits.
-  const sourceFingerprint = readTranscriptFileFingerprint(transcriptPath);
   const plan = planTranscriptImport(transcriptPath, allowMalformedPrefix);
   assertTranscriptFileUnchanged(transcriptPath, sourceFingerprint);
   const classificationHeader = {
@@ -196,7 +190,7 @@ type TranscriptFileFingerprint = {
   size: bigint;
 };
 
-function readTranscriptFileFingerprint(transcriptPath: string): TranscriptFileFingerprint {
+export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });
   return {
     ctimeNs: stat.ctimeNs,
@@ -211,7 +205,7 @@ function assertTranscriptFileUnchanged(
   transcriptPath: string,
   expected: TranscriptFileFingerprint,
 ): void {
-  const current = readTranscriptFileFingerprint(transcriptPath);
+  const current = readTranscriptFingerprint(transcriptPath);
   if (
     current.ctimeNs !== expected.ctimeNs ||
     current.dev !== expected.dev ||
@@ -289,101 +283,111 @@ function* iterateTranscriptEvents(
 }
 
 export function readSqliteEntryCount(target: SessionStoreTarget): number {
-  const result = readOnlySqliteSessionEntries(target);
-  return result.ok ? result.summaries.length : 0;
+  const result = readSessionDatabase(target, (database) => {
+    const projection = resolveSessionIdentityProjection(database);
+    const raw = projection
+      ? database.prepare(`SELECT count(*) AS count FROM ${projection.source}`).get()
+      : undefined;
+    const row = isRecord(raw) ? raw : undefined;
+    return sqliteNumber(row?.count);
+  });
+  return result.ok ? (result.value ?? 0) : 0;
 }
 
-export function readOnlySqliteExactSessionEntry(
+export function readOnlySqliteValidationSnapshot(
   target: SessionStoreTarget,
-  sessionKey: string,
-): ReadOnlySqliteExactSessionEntryResult {
-  const result = readOnlySqliteSessionEntries(target);
-  if (!result.ok) {
-    return { error: result.error, ok: false };
-  }
-  return {
-    entry: result.summaries.find((summary) => summary.sessionKey === sessionKey),
-    ok: true,
+): ReadOnlySqliteValidationSnapshotResult {
+  const empty: ReadOnlySqliteValidationSnapshot = {
+    sessionIdsBySessionKey: new Map(),
+    transcriptEventCountsBySessionId: new Map(),
   };
-}
-
-export function readOnlySqliteSessionEntries(
-  target: SessionStoreTarget,
-): ReadOnlySqliteSessionEntriesResult {
-  const sqlitePath = resolveTargetSqlitePath(target);
-  if (!fs.existsSync(sqlitePath)) {
-    return { exists: false, ok: true, summaries: [] };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const nodeTable = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("session_nodes");
-    const legacyEntryTable = nodeTable
-      ? undefined
-      : database
-          .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-          .get("session_entries");
-    if (!nodeTable && !legacyEntryTable) {
-      return { exists: true, ok: true, summaries: [] };
+  const result = readSessionDatabase(target, (database) => {
+    const projection = resolveSessionIdentityProjection(database);
+    const sessionIdsBySessionKey = new Map<string, string>();
+    if (projection) {
+      const statement = database.prepare(
+        `SELECT session_key, ${projection.sessionIdColumn} AS session_id
+               FROM ${projection.source}
+              ORDER BY session_key`,
+      );
+      // SAFETY: the selected SQLite columns have stable TEXT identities.
+      for (const row of statement.iterate() as Iterable<SessionIdentityRow>) {
+        sessionIdsBySessionKey.set(row.session_key, row.session_id);
+      }
     }
-    const rows = database
-      .prepare(
-        nodeTable
-          ? "SELECT session_key, entry_json FROM session_nodes ORDER BY session_key ASC"
-          : "SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC",
-      )
-      .all() as Array<{ entry_json?: unknown; session_key?: unknown }>;
-    return {
-      exists: true,
-      ok: true,
-      summaries: rows.flatMap((row) => {
-        if (typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
-          return [];
+    const transcriptEventCountsBySessionId = new Map<string, number>();
+    if (tableExists(database, "transcript_events")) {
+      const statement = database.prepare(
+        "SELECT session_id, COUNT(*) AS count FROM transcript_events GROUP BY session_id ORDER BY session_id",
+      );
+      for (const row of statement.iterate()) {
+        if (typeof row.session_id === "string" && typeof row.count === "number") {
+          transcriptEventCountsBySessionId.set(row.session_id, row.count);
         }
-        const entry = parseSqliteSessionEntry(row.entry_json);
-        return entry ? [{ entry, sessionKey: row.session_key }] : [];
-      }),
+      }
+    }
+    return {
+      sessionIdsBySessionKey,
+      transcriptEventCountsBySessionId,
     };
+  });
+  return result.ok ? { ok: true, snapshot: result.value ?? empty } : result;
+}
+
+export function scanReadOnlySqliteActiveTranscriptFiles(
+  target: SessionStoreTarget,
+  visit: (sessionKey: string, sessionId: string, sessionFile?: string) => void,
+): { ok: true } | { error: unknown; ok: false } {
+  const result = readSessionDatabase(target, (database) => {
+    const projection = resolveSessionIdentityProjection(database);
+    if (!projection) {
+      return;
+    }
+    const statement = database.prepare(
+      `SELECT session_key, ${projection.sessionIdColumn} AS session_id,
+                CASE WHEN json_valid(entry_json)
+                  THEN json_extract(entry_json, '$.sessionFile') END AS session_file
+           FROM ${projection.source}
+          ORDER BY session_key`,
+    );
+    // SAFETY: the query returns typed identities plus an optional JSON string.
+    const rows = statement.iterate() as Iterable<ActiveTranscriptRow>;
+    for (const row of rows) {
+      visit(row.session_key, row.session_id, row.session_file ?? undefined);
+    }
+  });
+  return result.ok ? { ok: true } : result;
+}
+
+function readSessionDatabase<T>(
+  target: SessionStoreTarget,
+  read: (database: DatabaseSync) => T,
+): ReadOnlySqliteResult<T | undefined> {
+  const sqlitePath = resolveTargetSqlitePath(target);
+  if (!fs.existsSync(sqlitePath)) {
+    return { ok: true, value: undefined };
+  }
+  let database: DatabaseSync | undefined;
+  try {
+    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
+    return { ok: true, value: read(database) };
   } catch (error) {
-    return { error, exists: true, ok: false };
+    return { error, ok: false };
   } finally {
     database?.close();
   }
 }
 
-export function readOnlySqliteTranscriptEventCount(
-  target: SessionStoreTarget,
-  sessionId: string,
-): ReadOnlySqliteTranscriptEventCountResult {
-  const sqlitePath = resolveTargetSqlitePath(target);
-  if (!fs.existsSync(sqlitePath)) {
-    return { events: 0, exists: false, ok: true };
-  }
-  let database: DatabaseSync | undefined;
-  try {
-    database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const table = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("transcript_events");
-    if (!table) {
-      return { events: 0, exists: true, ok: true };
-    }
-    const row = database
-      .prepare("SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?")
-      .get(sessionId) as { count?: unknown } | undefined;
-    const count = row?.count;
+function resolveSessionIdentityProjection(database: DatabaseSync) {
+  if (tableExists(database, "session_nodes")) {
     return {
-      events: typeof count === "number" && Number.isFinite(count) ? count : 0,
-      exists: true,
-      ok: true,
+      sessionIdColumn: "current_session_id",
+      source: `session_nodes WHERE ${tableHasColumn(database, "session_nodes", "entry_valid") ? "entry_valid = 1" : "entry_json <> '{}'"}`,
     };
-  } catch (error) {
-    return { error, exists: true, ok: false };
-  } finally {
-    database?.close();
   }
+  return tableExists(database, "session_entries")
+    ? { sessionIdColumn: "session_id", source: "session_entries" }
+    : undefined;
 }
 
 export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {
@@ -409,9 +413,7 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
   let database: DatabaseSync | undefined;
   try {
     database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const hasTranscriptEvents = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("transcript_events");
+    const hasTranscriptEvents = tableExists(database, "transcript_events");
     const integrityRow = database.prepare("PRAGMA quick_check").get() as
       | { quick_check?: unknown }
       | undefined;
@@ -472,6 +474,9 @@ export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqlit
 }
 
 export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
+  if (target.sqlitePath) {
+    return resolveOpenClawAgentSqlitePath({ agentId: target.agentId, path: target.sqlitePath });
+  }
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
   });
@@ -481,27 +486,28 @@ export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
   });
 }
 
-function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
-  try {
-    const parsed = JSON.parse(entryJson) as unknown;
-    return isRecord(parsed) && typeof parsed.sessionId === "string"
-      ? {
-          ...parsed,
-          sessionId: parsed.sessionId,
-          updatedAt:
-            typeof parsed.updatedAt === "number" && Number.isFinite(parsed.updatedAt)
-              ? parsed.updatedAt
-              : 0,
-        }
-      : undefined;
-  } catch {
-    return undefined;
-  }
+/**
+ * Enumerates existing per-agent session SQLite databases for a Doctor repair.
+ * Deduplicates by resolved path (aliases collapse to one target) and skips
+ * databases that do not yet exist on disk. Shared by every session-row repair
+ * so target enumeration cannot drift between repair surfaces.
+ */
+export function listExistingAgentDatabaseTargets(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Array<{ agentId: string; sqlitePath: string; storePath: string }> {
+  const seenPaths = new Set<string>();
+  return resolveAllAgentSessionStoreCandidateTargetsSync(cfg, { env }).flatMap((target) => {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
+      return [];
+    }
+    seenPaths.add(sqlitePath);
+    return [{ agentId: target.agentId, sqlitePath, storePath: target.storePath }];
+  });
 }
 
-function* iterateJsonlLinesSync(
-  filePath: string,
-): Generator<{ final: boolean; lineNumber: number; text: string }> {
+function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
@@ -520,14 +526,14 @@ function* iterateJsonlLinesSync(
         lineNumber += 1;
         const text = part.trim();
         if (text) {
-          yield { final: false, lineNumber, text };
+          yield { lineNumber, text };
         }
       }
     }
     carry += decoder.decode();
     const text = carry.trim();
     if (text) {
-      yield { final: true, lineNumber: lineNumber + 1, text };
+      yield { lineNumber: lineNumber + 1, text };
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
@@ -546,15 +552,8 @@ function sqliteNumber(value: unknown): number {
   return 0;
 }
 
-function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string }): unknown {
-  try {
-    return JSON.parse(line.text);
-  } catch (error) {
-    if (line.final) {
-      return undefined;
-    }
-    throw error;
-  }
+function parseJsonlLine(line: { text: string }): unknown {
+  return JSON.parse(line.text);
 }
 
 // Schema-tolerant session enumeration for transcript-label migration (avoids post-ship columns).
@@ -567,10 +566,7 @@ export function readOnlySqliteTranscriptSessionIds(sqlitePath: string): string[]
   let database: DatabaseSync | undefined;
   try {
     database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-    const table = database
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("transcript_events");
-    if (!table) {
+    if (!tableExists(database, "transcript_events")) {
       return [];
     }
     const rows = database

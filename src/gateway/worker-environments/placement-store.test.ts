@@ -8,8 +8,10 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
-import type { WorkerPlacementExecutionMode } from "./placement-record.js";
+import type {
+  WorkerSessionPlacementIdentity,
+  WorkerPlacementExecutionMode,
+} from "./placement-record.js";
 import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,

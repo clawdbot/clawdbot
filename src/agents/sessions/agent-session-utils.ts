@@ -57,6 +57,18 @@ export function extractTextContent(content: unknown): string {
   return text;
 }
 
+export function replaceAgentMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
+  // Agent-core stores the finalized message object before emitting message_end.
+  // Mutating it in place keeps agent state, later events, and persistence in sync.
+  if (target === replacement) {
+    return;
+  }
+  for (const key of Object.keys(target)) {
+    Reflect.deleteProperty(target, key);
+  }
+  Object.assign(target, replacement);
+}
+
 export function estimateMessagesFromContent(messages: AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
 }

@@ -154,6 +154,24 @@ export default definePluginEntry({
   provider should call the optional
   `onHost(host)` callback as each host settles; the returned host array remains
   required as the final compatibility snapshot.
+
+  CLI-backed catalogs that expose the same local-plus-paired-node shape can use
+  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
+  validation, node payload validation, host projection, adopted-session
+  projection, per-host publication, read routing, single-flight continuation,
+  and terminal plan routing. The provider must supply its local store reads,
+  identifiers and commands, error text, capability projection, continuation
+  availability and persistence operations, upstream-activity check, and terminal
+  executable/arguments. There are no default continuation, capability-mutation,
+  or terminal authorities. Use `createSessionCatalogNodeHostBindings(...)` to
+  build the matching list/read/terminal node commands and terminal-only invoke
+  policy from those explicit provider inputs.
+
+  The same entrypoint exports `sessionCatalogPaging`, which groups the bounded
+  list/read parameter parsers, canonical base64url cursor codec, and bounded
+  UTF-8 transcript pager. Providers pass their own identifier pattern and
+  validation messages into `parseReadParams(...)` and `parseListParams(...)`.
+
   `resolveCreateSession({ agentId })` must return a config-derived model/runtime
   target before OpenClaw advertises creation or calls `startTerminalSession`.
   Use
@@ -277,7 +295,9 @@ CLI registration:
   parse tree. Descriptor names must match letters, numbers, hyphen, and
   underscore, starting with a letter or number; OpenClaw rejects other
   shapes and strips terminal control sequences from descriptions before
-  rendering help. Cover every top-level command root the registrar exposes.
+  rendering help. Cover every top-level command root the registrar exposes,
+  and declare the same name, description, and subcommand marker in the
+  plugin manifest's `cliCommands` field so root help does not import plugin code.
   `commands` alone stays on the eager compatibility path.
 - Root descriptors may define a synchronous, pure
   `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
@@ -371,14 +391,16 @@ limited to config-only routes or methods required by that setup flow.
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode               | When                                               | What to register                                                                                                |
-| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Everything                                                                                                      |
-| `"discovery"`      | Read-only capability discovery                     | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                        |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                       |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed during setup                                      |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                            |
+| Mode               | When                                               | Runtime     | What to register                                                                                                |
+| ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
+| `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
+| `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
+| `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
+
+In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember

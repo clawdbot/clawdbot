@@ -3,8 +3,11 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
-import { AUTO_AGENT_RUNTIME_ID, type EmbeddedAgentRuntime } from "../agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import {
+  AUTO_AGENT_RUNTIME_ID,
+  type EmbeddedAgentRuntime,
+  normalizeOptionalAgentRuntimeId,
+} from "../agent-runtime-id.js";
 import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 
@@ -14,6 +17,7 @@ import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
   runtimeSource?: "model" | "provider" | "implicit";
+  forcedByEnvironment?: true;
 };
 
 /** Resolves model/provider/runtime config into the canonical harness runtime id. */
@@ -43,7 +47,11 @@ export function resolveAgentHarnessPolicy(params: {
   const runtimeSource =
     runtime === AUTO_AGENT_RUNTIME_ID ? "implicit" : (configured.source ?? "implicit");
   if (runtime !== "auto") {
-    return { runtime, runtimeSource };
+    return {
+      runtime,
+      runtimeSource,
+      ...(configured.forcedByEnvironment ? { forcedByEnvironment: true } : {}),
+    };
   }
   const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
     provider: params.provider,

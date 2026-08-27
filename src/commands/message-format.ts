@@ -7,7 +7,10 @@ import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { formatGatewaySummary, formatOutboundDeliverySummary } from "../infra/outbound/format.js";
-import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
+import {
+  resolveMessageActionOutcome,
+  type MessageActionResult,
+} from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
 import { shortenText } from "./text-format.js";
 
@@ -188,7 +191,7 @@ function renderReactions(payload: unknown, opts: FormatOpts): string[] | null {
     return null;
   }
 
-  const rows = reactions.slice(0, 50).map((r) => {
+  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
     const entry = r as Record<string, unknown>;
     const emojiObj = entry.emoji as Record<string, unknown> | undefined;
     const emoji =
@@ -274,6 +277,7 @@ export function formatMessageCliText(
 ): string[] {
   const rich = isRich();
   const ok = (text: string) => (rich ? theme.success(text) : text);
+  const fail = (text: string) => (rich ? theme.error(text) : text);
   const muted = (text: string) => (rich ? theme.muted(text) : text);
   const heading = (text: string) => (rich ? theme.heading(text) : text);
 
@@ -285,6 +289,7 @@ export function formatMessageCliText(
     return [muted(`[dry-run] would run ${result.action} via ${result.channel}`)];
   }
 
+  const outcome = resolveMessageActionOutcome(result);
   if (result.kind === "broadcast") {
     const results = result.payload.results ?? [];
     const rows = results.map((entry) => ({
@@ -295,8 +300,9 @@ export function formatMessageCliText(
     }));
     const okCount = results.filter((entry) => entry.ok).length;
     const total = results.length;
-    const headingLine = ok(
-      `✅ Broadcast complete (${okCount}/${total} succeeded, ${total - okCount} failed)`,
+    const successful = outcome.ok;
+    const headingLine = (successful ? ok : fail)(
+      `${successful ? "✅ Broadcast complete" : "❌ Broadcast failed"} (${okCount}/${total} succeeded, ${total - okCount} failed)`,
     );
     return [
       headingLine,
@@ -308,9 +314,14 @@ export function formatMessageCliText(
           { key: "Status", header: "Status", minWidth: 6 },
           { key: "Error", header: "Error", minWidth: 20, flex: true },
         ],
-        rows: rows.slice(0, 50),
+        rows,
       }).trimEnd(),
     ];
+  }
+
+  if (!outcome.ok) {
+    const messageId = result.kind === "send" ? result.sendResult?.result?.messageId : undefined;
+    return [fail(`❌ ${outcome.error}${messageId ? ` Message ID: ${messageId}` : ""}`)];
   }
 
   if (result.kind === "send") {

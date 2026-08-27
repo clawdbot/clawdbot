@@ -16,6 +16,7 @@ import {
   type QuotaBudgetSummary,
   type QuotaLimitSummary,
 } from "../../../lib/provider-quota-summary.ts";
+import { handleChatComposerDetailsToggle } from "./chat-picker-overlay.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;
@@ -120,7 +121,6 @@ function getContextNoticeViewModel(
   input: number | null;
   output: number | null;
   cost: number | null;
-  provider: string | null;
   detail: string;
   color: string;
   bg: string;
@@ -154,7 +154,6 @@ function getContextNoticeViewModel(
     input,
     output,
     cost,
-    provider: session?.modelProvider?.trim() || null,
   };
   if (!warning) {
     return {
@@ -350,7 +349,7 @@ export function renderContextNotice(
         )
       : undefined;
   };
-  const currentGroup = findQuotaGroup(model?.provider) ?? findQuotaGroup(providerCosts?.provider);
+  const currentGroup = findQuotaGroup(session?.modelProvider?.trim() || providerCosts?.provider);
   const planGroups = currentGroup
     ? [currentGroup, ...quotaGroups.filter((group) => group !== currentGroup)]
     : quotaGroups;
@@ -386,120 +385,135 @@ export function renderContextNotice(
       class="context-usage"
       style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
     >
-      <details>
-        <summary
-          class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
-          aria-label=${summary}
-          title=${t("chat.composer.contextUsage.open")}
-        >
-          <svg
-            class="context-ring__dial"
-            viewBox="0 0 16 16"
-            width="16"
-            height="16"
-            aria-hidden="true"
-          >
-            <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />
-            <circle
-              class="context-ring__fill"
-              cx="8"
-              cy="8"
-              r=${RING_RADIUS}
-              stroke-dasharray=${RING_CIRCUMFERENCE.toFixed(2)}
-              stroke-dashoffset=${dashOffset.toFixed(2)}
-            />
-          </svg>
-          ${percentage ? html`<span class="context-ring__pct">${percentage}</span>` : nothing}
-        </summary>
-        <section class="context-usage__popover" aria-label=${t("chat.composer.contextUsage.title")}>
-          ${model
-            ? html`
-                <div class="context-usage__header">
-                  <span class="context-usage__title"
-                    >${t("chat.composer.contextUsage.contextWindow")}</span
-                  >
-                  <strong class="context-usage__context-value"
-                    >${model.detail} · ${percentage}</strong
-                  >
-                </div>
-                <div
-                  class="context-usage__bar"
-                  role="progressbar"
-                  aria-label=${summary}
-                  aria-valuemin="0"
-                  aria-valuemax="100"
-                  aria-valuenow=${model.pct}
-                >
-                  <span style="width: ${model.pct}%"></span>
-                </div>
-              `
-            : nothing}
-          ${model
-            ? html`
-                <div class="context-usage__section-label">
-                  ${t("chat.composer.contextUsage.latestRunTokens")}
-                </div>
-                <dl class="context-usage__stats">
-                  <div>
-                    <dt>${t("usage.breakdown.input")}</dt>
-                    <dd>${formatStat(model.input)}</dd>
-                  </div>
-                  <div>
-                    <dt>${t("usage.breakdown.output")}</dt>
-                    <dd>${formatStat(model.output)}</dd>
-                  </div>
-                  ${!showCosts || model.cost === null
-                    ? nothing
-                    : html`
-                        <div>
-                          <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
-                          <dd>${formatCost(model.cost)}</dd>
-                        </div>
-                      `}
-                </dl>
-              `
-            : nothing}
-          ${showCosts && providerCosts && hasProviderCosts
-            ? html`
-                <div class="context-usage__section-label">${t("usage.breakdown.costByType")}</div>
-                <dl class="context-usage__stats">
-                  ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
-                  ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
-                  ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
-                  ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
-                </dl>
-              `
-            : nothing}
-          ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}
-        </section>
-      </details>
       ${canRenderCompact
-        ? html`
-            <button
-              class="context-ring__action ${options.compactBusy
-                ? "context-ring__action--busy"
-                : ""}"
-              type="button"
-              aria-label=${t("chat.composer.compactRecommendedContext")}
-              ?disabled=${compactDisabled}
-              @click=${(event: Event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (compactDisabled) {
-                  return;
-                }
+        ? html`<button
+            class="context-ring__compact ${options.compactBusy
+              ? "context-ring__compact--busy"
+              : ""}"
+            type="button"
+            aria-label=${`${summary}. ${t("chat.composer.compactRecommendedContext")}`}
+            title=${summary}
+            ?disabled=${compactDisabled}
+            @click=${() => {
+              if (!compactDisabled) {
                 void options.onCompact?.();
-              }}
+              }
+            }}
+          >
+            <svg
+              class="context-ring__dial"
+              viewBox="0 0 16 16"
+              width="16"
+              height="16"
+              aria-hidden="true"
             >
-              ${options.compactBusy ? icons.loader : icons.minimize}
-              <span
-                >${options.compactBusy
-                  ? t("chat.composer.compacting")
-                  : t("chat.composer.compact")}</span
+              <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />
+              <circle
+                class="context-ring__fill"
+                cx="8"
+                cy="8"
+                r=${RING_RADIUS}
+                stroke-dasharray=${RING_CIRCUMFERENCE.toFixed(2)}
+                stroke-dashoffset=${dashOffset.toFixed(2)}
+              />
+            </svg>
+            <span
+              >${options.compactBusy
+                ? t("chat.composer.compacting")
+                : t("chat.composer.compact")}</span
+            >
+          </button>`
+        : html`<details @toggle=${handleChatComposerDetailsToggle}>
+            <summary
+              class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
+              aria-label=${summary}
+              title=${t("chat.composer.contextUsage.open")}
+            >
+              <svg
+                class="context-ring__dial"
+                viewBox="0 0 16 16"
+                width="16"
+                height="16"
+                aria-hidden="true"
               >
-            </button>
-          `
-        : nothing}
+                <circle class="context-ring__track" cx="8" cy="8" r=${RING_RADIUS} />
+                <circle
+                  class="context-ring__fill"
+                  cx="8"
+                  cy="8"
+                  r=${RING_RADIUS}
+                  stroke-dasharray=${RING_CIRCUMFERENCE.toFixed(2)}
+                  stroke-dashoffset=${dashOffset.toFixed(2)}
+                />
+              </svg>
+            </summary>
+            <section
+              class="context-usage__popover"
+              aria-label=${t("chat.composer.contextUsage.title")}
+            >
+              ${model
+                ? html`
+                    <div class="context-usage__header">
+                      <span class="context-usage__title"
+                        >${t("chat.composer.contextUsage.contextWindow")}</span
+                      >
+                      <strong class="context-usage__context-value"
+                        >${model.detail} · ${percentage}</strong
+                      >
+                    </div>
+                    <div
+                      class="context-usage__bar"
+                      role="progressbar"
+                      aria-label=${summary}
+                      aria-valuemin="0"
+                      aria-valuemax="100"
+                      aria-valuenow=${model.pct}
+                    >
+                      <span style="width: ${model.pct}%"></span>
+                    </div>
+                  `
+                : nothing}
+              ${model
+                ? html`
+                    <div class="context-usage__section-label">
+                      ${t("chat.composer.contextUsage.latestRunTokens")}
+                    </div>
+                    <dl class="context-usage__stats">
+                      <div>
+                        <dt>${t("usage.breakdown.input")}</dt>
+                        <dd>${formatStat(model.input)}</dd>
+                      </div>
+                      <div>
+                        <dt>${t("usage.breakdown.output")}</dt>
+                        <dd>${formatStat(model.output)}</dd>
+                      </div>
+                      ${!showCosts || model.cost === null
+                        ? nothing
+                        : html`
+                            <div>
+                              <dt>${t("chat.composer.contextUsage.estimatedCost")}</dt>
+                              <dd>${formatCost(model.cost)}</dd>
+                            </div>
+                          `}
+                    </dl>
+                  `
+                : nothing}
+              ${showCosts && providerCosts && hasProviderCosts
+                ? html`
+                    <div class="context-usage__section-label">
+                      ${t("usage.breakdown.costByType")}
+                    </div>
+                    <dl class="context-usage__stats">
+                      ${renderCostStat(t("usage.breakdown.input"), providerCosts.input)}
+                      ${renderCostStat(t("usage.breakdown.output"), providerCosts.output)}
+                      ${renderCostStat(t("usage.breakdown.cacheRead"), providerCosts.cacheRead)}
+                      ${renderCostStat(t("usage.breakdown.cacheWrite"), providerCosts.cacheWrite)}
+                    </dl>
+                  `
+                : nothing}
+              ${planGroups.map((group) => renderQuotaGroup(group, usageHref))}
+            </section>
+          </details>`}
     </div>
   `;
 }

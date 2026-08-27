@@ -310,6 +310,33 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     expect(event?.isFinal).toBe(false);
     expect(event?.confidence).toBe(0.977219);
   });
+
+  it.each([undefined, "", "   ", "\t\n"])(
+    "does not emit blank transcription payloads %#",
+    (transcript) => {
+      const provider = new TelnyxProvider({
+        apiKey: "KEY123",
+        connectionId: "CONN456",
+        publicKey: undefined,
+      });
+      const result = provider.parseWebhookEvent(
+        createCtx({
+          rawBody: JSON.stringify({
+            data: {
+              id: "evt-blank-transcription",
+              event_type: "call.transcription",
+              payload: {
+                call_control_id: "call-1",
+                transcription_data: { transcript },
+              },
+            },
+          }),
+        }),
+      );
+
+      expect(result.events).toEqual([]);
+    },
+  );
 });
 
 describe("TelnyxProvider answer control", () => {

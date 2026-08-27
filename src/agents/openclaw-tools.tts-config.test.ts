@@ -64,7 +64,7 @@ vi.mock("./tools/image-generate-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
-  createImageTool: () => mocks.stubTool("image"),
+  createImageTool: () => mocks.stubTool("view_image"),
 }));
 
 vi.mock("./tools/message-tool-execution.js", () => ({
@@ -122,10 +122,6 @@ vi.mock("./tools/transcripts-tool.js", () => ({
     mocks.createTranscriptsToolOptions(options);
     return mocks.stubTool("transcripts");
   },
-}));
-
-vi.mock("./tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => mocks.stubTool("update_plan"),
 }));
 
 vi.mock("./tools/video-generate-tool.js", () => ({

@@ -21,7 +21,7 @@ import {
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
-import type { ChatSplitLayout } from "./split-layout.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({

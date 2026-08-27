@@ -15,6 +15,7 @@ import type {
 import {
   createUpdateVerificationController,
   formatUpdateCampaignLabel,
+  projectUpdateStatusResponse,
   resolveUpdateStatusBanner,
 } from "./update-overlay-helpers.ts";
 import {
@@ -86,6 +87,9 @@ async function verifyUpdate(params: {
     getHello: () => params.hello ?? null,
     publish: vi.fn(),
     publishBanner: (value) => {
+      banner = value;
+    },
+    publishRecordedFailure: ({ banner: value }) => {
       banner = value;
     },
     ...(params.onVerifiedInstall ? { onVerifiedInstall: params.onVerifiedInstall } : {}),
@@ -412,6 +416,48 @@ describe("update schedule hydration", () => {
 });
 
 describe("update status localization", () => {
+  it("projects the recorded update attempt without inferring from localized text", () => {
+    installTranslations();
+    const projected = projectUpdateStatusResponse(
+      {
+        sentinel: {
+          kind: "update",
+          status: "error",
+          ts: 123,
+          stats: {
+            mode: "git",
+            reason: "build-failed",
+            before: { sha: "before" },
+            after: { sha: "after" },
+            steps: [
+              {
+                name: "build",
+                log: { exitCode: 1, stderrTail: "first line\nType check failed" },
+              },
+            ],
+          },
+        },
+      },
+      {
+        updateStatusBanner: null,
+        recordedUpdateAttempt: null,
+        heldUpdateCampaignId: null,
+      },
+    );
+
+    expect(projected.recordedUpdateAttempt).toEqual({
+      timestampMs: 123,
+      status: "error",
+      reason: "build-failed",
+      installKind: "git",
+      installedVersion: null,
+      installedSha: "before",
+      targetVersion: null,
+      targetSha: "after",
+      failure: { step: "build", detail: "Type check failed" },
+    });
+  });
+
   it("localizes known update failure guidance", () => {
     const translate = installTranslations();
 

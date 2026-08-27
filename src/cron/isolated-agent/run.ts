@@ -1,4 +1,14 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  acquireAgentRunPreparedModelRuntime,
+  loadPublishedGatewayReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.js";
+import type {
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelRuntimeSnapshot,
+} from "../../agents/prepared-model-runtime.types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -9,7 +19,6 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
-  bindAgentRunTaskRunId,
   claimAgentRunContext,
   consumeCronNextCheckProposal,
   getAgentRunContext,
@@ -28,7 +37,6 @@ import {
   normalizeCronRunErrorText,
   resolveCronAbortReasonText,
 } from "../service/execution-errors.js";
-import { getActiveCronTaskRunId } from "../service/task-runs.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -42,6 +50,60 @@ import type { RunCronAgentTurnResult } from "./run.types.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
+
+type CronRunPluginGenerationLease = {
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  borrowSnapshot: () => PreparedModelRuntimeSnapshot | undefined;
+  release: () => void;
+};
+
+/**
+ * Gateway-hosted isolated runs reuse the published plugin generation instead of
+ * rebuilding metadata snapshots per run (#125596 carried this for the channel
+ * path; hook/cron turns share the invariant). Standalone hosts (no Gateway
+ * lifecycle) and startup/replacement races return undefined so the embedded
+ * orchestrator admits on whatever generation is current at execution time.
+ */
+async function acquireCronRunPluginGeneration(context: {
+  agentId: string;
+  workspaceDir: string;
+}): Promise<CronRunPluginGenerationLease | undefined> {
+  try {
+    const dispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
+      agentId: context.agentId,
+    });
+    if (!dispatchRuntime) {
+      return undefined;
+    }
+    // Holding this static lease across the run anchors the admitted generation:
+    // a config/plugin reload mid-run lets nested embedded admissions borrow the
+    // leased snapshot instead of failing on the superseded configured owner.
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: dispatchRuntime.config,
+        agentId: dispatchRuntime.agentId,
+        agentDir: dispatchRuntime.agentDir,
+        allowGatewaySubagentBinding: true,
+        workspaceDir: context.workspaceDir,
+      },
+      { catalogMode: "static", pluginGeneration: dispatchRuntime.pluginGeneration },
+    );
+    let leaseActive = true;
+    return {
+      pluginGeneration: dispatchRuntime.pluginGeneration,
+      borrowSnapshot: () => (leaseActive ? lease.snapshot : undefined),
+      release: () => {
+        leaseActive = false;
+        lease.release();
+      },
+    };
+  } catch (error) {
+    if (error instanceof PreparedModelRuntimeOwnerNotPublishedError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
   return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
@@ -93,6 +155,7 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
 }): Promise<RunCronAgentTurnResult> {
   const admittedLifecycleGeneration = getAgentEventLifecycleGeneration();
   const upstreamAbortSignal = params.abortSignal ?? params.signal;
@@ -130,7 +193,12 @@ export async function runCronIsolatedAgentTurn(params: {
   let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   let executionStarted = false;
-  const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
+  const notifyExecutionStarted = (info?: {
+    lifecycleGeneration?: string;
+    isFallback?: boolean;
+    provider?: string;
+    model?: string;
+  }) => {
     executionStarted = true;
     if (info?.lifecycleGeneration) {
       runLifecycleGeneration = info.lifecycleGeneration;
@@ -140,9 +208,10 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
+      ...(info?.isFallback === true ? { isFallback: true } : {}),
       phase: "runner_entered",
-      provider: prepared.context.liveSelection.provider,
-      model: prepared.context.liveSelection.model,
+      provider: info?.provider ?? prepared.context.liveSelection.provider,
+      model: info?.model ?? prepared.context.liveSelection.model,
     });
   };
   const notifyExecutionPhase = (
@@ -204,12 +273,6 @@ export async function runCronIsolatedAgentTurn(params: {
         ownsContext: ownsRunContext,
       },
     );
-    if (runContextOwnerToken) {
-      const taskRunId = getActiveCronTaskRunId();
-      if (taskRunId) {
-        bindAgentRunTaskRunId(initialSessionId, runContextOwnerToken, taskRunId);
-      }
-    }
     const { executeCronRun } = await cronExecutorRuntimeLoader.load();
     const executionParams: Parameters<typeof executeCronRun>[0] = {
       cfg: params.cfg,
@@ -258,14 +321,29 @@ export async function runCronIsolatedAgentTurn(params: {
       runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
       pluginRegistry: prepared.context.pluginRegistry,
+      executionIdentity: params.executionIdentity,
     };
-    const execution = await prepared.context.sessionWorkAdmission.run(() =>
-      withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
-        withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
-          executeCronRun(executionParams),
+    const runExecutionWithAdmission = () =>
+      prepared.context.sessionWorkAdmission.run(() =>
+        withAgentRunLifecycleGeneration(runLifecycleGeneration, () =>
+          withPluginRuntimeRegistryScope(prepared.context.pluginRegistry, () =>
+            executeCronRun(executionParams),
+          ),
         ),
-      ),
-    );
+      );
+    const pluginGenerationLease = await acquireCronRunPluginGeneration(prepared.context);
+    let execution: Awaited<ReturnType<typeof runExecutionWithAdmission>>;
+    try {
+      execution = pluginGenerationLease
+        ? await withPreparedModelRuntimePluginGenerationScope(
+            pluginGenerationLease.pluginGeneration,
+            runExecutionWithAdmission,
+            pluginGenerationLease.borrowSnapshot,
+          )
+        : await runExecutionWithAdmission();
+    } finally {
+      pluginGenerationLease?.release();
+    }
     const finalized = await finalizeCronRun({
       prepared: prepared.context,
       execution,
@@ -331,54 +409,56 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionId: prepared.context.currentRunSessionId(),
       sessionKey: prepared.context.runSessionKey,
     };
-    messageLifecycle.markIdle(undefined, finalSessionRef);
-    messageLifecycle.markProcessed(outcome, {
-      ...finalSessionRef,
-      error: outcomeError,
-    });
     try {
-      if (!cronRunSessionCleanupAttempted) {
-        const cleanupOutcome = await cleanupCronRunSessionAfterRun({
-          job: params.job,
-          agentSessionKey: prepared.context.agentSessionKey,
-          sessionId: prepared.context.currentRunSessionId(),
-          lifecycleRevision: prepared.context.cronSession.lifecycleRevision,
-          sessionUpdatedAt: prepared.context.cronSession.sessionEntry.updatedAt,
-          beforeDelete: prepared.context.sessionWorkAdmission.release,
-          reason: "cron-delete-after-run-finally",
-        });
-        cronRunSessionCleanupAttempted = cleanupOutcome !== "not-requested";
-      }
+      messageLifecycle.markIdle(undefined, finalSessionRef);
+      messageLifecycle.markProcessed(outcome, {
+        ...finalSessionRef,
+        error: outcomeError,
+      });
     } finally {
-      // Release runtime references after the run completes (success or failure).
-      // The session entry has already been persisted to disk by this point,
-      // so the in-memory store and run context can be safely dropped.
       try {
-        if (prepared.context.runContinuationSession) {
-          try {
-            await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
-          } catch (error) {
-            logWarn(
-              `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-            );
-          }
-        }
-        await disposeCronRunContext({
-          sessionId: initialSessionId,
-          cronSession: prepared.context.cronSession,
-          ownsRunContext,
-          runContextOwnerToken,
-        });
-      } finally {
-        prepared.context.sessionWorkAdmission.release();
-        // Only run-scoped browser identities end with this invocation.
-        // Persistent cron targets keep the session and its tracked tabs alive.
-        if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
-          await cleanupBrowserSessionsForLifecycleEnd({
-            cfg: prepared.context.cfgWithAgentDefaults,
-            sessionKeys: [prepared.context.runSessionKey],
-            onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+        if (!cronRunSessionCleanupAttempted) {
+          await cleanupCronRunSessionAfterRun({
+            job: params.job,
+            agentSessionKey: prepared.context.agentSessionKey,
+            sessionId: prepared.context.currentRunSessionId(),
+            lifecycleRevision: prepared.context.cronSession.lifecycleRevision,
+            sessionUpdatedAt: prepared.context.cronSession.sessionEntry.updatedAt,
+            beforeDelete: prepared.context.sessionWorkAdmission.release,
+            reason: "cron-delete-after-run-finally",
           });
+        }
+      } finally {
+        // Release runtime references after the run completes (success or failure).
+        // The session entry has already been persisted to disk by this point,
+        // so the in-memory store and run context can be safely dropped.
+        try {
+          if (prepared.context.runContinuationSession) {
+            try {
+              await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
+            } catch (error) {
+              logWarn(
+                `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+              );
+            }
+          }
+          await disposeCronRunContext({
+            sessionId: initialSessionId,
+            cronSession: prepared.context.cronSession,
+            ownsRunContext,
+            runContextOwnerToken,
+          });
+        } finally {
+          prepared.context.sessionWorkAdmission.release();
+          // Only run-scoped browser identities end with this invocation.
+          // Persistent cron targets keep the session and its tracked tabs alive.
+          if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
+            await cleanupBrowserSessionsForLifecycleEnd({
+              cfg: prepared.context.cfgWithAgentDefaults,
+              sessionKeys: [prepared.context.runSessionKey],
+              onWarn: (message) => logWarn(`[cron:${params.job.id}] ${message}`),
+            });
+          }
         }
       }
     }

@@ -46,6 +46,7 @@ function describeOrderFallback(cfg: OpenClawConfig, provider: string): string {
 async function resolveAuthOrderContext(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
+  kind: "read" | "mutation",
 ) {
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
@@ -55,7 +56,7 @@ async function resolveAuthOrderContext(
   }
   const provider = normalizeProviderId(rawProvider);
   const cfg = await loadModelsConfig({ commandName: "models auth-order", runtime });
-  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind });
   return { cfg, agentId, agentDir, provider };
 }
 
@@ -64,7 +65,7 @@ export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
 ) {
-  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime, "read");
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
@@ -96,7 +97,8 @@ export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
 ) {
-  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const context = await resolveAuthOrderContext(opts, runtime, "mutation");
+  const { cfg, agentId, agentDir, provider } = context;
   const updated = await setAuthProfileOrder({
     agentDir,
     provider: resolveProviderIdForAuth(provider, { config: cfg }),
@@ -111,7 +113,7 @@ export async function modelsAuthOrderClearCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`);
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(agentId);
 }
 
 /** Sets the provider auth profile priority order after validating each profile id. */
@@ -119,7 +121,8 @@ export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
 ) {
-  const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime);
+  const context = await resolveAuthOrderContext(opts, runtime, "mutation");
+  const { cfg, agentId, agentDir, provider } = context;
 
   const store = ensureAuthProfileStore(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
@@ -158,5 +161,5 @@ export async function modelsAuthOrderSetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override: ${describeOrder(updated, provider, cfg).join(", ")}`);
-  await refreshRunningGatewayAuthState();
+  await refreshRunningGatewayAuthState(agentId);
 }

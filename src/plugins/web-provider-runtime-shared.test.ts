@@ -1,6 +1,7 @@
 // Covers shared web provider runtime helpers.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 
 const mocks = vi.hoisted(() => ({
   isPluginRegistryLoadInFlight: vi.fn(() => false),
@@ -156,27 +157,31 @@ describe("web-provider-runtime-shared", () => {
     expect(mockArg(mapRegistryProviders).onlyPluginIds).toEqual(["alpha"]);
   });
 
-  it("reuses the active registry after deriving web provider candidates from resolved config", () => {
+  it("resolves provider candidates from the original config and prepared manifests", () => {
     const activeRegistry = { source: "active" };
+    const config = { plugins: { entries: {} } };
     const resolvedConfig = { plugins: { entries: { brave: { enabled: true } } } };
+    const manifestRecords: PluginManifestRecord[] = [];
     const resolveCandidatePluginIds = vi.fn(() => ["brave"]);
     const mapRegistryProviders = vi.fn(() => ["provider"]);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue(activeRegistry);
 
     const providers = resolvePluginWebProviders(
       {
-        config: { plugins: { entries: {} } },
+        config,
         env: { BRAVE_API_KEY: "key" },
         onlyPluginIds: ["brave", "firecrawl"],
         origin: "bundled",
         sandboxed: true,
         workspaceDir: "/workspace",
+        manifestRecords,
       },
       {
         resolveBundledResolutionConfig: () => ({
           config: resolvedConfig,
-          activationSourceConfig: { plugins: { entries: {} } },
+          activationSourceConfig: config,
           autoEnabledReasons: { brave: ["env"] },
+          manifestRecords,
         }),
         resolveCandidatePluginIds,
         mapRegistryProviders,
@@ -185,16 +190,21 @@ describe("web-provider-runtime-shared", () => {
 
     expect(providers).toEqual(["provider"]);
     expect(resolveCandidatePluginIds).toHaveBeenCalledWith({
-      config: resolvedConfig,
+      config,
       workspaceDir: "/workspace",
       env: { BRAVE_API_KEY: "key" },
       onlyPluginIds: ["brave", "firecrawl"],
       origin: "bundled",
       sandboxed: true,
+      manifestRecords,
     });
     expect(mapRegistryProviders).toHaveBeenCalledWith({
       registry: activeRegistry,
       onlyPluginIds: ["brave"],
+    });
+    expect(mockArg(mocks.buildPluginRuntimeLoadOptionsFromValues).manifestRegistry).toEqual({
+      plugins: manifestRecords,
+      diagnostics: [],
     });
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });

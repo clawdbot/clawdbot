@@ -2,19 +2,16 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import path, { win32 } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  fetchJsonWithTimeout,
-  runCommand,
-  signalChildProcessTree,
-} from "../../scripts/e2e/telegram-user-credential-io.ts";
+import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
 import {
   expandHome,
   resolvePrivateJsonDirectory,
   writePrivateJson,
 } from "../../scripts/e2e/telegram-user-credential-paths.ts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = createTempDirTracker();
@@ -30,10 +27,6 @@ const PROCESS_WAIT_TIMEOUT_MS = 30_000;
 // the timeout fires. This one is paid in wall-clock, so it stays modest while
 // keeping an order-of-magnitude margin over measured child startup.
 const TIMEOUT_TRIGGER_MS = 1_500;
-
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
-}
 
 function isProcessAlive(pid: number): boolean {
   try {
@@ -70,6 +63,19 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
   throw new Error(`process still alive: ${pid}`);
 }
 
+async function waitForText(readText: () => string, expected: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (readText().includes(expected)) {
+      return;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+  throw new Error(`timeout waiting for output: ${expected}`);
+}
+
 async function waitForExit(
   child: ReturnType<typeof spawn>,
   timeoutMs: number,
@@ -86,6 +92,36 @@ async function waitForExit(
       resolve({ code, signal });
     });
   });
+}
+
+function spawnCredentialCli(args: string[]) {
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "scripts/e2e/telegram-user-credential.ts", ...args],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_QA_CONVEX_SECRET_CI: undefined,
+        OPENCLAW_QA_CONVEX_SITE_URL: undefined,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  return { child, output: () => ({ stderr, stdout }) };
+}
+
+async function runCredentialCli(args: string[]) {
+  const { child, output } = spawnCredentialCli(args);
+  const exit = await waitForExit(child, PROCESS_WAIT_TIMEOUT_MS);
+  return { ...exit, ...output() };
 }
 
 afterEach(() => {
@@ -297,6 +333,174 @@ describe("telegram user credential IO", () => {
     ).toThrow("Usage:");
   });
 
+  it("heartbeats leases and marks ownership loss without logging secrets", async () => {
+    const dir = tempDirs.make("openclaw-telegram-credential-heartbeat-");
+    const leaseFile = path.join(dir, "lease.json");
+    const envFile = path.join(dir, "broker.env");
+    const leaseToken = "test-lease-token";
+    const brokerSecret = "test-broker-secret";
+    const requests: Array<{ body: Record<string, unknown>; path: string | undefined }> = [];
+    let brokerResponse: Record<string, unknown> = { status: "ok" };
+    const server = createServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) {
+        chunks.push(Buffer.from(chunk));
+      }
+      requests.push({
+        body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+        path: request.url,
+      });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(brokerResponse));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const siteUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    writeFileSync(
+      leaseFile,
+      JSON.stringify({
+        actorRole: "ci",
+        credentialId: "credential-1",
+        kind: "telegram-user",
+        leaseToken,
+        ownerId: "owner-1",
+        siteUrl,
+      }),
+    );
+    writeFileSync(
+      envFile,
+      `OPENCLAW_QA_CONVEX_SITE_URL=${siteUrl}\nOPENCLAW_QA_CONVEX_SECRET_CI=${brokerSecret}\n`,
+    );
+
+    try {
+      const heartbeat = await runCredentialCli([
+        "heartbeat",
+        "--lease-file",
+        leaseFile,
+        "--env-file",
+        envFile,
+        "--credential-role",
+        "ci",
+      ]);
+      expect(heartbeat).toMatchObject({ code: 0, signal: null });
+      expect(requests).toEqual([
+        {
+          body: {
+            actorRole: "ci",
+            credentialId: "credential-1",
+            kind: "telegram-user",
+            leaseToken,
+            leaseTtlMs: 1_200_000,
+            ownerId: "owner-1",
+          },
+          path: "/qa-credentials/v1/heartbeat",
+        },
+      ]);
+      expect(`${heartbeat.stdout}${heartbeat.stderr}`).not.toContain(leaseToken);
+      expect(`${heartbeat.stdout}${heartbeat.stderr}`).not.toContain(brokerSecret);
+
+      brokerResponse = { status: "error", code: "LEASE_NOT_OWNER" };
+      const lost = await runCredentialCli([
+        "heartbeat-loop",
+        "--lease-file",
+        leaseFile,
+        "--env-file",
+        envFile,
+        "--credential-role",
+        "ci",
+        "--interval-ms",
+        "1",
+      ]);
+      expect(lost).toMatchObject({ code: 0, signal: null });
+      expect(JSON.parse(readFileSync(`${leaseFile}.lost`, "utf8"))).toEqual({
+        code: "LEASE_NOT_OWNER",
+      });
+      expect(`${lost.stdout}${lost.stderr}`).not.toContain(leaseToken);
+      expect(`${lost.stdout}${lost.stderr}`).not.toContain(brokerSecret);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("retries non-terminal heartbeat failures without logging secrets", async () => {
+    const dir = tempDirs.make("openclaw-telegram-credential-heartbeat-retry-");
+    const leaseFile = path.join(dir, "lease.json");
+    const envFile = path.join(dir, "broker.env");
+    const leaseToken = "retry-lease-token";
+    const brokerSecret = "retry-broker-secret";
+    let heartbeatCount = 0;
+    let resolveSecondHeartbeat!: () => void;
+    const secondHeartbeat = new Promise<void>((resolve) => {
+      resolveSecondHeartbeat = resolve;
+    });
+    const server = createServer(async (request, response) => {
+      for await (const _chunk of request) {
+        // Drain the request before responding so the real CLI can reuse the connection.
+      }
+      heartbeatCount += 1;
+      if (heartbeatCount === 1) {
+        response.writeHead(500, { "content-type": "application/json" });
+        response.end(JSON.stringify({ status: "error", code: "BROKER_UNAVAILABLE" }));
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ status: "ok" }));
+      resolveSecondHeartbeat();
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const siteUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    writeFileSync(
+      leaseFile,
+      JSON.stringify({
+        actorRole: "ci",
+        credentialId: "credential-retry",
+        kind: "telegram-user",
+        leaseToken,
+        ownerId: "owner-retry",
+        siteUrl,
+      }),
+    );
+    writeFileSync(
+      envFile,
+      `OPENCLAW_QA_CONVEX_SITE_URL=${siteUrl}\nOPENCLAW_QA_CONVEX_SECRET_CI=${brokerSecret}\n`,
+    );
+
+    const { child, output } = spawnCredentialCli([
+      "heartbeat-loop",
+      "--lease-file",
+      leaseFile,
+      "--env-file",
+      envFile,
+      "--credential-role",
+      "ci",
+      "--interval-ms",
+      "1",
+    ]);
+    try {
+      const outcome = await Promise.race([
+        secondHeartbeat.then(() => "heartbeat" as const),
+        waitForExit(child, PROCESS_WAIT_TIMEOUT_MS).then(() => "exit" as const),
+      ]);
+      expect(outcome).toBe("heartbeat");
+      expect(heartbeatCount).toBeGreaterThanOrEqual(2);
+      expect(existsSync(`${leaseFile}.lost`)).toBe(false);
+      const retryMessage = "Credential lease heartbeat failed (BROKER_UNAVAILABLE); retrying.";
+      await waitForText(() => output().stderr, retryMessage, PROCESS_WAIT_TIMEOUT_MS);
+      expect(output().stderr).toContain(retryMessage);
+      expect(`${output().stdout}${output().stderr}`).not.toContain(leaseToken);
+      expect(`${output().stdout}${output().stderr}`).not.toContain(brokerSecret);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGTERM");
+      }
+      await waitForExit(child, PROCESS_WAIT_TIMEOUT_MS);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
     await expect(
       runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
@@ -449,75 +653,6 @@ setInterval(() => {}, 1000);
         process.kill(childPid, "SIGKILL");
       }
     }
-  });
-
-  it("signals Windows credential helper process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-
-    signalChildProcessTree(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows credential helper process trees when graceful taskkill fails", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalChildProcessTree(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      1,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "12345", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.runIf(process.platform !== "win32")(

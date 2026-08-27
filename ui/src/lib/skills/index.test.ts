@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createRuntimeConfigCapability } from "../config/runtime-config-capability.ts";
 import { searchClawHub } from "./clawhub-search.ts";
@@ -905,7 +906,12 @@ describe("skill mutations", () => {
     });
     const client = expectDefined(state.client, "connected skill mutation client");
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client, phase: "connected", sessionKey: "main" },
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
       subscribe: () => () => undefined,
     });
     state.runtimeConfig = runtimeConfig;
@@ -951,7 +957,12 @@ describe("skill mutations", () => {
     });
     const client = expectDefined(state.client, "connected skill mutation client");
     const runtimeConfig = createRuntimeConfigCapability({
-      snapshot: { client, phase: "connected", sessionKey: "main" },
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
       subscribe: () => () => undefined,
     });
     state.runtimeConfig = runtimeConfig;

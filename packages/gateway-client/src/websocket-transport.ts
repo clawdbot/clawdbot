@@ -2,7 +2,7 @@ import { isLoopbackIpAddress, type ParsedIpAddress } from "@openclaw/net-policy/
 import { isWssUrl } from "@openclaw/net-policy/url-protocol";
 import type { ClientOptions, CertMeta, WebSocket } from "ws";
 import {
-  normalizeFingerprint,
+  normalizeTlsFingerprint,
   parseGatewayIpAddress,
   parseHostForAddressChecks,
 } from "./client-address-utils.js";
@@ -124,20 +124,28 @@ export function resolveGatewayWebSocketTransport(params: {
     );
   }
 
-  const normalize = params.normalizeTlsFingerprint ?? normalizeFingerprint;
+  const normalize = params.normalizeTlsFingerprint ?? normalizeTlsFingerprint;
+  const expectedFingerprint = params.tlsFingerprint
+    ? normalizeTlsFingerprint(params.tlsFingerprint)
+    : undefined;
+  if (params.tlsFingerprint && !expectedFingerprint) {
+    throw new GatewayWebSocketTransportConfigurationError(
+      "gateway tls fingerprint must be a SHA-256 fingerprint",
+    );
+  }
   const options: FingerprintCheckingClientOptions = { ...params.options };
-  if (usesTls && params.tlsFingerprint) {
+  if (usesTls && expectedFingerprint) {
     options.rejectUnauthorized = false;
     options.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {
       const fingerprintValue =
         typeof cert === "object" && cert && "fingerprint256" in cert
           ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
           : "";
-      const fingerprint = normalize(typeof fingerprintValue === "string" ? fingerprintValue : "");
-      const expected = normalize(params.tlsFingerprint);
-      if (!expected) {
-        return undefined;
-      }
+      const canonicalFingerprint = normalizeTlsFingerprint(
+        typeof fingerprintValue === "string" ? fingerprintValue : "",
+      );
+      const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
+      const expected = normalize(expectedFingerprint);
       if (!fingerprint) {
         return new Error("Missing server TLS fingerprint");
       }
@@ -154,7 +162,7 @@ export function resolveGatewayWebSocketTransport(params: {
       if (!params.tlsFingerprint) {
         return null;
       }
-      const expected = normalize(params.tlsFingerprint);
+      const expected = expectedFingerprint ? normalize(expectedFingerprint) : "";
       if (!expected) {
         return new Error("gateway tls fingerprint missing");
       }
@@ -167,7 +175,8 @@ export function resolveGatewayWebSocketTransport(params: {
         return new Error("gateway tls fingerprint unavailable");
       }
       const cert = rawSocket.getPeerCertificate();
-      const fingerprint = normalize(cert?.fingerprint256 ?? "");
+      const canonicalFingerprint = normalizeTlsFingerprint(cert?.fingerprint256 ?? "");
+      const fingerprint = canonicalFingerprint ? normalize(canonicalFingerprint) : "";
       if (!fingerprint) {
         return new Error("gateway tls fingerprint unavailable");
       }

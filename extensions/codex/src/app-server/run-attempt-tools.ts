@@ -88,11 +88,8 @@ export function resolveCodexDynamicToolDirectNames(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");
   }
-  // Restricted plugin runs replace Codex's native tool surface with an exact
-  // OpenClaw policy-filtered catalog. Keep the replacement planner visible in
-  // the initial context so Codex can maintain the same user-facing plan stream.
-  if (params.pluginHarnessToolPolicyRestricted === true) {
-    names.push("update_plan");
-  }
+  // OpenClaw disables Codex's native update_plan on every thread. Keep its
+  // replacement in the initial context or the run has no visible progress tool.
+  names.push("progress_card");
   return names;
 }

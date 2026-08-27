@@ -51,6 +51,10 @@ android {
   }
 
   buildTypes {
+    debug {
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
+    }
     release {
       if (phoneReleaseSigning != null) {
         signingConfig = phoneReleaseSigning

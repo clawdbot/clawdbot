@@ -6,12 +6,17 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { buildTelegramGroupPeerId } from "./bot/helpers.js";
+import { recordTelegramGroupHistoryEntry } from "./group-history-window.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
 import {
   createTelegramMessageCache,
   hasProviderObservedTelegramThreadBinding,
 } from "./message-cache.js";
-import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
+import {
+  recordOutboundMessageForPromptContext,
+  registerTelegramOutboundGroupHistoryRecorder,
+} from "./outbound-message-context.js";
 import { setTelegramRuntime } from "./runtime.js";
 import {
   clearTelegramRuntimeForTest as clearTelegramRuntime,
@@ -170,6 +175,59 @@ describe("recordOutboundMessageForPromptContext", () => {
 
     expect(cached?.threadId).toBe("77");
     expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "direct-messages", id: 77 });
+  });
+
+  it("records forum and channel Direct Messages replies with the same topic ID in separate histories", async () => {
+    const chatId = -1001;
+    const history = new Map<string, Array<{ sender: string; body: string; messageId: string }>>();
+    const unregister = registerTelegramOutboundGroupHistoryRecorder({
+      accountId: "default",
+      recorder: (record) =>
+        recordTelegramGroupHistoryEntry({
+          historyMap: history,
+          historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
+          limit: 10,
+          entry: {
+            sender: "Configured Agent (you)",
+            body: record.text ?? "<media>",
+            messageId: String(record.messageId),
+          },
+        }),
+    });
+
+    try {
+      for (const { scope, messageId, body } of [
+        { scope: "forum", messageId: 710, body: "Forum reply" },
+        { scope: "direct-messages", messageId: 711, body: "Direct-topic reply" },
+      ] as const) {
+        await recordOutboundMessageForPromptContext({
+          cfg,
+          account: { accountId: "default", name: "Configured Agent" },
+          chatId,
+          messageId,
+          messageThreadId: 77,
+          successfulSendThread: { scope, id: 77 },
+          message: {
+            chat: { id: chatId, type: "supergroup" },
+            date: 1_736_380_700,
+            message_id: messageId,
+            ...(scope === "forum"
+              ? { message_thread_id: 77 }
+              : { direct_messages_topic: { topic_id: 77 } }),
+            text: body,
+          },
+        });
+      }
+
+      expect(history.get("-1001:direct-topic:77")).toEqual([
+        expect.objectContaining({ body: "Direct-topic reply", messageId: "711" }),
+      ]);
+      expect(history.get("-1001:topic:77")).toEqual([
+        expect.objectContaining({ body: "Forum reply", messageId: "710" }),
+      ]);
+    } finally {
+      unregister();
+    }
   });
 
   it("binds a successful General-topic response from trusted send context", async () => {

@@ -249,7 +249,7 @@ async function resizeImageBase64IfNeeded(params: {
             ? Number((((buf.byteLength - out.byteLength) / buf.byteLength) * 100).toFixed(1))
             : 0;
         log.info(
-          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (-${byteReductionPct}%)`,
+          `Image resized to fit limits: ${sourceWithFile} ${formatBytesShort(buf.byteLength)} -> ${formatBytesShort(out.byteLength)} (${byteReductionPct < 0 ? "+" : ""}${-byteReductionPct}%)`,
           {
             label: params.label,
             fileName: params.fileName,

@@ -22,7 +22,6 @@ import {
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
-import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
@@ -45,10 +44,7 @@ import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-disc
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
-import {
-  resolvePromptModeForSession,
-  shouldInjectHeartbeatPrompt,
-} from "./attempt-prompt-helpers.js";
+import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -60,7 +56,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   attempt: EmbeddedRunAttemptParams;
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
-  defaultAgentId: string;
   effectiveCwd: string;
   effectiveTools: PromptTools;
   effectiveWorkspace: string;
@@ -109,6 +104,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     config: attempt.config,
     agentId: params.sessionAgentId,
     sessionKey: attempt.sessionKey,
+    permissionMode: attempt.permissionMode,
     sandboxAvailable: params.sandbox?.enabled === true,
     execOverrides: attempt.execOverrides,
   });
@@ -197,7 +193,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       activeProcessSessions,
     },
   });
-  const isDefaultAgent = params.sessionAgentId === params.defaultAgentId;
   const promptMode =
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
@@ -211,20 +206,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     cwd: params.effectiveCwd,
     moduleUrl: import.meta.url,
   });
-  const heartbeatPrompt = shouldInjectHeartbeatPrompt({
-    config: attempt.config,
-    agentId: params.sessionAgentId,
-    defaultAgentId: params.defaultAgentId,
-    isDefaultAgent,
-    trigger: attempt.trigger,
-    bootstrapContextRunKind: attempt.bootstrapContextRunKind,
-  })
-    ? resolveHeartbeatPromptForSystemPrompt({
-        config: attempt.config,
-        agentId: params.sessionAgentId,
-        defaultAgentId: params.defaultAgentId,
-      })
-    : undefined;
   const promptContributionContext = {
     config: attempt.config,
     agentDir: attempt.agentDir,
@@ -302,7 +283,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       extraSystemPrompt,
       ownerNumbers: attempt.ownerNumbers,
       reasoningTagHint,
-      heartbeatPrompt,
       skillsPrompt: effectiveSkillsPrompt,
       codeModeActive: params.codeModeActive,
       docsPath: openClawReferences.docsPath ?? undefined,

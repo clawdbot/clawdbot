@@ -5,8 +5,8 @@ import { normalizeOptionalStringifiedId } from "../../../../packages/normalizati
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 import {
-  LEGACY_TASK_SUGGESTION_TOOL_NAME,
-  TASK_SUGGESTION_TOOL_NAME,
+  IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
+  TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
 
@@ -126,7 +126,12 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   }
   if (issues.legacyTaskSuggestionToolName) {
     lines.push(
-      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${LEGACY_TASK_SUGGESTION_TOOL_NAME}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME}\``,
+      `- ${pluralize(issues.legacyTaskSuggestionToolName, "job")} still grants legacy tool \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.legacyName}\`; doctor will rename it to \`${TASK_SUGGESTION_TOOL_NAME_MIGRATION.canonicalName}\``,
+    );
+  }
+  if (issues.legacyImageInspectionToolName) {
+    lines.push(
+      `- ${pluralize(issues.legacyImageInspectionToolName, "job")} still relies on legacy \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.legacyName}\` coverage; doctor will preserve equivalent \`${IMAGE_INSPECTION_TOOL_NAME_MIGRATION.canonicalName}\` access`,
     );
   }
   if (issues.legacyAgentTurnCommandPayload) {

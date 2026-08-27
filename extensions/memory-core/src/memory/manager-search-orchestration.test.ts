@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddingProvider } from "./embeddings.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixtureConfig,
@@ -72,26 +73,20 @@ describe("memory index", () => {
     let queryCalls = 0;
     (
       manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
+        provider: EmbeddingProvider;
         waitForEmbeddingRetry: (delayMs: number, action: string) => Promise<void>;
       }
     ).provider = {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         if (queryCalls === 1) {
           throw new Error("TypeError: fetch failed | other side closed");
         }
         return [1, 0, 0, 0];
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
     };
     (
@@ -116,22 +111,16 @@ describe("memory index", () => {
     let queryCalls = 0;
     (
       manager as unknown as {
-        provider: {
-          id: string;
-          model: string;
-          embedQuery: (text: string) => Promise<number[]>;
-          embedBatch: (texts: string[]) => Promise<number[][]>;
-          close: () => Promise<void>;
-        };
+        provider: EmbeddingProvider;
       }
     ).provider = {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         throw new Error("TypeError: fetch failed | other side closed");
       },
-      embedBatch: async (texts: string[]) => texts.map(() => [1, 0, 0, 0]),
+      embedBatch: async (texts) => texts.map(() => [1, 0, 0, 0]),
       close: async () => {},
     };
     (
@@ -154,13 +143,7 @@ describe("memory index", () => {
     const close = vi.fn(async () => {});
     let queryCalls = 0;
     const fields = manager as unknown as {
-      provider: {
-        id: string;
-        model: string;
-        embedQuery: (text: string) => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
-      };
+      provider: EmbeddingProvider;
       providerKey: string;
       providerLifecycle: { mode: "active"; providerId: string };
       computeProviderKey: () => string;
@@ -168,7 +151,7 @@ describe("memory index", () => {
     fields.provider = {
       id: "local",
       model: "mock-embed",
-      embedQuery: async () => {
+      embed: async () => {
         queryCalls += 1;
         return [1, 0, 0, 0];
       },
@@ -300,10 +283,8 @@ describe("memory index", () => {
       }),
     );
     await manager.sync({ reason: "test" });
-    const provider = Reflect.get(manager, "provider") as {
-      embedQuery: (text: string) => Promise<number[]>;
-    };
-    const embedQuerySpy = vi.spyOn(provider, "embedQuery");
+    const provider = Reflect.get(manager, "provider") as EmbeddingProvider;
+    const embedSpy = vi.spyOn(provider, "embed");
 
     for (const entry of cases) {
       const results = await manager.search(entry.query, { maxResults: 6 });
@@ -311,7 +292,7 @@ describe("memory index", () => {
         true,
       );
     }
-    expect(embedQuerySpy).toHaveBeenCalledTimes(cases.length);
+    expect(embedSpy).toHaveBeenCalledTimes(cases.length);
   });
 
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
@@ -496,6 +477,23 @@ describe("memory index", () => {
     expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
     releaseSync();
     await pendingSync;
+  });
+
+  it("reports session-only refreshes from the manager sync owner", async () => {
+    const manager = await getPersistentManager(
+      createCfg({ provider: "none", minScore: 0, onSearch: true, hybrid: { enabled: true } }),
+    );
+    await manager.sync({ reason: "test" });
+
+    Reflect.set(manager, "dirty", false);
+    Reflect.set(manager, "sessionsDirty", true);
+    Reflect.set(manager, "syncing", new Promise<void>(() => {}));
+    try {
+      expect(manager.status().pendingSyncSources).toEqual(["sessions"]);
+    } finally {
+      Reflect.set(manager, "syncing", null);
+      Reflect.set(manager, "sessionsDirty", false);
+    }
   });
 
   it("waits for dirty sync before querying", async () => {

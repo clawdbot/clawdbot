@@ -21,8 +21,8 @@ import {
   resolveTelegramBotHasTopicsEnabled,
   resolveTelegramForumFlag,
   withResolvedTelegramForumFlag,
+  TelegramPairingStoreReadError,
 } from "./bot/helpers.js";
-import { TelegramPairingStoreReadError } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 import type { TelegramMessageDispatchReplayClaim } from "./message-dispatch-dedupe.js";
@@ -195,19 +195,17 @@ function createTelegramInboundHandlers(
       const {
         dmPolicy,
         resolvedThreadId,
-        dmThreadId,
         storeAllowFrom,
         groupConfig,
         topicConfig,
         effectiveGroupAllow,
+        threadSpec,
       } = gate.context;
 
       const sessionState = resolveTelegramSessionState({
         chatId: event.chatId,
         isGroup: event.isGroup,
-        isForum: event.isForum,
-        messageThreadId: event.messageThreadId,
-        resolvedThreadId,
+        threadSpec,
         botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
         senderId: event.senderId,
         runtimeCfg: gate.context.cfg,
@@ -236,8 +234,7 @@ function createTelegramInboundHandlers(
         chatId: event.chatId,
         isGroup: event.isGroup,
         isForum: event.isForum,
-        resolvedThreadId,
-        dmThreadId,
+        threadSpec,
         dmPolicy,
         storeAllowFrom,
         senderId: event.senderId,

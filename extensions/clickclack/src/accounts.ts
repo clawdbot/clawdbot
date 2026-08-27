@@ -14,7 +14,6 @@ import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import {
   normalizeSecretInputString,
-  normalizeResolvedSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -116,18 +115,33 @@ function resolveClickClackToken(params: {
   tokenFile?: string;
   accountId: string;
   env?: NodeJS.ProcessEnv;
-}): string {
+}): Required<Pick<ResolvedClickClackAccount, "token" | "tokenSource" | "tokenStatus">> &
+  Pick<ResolvedClickClackAccount, "credentialDiagnostics"> {
   const tokenFile = params.tokenFile?.trim();
   if (tokenFile) {
-    return (
-      tryReadSecretFileSync(
-        tokenFile,
-        params.accountId === DEFAULT_ACCOUNT_ID
-          ? "channels.clickclack.tokenFile"
-          : `channels.clickclack.accounts.${params.accountId}.tokenFile`,
-        { rejectSymlink: true },
-      ) ?? ""
+    const accountTokenFile = resolveNormalizedAccountEntry(
+      params.cfg.channels?.clickclack?.accounts,
+      params.accountId,
+      normalizeAccountId,
+    )?.tokenFile?.trim();
+    const result = tryReadSecretFileSync(
+      tokenFile,
+      "ClickClack bot token",
+      { rejectSymlink: true },
+      {
+        configPath: accountTokenFile
+          ? `channels.clickclack.accounts.${params.accountId}.tokenFile`
+          : "channels.clickclack.tokenFile",
+      },
     );
+    return result.status === "available"
+      ? { token: result.value, tokenSource: "tokenFile", tokenStatus: "available" }
+      : {
+          token: "",
+          tokenSource: "tokenFile",
+          tokenStatus: "configured_unavailable",
+          credentialDiagnostics: [result.diagnostic],
+        };
   }
   const resolved = resolveSecretInputString({
     value: params.value,
@@ -140,7 +154,10 @@ function resolveClickClackToken(params: {
   });
   if (resolved.status !== "available") {
     if (resolved.status === "missing" && params.accountId === DEFAULT_ACCOUNT_ID) {
-      return normalizeSecretInputString((params.env ?? process.env).CLICKCLACK_BOT_TOKEN) ?? "";
+      const token = normalizeSecretInputString((params.env ?? process.env).CLICKCLACK_BOT_TOKEN);
+      return token
+        ? { token, tokenSource: "env", tokenStatus: "available" }
+        : { token: "", tokenSource: "none", tokenStatus: "missing" };
     }
     if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
       const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
@@ -163,16 +180,20 @@ function resolveClickClackToken(params: {
           `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
         );
       }
-      return normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]) ?? "";
+      const token = normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]);
+      return {
+        token: token ?? "",
+        tokenSource: "config",
+        tokenStatus: token ? "available" : "configured_unavailable",
+      };
     }
-    return "";
+    return {
+      token: "",
+      tokenSource: resolved.status === "missing" ? "none" : "config",
+      tokenStatus: resolved.status,
+    };
   }
-  return (
-    normalizeResolvedSecretInputString({
-      value: resolved.value,
-      path: "channels.clickclack.token",
-    }) ?? ""
-  );
+  return { token: resolved.value, tokenSource: "config", tokenStatus: "available" };
 }
 
 /**
@@ -203,10 +224,10 @@ export function resolveClickClackAccount(params: {
   return {
     accountId,
     enabled,
-    configured: Boolean(baseUrl && token && workspace),
+    configured: Boolean(baseUrl && token.tokenStatus !== "missing" && workspace),
     name: normalizeOptionalString(merged.name),
     baseUrl,
-    token,
+    ...token,
     workspace,
     botUserId: normalizeOptionalString(merged.botUserId),
     agentId: normalizeOptionalString(merged.agentId),

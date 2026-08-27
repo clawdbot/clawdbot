@@ -11,6 +11,7 @@ export type CommandOutputCaptureOption =
 export type CommandOutputLimitOption =
   | boolean
   | { stdout?: boolean; stderr?: boolean; combined?: boolean };
+export type CommandOutputErrorOption = boolean | { stdout?: boolean; stderr?: boolean };
 export type PreserveOutputLine = (line: string, stream: CommandOutputStream) => boolean;
 
 export type CapturedOutputBuffers = {
@@ -62,6 +63,13 @@ export function shouldTerminateOnOutputLimit(
   limit: CommandOutputStream | "combined",
 ): boolean {
   return typeof value === "boolean" ? value : value?.[limit] === true;
+}
+
+export function shouldTerminateOnOutputError(
+  value: CommandOutputErrorOption | undefined,
+  stream: CommandOutputStream,
+): boolean {
+  return typeof value === "boolean" ? value : value?.[stream] === true;
 }
 
 export function appendCapturedOutput(

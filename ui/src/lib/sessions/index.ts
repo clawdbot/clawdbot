@@ -1,6 +1,7 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
@@ -52,6 +53,7 @@ export {
   isSystemCreatedSessionRow,
   resolveSessionNavigation,
   sessionMatchesArchivedFilter,
+  sessionMatchesVisibleSessionScope,
   scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
@@ -98,11 +100,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const swarmActivity = new SwarmActivityTracker();
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
-  const pullRequestEpochs = new Map<string, symbol>();
+  const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
+  let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
@@ -131,19 +134,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
     mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
 
-  const roster = createSessionRosterRefresh({
-    connection,
-    snapshot: () => gateway.snapshot,
-    readState: () => state,
-    publish,
-    observerError: () => sessionEventSubscriptionError,
-    decorate: decorateRows,
-    onCanonicalList(result) {
-      mutations.settlePrepared(result);
-      canonicalListRevision += 1;
-    },
-  });
-
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => connection.isCurrent(scope),
     retryDelayMs: sessionRetryDelayMs,
@@ -166,6 +156,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
   });
 
+  const roster = createSessionRosterRefresh({
+    connection,
+    snapshot: () => gateway.snapshot,
+    readState: () => state,
+    publish,
+    observerError: () => sessionEventSubscriptionError,
+    bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
+    decorate: decorateRows,
+    onCanonicalList(result) {
+      mutations.settlePrepared(result);
+      canonicalListRevision += 1;
+    },
+  });
+
   const groups = createSessionGroupCatalog({
     connection,
     snapshot: () => gateway.snapshot,
@@ -175,6 +179,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     retryDelayMs: sessionRetryDelayMs,
   });
 
+  const notifyCreated = (key: string) => {
+    for (const listener of createdListeners) {
+      listener(key);
+    }
+  };
+
   const mutations = createSessionMutations({
     connection,
     readState: () => state,
@@ -182,11 +192,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
     publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
-    notifyCreated(key) {
-      for (const listener of createdListeners) {
-        listener(key);
-      }
-    },
+    notifyCreated,
     retirePullRequestSummary,
   });
 
@@ -194,32 +200,29 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connection,
     agentId: () => state.agentId,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    notifyCreated,
+    reportError: (error) => publish({ ...state, error: formatUiError(error) }, "operation"),
   });
 
   const pullRequestSummary = (key: string) => pullRequestSummaries.get(key.trim());
 
-  const capturePullRequestEpoch = (key: string): symbol => {
-    const normalizedKey = key.trim();
-    const epoch = Symbol(normalizedKey);
-    pullRequestEpochs.set(normalizedKey, epoch);
+  const capturePullRequestEpoch = (key: string): object => {
+    const epoch = {};
+    pullRequestEpochs.set(key.trim(), epoch);
     return epoch;
   };
 
   const setPullRequestSummary = (
     key: string,
     summary: SessionCatalogPullRequestSummary | undefined,
-    epoch?: symbol,
+    epoch?: object,
   ) => {
     const normalizedKey = key.trim();
     if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
       return;
     }
     const previous = pullRequestSummaries.get(normalizedKey);
-    const unchanged =
-      previous?.state === summary?.state &&
-      previous?.numbers.length === summary?.numbers.length &&
-      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
-    if (unchanged || (!previous && !summary)) {
+    if (previous === summary) {
       return;
     }
     if (summary) {
@@ -233,9 +236,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const reconcile = (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
-    options?: SessionReconcileOptions,
+    options?: SessionReconcileOptions & { sourceCanonicalListRevision?: number },
   ): boolean => {
-    const result = decorateRows(reconcileSessionHistory(state.result, row, defaults, options));
+    const { sourceCanonicalListRevision, ...historyOptions } = options ?? {};
+    const preserveCanonicalRow =
+      sourceCanonicalListRevision !== undefined &&
+      canonicalListRevision > sourceCanonicalListRevision;
+    const result = decorateRows(
+      reconcileSessionHistory(state.result, row, defaults, historyOptions, preserveCanonicalRow),
+    );
     if (result === state.result) {
       return false;
     }
@@ -258,10 +267,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     );
   };
 
-  const reconcileChangedOptions = (
-    payload: unknown,
-    options?: SessionReconcileOptions,
-  ): SessionReconcileOptions | undefined => {
+  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
+    const previous = state.result;
     const eventInfo = readSessionChangedEvent(payload);
     const selectedSessionKey = gateway.snapshot.sessionKey?.trim();
     const archivesSelectedSession =
@@ -278,25 +285,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           eventInfo.agentId,
         ),
       );
-    if (!archivesSelectedSession) {
-      return options;
-    }
     // The capability owns the shared roster, so every event consumer must
     // preserve the routed archive regardless of subscriber delivery order.
-    return {
-      ...options,
-      archivedFilter: "all",
-    };
-  };
-
-  const reconcileChangedEvent = (payload: unknown, options?: SessionReconcileOptions) => {
-    const previous = state.result;
-    const eventInfo = readSessionChangedEvent(payload);
-    const reconciled = reconcileSessionChanged(
-      previous,
-      payload,
-      reconcileChangedOptions(payload, options),
-    );
+    const reconcileOptions = archivesSelectedSession
+      ? { ...options, archivedFilter: "all" as const }
+      : options;
+    const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
     if (reconciled.result !== previous && reconciled.key && eventInfo) {
       mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
     }
@@ -328,7 +322,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           ? normalizeAgentId(options.resultAgentId)
           : state.agentId,
         deletedSessions: reconciled.deletedKey
-          ? [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }]
+          ? [
+              {
+                key: reconciled.deletedKey,
+                ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
+                retireBeforeRevision: Date.now(),
+              },
+            ]
           : [],
       });
     }
@@ -347,6 +347,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
+    const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
     connectionClient = next.client;
     if (connectionChanged) {
@@ -367,6 +368,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     if (!connected || !next.client) {
       hydratedClient = null;
+      hydratedSelfUserId = null;
       publish({
         result: null,
         agentId: null,
@@ -380,26 +382,30 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (hydratedClient !== next.client) {
+    if (hydratedClient !== next.client || hydratedSelfUserId !== selfUserId) {
       const scope = connection.capture();
       if (!scope) {
         return;
       }
       hydratedClient = scope.client;
+      hydratedSelfUserId = selfUserId;
       void (async () => {
-        await sessionEventSubscription.ensure(scope);
         if (connection.isCurrent(scope)) {
           const sessionKey = gateway.snapshot.sessionKey?.trim();
           const agentScope = sessionKey
             ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
             : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
-          await roster.refresh({
+          await roster.bootstrap({
+            ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
             ...agentScope,
             includeDerivedTitles: true,
             includeLastMessage: true,
             backgroundHydrate: true,
             force: true,
           });
+          if (connection.isCurrent(scope)) {
+            await roster.refreshManagedLists();
+          }
         }
       })();
     }
@@ -418,22 +424,44 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    if (eventInfo?.archived !== null) {
+    const payload = event.payload as {
+      agentId?: unknown;
+      reason?: unknown;
+      session?: unknown;
+    } | null;
+    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+    const status = reconciled.status ?? eventInfo?.status;
+    const runEnded =
+      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+    const isTerminalMessage = event.event === "session.message" && runEnded;
+    // Only an existing Gateway roster member that remains active can be replaced directly.
+    const primarySnapshotApplied =
+      isTerminalMessage &&
+      reconciled.applied &&
+      eventInfo !== null &&
+      eventInfo.archived !== true &&
+      typeof payload?.session === "object" &&
+      payload.session !== null &&
+      roster.canApplyPrimarySnapshot() &&
+      state.result?.sessions.some((row) =>
+        uiSessionEventMatches(
+          { ...gateway.snapshot, sessionKey: row.key },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      ) === true;
+    if ((eventInfo?.archived !== null && !isTerminalMessage) || primarySnapshotApplied) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
-    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-    const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
+    const eventReason = payload?.reason;
+    const payloadAgentId = payload?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();
       void groups.load();
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
-    const runEnded =
-      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     if (event.event === "session.message" && !runEnded) {
       return;
     }
@@ -441,7 +469,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       retirePullRequestSummary(reconciled.deletedKey);
       publish({
         ...state,
-        deletedSessions: [{ key: reconciled.deletedKey, agentId: reconciled.agentId ?? undefined }],
+        deletedSessions: [
+          {
+            key: reconciled.deletedKey,
+            ...(reconciled.agentId ? { agentId: reconciled.agentId } : {}),
+            retireBeforeRevision: Date.now(),
+          },
+        ],
       });
     } else if ((eventReason === "create" || eventReason === "new") && eventInfo) {
       const remainingDeletedSessions = state.deletedSessions.filter(
@@ -460,13 +494,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Gateway lists own filtering/order; events coalesce into one canonical refresh.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
-      filtered: event.event === "sessions.changed",
+      primarySnapshotApplied,
     });
   });
 
@@ -477,10 +510,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     get canonicalListRevision() {
       return canonicalListRevision;
     },
+    captureConnectionScope: () => connection.capture(),
+    isConnectionScopeCurrent: (scope) => connection.isCurrent(scope),
     list: roster.list,
     listSnapshot: (scope) => roster.listSnapshot(scope),
     subscribeList(scope, listener) {
-      if (scope.archivedFilter && scope.archivedFilter !== "active") {
+      if (!roster.isPrimaryList(scope)) {
         return roster.subscribeList(scope, listener);
       }
       const notify = () => listener(roster.listSnapshot(scope));
@@ -488,7 +523,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(notify);
     },
     refreshList: (options) => roster.refreshList(options),
-    setCreatorFilter: (creatorId) => roster.setCreatorFilter(creatorId),
+    setOwnerFilter: (ownerId) => roster.setOwnerFilter(ownerId),
+    setInvolvingMeFilter: (enabled) => roster.setInvolvingMeFilter(enabled),
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,
@@ -496,10 +532,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: roster.refreshReplacement,
     createResult: mutations.createResult,
     create: mutations.create,
-    recover: mutations.recover,
+    recover: operations.recover,
     patch: mutations.patch,
+    archiveVisibility: mutations.archiveVisibility,
+    setArchiveVisibility: mutations.setArchiveVisibility,
+    assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
-    setModelOverride: mutations.setModelOverride,
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,
@@ -509,7 +547,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     deleteMany: mutations.deleteMany,
     reset: mutations.reset,
     compact: operations.compact,
-    steer: operations.steer,
     listFiles: operations.listFiles,
     getFile: operations.getFile,
     setFile: operations.setFile,
@@ -544,6 +581,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       connection.dispose();
       groups.dispose();
       hydratedClient = null;
+      hydratedSelfUserId = null;
       mutations.dispose();
       swarmActivity.clear();
       pullRequestSummaries.clear();

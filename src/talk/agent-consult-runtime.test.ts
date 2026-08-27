@@ -22,8 +22,8 @@ import {
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
 } from "./agent-consult-runtime.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
 import {
+  REALTIME_VOICE_AGENT_CONSULT_TOOL,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";

@@ -1,10 +1,10 @@
 ---
-summary: "iOS node app: connect to the Gateway, pairing, canvas, and troubleshooting"
+summary: "iOS node app: connect to the Gateway, pairing, device capabilities, and troubleshooting"
 read_when:
   - Pairing or reconnecting the iOS node
   - Enabling or troubleshooting the direct Apple Watch node
   - Running the iOS app from source
-  - Debugging gateway discovery or canvas commands
+  - Debugging gateway discovery or iOS node commands
 title: "iOS app"
 ---
 
@@ -13,7 +13,7 @@ Availability: iPhone app builds are distributed through Apple channels when enab
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
-- Exposes node capabilities: Canvas, Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
+- Exposes node capabilities: Screen snapshot, Camera capture, Location, Talk mode, Voice wake, and opt-in Health summaries.
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired gateway: cold opens paint the last known transcript immediately and refresh once the gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
@@ -59,9 +59,6 @@ creation has a token or password auth path.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
-
-   If the setup code contains both LAN and Tailscale Serve routes, the app
-   probes them in order and saves the first reachable endpoint.
 
    Paired gateways remain in the **Gateways** list. The checkmark identifies
    the focused gateway; use the bolt control on another row to keep its
@@ -200,9 +197,6 @@ Direct watchOS node commands:
 | Device        | `device.info`, `device.status` | Watch identity, battery, thermal, storage, and network. |
 | Notifications | `system.notify`                | While the app is active; requires watch permission.     |
 
-watchOS does not expose WebKit to third-party apps, so the direct watch node
-does not advertise Canvas commands.
-
 ## Relay-backed push for official builds
 
 Official distributed iOS builds use an external push relay instead of publishing the raw APNs token to the gateway. Official App Store builds from the public release lane use the hosted relay at `https://ios-push-relay.openclaw.ai`; this base URL is hardcoded for App Store distribution and does not read any override.
@@ -315,49 +309,25 @@ The app keeps a registry of every gateway it has paired with, so you can switch 
 - Swipe a paired gateway (or use its context menu) to **Forget** it, which removes its credentials, device tokens, TLS pin, and cached chats.
 - Discovered gateways must be visible on the network to switch to them; manual gateways reconnect by saved host and port.
 
-## Canvas + A2UI
-
-The iOS node renders a WKWebView canvas. Use `node.invoke` to drive it:
-
-```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-host>:18789/__openclaw__/canvas/"}'
-```
-
-Notes:
-
-- The Gateway canvas host serves `/__openclaw__/canvas/` and `/__openclaw__/a2ui/`, from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
-- The iOS node keeps the built-in scaffold as the connected default view. `canvas.a2ui.push` and `canvas.a2ui.reset` use the bundled app-owned A2UI page.
-- Remote Gateway A2UI pages are render-only on iOS; native A2UI button actions are accepted only from bundled app-owned pages.
-- Return to the built-in scaffold with `canvas.navigate` and `{"url":""}`.
-
 ## Computer Use relationship
 
-The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex Computer Use and `cua-driver mcp` control a local macOS desktop through MCP tools; the iOS app exposes iPhone capabilities through OpenClaw node commands such as `canvas.*`, `camera.*`, `screen.*`, `location.*`, and `talk.*`.
+The iOS app is a mobile node surface, not a Codex Computer Use backend. Codex Computer Use and `cua-driver mcp` control a local macOS desktop through MCP tools; the iOS app exposes iPhone capabilities through OpenClaw node commands such as `camera.*`, `screen.*`, `location.*`, and `talk.*`.
 
 Agents can still operate the iOS app through OpenClaw by invoking node commands, but those calls go through the gateway node protocol and follow iOS foreground/background limits. Use [Codex Computer Use](/plugins/codex-computer-use) for local desktop control and this page for iOS node capabilities.
-
-### Canvas eval / snapshot
-
-```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.eval --params '{"javaScript":"(() => { const {ctx} = window.__openclaw; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
-```
-
-```bash
-openclaw nodes invoke --node "iOS Node" --command canvas.snapshot --params '{"maxWidth":900,"format":"jpeg"}'
-```
 
 ## Voice wake + talk mode
 
 - Voice wake and talk mode are available in Settings.
+- Voice wake sends recognized commands to the active session and shows Gateway delivery failures in Settings; use talk mode for spoken assistant replies.
 - OpenAI realtime Talk uses client-owned WebRTC when `talk.realtime.transport` is `webrtc`; an explicit `gateway-relay` configuration remains Gateway-owned. See [Talk mode](/nodes/talk).
 - Talk-capable iOS nodes advertise the `talk` capability and can declare `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once`; the Gateway allows those push-to-talk commands by default for trusted Talk-capable nodes.
 - iOS may suspend background audio; treat voice features as best-effort when the app is not active.
 
 ## Common errors
 
-- `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (canvas/camera/screen commands require it).
-- `A2UI_HOST_UNAVAILABLE`: the bundled A2UI page was not reachable in the app WebView; keep the app foregrounded on the Screen tab and retry.
+- `NODE_BACKGROUND_UNAVAILABLE`: bring the iOS app to the foreground (camera/screen commands require it).
 - Pairing prompt never appears: run `openclaw devices list` and approve manually.
+- `Gateway setup incomplete`: the Gateway did not provide both node and operator credentials. Generate a new iPhone setup code from **Devices -> Pair device** in the Control UI or `openclaw qr`, then scan it in **Settings -> Gateway**. Automatic reconnect stays paused until you retry setup; this is not a device-storage error.
 - Watch shows no iPhone state: confirm the iPhone reports `watchPaired: true`
   and `watchAppInstalled: true` in `watch.status`. If pairing is false, pair the
   Watch in Apple's Watch app. If installation is false, install the companion

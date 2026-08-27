@@ -1,6 +1,7 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -17,6 +18,14 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 const slackConfig = {
   channels: {
     slack: {
+      enabled: true,
+    },
+  },
+} as OpenClawConfig;
+
+const telegramConfig = {
+  channels: {
+    telegram: {
       enabled: true,
     },
   },
@@ -52,6 +61,41 @@ function registerSlackTextPlugin(accountIds: string[] = ["default"]) {
     ]),
   );
   return sendText;
+}
+
+function registerTelegramTextPlugin(
+  matchesToolContextTarget: NonNullable<
+    NonNullable<ChannelPlugin["threading"]>["matchesToolContextTarget"]
+  >,
+) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createOutboundTestPlugin({
+            id: "telegram",
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn().mockResolvedValue({
+                channel: "telegram",
+                messageId: "m1",
+                chatId: "-100123",
+              }),
+            },
+          }),
+          config: {
+            listAccountIds: () => ["default"],
+            resolveAccount: () => ({ enabled: true }),
+            isConfigured: () => true,
+          },
+          threading: { matchesToolContextTarget },
+        },
+      },
+    ]),
+  );
 }
 
 describe("runMessageAction core send routing", () => {
@@ -121,6 +165,66 @@ describe("runMessageAction core send routing", () => {
 
     expect(result.kind).toBe("send");
     expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it.each([
+    {
+      name: "an equivalent raw current-chat target",
+      target: "-100123",
+      currentChannelId: "telegram:-100123",
+      matcherResult: true,
+      expectedRoute: "current-source",
+    },
+    {
+      name: "a different chat",
+      target: "-100456",
+      currentChannelId: "telegram:-100123",
+      matcherResult: false,
+      expectedRoute: undefined,
+    },
+    {
+      name: "a different topic",
+      target: "-100123:topic:78",
+      currentChannelId: "telegram:-100123:topic:77",
+      matcherResult: false,
+      expectedRoute: undefined,
+    },
+  ])("uses the Telegram target matcher for $name", async (testCase) => {
+    const matchesToolContextTarget = vi.fn(() => testCase.matcherResult);
+    registerTelegramTextPlugin(matchesToolContextTarget);
+
+    const toolContext = {
+      currentChannelProvider: "telegram",
+      currentChannelId: testCase.currentChannelId,
+      currentSourceTurnId: "source-turn-1",
+    };
+    const result = await runMessageAction({
+      cfg: telegramConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: testCase.target,
+        message: "visible source reply",
+      },
+      toolContext,
+      messageActionAuthorization: {
+        requesterAccountId: "default",
+        toolContext,
+      },
+      sessionKey: `agent:main:telegram:group:${testCase.currentChannelId}`,
+      defaultAccountId: "default",
+      sourceReplyDeliveryMode: "message_tool_only",
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("send");
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBe(
+      testCase.expectedRoute,
+    );
+    expect(matchesToolContextTarget).toHaveBeenCalledWith({
+      target: testCase.target,
+      toolContext,
+    });
   });
 
   it("does not mark a message-scoped reply that enters a new thread as current-source", async () => {

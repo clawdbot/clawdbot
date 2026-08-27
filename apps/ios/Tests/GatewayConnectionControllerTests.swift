@@ -304,13 +304,16 @@ private func waitUntil(
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
             let caps = Set(controller._test_currentCaps())
 
-            #expect(caps.contains(OpenClawCapability.canvas.rawValue))
+            #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
             #expect(caps.contains(OpenClawCapability.screen.rawValue))
             #expect(!caps.contains(OpenClawGatewayClientCapability.inlineWidgets))
             #expect(caps.contains(OpenClawCapability.camera.rawValue))
             #expect(caps.contains(OpenClawCapability.location.rawValue))
             #expect(caps.contains(OpenClawCapability.voiceWake.rawValue))
             #expect(caps.contains(OpenClawCapability.talk.rawValue))
+
+            let commands = controller._test_currentCommands()
+            #expect(!commands.contains(where: { $0.hasPrefix("canvas.") }))
         }
     }
 
@@ -549,12 +552,14 @@ private func waitUntil(
         #expect(appModel.lastGatewayProblem == problem)
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
 
         appModel.clearGatewayConnectionProblem()
 
         #expect(appModel.lastGatewayProblem == problem)
         #expect(appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == "req-admin")
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
 
         appModel.clearOperatorGatewayConnectionProblemIfCurrent()
 
@@ -564,6 +569,7 @@ private func waitUntil(
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayStatusText == "Connected")
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .connected)
     }
 
     @Test @MainActor func `retained gateway problem clears only when explicit target changes`() throws {
@@ -635,7 +641,7 @@ private func waitUntil(
             bootstrapToken: lhs.bootstrapToken,
             password: lhs.password,
             nodeOptions: Self.makeNodeOptions(
-                caps: ["canvas", "screen"],
+                caps: ["camera", "screen"],
                 commands: ["location.get", "notify"],
                 permissions: ["screen": true]))
 
@@ -1087,7 +1093,7 @@ private func waitUntil(
         #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "operator") == nil)
     }
 
-    @Test @MainActor func `successful setup handoff enables target scoped auth`() throws {
+    @Test @MainActor func `successful setup handoff enables target scoped auth`() async throws {
         let previousStableID = "manual|previous.gateway.example.com|443"
         let stableID = "manual|new.gateway.example.com|443"
         let instanceID = "bootstrap-handoff-\(UUID().uuidString)"
@@ -1126,18 +1132,20 @@ private func waitUntil(
         defer { appModel.disconnectGateway() }
         appModel.applyGatewayConnectConfig(config)
 
-        let emptyIssuanceOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: [],
+        let emptyIssuanceOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: ([], []),
             nodeOptions: nodeOptions)
-        let operatorOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: ["operator"],
+        let operatorOnlyOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (["operator"], ["operator"]),
             nodeOptions: nodeOptions)
-        let nodeOnlyOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: ["node"],
+        let nodeOnlyOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (["node"], ["node"]),
             nodeOptions: nodeOptions)
         #expect(emptyIssuanceOptions == nil)
         #expect(operatorOnlyOptions == nil)
         #expect(nodeOnlyOptions == nil)
+        #expect(appModel.lastGatewayProblem?.owner == .gateway)
+        #expect(appModel.lastGatewayProblem?.title == "Gateway setup incomplete")
         #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == "one-time-bootstrap")
         #expect(GatewaySettingsStore.loadGatewayCredentialMetadata(
             instanceId: instanceID,
@@ -1155,8 +1163,8 @@ private func waitUntil(
             gatewayID: stableID)
         let bootstrapOptions = nodeOptions
         appModel._test_setGatewayLoopTasks(node: nil, operator: Task {})
-        let completedOptions = try appModel._test_completeSuccessfulGatewayAuthHandoff(
-            issuedRoles: ["node", "operator"],
+        let completedOptions = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (["node", "operator"], ["node", "operator"]),
             nodeOptions: nodeOptions)
         nodeOptions = try #require(completedOptions)
 
@@ -1182,6 +1190,40 @@ private func waitUntil(
         #expect(appModel.currentGatewayReconnectOptions(
             stableID: stableID,
             fallback: bootstrapOptions).allowStoredDeviceAuth)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func `incomplete setup distinguishes missing roles from failed storage`(receivedOperator: Bool) async throws {
+        let stableID = "manual|handoff.gateway.example.com|443"
+        let temporaryState = try TemporaryOpenClawState(instanceID: UUID().uuidString)
+        defer { temporaryState.restore() }
+        let options = Self.makeNodeOptions(allowStoredDeviceAuth: false, deviceAuthGatewayID: stableID)
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        try appModel.applyGatewayConnectConfig(GatewayConnectConfig(
+            url: #require(URL(string: "wss://127.0.0.1:1")),
+            stableID: stableID,
+            tls: nil,
+            token: nil,
+            bootstrapToken: "one-time-bootstrap",
+            password: nil,
+            nodeOptions: options))
+
+        let received: Set<String> = receivedOperator ? ["node", "operator"] : ["node"]
+        let result = await appModel._test_completeSuccessfulGatewayAuthHandoff(
+            authRoles: (received, ["node"]),
+            nodeOptions: options)
+        let problem = try #require(appModel.lastGatewayProblem)
+        #expect(result == nil)
+        #expect(problem.owner == (receivedOperator ? .iphone : .gateway))
+        #expect(problem.title == (receivedOperator ? "Credential save failed" : "Gateway setup incomplete"))
+        #expect(problem.pauseReconnect)
+        #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == "one-time-bootstrap")
+        #expect(appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == false)
+        if !receivedOperator {
+            #expect(problem.technicalDetails == "Gateway credential handoff missing roles: operator.")
+            #expect(problem.message.contains("new iPhone setup code"))
+        }
     }
 
     @Test @MainActor func `bootstrap pairing clears only the target gateway`() async throws {
@@ -1557,7 +1599,6 @@ private func waitUntil(
             lanHost: nil,
             tailnetDns: nil,
             gatewayPort: nil,
-            canvasPort: nil,
             tlsEnabled: true,
             tlsFingerprintSha256: nil,
             cliPath: nil)
@@ -2471,8 +2512,9 @@ private func waitUntil(
         controller.clearPendingTrustPrompt()
         probe.results.continuation.yield(.fingerprint("stale-fingerprint"))
         probe.results.continuation.finish()
-        await connectTask.value
+        let result = await connectTask.value
 
+        #expect(result == .superseded)
         #expect(controller.pendingTrustPrompt == nil)
     }
 
@@ -2505,10 +2547,10 @@ private func waitUntil(
             startDiscovery: false,
             forceReconnectReset: { _ in })
 
-        let failure = await controller.switchToGateway(stableID: stableID)
+        let result = await controller.switchToGateway(stableID: stableID)
         await waitUntil { appModel.activeGatewayConnectConfig != nil }
 
-        #expect(failure == nil)
+        #expect(result == .accepted)
         #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
         #expect(appModel.activeGatewayConnectConfig?.url == URL(string: "ws://127.0.0.1:1"))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == stableID)
@@ -2531,10 +2573,33 @@ private func waitUntil(
         let appModel = NodeAppModel()
         let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-        let failure = await controller.switchToGateway(stableID: discoveredID)
+        let result = await controller.switchToGateway(stableID: discoveredID)
 
-        #expect(failure == "Kitchen Gateway is not currently discoverable on this network.")
+        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor
+    func `reconnect to active undiscoverable gateway returns failure without queuing connection`() async {
+        let registryIsolation = GatewayRegistryTestIsolation()
+        defer { registryIsolation.restore() }
+        let discoveredID = "bonjour|missing-active"
+        _ = GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+            stableID: discoveredID,
+            kind: .discovered,
+            name: "Kitchen Gateway",
+            host: nil,
+            port: nil,
+            useTLS: true,
+            lastConnectedAtMs: nil), activate: true)
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+        let result = await controller.connectActiveGateway()
+
+        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
+        #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == discoveredID)
         #expect(appModel.activeGatewayConnectConfig == nil)
     }
 
@@ -2621,7 +2686,7 @@ private func waitUntil(
             bootstrapToken: nil,
             password: nil,
             nodeOptions: self.makeNodeOptions(
-                caps: ["screen", "canvas"],
+                caps: ["screen", "camera"],
                 commands: ["notify", "location.get"],
                 permissions: ["screen": true]))
     }

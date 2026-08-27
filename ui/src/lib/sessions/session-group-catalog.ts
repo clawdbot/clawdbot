@@ -1,4 +1,5 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { formatUiError } from "../format-error.ts";
 import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import {
@@ -123,7 +124,7 @@ export function createSessionGroupCatalog(host: SessionGroupCatalogHost) {
     if (!current) {
       return "stale";
     }
-    host.publish({ ...host.readState(), error: String(error) }, "operation");
+    host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
     throw error;
   };
 

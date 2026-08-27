@@ -10,13 +10,11 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { MattermostPost } from "./client.js";
 import { resolveMattermostInboundMentionDecision } from "./monitor-activation.js";
 import {
   formatMattermostDirectMessageDropLog,
@@ -27,10 +25,11 @@ import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import {
   formatInboundFromLabel,
+  matchesMattermostBotMention,
   normalizeMention,
   shouldDropEmptyMattermostBody,
 } from "./monitor-helpers.js";
-import type { MattermostIngressLifecycle } from "./monitor-ingress.js";
+import type { MattermostIngressLifecycle, MattermostIngressPost } from "./monitor-ingress.js";
 import { resolveOncharPrefixes, stripOncharPrefix } from "./monitor-onchar.js";
 import {
   buildMattermostInboundMediaPayload,
@@ -55,11 +54,13 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
   const channelHistories = new Map<string, HistoryEntry[]>();
   const historyLimit = Math.max(
     0,
-    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    account.config.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
   );
 
   return async (
-    post: MattermostPost,
+    post: MattermostIngressPost,
     payload: MattermostEventPayload,
     turnAdoptionLifecycle?: MattermostIngressLifecycle,
     messageIds?: string[],
@@ -74,11 +75,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       return;
     }
     const allMessageIds = messageIds?.length ? messageIds : [post.id];
-    const senderId = post.user_id ?? payload.broadcast?.user_id;
-    if (!senderId) {
-      monitor.logVerboseMessage("mattermost: drop post (missing sender id)");
-      return;
-    }
+    const senderId = post.user_id;
     if (senderId === botUserId) {
       monitor.logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
       return;
@@ -176,7 +173,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
           if (created) {
             try {
               await sendMessageMattermost(
-                `user:${senderId}`,
+                `channel:${channelId}`,
                 core.channel.pairing.buildPairingReply({
                   channel: "mattermost",
                   idLine: `Your Mattermost user id: ${senderId}`,
@@ -250,11 +247,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
       kind !== "direct" &&
-      ((botUsername
-        ? normalizeLowercaseStringOrEmpty(rawText).includes(
-            `@${normalizeLowercaseStringOrEmpty(botUsername)}`,
-          )
-        : false) ||
+      (matchesMattermostBotMention(rawText, botUsername) ||
         core.channel.mentions.matchesMentionPatterns(rawText, mentionRegexes));
     const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
     const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];

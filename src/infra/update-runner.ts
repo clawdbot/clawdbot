@@ -98,3 +98,21 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     durationMs: Date.now() - startedAt,
   };
 }
+
+export function runGatewayUpdatePreflight(
+  cwd: string | undefined,
+  timeoutMs: number | undefined,
+  devTarget?: UpdateRunnerOptions["devTarget"],
+) {
+  const complete = new Error("update-preflight-complete");
+  return runGatewayUpdate({
+    cwd,
+    timeoutMs,
+    devTarget,
+    beforeGitMutation: () => Promise.reject(complete),
+  }).catch((error: unknown) => {
+    if (error !== complete) {
+      throw error;
+    }
+  });
+}

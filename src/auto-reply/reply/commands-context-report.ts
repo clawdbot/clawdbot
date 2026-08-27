@@ -273,10 +273,21 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   }
 
   const fileLines = report.injectedWorkspaceFiles.map((f) => {
-    const status = f.missing ? "MISSING" : f.truncated ? "TRUNCATED" : "OK";
+    const nativeUnverified = f.injectionStatus === "native_unverified";
+    const status = nativeUnverified
+      ? "NATIVE/UNVERIFIED"
+      : f.missing
+        ? "MISSING"
+        : f.truncated
+          ? "TRUNCATED"
+          : "OK";
     const raw = f.missing ? "0" : formatCharsAndTokens(f.rawChars);
-    const injected = f.missing ? "0" : formatCharsAndTokens(f.injectedChars);
-    return `- ${f.name}: ${status} | raw ${raw} | injected ${injected}`;
+    const injected = nativeUnverified
+      ? "unknown"
+      : f.missing
+        ? "0"
+        : formatCharsAndTokens(f.injectedChars);
+    return `- ${f.name}: ${status} | raw${nativeUnverified ? "(local)" : ""} ${raw} | injected ${injected}`;
   });
 
   const sandboxLine = `Sandbox: mode=${report.sandbox?.mode ?? "unknown"} sandboxed=${report.sandbox?.sandboxed ?? false}`;
@@ -314,7 +325,9 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({
-    files: report.injectedWorkspaceFiles,
+    files: report.injectedWorkspaceFiles.filter(
+      (file) => file.injectionStatus !== "native_unverified",
+    ),
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
@@ -346,6 +359,15 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
           "Tip: increase this agent's `agents.entries.*.bootstrapMaxChars` / `agents.entries.*.bootstrapTotalMaxChars` override, or the matching `agents.defaults.*` fallback, if this truncation is not intentional.",
         ]
       : [];
+  const hasNativeUnverifiedFiles = report.injectedWorkspaceFiles.some(
+    (file) => file.injectionStatus === "native_unverified",
+  );
+  const nativeUnverifiedWarningLines = hasNativeUnverifiedFiles
+    ? [
+        "⚠ Native Codex project instructions are unverified: Codex applies one aggregate root-to-CWD byte budget, and app-server does not report exact per-file retained bytes, so later AGENTS.md files can be partial.",
+        "Keep earlier/root files concise and read the relevant scoped file directly if guidance appears missing.",
+      ]
+    : [];
 
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine =
@@ -359,6 +381,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     sandboxLine,
     systemPromptLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
+    ...(nativeUnverifiedWarningLines.length ? ["", ...nativeUnverifiedWarningLines] : []),
     "",
     "Injected workspace files:",
     ...fileLines,

@@ -15,7 +15,11 @@ type HostProjection = {
   durableSeen: Set<string>;
   retryable: Set<string>;
 };
-type LiveProjection = { item: ChatQueueItem; owner: Host };
+type LiveProjection = {
+  confirmationGrace?: { deadlineMs: number; deliveryVersion: string };
+  item: ChatQueueItem;
+  owner: Host;
+};
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 const routePresentation = new WeakSet<ChatQueueItem>();
 const storageIds = new WeakMap<Storage, number>();
@@ -233,6 +237,30 @@ class ChatOutboxGatewayOwner {
   hasVolatile(host: Host, id: string): boolean {
     return this.hosts.get(host)?.retryable.has(id) ?? false;
   }
+  confirmationDeadline(
+    scope: Scope,
+    itemId: string,
+    deliveryVersion: string,
+    now: number,
+    graceMs: number,
+  ): number | null {
+    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(itemId);
+    if (!live) {
+      return null;
+    }
+    if (live.confirmationGrace?.deliveryVersion === deliveryVersion) {
+      return live.confirmationGrace.deadlineMs;
+    }
+    const deadlineMs = now + graceMs;
+    live.confirmationGrace = { deadlineMs, deliveryVersion };
+    return deadlineMs;
+  }
+  clearConfirmationGrace(scope: Scope, itemId: string): void {
+    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(itemId);
+    if (live) {
+      delete live.confirmationGrace;
+    }
+  }
   // Panes share this outbox and its drain while composer state stays per pane, so
   // a pane-local fact that blocks delivery has to be answerable from any of them.
   anyPane(matches: (host: Host) => boolean): boolean {
@@ -257,7 +285,7 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(scope);
     const live = this.live.get(key) ?? new Map<string, LiveProjection>();
     if (item) {
-      live.set(id, { item, owner: host });
+      live.set(id, { confirmationGrace: live.get(id)?.confirmationGrace, item, owner: host });
       this.live.set(key, live);
     } else {
       live.delete(id);

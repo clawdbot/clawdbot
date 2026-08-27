@@ -45,6 +45,7 @@ function makeMatrixFlowQaSuiteTestScenario(
     execution: {
       kind: "flow",
       channel: "matrix",
+      channels: ["matrix"],
       timeoutMs: 60_000,
       retryCount: 0,
       ...(providerMode ? { providerMode } : {}),

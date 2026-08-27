@@ -42,6 +42,21 @@ describe("gateway restart-handoff commands", () => {
     expect(gateway.helpInformation()).not.toContain("restart-handoff");
   });
 
+  it("documents restart-handoff output as unconditionally JSON", () => {
+    const program = new Command();
+    const gateway = program.command("gateway");
+    addGatewayRestartHandoffCommands(gateway);
+    const restartHandoff = gateway.commands.find((command) => command.name() === "restart-handoff");
+
+    for (const command of restartHandoff?.commands ?? []) {
+      const jsonOption = command.options.find((option) => option.long === "--json");
+      expect(jsonOption?.description, command.name()).toBe(
+        "Explicit machine-output spelling (command results are JSON by default)",
+      );
+      expect(jsonOption?.defaultValue, command.name()).toBeUndefined();
+    }
+  });
+
   it("reports protocol version 1 capabilities", async () => {
     await runRegisteredCli({
       register: registerGatewayRestartHandoffCli,

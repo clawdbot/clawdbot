@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexThread, JsonValue } from "./protocol.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -37,22 +38,6 @@ type ProjectedCodexHistoryMessage = {
   responseItem: JsonValue;
   textBytes: number;
 };
-
-function isUtf8ContinuationByte(byte: number | undefined): boolean {
-  return byte !== undefined && (byte & 0xc0) === 0x80;
-}
-
-function truncateUtf8Prefix(value: string, maxBytes: number): string {
-  const bytes = Buffer.from(value);
-  if (bytes.byteLength <= maxBytes) {
-    return value;
-  }
-  let end = Math.max(0, maxBytes);
-  while (end > 0 && isUtf8ContinuationByte(bytes[end])) {
-    end -= 1;
-  }
-  return bytes.subarray(0, end).toString("utf8");
-}
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -168,6 +153,9 @@ function projectCodexThreadHistory(params: {
       if (!text || !role) {
         continue;
       }
+      const phase =
+        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
+      const asyncDelivery = item.delivery === "async";
       const message =
         role === "assistant"
           ? attachCodexMirrorIdentity(
@@ -190,13 +178,13 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
+                ...(phase ? { phase } : {}),
+                ...(asyncDelivery && itemId ? { openclawAsyncDelivery: { itemId } } : {}),
                 timestamp,
               } satisfies AssistantMessage,
               identity,
             )
           : attachCodexMirrorIdentity({ role, content: text, timestamp } as AgentMessage, identity);
-      const phase =
-        item.phase === "commentary" || item.phase === "final_answer" ? item.phase : undefined;
       projected.push({
         message,
         responseItem: {
@@ -262,7 +250,9 @@ export function projectBoundedCodexThreadHistory(params: {
       .filter(
         ({ message }) =>
           message.role !== "assistant" ||
-          (message.stopReason !== "aborted" && message.stopReason !== "error"),
+          (message.stopReason !== "aborted" &&
+            message.stopReason !== "error" &&
+            !("openclawAsyncDelivery" in message)),
       )
       .map(({ responseItem }) => responseItem),
     transcriptMessages: selected.map(({ message }) => message),
@@ -280,8 +270,9 @@ export function projectBoundedCodexVisibleSessionHistory(
     }
     if (
       entry.role === "assistant" &&
-      "stopReason" in entry.message &&
-      (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")
+      (("stopReason" in entry.message &&
+        (entry.message.stopReason === "aborted" || entry.message.stopReason === "error")) ||
+        "openclawAsyncDelivery" in entry.message)
     ) {
       continue;
     }

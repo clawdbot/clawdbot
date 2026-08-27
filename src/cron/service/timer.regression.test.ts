@@ -138,30 +138,6 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("re-arms timer without hot-looping when a run is already in progress", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const store = timerRegressionFixtures.makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const state = createRunningCronServiceState({
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      jobs: [createDueIsolatedJob({ id: "due", nowMs: now, nextRunAtMs: now - 1 })],
-    });
-
-    await onTimer(state);
-
-    expect(timeoutSpy).toHaveBeenCalled();
-    if (state.timer == null) {
-      throw new Error("Expected cron timer to be re-armed");
-    }
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((d): d is number => typeof d === "number");
-    expect(delays).toContain(60_000);
-    timeoutSpy.mockRestore();
-  });
-
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
@@ -1188,7 +1164,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it("keeps scheduling after setup timeout when no restart handler is installed", async () => {
+  it("keeps scheduling after setup timeout without a notification handler", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -1226,7 +1202,6 @@ describe("cron service timer regressions", () => {
       now += 60_100;
       await timerPromise;
 
-      expect(state.restartRecoveryPending).toBe(false);
       expect(state.timer).not.toBeNull();
     } finally {
       vi.useRealTimers();
@@ -1414,20 +1389,21 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(0);
       await timerPromise;
 
-      const expectedSessionKey = `agent:main:cron:main-session-cancel-boundary:run:${scheduledAt}`;
       expect(enqueueSystemEvent).toHaveBeenCalledWith(
         "queued downstream work",
         expect.objectContaining({
+          agentId: "main",
           contextKey: "cron:main-session-cancel-boundary",
-          sessionKey: expectedSessionKey,
         }),
       );
+      expect(enqueueSystemEvent.mock.calls[0]?.[1]).not.toHaveProperty("sessionKey");
       expect(requestHeartbeat).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentId: "main",
           reason: "cron:main-session-cancel-boundary",
-          sessionKey: expectedSessionKey,
         }),
       );
+      expect(requestHeartbeat.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     } finally {
       resetActiveCronTaskRunsForTests();
       resetTaskRegistryControlRuntimeForTests();
@@ -1901,7 +1877,7 @@ describe("cron service timer regressions", () => {
     expect(startedAtEvents).toEqual([dueAt, dueAt + 50]);
   });
 
-  it("keeps queued scheduled reservations out of stuck-marker cleanup", async () => {
+  it("keeps capacity-blocked scheduled work unreserved until a slot opens", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const dueAt = Date.parse("2026-02-06T10:05:01.250Z");
     const first = createDueIsolatedJob({
@@ -1941,12 +1917,11 @@ describe("cron service timer regressions", () => {
 
     const timerRun = onTimer(state);
     await firstStarted.promise;
-    await vi.waitFor(() => {
-      expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
-    });
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBeUndefined();
+    expect(state.queuedRunReservationsByJobId.has(second.id)).toBe(false);
     now += 2 * 60 * 60 * 1000 + 1;
     recomputeNextRunsForMaintenance(state);
-    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBe(dueAt);
+    expect(state.store?.jobs.find((job) => job.id === second.id)?.state.queuedAtMs).toBeUndefined();
 
     releaseFirst.resolve({ status: "ok", summary: "first" });
     await secondStarted.promise;
@@ -2479,44 +2454,11 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(state.restartRecoveryPending).toBe(false);
       expect(state.timer).not.toBeNull();
       expect(scheduledStarted).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("skips new manual runs while restart recovery is pending", async () => {
-    const store = timerRegressionFixtures.makeStorePath();
-    const scheduledAt = Date.parse("2026-05-10T08:58:30.000Z");
-    const manualJob = createDueIsolatedJob({
-      id: "manual-blocked-by-recovery",
-      nowMs: scheduledAt,
-      nextRunAtMs: scheduledAt,
-    });
-    await saveCronStore(store.storePath, { version: 1, jobs: [manualJob] });
-
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronServiceState({
-      cronEnabled: true,
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => scheduledAt,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
-    state.restartRecoveryPending = true;
-
-    const result = await runManualCronJob(state, manualJob.id, "force");
-
-    expect(result).toEqual({
-      ok: true,
-      ran: false,
-      reason: "restart-recovery-pending",
-    });
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
   });
 
   it("does not persist stale startup catch-up outcomes after the old service stops", async () => {
@@ -2719,14 +2661,15 @@ describe("cron service timer regressions", () => {
       now += 60_100;
       await manualRun;
       await firstScheduledStarted.promise;
-      expect(state.restartRecoveryPending).toBe(false);
 
       finishFirstScheduled.resolve();
       await timerRun;
+      await vi.waitFor(() => {
+        expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
+      });
 
       const second = requireJob(state, secondScheduledJob.id);
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
       expect(second.state.runningAtMs).toBeUndefined();
     } finally {
       vi.useRealTimers();
@@ -2959,13 +2902,16 @@ describe("cron service timer regressions", () => {
   it("auto-disables a recurring job on its tenth consecutive run failure", () => {
     const startedAt = Date.parse("2026-08-01T12:00:00.000Z");
     const deferredNotifications: Array<() => void> = [];
+    const enqueueSystemEvent = vi.fn();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
     const state = createCronServiceState({
       cronEnabled: true,
       storePath: "/tmp/cron-consecutive-failure-threshold.json",
       log: noopLogger,
       nowMs: () => startedAt,
-      enqueueSystemEvent: vi.fn(),
+      enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
+      sendCronFailureAlert,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     const job = createIsolatedRegressionJob({
@@ -2976,6 +2922,7 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "fail" },
       state: { consecutiveErrors: 8 },
     });
+    job.failureAlert = { after: 10, cooldownMs: 0 };
 
     applyJobResult(
       state,
@@ -3007,6 +2954,9 @@ describe("cron service timer regressions", () => {
       consecutiveErrors: 10,
     });
     expect(deferredNotifications).toHaveLength(1);
+    deferredNotifications[0]?.();
+    expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
   });
 
   it("resets the auto-disable streak after a successful recurring run", () => {
@@ -3057,7 +3007,7 @@ describe("cron service timer regressions", () => {
   it.each([
     { name: "stale schedule", opts: { scheduleOwnership: "stale" as const } },
     { name: "forced run", opts: { scheduleMode: "preserve" as const } },
-  ])("does not auto-disable after a $name failure", ({ opts }) => {
+  ])("does not auto-disable but still alerts after a $name failure", ({ opts }) => {
     const startedAt = Date.parse("2026-08-01T14:00:00.000Z");
     const deferredNotifications: Array<() => void> = [];
     const state = createCronServiceState({
@@ -3088,7 +3038,7 @@ describe("cron service timer regressions", () => {
     expect(job.enabled).toBe(true);
     expect(job.state.consecutiveErrors).toBe(10);
     expect(job.state.autoDisabled).toBeUndefined();
-    expect(deferredNotifications).toHaveLength(0);
+    expect(deferredNotifications).toHaveLength(1);
   });
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {

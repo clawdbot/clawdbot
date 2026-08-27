@@ -1,11 +1,13 @@
 // Imported by register.test.ts to keep its mocked suite in one Vitest module graph.
-import { runDoctorLintChecks, type OpenClawConfig } from "openclaw/plugin-sdk/health";
+import { runDoctorLintChecks } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence } from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   cfgWithPolicy,
+  cfgWithPolicyOverrides,
   ctx,
+  rawCfgWithPolicy,
   runPolicyChecks,
   setupPolicyDoctorTest,
   teardownPolicyDoctorTest,
@@ -18,7 +20,7 @@ describe("registerPolicyDoctorChecks", () => {
   afterEach(teardownPolicyDoctorTest);
 
   it("ignores agent-local Docker and browser posture under shared sandbox scope", async () => {
-    const cfg = {
+    const cfg = rawCfgWithPolicy({
       agents: {
         defaults: {
           sandbox: {
@@ -52,9 +54,9 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    };
+    });
 
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
     const runnerEvidence = (evidence.sandboxPosture ?? []).filter(
       (entry) => entry.agentId === "runner",
     );
@@ -96,8 +98,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("treats blank agent browser CDP source range as an explicit clear", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -115,7 +116,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         browser: { requireCdpSourceRange: true },
@@ -135,8 +136,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports enabled container posture rules that the backend cannot observe", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -150,7 +150,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         allowBackends: ["openshell"],
@@ -163,7 +163,7 @@ describe("registerPolicyDoctorChecks", () => {
     });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([
@@ -209,8 +209,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("evaluates inherited container mounts for browser containers on non-Docker backends", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -226,7 +225,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         allowBackends: ["openshell"],
@@ -238,7 +237,7 @@ describe("registerPolicyDoctorChecks", () => {
     });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([
@@ -265,8 +264,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("normalizes mixed-case Docker backend before collecting container posture", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -280,7 +278,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         allowBackends: ["docker"],
@@ -293,7 +291,7 @@ describe("registerPolicyDoctorChecks", () => {
     });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([
@@ -317,8 +315,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("evaluates Podman container posture without reporting it as unobservable", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -332,7 +329,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         allowBackends: ["podman"],
@@ -363,7 +360,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses explicit agent sandbox scope before inherited legacy perSession", async () => {
-    const cfg = {
+    // `perSession` is retired runtime config but remains raw doctor input so policy evidence can
+    // verify that an explicit modern scope wins over the legacy field.
+    const cfg = rawCfgWithPolicy({
       agents: {
         defaults: {
           sandbox: {
@@ -393,9 +392,9 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    };
+    });
 
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
     const runnerEvidence = (evidence.sandboxPosture ?? []).filter(
       (entry) => entry.agentId === "runner",
     );
@@ -422,8 +421,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts configured sandbox posture that matches policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -438,7 +436,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         requireMode: ["all", "non-main"],
@@ -460,15 +458,14 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies agent-scoped sandbox claims only to matching agents", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         list: [
           { id: "Sebby", sandbox: { mode: "off", backend: "ssh" } },
           { id: "buddy", sandbox: { mode: "all", backend: "docker" } },
         ],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       sandbox: {
         requireMode: ["all"],
@@ -510,12 +507,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not apply sandbox overlays from invalid scoped policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         list: [{ id: "sebby", sandbox: { mode: "off" } }],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         sebby: {
@@ -549,8 +545,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports scoped container posture rules that a non-Docker agent group cannot observe", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -569,7 +564,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         release: {
@@ -593,8 +588,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows scoped non-Docker agent groups when container posture rules are off", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -613,7 +607,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         release: {
@@ -631,8 +625,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not fall back to default browser posture for scoped browser-disabled agents", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: {
@@ -648,7 +641,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         release: {
@@ -662,7 +655,7 @@ describe("registerPolicyDoctorChecks", () => {
     });
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
       expect.arrayContaining([
@@ -682,8 +675,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies main-scoped sandbox claims to defaults when unrelated agents exist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: { mode: "off" },
@@ -695,7 +687,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         mainSandbox: {
@@ -719,8 +711,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports tool posture denied by policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         profile: "coding",
         deny: ["write"],
@@ -742,7 +733,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         profiles: { allow: ["messaging", "minimal"] },
@@ -759,7 +750,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
@@ -834,8 +825,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts configured tool posture that matches policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         profile: "messaging",
         deny: ["group:runtime", "group:fs"],
@@ -843,7 +833,7 @@ describe("registerPolicyDoctorChecks", () => {
         fs: { workspaceOnly: true },
         elevated: { enabled: false },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         profiles: { allow: ["messaging", "minimal"] },
@@ -865,8 +855,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports global and agent-scoped tool claims independently", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         exec: { host: "sandbox" },
       },
@@ -876,7 +865,7 @@ describe("registerPolicyDoctorChecks", () => {
           { id: "buddy", tools: { exec: { host: "sandbox" } } },
         ],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         exec: { allowHosts: ["sandbox", "gateway"] },
@@ -918,15 +907,14 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not apply agent-scoped tool claims to other agents", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         list: [
           { id: "sebby", tools: { exec: { host: "sandbox" } } },
           { id: "buddy", tools: { exec: { host: "node" } } },
         ],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         sebby: {
@@ -945,8 +933,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports global and agent-scoped alsoAllow drift", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: { alsoAllow: ["read", "cron"] },
       agents: {
         list: [
@@ -954,7 +941,7 @@ describe("registerPolicyDoctorChecks", () => {
           { id: "buddy", tools: { alsoAllow: ["read"] } },
         ],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         alsoAllow: { expected: ["read", "message"] },
@@ -1007,10 +994,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports unexpected alsoAllow entries when policy expects none", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: { alsoAllow: ["read"] },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         alsoAllow: { expected: [] },
@@ -1030,12 +1016,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses config-level exec defaults and normalizes required deny aliases", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         deny: ["exec", "apply_patch"],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         exec: {
@@ -1072,12 +1057,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts omitted exec defaults and individual denies for required deny groups", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         deny: ["exec", "process", "code_execution", "read", "write", "edit", "apply_patch"],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         exec: {
@@ -1096,12 +1080,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts wildcard tool denies for required tool posture", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         deny: ["web_*"],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         denyTools: ["web_search"],
@@ -1115,12 +1098,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts canonical tool groups for required tool denies", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         deny: ["group:openclaw"],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         denyTools: ["message"],
@@ -1129,7 +1111,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
@@ -1145,8 +1127,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("treats globally disabled elevated mode as disabling per-agent elevated posture", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         elevated: { enabled: false },
       },
@@ -1160,7 +1141,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         ],
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         elevated: { allow: false },
@@ -1169,7 +1150,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
@@ -1205,12 +1186,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses deny as the omitted exec security default for explicit sandbox host", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       tools: {
         exec: { host: "sandbox" },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         exec: {
@@ -1222,7 +1202,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
@@ -1238,14 +1218,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses deny as the omitted exec security default for auto host when sandbox can apply", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: { mode: "all" },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         exec: {
@@ -1257,7 +1236,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
@@ -1273,14 +1252,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("keeps omitted auto-host exec security full when sandbox is non-main only", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       agents: {
         defaults: {
           sandbox: { mode: "non-main" },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       tools: {
         exec: {
@@ -1292,7 +1270,7 @@ describe("registerPolicyDoctorChecks", () => {
 
     registerPolicyDoctorChecks();
     const result = await runDoctorLintChecks(ctx(configPath, cfg));
-    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+    const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
       expect.arrayContaining([
@@ -1314,8 +1292,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports gateway exposure settings denied by policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         bind: "lan",
         auth: { mode: "none" },
@@ -1341,7 +1318,7 @@ describe("registerPolicyDoctorChecks", () => {
           commands: { allow: ["mcp.help", "mcp.invoke", "system.run"] },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1427,8 +1404,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report gateway node commands denied by runtime config", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         nodes: {
           commands: {
@@ -1437,7 +1413,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         nodes: {
@@ -1453,12 +1429,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports gateway node commands denied by policy without explicit extra allows", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         nodes: {},
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         nodes: {
@@ -1481,10 +1456,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports omitted gateway bind when non-loopback exposure is denied", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {},
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1507,12 +1481,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report omitted gateway bind when Tailscale forces loopback", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         tailscale: { mode: "serve" },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1528,12 +1501,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports preserved Tailscale Funnel routes when policy denies Funnel exposure", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         tailscale: { mode: "serve", preserveFunnel: true },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1578,13 +1550,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report inactive custom bind hosts", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         bind: "loopback",
         customBindHost: "0.0.0.0",
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1600,13 +1571,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report loopback custom bind hosts", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         bind: "custom",
         customBindHost: "127.0.0.1",
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1622,13 +1592,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports valid non-loopback custom bind hosts", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         bind: "custom",
         customBindHost: "192.168.1.20",
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1651,13 +1620,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report blank custom bind config as active non-loopback exposure", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         bind: "custom",
         customBindHost: "   ",
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         exposure: {
@@ -1675,13 +1643,12 @@ describe("registerPolicyDoctorChecks", () => {
   it.each(["localhost", "::1", "192.168.001.20"])(
     "does not report invalid custom bind host %s as active non-loopback exposure",
     async (customBindHost) => {
-      const cfg = {
-        ...cfgWithPolicy(),
+      const cfg = cfgWithPolicyOverrides({
         gateway: {
           bind: "custom",
           customBindHost,
         },
-      } as unknown as OpenClawConfig;
+      });
       const configPath = await writePolicyFixture({
         gateway: {
           exposure: {
@@ -1698,15 +1665,14 @@ describe("registerPolicyDoctorChecks", () => {
   );
 
   it("reports configured gateway remote URLs when remote mode is active", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         mode: "remote",
         remote: {
           url: "wss://remote.example.test:18789",
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         remote: {
@@ -1735,14 +1701,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report inert remote config outside remote mode", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         remote: {
           url: "wss://remote.example.test:18789",
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         remote: {
@@ -1758,8 +1723,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports default Responses URL fetching without allowlists", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         http: {
           endpoints: {
@@ -1769,7 +1733,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         http: {
@@ -1801,8 +1765,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports wildcard Responses URL allowlists as unrestricted", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       gateway: {
         http: {
           endpoints: {
@@ -1814,7 +1777,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    });
     const configPath = await writePolicyFixture({
       gateway: {
         http: {

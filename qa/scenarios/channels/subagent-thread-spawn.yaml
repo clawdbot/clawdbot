@@ -5,7 +5,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - matrix.acp-subagent-spawn-hooks
+      - channels.native-threads
       - agent-runtime.subagent-turns-subagents
   objective: Verify sessions_spawn(thread=true, mode=session) creates a persistent Matrix child thread and delivers the child result there.
   gatewayConfigPatch:

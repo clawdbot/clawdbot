@@ -1,11 +1,16 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type {
   ExecApprovalIdLookupResult,
   ExecApprovalManager,
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
+import { createSessionListEntryFilter, resolveSessionSharingTarget } from "../session-sharing.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 const APPROVAL_NOT_FOUND_DETAILS = {
@@ -38,13 +43,53 @@ export function normalizeApprovalIdentities(
   return [...normalized];
 }
 
+export function canAccessApprovalSession(params: {
+  cfg: OpenClawConfig;
+  client: GatewayClient | null;
+  sessionKey?: string | null;
+  agentId?: string | null;
+}): boolean {
+  if (operatorSessionCap(params.client, params.cfg) !== "none") {
+    return true;
+  }
+  const visibilityFilter = createSessionListEntryFilter({ client: params.client, cfg: params.cfg });
+  if (!visibilityFilter) {
+    return true;
+  }
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return false;
+  }
+  const agentId = normalizeOptionalString(params.agentId);
+  const target = resolveSessionSharingTarget({
+    cfg: params.cfg,
+    sessionKey,
+    ...(agentId ? { agentId } : {}),
+  });
+  return Boolean(target && visibilityFilter(target.storeKey, target.entry));
+}
+
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
+  cfg?: OpenClawConfig;
 }): boolean {
   const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
   if (scopes.includes(ADMIN_SCOPE)) {
     return true;
+  }
+  if (params.cfg) {
+    const source = isRecord(params.record.request) ? params.record.request : undefined;
+    if (
+      !canAccessApprovalSession({
+        cfg: params.cfg,
+        client: params.client,
+        sessionKey: normalizeOptionalString(source?.sessionKey),
+        agentId: normalizeOptionalString(source?.agentId),
+      })
+    ) {
+      return false;
+    }
   }
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
@@ -77,16 +122,30 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 export function listVisiblePendingApprovalRequests<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   client?: GatewayClient | null;
-}): Array<{ id: string; request: TPayload; createdAtMs: number; expiresAtMs: number }> {
+  cfg?: OpenClawConfig;
+  approvalKind?: ChannelApprovalKind;
+}): Array<{
+  approvalKind?: ChannelApprovalKind;
+  id: string;
+  request: TPayload;
+  createdAtMs: number;
+  expiresAtMs: number;
+}> {
   return params.manager
     .listPendingRecords()
-    .filter((record) => isApprovalRecordVisibleToClient({ record, client: params.client ?? null }))
-    .map(({ id, request, createdAtMs, expiresAtMs }) => ({
-      id,
-      request,
-      createdAtMs,
-      expiresAtMs,
-    }));
+    .filter((record) =>
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+        ...(params.cfg ? { cfg: params.cfg } : {}),
+      }),
+    )
+    .map(({ id, request, createdAtMs, expiresAtMs }) => {
+      const approval = { id, request, createdAtMs, expiresAtMs };
+      return params.approvalKind
+        ? Object.assign(approval, { approvalKind: params.approvalKind })
+        : approval;
+    });
 }
 
 function resolveLookupError(params: {
@@ -110,6 +169,7 @@ function resolveApprovalRecordForState<TPayload>(
     manager: ExecApprovalManager<TPayload>;
     inputId: string;
     client?: GatewayClient | null;
+    cfg?: OpenClawConfig;
     exposeAmbiguousPrefixError?: boolean;
     recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
   },
@@ -118,7 +178,11 @@ function resolveApprovalRecordForState<TPayload>(
   const resolvedId = params.manager.lookupApprovalId(params.inputId, {
     includeResolved: expectedState === "resolved",
     filter: (record) =>
-      isApprovalRecordVisibleToClient({ record, client: params.client ?? null }) &&
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+        ...(params.cfg ? { cfg: params.cfg } : {}),
+      }) &&
       (params.recordFilter?.(record) ?? true),
   });
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
@@ -135,6 +199,7 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
   client?: GatewayClient | null;
+  cfg?: OpenClawConfig;
   exposeAmbiguousPrefixError?: boolean;
   recordFilter?: (record: ExecApprovalRecord<TPayload>) => boolean;
 }): ApprovalRecordLookupResult<TPayload> {

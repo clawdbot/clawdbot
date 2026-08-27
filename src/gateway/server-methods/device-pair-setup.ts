@@ -9,13 +9,13 @@ import {
   validateDevicePairSetupStatusParams,
   type DevicePairSetupStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readDevicePairSetupCompletion } from "../../infra/device-bootstrap.js";
 import { registerDevicePairingJoinCode } from "../../infra/device-pairing-join-code.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import {
   decodePairingSetupCode,
   encodePairingSetupCode,
+  resolveConfiguredPairingPublicUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -34,11 +34,6 @@ import { assertValidParams } from "./validation.js";
 // rather than return a response that violates the protocol schema.
 const MAX_QR_DATA_URL_LENGTH = 16_384;
 type PairingSetupPayload = ReturnType<typeof decodePairingSetupCode>;
-
-function readConfiguredDevicePairPublicUrl(config: OpenClawConfig): string | undefined {
-  const value = config.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function resolveDevicePairingJoinBaseUrl(payload: PairingSetupPayload): URL {
   for (const candidate of payload.urls ?? [payload.url]) {
@@ -86,7 +81,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
       const config = context.getRuntimeConfig();
       const requestPublicUrl = typeof params.publicUrl === "string" ? params.publicUrl : undefined;
       const configuredPublicUrl =
-        params.preferRemoteUrl === true ? undefined : readConfiguredDevicePairPublicUrl(config);
+        params.preferRemoteUrl === true ? undefined : resolveConfiguredPairingPublicUrl(config);
       const publicUrl = requestPublicUrl ?? configuredPublicUrl;
       const resolved = await resolvePairingSetupFromConfig(config, {
         env: process.env,

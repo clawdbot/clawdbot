@@ -3,9 +3,10 @@ import {
   buildChannelInboundEventContext,
   type PreparedInboundReply,
 } from "openclaw/plugin-sdk/channel-inbound";
+import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { vi, type Mock } from "vitest";
-import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type {
   MatrixConfig,
   MatrixRoomConfig,
@@ -25,6 +26,19 @@ type MatrixDispatchInboundMessage = (params: {
 }) => Promise<{
   queuedFinal: boolean;
   counts: { final: number; block: number; tool: number };
+  settledReceipt?: {
+    anyVisibleDelivered: boolean;
+    counts: Record<
+      "tool" | "block" | "final",
+      {
+        delivered: number;
+        deliveredNotVisible: number;
+        cancelled: number;
+        failedBeforeSend: number;
+        failedAfterSend: number;
+      }
+    >;
+  };
 }>;
 
 const DEFAULT_ROUTE = {
@@ -93,6 +107,7 @@ type MatrixHandlerTestHarnessOptions = {
   };
   resolveHumanDelayConfig?: () => undefined;
   dispatchInboundMessage?: MatrixDispatchInboundMessage;
+  runChannelInboundEvent?: MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"];
   runPrepared?: MatrixRunPreparedMock;
   inboundDeduper?: MatrixMonitorHandlerParams["inboundDeduper"];
   shouldAckReaction?: () => boolean;
@@ -205,7 +220,7 @@ export function createMatrixHandlerTestHarness(
         dispatchResult,
       };
     });
-  const run = vi.fn(
+  const defaultRun = vi.fn(
     async (
       params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
     ) => {
@@ -253,6 +268,7 @@ export function createMatrixHandlerTestHarness(
       });
     },
   );
+  const run = options.runChannelInboundEvent ?? defaultRun;
   const dmPolicy = options.dmPolicy ?? "open";
   const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
   const cfgForHandler =

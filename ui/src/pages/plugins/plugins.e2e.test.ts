@@ -265,6 +265,27 @@ function readOnlyConnectResponse() {
   };
 }
 
+function enabledWorkboardConnectResponse() {
+  return {
+    ...readOnlyConnectResponse(),
+    auth: {
+      deviceToken: "plugins-workboard-device-token",
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    },
+    controlUiTabs: [
+      {
+        group: "control",
+        icon: "kanban",
+        id: "workboard",
+        label: "Workboard",
+        placement: "route:workboard",
+        pluginId: "workboard",
+      },
+    ],
+  };
+}
+
 const requireRecord = createRequireRecord("record", "expected-object-value");
 
 function requestParams(request: MockGatewayRequest): Record<string, unknown> {
@@ -601,6 +622,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(requestParams(postEnableConfigRequest)).toEqual({});
       await gateway.setMethodResponse("plugins.list", finalInventory);
       await gateway.setMethodResponse("config.get", configSnapshot(true));
+      await gateway.setMethodResponse("connect", enabledWorkboardConnectResponse());
       await gateway.resolveDeferred("config.get", configSnapshot(true));
       const postEnableListRequest = await waitForNextRequest(
         gateway,
@@ -654,6 +676,42 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         "Removed calendar-plus",
       );
 
+      await gateway.setMethodResponse("plugins.list", uninstalledInventory);
+      await page.getByRole("tab", { name: /^Discover/u }).click();
+      const searchCountBeforeReinstall = (await gateway.getRequests("plugins.search")).length;
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("calendar");
+      await waitForNextRequest(gateway, "plugins.search", searchCountBeforeReinstall);
+      const reinstallRow = page.locator(
+        '[data-package-name="calendar-plus"][data-plugin-status="not-installed"]',
+      );
+      await reinstallRow.waitFor({ state: "visible" });
+      await gateway.setMethodResponse("plugins.install", installResult);
+      await gateway.setMethodResponse("plugins.list", finalInventory);
+      const installCountBeforeReinstall = (await gateway.getRequests("plugins.install")).length;
+      await reinstallRow
+        .getByRole("button", { name: "Install Calendar Plus", exact: true })
+        .click();
+      const reinstallRequest = await waitForNextRequest(
+        gateway,
+        "plugins.install",
+        installCountBeforeReinstall,
+      );
+      expect(requestParams(reinstallRequest)).toEqual({
+        source: "clawhub",
+        packageName: "calendar-plus",
+      });
+      const reinstalledRow = page.locator(
+        '[data-package-name="calendar-plus"][data-plugin-status="enabled"]',
+      );
+      await reinstalledRow.waitFor({ state: "attached" });
+      await captureScreenshot(page, "11-reinstalled-feedback-desktop.png");
+      expect(await page.locator(".plugins-page-notice").count()).toBe(0);
+      expect(await reinstalledRow.getByRole("status").textContent()).toContain(
+        "Installed Calendar Plus",
+      );
+
+      await page.getByRole("tab", { name: /^Installed/u }).click();
+      await page.getByRole("searchbox", { name: "Search plugins" }).fill("");
       await page.setViewportSize(mobileViewport);
       await expect
         .poll(() =>
@@ -680,7 +738,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.waitFor({ state: "visible" });
       const workboardSidebarItem = sidebar.locator(
-        '.sidebar-zone-entry[data-sidebar-entry="route:workboard"] > .nav-item',
+        '.sidebar-zone-entry[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
       );
       await workboardSidebarItem.waitFor({ state: "visible" });
       expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");

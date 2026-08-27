@@ -1,20 +1,31 @@
+import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
   SessionCatalogTranscriptItem,
   SessionsCatalogReadResult,
 } from "openclaw/plugin-sdk/session-catalog";
+import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import type { ActiveSessionCatalog } from "openclaw/plugin-sdk/session-catalog-runtime";
+import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   beamMirrorId,
   buildBeamMirrorItems,
   createBeamMirrorRunner,
+  createBeamMirrorService,
   fitBeamMirrorUpload,
   parseBeamMirrorConfig,
   type BeamMirrorUpload,
 } from "./mirror.js";
 import { BEAM_MAX_ITEMS, parseBeamUpload } from "./types.js";
+
+vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-catalog-runtime")>();
+  return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
+});
 
 const NOW = Date.parse("2026-07-27T12:00:00.000Z");
 
@@ -42,7 +53,9 @@ function fakeCatalog(params: {
   sessions: Array<{ threadId: string; name?: string; recencyAt: number }>;
   items?: SessionCatalogTranscriptItem[];
   hostKind?: string;
-  onRead?: (threadId: string) => void;
+  onList?: () => unknown;
+  onRead?: (threadId: string) => unknown;
+  processHomeFallbackAllowed?: boolean;
 }): ActiveSessionCatalog {
   const host: SessionCatalogHost = {
     hostId: "gateway:local",
@@ -65,9 +78,13 @@ function fakeCatalog(params: {
     pluginId: params.id,
     id: params.id,
     label: params.id,
-    list: async () => [host],
+    processHomeFallbackAllowed: params.processHomeFallbackAllowed ?? true,
+    list: async () => {
+      await params.onList?.();
+      return [host];
+    },
     read: async ({ threadId }): Promise<SessionsCatalogReadResult> => {
-      params.onRead?.(threadId);
+      await params.onRead?.(threadId);
       return {
         hostId: "gateway:local",
         label: "Local",
@@ -92,7 +109,7 @@ function captureFetch(
   status = 200,
   onCancel?: () => void | Promise<void>,
 ): typeof fetch {
-  return (async (url: unknown, init?: RequestInit) => {
+  return vi.fn(async (url: unknown, init?: RequestInit) => {
     const headers = (init?.headers ?? {}) as Record<string, string>;
     sent.push({
       url: String(url),
@@ -105,10 +122,43 @@ function captureFetch(
         })
       : "{}";
     return new Response(body, { status });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 const silentLogger = { warn: () => {}, info: () => {} };
+
+async function listenOnLoopback(server: Server): Promise<string> {
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("test server did not expose a TCP address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+
+async function closeTestServer(server: Server): Promise<void> {
+  if (!server.listening) {
+    return;
+  }
+  server.closeAllConnections();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of req) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
 
 describe("parseBeamMirrorConfig", () => {
   it("returns undefined without mirror config", () => {
@@ -223,6 +273,205 @@ describe("fitBeamMirrorUpload", () => {
 });
 
 describe("createBeamMirrorRunner", () => {
+  it("does not replay mirror uploads across redirects to another private origin", async () => {
+    const redirectedBodies: string[] = [];
+    const internalServer = createServer((req, res) => {
+      void readRequestBody(req).then(
+        (body) => {
+          redirectedBodies.push(body);
+          res.statusCode = 200;
+          res.end("ok");
+        },
+        (error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    const internalOrigin = await listenOnLoopback(internalServer);
+    const receiverBodies: string[] = [];
+    const receiverServer = createServer((req, res) => {
+      void readRequestBody(req).then(
+        (body) => {
+          receiverBodies.push(body);
+          res.statusCode = 307;
+          res.setHeader("Location", `${internalOrigin}/internal-action`);
+          res.end();
+        },
+        (error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    try {
+      const receiverOrigin = await listenOnLoopback(receiverServer);
+      const runner = createBeamMirrorRunner({
+        runtime: fakeRuntime(mirrorConfig({ endpoint: `${receiverOrigin}/beam` })),
+        logger: silentLogger,
+        now: () => NOW,
+        listCatalogs: () => [
+          fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+        ],
+      });
+
+      await runner.tick();
+
+      expect(receiverBodies).toHaveLength(1);
+      expect(receiverBodies[0]).toContain("Fix the flow.");
+      expect(redirectedBodies).toEqual([]);
+    } finally {
+      await Promise.all([closeTestServer(receiverServer), closeTestServer(internalServer)]);
+    }
+  });
+
+  it.each([
+    { label: "301", status: 301, location: "/redirected?private=do-not-log" },
+    { label: "302", status: 302, location: "/redirected?private=do-not-log" },
+    { label: "303", status: 303, location: "/redirected?private=do-not-log" },
+    { label: "307", status: 307, location: "/redirected?private=do-not-log" },
+    { label: "308", status: 308, location: "/redirected?private=do-not-log" },
+    { label: "307 without Location", status: 307, location: undefined },
+  ])(
+    "blocks a $label redirect without retrying the configured endpoint",
+    async ({ status, location }) => {
+      const warnings: string[] = [];
+      const receiverBodies: string[] = [];
+      const redirectedBodies: string[] = [];
+      const server = createServer((req, res) => {
+        void readRequestBody(req).then(
+          (body) => {
+            if (req.url === "/redirected") {
+              redirectedBodies.push(body);
+              res.statusCode = 200;
+              res.end("ok");
+              return;
+            }
+            receiverBodies.push(body);
+            res.statusCode = status;
+            if (location) {
+              res.setHeader("Location", location);
+            }
+            res.end();
+          },
+          (error: unknown) => {
+            res.destroy(error instanceof Error ? error : new Error(String(error)));
+          },
+        );
+      });
+      try {
+        const origin = await listenOnLoopback(server);
+        const runner = createBeamMirrorRunner({
+          runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+          logger: { warn: (message) => warnings.push(message), info: () => {} },
+          now: () => NOW,
+          listCatalogs: () => [
+            fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+          ],
+        });
+
+        await runner.tick();
+        await runner.tick();
+
+        expect(receiverBodies).toHaveLength(1);
+        expect(redirectedBodies).toEqual([]);
+        expect(warnings).toEqual([
+          `beam mirror upload blocked for claude: receiver returned redirect (${status}); redirects are not followed; configure the final endpoint`,
+        ]);
+        expect(warnings.join(" ")).not.toContain("do-not-log");
+      } finally {
+        await closeTestServer(server);
+      }
+    },
+  );
+
+  it("logs a terminal redirect block after a recent transient warning", async () => {
+    const warnings: string[] = [];
+    let requestCount = 0;
+    const server = createServer((req, res) => {
+      void readRequestBody(req).then(
+        () => {
+          requestCount += 1;
+          res.statusCode = requestCount === 1 ? 503 : 307;
+          res.end();
+        },
+        (error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    try {
+      const origin = await listenOnLoopback(server);
+      const runner = createBeamMirrorRunner({
+        runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+        logger: { warn: (message) => warnings.push(message), info: () => {} },
+        now: () => NOW,
+        listCatalogs: () => [
+          fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+        ],
+      });
+
+      await runner.tick();
+      await runner.tick();
+      await runner.tick();
+
+      expect(requestCount).toBe(2);
+      expect(warnings).toEqual([
+        "beam mirror upload failed (503) for claude",
+        "beam mirror upload blocked for claude: receiver returned redirect (307); redirects are not followed; configure the final endpoint",
+      ]);
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
+  it("rechecks once after runner restart and resumes after the endpoint changes", async () => {
+    const requests: string[] = [];
+    const server = createServer((req, res) => {
+      void readRequestBody(req).then(
+        () => {
+          requests.push(req.url ?? "");
+          if (req.url === "/redirecting") {
+            res.statusCode = 307;
+            res.setHeader("Location", "/redirected");
+          } else {
+            res.statusCode = 200;
+          }
+          res.end();
+        },
+        (error: unknown) => {
+          res.destroy(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+    try {
+      const origin = await listenOnLoopback(server);
+      let endpoint = `${origin}/redirecting`;
+      const runtime = {
+        config: { current: () => mirrorConfig({ endpoint }) },
+      } as unknown as PluginRuntime;
+      const createRunner = () =>
+        createBeamMirrorRunner({
+          runtime,
+          logger: silentLogger,
+          now: () => NOW,
+          listCatalogs: () => [
+            fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+          ],
+        });
+      const runner = createRunner();
+
+      await runner.tick();
+      await runner.tick();
+      const restartedRunner = createRunner();
+      await restartedRunner.tick();
+      endpoint = `${origin}/direct`;
+      await restartedRunner.tick();
+
+      expect(requests).toEqual(["/redirecting", "/redirecting", "/direct"]);
+    } finally {
+      await closeTestServer(server);
+    }
+  });
+
   it("uploads active local sessions and skips unchanged ones", async () => {
     const sent: SentRequest[] = [];
     const reads: string[] = [];
@@ -299,6 +548,245 @@ describe("createBeamMirrorRunner", () => {
     expect(warnings).toEqual([]);
   });
 
+  it("bounds guarded uploads and releases their response resources", async () => {
+    const cancel = vi.fn();
+    const release = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel,
+      }),
+      { status: 200 },
+    );
+    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response,
+      finalUrl: "https://team.example/api/v1/beam/sessions",
+      release,
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+      ],
+    });
+
+    try {
+      await runner.tick();
+
+      expect(guardedFetch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: "https://team.example/api/v1/beam/sessions",
+          timeoutMs: 15_000,
+          maxRedirects: 0,
+          policy: { allowedOrigins: ["https://team.example"] },
+        }),
+      );
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      guardedFetch.mockRestore();
+    }
+  });
+
+  it("stops before a paused transcript read settles without resuming mirror work", async () => {
+    const readStarted = createDeferred<void>();
+    const releaseRead = createDeferred<void>();
+    const list = vi.fn();
+    const read = vi.fn(async () => {
+      readStarted.resolve();
+      await releaseRead.promise;
+    });
+    const sent: SentRequest[] = [];
+    const warnings: string[] = [];
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      fetchFn: captureFetch(sent),
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({
+          id: "claude",
+          sessions: [
+            { threadId: "t1", recencyAt: NOW },
+            { threadId: "t2", recencyAt: NOW },
+          ],
+          onList: list,
+          onRead: read,
+        }),
+      ],
+    });
+
+    try {
+      const tick = runner.tick();
+      await readStarted.promise;
+      const firstStop = runner.stop();
+      expect(runner.stop()).toBe(firstStop);
+      await Promise.all([firstStop, tick]);
+
+      releaseRead.resolve();
+      await read.mock.results[0]?.value;
+
+      expect(read).toHaveBeenCalledOnce();
+      expect(sent).toEqual([]);
+      expect(warnings).toEqual([]);
+      await runner.tick();
+      expect(list).toHaveBeenCalledOnce();
+    } finally {
+      releaseRead.resolve();
+      await runner.stop();
+    }
+  });
+
+  it("joins overlapping ticks into one catalog and upload path", async () => {
+    const listStarted = createDeferred<void>();
+    const releaseList = createDeferred<void>();
+    const list = vi.fn(async () => {
+      listStarted.resolve();
+      await releaseList.promise;
+    });
+    const read = vi.fn();
+    const sent: SentRequest[] = [];
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: silentLogger,
+      fetchFn: captureFetch(sent),
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({
+          id: "claude",
+          sessions: [{ threadId: "t1", recencyAt: NOW }],
+          onList: list,
+          onRead: read,
+        }),
+      ],
+    });
+
+    try {
+      const first = runner.tick();
+      await listStarted.promise;
+      const second = runner.tick();
+      await Promise.resolve();
+      expect(list).toHaveBeenCalledOnce();
+
+      releaseList.resolve();
+      await Promise.all([first, second]);
+
+      expect(read).toHaveBeenCalledOnce();
+      expect(sent).toHaveLength(1);
+    } finally {
+      releaseList.resolve();
+      await runner.stop();
+    }
+  });
+
+  it("waits for guarded response cleanup after lifecycle abort without warning", async () => {
+    const fetchStarted = createDeferred<void>();
+    const cleanupStarted = createDeferred<void>();
+    const releaseCleanup = createDeferred<void>();
+    const cancel = vi.fn();
+    const release = vi.fn(async () => {
+      cleanupStarted.resolve();
+      await releaseCleanup.promise;
+    });
+    const warnings: string[] = [];
+    let signal: AbortSignal | undefined;
+    const guardedFetch = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockImplementation(async (options) => {
+        const abortSignal = options.signal;
+        fetchStarted.resolve();
+        if (!abortSignal) {
+          throw new Error("guarded fetch did not receive the runner abort signal");
+        }
+        signal = abortSignal;
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+        return {
+          response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
+          finalUrl: options.url,
+          release,
+        };
+      });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig()),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+      ],
+    });
+
+    try {
+      const tick = runner.tick();
+      await fetchStarted.promise;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+
+      let stopSettled = false;
+      const stop = runner.stop().then(() => {
+        stopSettled = true;
+      });
+      expect(signal?.aborted).toBe(true);
+      await cleanupStarted.promise;
+      await Promise.resolve();
+      expect(stopSettled).toBe(false);
+
+      releaseCleanup.resolve();
+      await Promise.all([tick, stop]);
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+      expect(warnings).toEqual([]);
+    } finally {
+      releaseCleanup.resolve();
+      guardedFetch.mockRestore();
+      await runner.stop();
+    }
+  });
+
+  it("aborts a stalled loopback transport on stop", async () => {
+    const requestStarted = createDeferred<void>();
+    const requestClosed = createDeferred<void>();
+    const server = createServer((req) => {
+      requestStarted.resolve();
+      req.socket.once("close", requestClosed.resolve);
+    });
+    const origin = await listenOnLoopback(server);
+    const warnings: string[] = [];
+    let signal: AbortSignal | undefined;
+    const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      signal = init?.signal ?? undefined;
+      return fetch(input, init);
+    }) as unknown as typeof fetch;
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig({ endpoint: `${origin}/beam` })),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      fetchFn,
+      now: () => NOW,
+      listCatalogs: () => [
+        fakeCatalog({ id: "claude", sessions: [{ threadId: "t1", recencyAt: NOW }] }),
+      ],
+    });
+
+    try {
+      const tick = runner.tick();
+      await requestStarted.promise;
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+
+      const stop = runner.stop();
+      expect(signal?.aborted).toBe(true);
+      await Promise.all([requestClosed.promise, tick, stop]);
+
+      expect(warnings).toEqual([]);
+    } finally {
+      await runner.stop();
+      await closeTestServer(server);
+    }
+  });
+
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
     const sent: SentRequest[] = [];
     const idle = fakeCatalog({
@@ -327,6 +815,28 @@ describe("createBeamMirrorRunner", () => {
     });
     await runner.tick();
     expect(sent).toHaveLength(0);
+  });
+
+  it("warns once when profile isolation disables process-HOME fallback", async () => {
+    const warnings: string[] = [];
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [],
+      processHomeFallbackAllowed: false,
+    });
+    const runner = createBeamMirrorRunner({
+      runtime: fakeRuntime(mirrorConfig({ catalogs: ["claude"] })),
+      logger: { warn: (message) => warnings.push(message), info: () => {} },
+      now: () => NOW,
+      listCatalogs: () => [catalog],
+    });
+
+    await runner.tick();
+    await runner.tick();
+
+    expect(warnings).toEqual([
+      "beam mirror process-HOME fallback disabled: isolated state; only explicit catalog roots can be mirrored",
+    ]);
   });
 
   it("sends one completed upload when a session leaves the active window", async () => {
@@ -416,5 +926,52 @@ describe("createBeamMirrorRunner", () => {
     });
     await runner.tick();
     expect(sent).toHaveLength(0);
+  });
+});
+
+describe("createBeamMirrorService", () => {
+  it("stops before catalog listing settles without starting reads or uploads", async () => {
+    const listingStarted = createDeferred<void>();
+    const releaseListing = createDeferred<void>();
+    const list = vi.fn(async () => {
+      listingStarted.resolve();
+      await releaseListing.promise;
+    });
+    const read = vi.fn();
+    const catalog = fakeCatalog({
+      id: "claude",
+      sessions: [{ threadId: "t1", recencyAt: Date.now() }],
+      onList: list,
+      onRead: read,
+    });
+    const listCatalogs = vi
+      .spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs")
+      .mockReturnValue([catalog]);
+    const upload = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
+      response: new Response("{}", { status: 200 }),
+      finalUrl: "https://team.example/api/v1/beam/sessions",
+      release: vi.fn(async () => undefined),
+    });
+    const service = createBeamMirrorService({ runtime: fakeRuntime(mirrorConfig()) });
+
+    try {
+      service.start({ logger: silentLogger });
+      await listingStarted.promise;
+
+      await service.stop();
+      expect(read).not.toHaveBeenCalled();
+      expect(upload).not.toHaveBeenCalled();
+
+      releaseListing.resolve();
+      await list.mock.results[0]?.value;
+
+      expect(read).not.toHaveBeenCalled();
+      expect(upload).not.toHaveBeenCalled();
+    } finally {
+      releaseListing.resolve();
+      upload.mockRestore();
+      listCatalogs.mockRestore();
+      await service.stop();
+    }
   });
 });

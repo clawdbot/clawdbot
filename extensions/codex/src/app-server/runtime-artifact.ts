@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   resolveWindowsExecutablePath,
   resolveWindowsSpawnProgram,
@@ -223,14 +224,6 @@ async function listPackageFiles(params: {
   return files;
 }
 
-function pathIsWithin(rootPath: string, candidatePath: string): boolean {
-  const relative = path.relative(rootPath, candidatePath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
 function assertSafeNodeOptions(env: NodeJS.ProcessEnv): void {
   for (const [rawKey, value] of Object.entries(env)) {
     const key = rawKey.toUpperCase();
@@ -376,7 +369,7 @@ async function hashSelectedArtifactFiles(
     }
   }
   const externalFiles = [...new Set(allFiles)]
-    .filter((filePath) => !packageRoot || !pathIsWithin(packageRoot, filePath))
+    .filter((filePath) => !packageRoot || !isPathInside(packageRoot, filePath))
     .toSorted(compareArtifactNames);
   const budget: ArtifactHashBudget = { fileCount: 0, totalBytes: 0n };
   const hash = createHash("sha256");
@@ -517,7 +510,7 @@ async function resolvePackageRoot(nativePath: string): Promise<string | undefine
       return undefined;
     }
     const root = await fs.realpath(candidate);
-    return pathIsWithin(root, nativePath) ? root : undefined;
+    return isPathInside(root, nativePath) ? root : undefined;
   } catch {
     return undefined;
   }

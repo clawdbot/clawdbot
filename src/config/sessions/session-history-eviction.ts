@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   collectActiveSessionWorkAdmissionIdentities,
   runExclusiveSessionLifecycleMutation,
@@ -441,6 +442,8 @@ async function pruneAllSessionTranscriptArchivesToHighWater(params: {
   };
 }
 
+const log = createSubsystemLogger("sessions/history-eviction");
+
 const PHYSICAL_BUDGET_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 // Single-slot per store: ordinary entry writes kick a throttled background
 // budget pass so an over-budget database self-heals without waiting for a
@@ -503,8 +506,14 @@ export function kickSessionHistoryDiskBudgetMaintenance(params: {
     mode: maintenance.mode,
     maintenance,
   })
-    .catch(() => {
-      // Best-effort: budget pressure is retried on the next throttled kick.
+    .catch((error: unknown) => {
+      // Best-effort: budget pressure is retried on the next throttled kick,
+      // but a persistently failing sweep must stay operator-visible — silent
+      // failure here means unbounded disk growth with no signal.
+      log.warn("session history disk-budget sweep failed; retrying on next kick", {
+        error,
+        storePath: params.storePath,
+      });
     })
     .finally(() => {
       state.running = false;

@@ -369,6 +369,12 @@ catalog, API-key auth, and dynamic model resolution.
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
 
+    When `ctx.providerIds` is present, it contains the normalized provider
+    identities selected for that catalog owner. Return `null` before resolving
+    credentials or making network requests when the hook serves none of them;
+    OpenClaw also filters returned identities to that scope. An absent scope
+    means the caller requested the full catalog.
+
     If the upstream provider uses different control tokens than OpenClaw, add a
     small bidirectional text transform instead of replacing the stream path:
 
@@ -485,8 +491,10 @@ catalog, API-key auth, and dynamic model resolution.
     });
     ```
 
-    If resolving requires a network call, use `prepareDynamicModel` for async
-    warm-up - `resolveDynamicModel` runs again after it completes.
+    If resolving requires a network call, return the requested model directly
+    from `prepareDynamicModel`. OpenClaw applies the same configured overrides
+    and normalization as synchronous dynamic resolution. Existing hooks that
+    return nothing still retry `resolveDynamicModel` after preparation.
 
   </Step>
 
@@ -683,7 +691,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
       | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
       | `resolveDynamicModel` | Accept arbitrary upstream model IDs |
-      | `prepareDynamicModel` | Async metadata fetch before resolving |
+      | `prepareDynamicModel` | Return an asynchronously discovered model, or warm reusable metadata before sync resolution |
       | `normalizeResolvedModel` | Transport rewrites before the runner |
       | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
       | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
@@ -951,6 +959,17 @@ catalog, API-key auth, and dynamic model resolution.
         general embedding contract for reusable vector generation, including
         memory search. The retired memory-specific registrar and manifest
         contract are no longer accepted.
+
+        Providers that accept model aliases can expose
+        `normalizeModel(options): string`. Memory uses this synchronous hook for
+        both creation options and cold index identity checks. Keep it configuration-only:
+        do not authenticate or access the network. Make normalization idempotent and
+        reuse it in `create`, which may receive an already-normalized model or be
+        called outside memory. Return an empty string only when the
+        model remains unknown until discovery; do not turn an invalid explicit
+        model into an omitted selection. For an exact pre-initialization identity,
+        `resolveIndexIdentity(options)` additionally supplies the required
+        `cacheKeyData` and any equivalent persisted aliases.
       </Tab>
       <Tab title="Image and video generation">
         Image and video capabilities use a **mode-aware** shape. Image

@@ -10,6 +10,16 @@ import {
 } from "../agents/auth-profiles/path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import {
+  hasPendingSharedAuthCleanup,
+  inspectSharedAuthLegacyRowsReadOnly,
+  inspectSharedAuthLegacySourceFile,
+  readSharedAuthLegacyRowsFromDatabase,
+  SharedAuthStoreSourceInspectionError,
+  type SharedAuthLegacyRows as AuthRows,
+  type SharedAuthLegacyStateRow as StateRow,
+  type SharedAuthLegacyStoreRow as StoreRow,
+} from "../agents/auth-profiles/shared-store-bootstrap.js";
+import {
   closeAuthProfileReadPool,
   resolveAuthProfileDatabaseOwnerId,
 } from "../agents/auth-profiles/sqlite.js";
@@ -18,8 +28,6 @@ import {
   closeOpenClawAgentDatabaseByPath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists as sqliteTableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -27,7 +35,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { SharedAuthStoreMigrationDetection } from "./state-migrations.shared-auth-store.types.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
@@ -50,23 +57,7 @@ type SharedAuthMigrationDatabase = Pick<
   | "migration_sources"
 >;
 
-type StoreRow = { store_json: string; updated_at: number };
-type StateRow = { state_json: string; updated_at: number };
-type AuthRows = { store: StoreRow | null; state: StateRow | null };
 type MigrationStage = "copied" | "ownership-flipped" | "completed";
-
-class SharedAuthStoreSourceInspectionError extends Error {
-  readonly code = "SHARED_AUTH_STORE_SOURCE_UNREADABLE" as const;
-  readonly action = "openclaw doctor --fix" as const;
-  readonly sourcePath: string;
-
-  constructor(sourcePath: string, operation: string, cause: unknown) {
-    const detail = cause instanceof Error ? cause.message : String(cause);
-    super(`Cannot ${operation} legacy shared auth database ${sourcePath}: ${detail}`, { cause });
-    this.name = "SharedAuthStoreSourceInspectionError";
-    this.sourcePath = sourcePath;
-  }
-}
 
 function sourceMigrationKey(sourcePath: string, sourceTable: string): string {
   return `shared-auth-store:${createHash("sha256")
@@ -76,90 +67,17 @@ function sourceMigrationKey(sourcePath: string, sourceTable: string): string {
     .digest("hex")}`;
 }
 
-function inspectSourceFile(
-  sourcePath: string,
-): { status: "missing" } | { status: "present"; size: number } {
-  let entry: fs.Stats;
-  try {
-    entry = fs.lstatSync(sourcePath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { status: "missing" };
-    }
-    throw new SharedAuthStoreSourceInspectionError(sourcePath, "inspect", error);
-  }
-  let target = entry;
-  if (entry.isSymbolicLink()) {
-    try {
-      target = fs.statSync(sourcePath);
-    } catch (error) {
-      throw new SharedAuthStoreSourceInspectionError(sourcePath, "resolve", error);
-    }
-  }
-  if (!target.isFile()) {
-    throw new SharedAuthStoreSourceInspectionError(
-      sourcePath,
-      "open",
-      new Error("path is not a regular file"),
-    );
-  }
-  return { status: "present", size: target.size };
-}
-
-function readSourceRowsFromDatabase(database: DatabaseSync): AuthRows {
-  const db = getNodeSqliteKysely<SourceAuthDatabase>(database);
-  const store = sqliteTableExists(database, "auth_profile_store")
-    ? (executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("auth_profile_store")
-          .select(["store_json", "updated_at"])
-          .where("store_key", "=", SOURCE_STORE_KEY),
-      ) ?? null)
-    : null;
-  const state = sqliteTableExists(database, "auth_profile_state")
-    ? (executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("auth_profile_state")
-          .select(["state_json", "updated_at"])
-          .where("state_key", "=", SOURCE_STORE_KEY),
-      ) ?? null)
-    : null;
-  return { store, state };
-}
-
-function inspectSourceRowsReadOnly(sourcePath: string): AuthRows {
-  const source = inspectSourceFile(sourcePath);
-  if (source.status === "missing") {
-    return { store: null, state: null };
-  }
-  let database: DatabaseSync;
-  try {
-    database = openNodeSqliteDatabase(sourcePath, { readOnly: true });
-  } catch (error) {
-    throw new SharedAuthStoreSourceInspectionError(sourcePath, "open", error);
-  }
-  try {
-    return readSourceRowsFromDatabase(database);
-  } catch (error) {
-    throw new SharedAuthStoreSourceInspectionError(sourcePath, "read", error);
-  } finally {
-    database.close();
-  }
-}
-
 function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string }): {
   rows: AuthRows;
   size: number | null;
 } {
-  const source = inspectSourceFile(params.sourcePath);
+  const source = inspectSharedAuthLegacySourceFile(params.sourcePath);
   if (source.status === "missing") {
     return { rows: { store: null, state: null }, size: null };
   }
   try {
     const rows = runOpenClawAgentWriteTransaction(
-      ({ db }) => readSourceRowsFromDatabase(db),
+      ({ db }) => readSharedAuthLegacyRowsFromDatabase(db),
       {
         agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(params.sourcePath)),
         path: params.sourcePath,
@@ -467,14 +385,14 @@ function flipOwnership(params: {
 }
 
 function cleanupSourceRows(params: { env: NodeJS.ProcessEnv; sourcePath: string }): boolean {
-  if (inspectSourceFile(params.sourcePath).status === "missing") {
+  if (inspectSharedAuthLegacySourceFile(params.sourcePath).status === "missing") {
     return false;
   }
   try {
     const removed = runOpenClawAgentWriteTransaction(
       ({ db: database }) => {
         const db = getNodeSqliteKysely<SourceAuthDatabase>(database);
-        const before = readSourceRowsFromDatabase(database);
+        const before = readSharedAuthLegacyRowsFromDatabase(database);
         executeSqliteQuerySync(
           database,
           db.deleteFrom("auth_profile_store").where("store_key", "=", SOURCE_STORE_KEY),
@@ -483,7 +401,7 @@ function cleanupSourceRows(params: { env: NodeJS.ProcessEnv; sourcePath: string 
           database,
           db.deleteFrom("auth_profile_state").where("state_key", "=", SOURCE_STORE_KEY),
         );
-        const after = readSourceRowsFromDatabase(database);
+        const after = readSharedAuthLegacyRowsFromDatabase(database);
         if (after.store || after.state) {
           throw new Error("legacy shared auth rows remain after cleanup");
         }
@@ -521,28 +439,6 @@ function finalizeMigration(params: {
   );
 }
 
-function hasPendingCleanup(env: NodeJS.ProcessEnv, sourcePath: string): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(
-      ({ db: database }) => {
-        const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
-        const row = executeSqliteQueryTakeFirstSync(
-          database,
-          db
-            .selectFrom("migration_sources")
-            .select("source_key")
-            .where("migration_kind", "=", MIGRATION_KIND)
-            .where("source_path", "=", sourcePath)
-            .where("removed_source", "=", 0)
-            .limit(1),
-        );
-        return Boolean(row);
-      },
-      { env },
-    ) ?? false
-  );
-}
-
 /** Detect relocation or unfinished cleanup only in the explicit Doctor repair path. */
 export function detectSharedAuthStoreMigration(params: {
   stateDir: string;
@@ -554,14 +450,14 @@ export function detectSharedAuthStoreMigration(params: {
     return { sourcePath, hasLegacy: false };
   }
   const ownership = resolveSharedAuthStoreOwnership(env);
-  const sourceRows = inspectSourceRowsReadOnly(sourcePath);
+  const sourceRows = inspectSharedAuthLegacyRowsReadOnly(sourcePath);
   return {
     sourcePath,
     hasLegacy:
       ownership.location === "legacy-main" ||
       sourceRows.store !== null ||
       sourceRows.state !== null ||
-      hasPendingCleanup(env, sourcePath),
+      hasPendingSharedAuthCleanup(env, sourcePath),
   };
 }
 
@@ -599,6 +495,7 @@ export async function migrateSharedAuthStore(params: {
         now,
       });
       const sourceCleaned = cleanupSourceRows({ env, sourcePath: params.detected.sourcePath });
+      const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
       finalizeMigration({
         env,
         sourcePath: params.detected.sourcePath,
@@ -608,13 +505,15 @@ export async function migrateSharedAuthStore(params: {
       });
       return {
         changes: [
-          ...(ownershipFlipped ? ["Relocated shared auth profiles into shared SQLite state."] : []),
+          ...(ownershipFlipped && relocatedRows
+            ? ["Relocated shared auth profiles into shared SQLite state."]
+            : []),
           ...(sourceCleaned && !ownershipFlipped
             ? ["Completed legacy shared auth row cleanup."]
             : []),
         ],
         warnings: [],
-        ...(ownershipFlipped
+        ...(ownershipFlipped && rows.store !== null
           ? {
               notices: ["The main agent no longer owns shared credentials and can now be deleted."],
             }

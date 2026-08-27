@@ -264,7 +264,7 @@ describe("Slack thread failure notices", () => {
     expect(slackTestState.sendMock.mock.calls[1]?.[1]).toBe(AUTH_FAILURE);
   });
 
-  it("retries the same thread failure when its first Slack delivery fails", async () => {
+  it("does not retry a thread failure whose first Slack send is ambiguous", async () => {
     mockReplySequence(
       { text: "Working normally" },
       { text: AUTH_FAILURE, isError: true },
@@ -277,8 +277,7 @@ describe("Slack thread failure notices", () => {
     await dispatchEvent({ ts: "105.040001", thread_ts: "105.040000", parent_user_id: "U1" });
     await dispatchEvent({ ts: "105.040002", thread_ts: "105.040000", parent_user_id: "U1" });
 
-    expect(slackTestState.sendMock).toHaveBeenCalledTimes(3);
-    expect(slackTestState.sendMock.mock.calls[2]?.[1]).toBe(AUTH_FAILURE);
+    expect(slackTestState.sendMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not suppress warnings for non-terminal tool failures", async () => {

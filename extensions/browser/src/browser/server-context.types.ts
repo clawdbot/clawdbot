@@ -3,6 +3,7 @@
  * operation factories.
  */
 import type { Server } from "node:http";
+import type { ChromeMcpPageProbe } from "./chrome-mcp-contracts.js";
 import type { RunningChrome } from "./chrome.js";
 import type { BrowserOpenResult, BrowserTab, BrowserTransport } from "./client.types.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
@@ -64,7 +65,11 @@ type BrowserProfileActions = {
     options?: EnsureTabAvailableOptions,
   ) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: (
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    pageProbe?: ChromeMcpPageProbe,
+  ) => Promise<boolean>;
   isReachable: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
@@ -76,7 +81,7 @@ type BrowserProfileActions = {
   ) => Promise<BrowserOpenResult>;
   labelTab: (targetId: string, label: string) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
-  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
   resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
 };

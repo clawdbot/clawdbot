@@ -1,11 +1,13 @@
 /** Mutates and persists isolated cron session state around one run. */
 import { isDeepStrictEqual } from "node:util";
+import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
@@ -18,9 +20,16 @@ import type {
   CronScheduledToolCallerOrigin,
   CronScheduledToolPolicy,
 } from "../scheduled-tool-policy.js";
+import { setSessionRuntimeModel } from "./run.runtime.js";
 import type { resolveCronSession } from "./session.js";
 
 type MutableSessionStore = Record<string, SessionEntry>;
+
+function clearCronContextOwnerState(entry: SessionEntry) {
+  delete entry.contextTokens;
+  delete entry.contextTokensSource;
+  delete entry.contextBudgetStatus;
+}
 
 /** Mutable cron session entry updated by an isolated run before persistence. */
 type MutableCronSessionEntry = SessionEntry;
@@ -124,6 +133,7 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
 export function createPersistCronSessionEntry(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
+  createdActor?: SessionCreatedActor;
   persistSessionEntry: PersistSessionEntry;
 }): PersistCronSessionEntry {
   return async () => {
@@ -150,7 +160,7 @@ export function createPersistCronSessionEntry(params: {
         if (!currentEntry) {
           const creationStamp = buildSessionCreationStamp({
             via: "cron",
-            actor: { type: "system" },
+            actor: params.createdActor ?? { type: "system" },
           });
           committedEntry = { ...persistedEntry, ...creationStamp };
           mergedLiveEntry = { ...liveEntry, ...creationStamp };
@@ -230,6 +240,7 @@ export function createPersistCronSessionEntry(params: {
 export function createCronRunContinuationSession(params: {
   cronSession: MutableCronSession;
   runSessionKey: string;
+  createdActor?: SessionCreatedActor;
   thinkingLevel?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
@@ -295,7 +306,10 @@ export function createCronRunContinuationSession(params: {
           ...current,
           ...source,
           ...(!current
-            ? buildSessionCreationStamp({ via: "cron", actor: { type: "system" } })
+            ? buildSessionCreationStamp({
+                via: "cron",
+                actor: params.createdActor ?? { type: "system" },
+              })
             : {}),
           ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
           cronRunContinuation: {
@@ -380,14 +394,50 @@ export async function persistCronSkillsSnapshotIfChanged(params: {
   await params.persistSessionEntry();
 }
 
+/**
+ * Updates the cron selection and drops facts produced by the previous model.
+ * Keeping those facts after the owner tuple changes lets a later run relabel stale telemetry.
+ */
+export function setCronSessionRuntimeModel(params: {
+  entry: MutableCronSessionEntry;
+  provider: string;
+  model: string;
+}) {
+  const provider = params.provider.trim();
+  const model = params.model.trim();
+  if (!provider || !model) {
+    return false;
+  }
+  const selectionChanged =
+    params.entry.modelProvider?.trim() !== provider || params.entry.model?.trim() !== model;
+  if (selectionChanged) {
+    clearCronContextOwnerState(params.entry);
+  }
+  setSessionRuntimeModel(params.entry, { provider, model });
+  return selectionChanged;
+}
+
+/** Updates the producing harness and drops context facts owned by the previous runtime. */
+export function setCronSessionAgentHarnessId(params: {
+  entry: MutableCronSessionEntry;
+  agentHarnessId: string | undefined;
+}) {
+  const previousRuntime = normalizeOptionalAgentRuntimeId(params.entry.agentHarnessId);
+  const nextRuntime = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
+  if (previousRuntime !== nextRuntime) {
+    clearCronContextOwnerState(params.entry);
+  }
+  params.entry.agentHarnessId = params.agentHarnessId;
+  return previousRuntime !== nextRuntime;
+}
+
 /** Records the selected provider/model before a cron run starts. */
 export function markCronSessionPreRun(params: {
   entry: MutableCronSessionEntry;
   provider: string;
   model: string;
 }) {
-  params.entry.modelProvider = params.provider;
-  params.entry.model = params.model;
+  setCronSessionRuntimeModel(params);
   params.entry.systemSent = true;
 }
 
@@ -396,8 +446,16 @@ export function syncCronSessionLiveSelection(params: {
   entry: MutableCronSessionEntry;
   liveSelection: CronLiveSelection;
 }) {
-  params.entry.modelProvider = params.liveSelection.provider;
-  params.entry.model = params.liveSelection.model;
+  const previousRuntime = normalizeOptionalAgentRuntimeId(params.entry.agentRuntimeOverride);
+  const nextRuntime = normalizeOptionalAgentRuntimeId(params.liveSelection.agentRuntimeOverride);
+  setCronSessionRuntimeModel({
+    entry: params.entry,
+    provider: params.liveSelection.provider,
+    model: params.liveSelection.model,
+  });
+  if (previousRuntime !== nextRuntime) {
+    clearCronContextOwnerState(params.entry);
+  }
   if (params.liveSelection.agentRuntimeOverride) {
     params.entry.agentRuntimeOverride = params.liveSelection.agentRuntimeOverride;
   } else {

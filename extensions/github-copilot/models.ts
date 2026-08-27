@@ -179,7 +179,9 @@ function compareCopilotStarterCandidates(
   if (categoryDelta !== 0) {
     return categoryDelta;
   }
-  const contextDelta = right.contextWindow - left.contextWindow;
+  const contextDelta =
+    (right.contextWindow ?? DEFAULT_CONTEXT_WINDOW) -
+    (left.contextWindow ?? DEFAULT_CONTEXT_WINDOW);
   if (contextDelta !== 0) {
     return contextDelta;
   }
@@ -201,7 +203,7 @@ export function selectCopilotStarterModel(
   );
 }
 
-const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
+export const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   api: NonNullable<ModelDefinitionConfig["api"]>;

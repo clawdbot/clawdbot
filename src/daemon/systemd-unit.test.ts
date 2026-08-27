@@ -58,7 +58,7 @@ describe("buildSystemdUnit", () => {
       environment: {},
     });
     expect(unit).toContain("KillMode=control-group");
-    expect(unit).toContain("TimeoutStopSec=30");
+    expect(unit).toContain("TimeoutStopSec=330");
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");
     expect(unit).toContain("OOMPolicy=continue");

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateConnectParams } from "../validator-registry.js";
 
-describe("node worker-runs connect manifest", () => {
+describe("legacy node worker-runs connect manifest", () => {
   const connect = {
     minProtocol: 1,
     maxProtocol: 1,

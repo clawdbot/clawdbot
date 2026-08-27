@@ -2,7 +2,6 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   jsonResult,
-  resolveMemorySearchConfig,
   resolveSessionAgentIds,
   type MemoryPluginRuntime,
   type OpenClawConfig,
@@ -14,29 +13,23 @@ import {
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import type { TSchema } from "typebox";
 import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
+import {
+  buildMemoryPromptSection,
+  MEMORY_GET_TOOL_CONTRACT,
+  MEMORY_SEARCH_TOOL_CONTRACT,
+  resolveMemoryToolContext,
+  type MemoryToolContract,
+  type MemoryToolOptions,
+} from "./src/memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
-import { buildPromptSection } from "./src/prompt-section.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
 type StandingIntentToolModule = typeof import("./src/standing-intents-tool.js");
-
-type MemoryToolOptions = {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  oneShotCliRun?: boolean;
-  conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
-  activeProjectKeys?: readonly string[];
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
 
 const loadMemoryToolsModule = createLazyRuntimeModule(() => import("./src/tools.js"));
 const loadStandingIntentsModule = createLazyRuntimeModule(
@@ -50,56 +43,13 @@ const loadRuntimeProviderModule = createLazyRuntimeModule(
   () => import("./src/runtime-provider.js"),
 );
 
-function getToolConfig(options: MemoryToolOptions): OpenClawConfig | undefined {
-  return options.getConfig?.() ?? options.config;
-}
-
-function hasMemoryToolContext(options: MemoryToolOptions): boolean {
-  const cfg = getToolConfig(options);
-  if (!cfg) {
-    return false;
-  }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-    agentId: options.agentId,
-  });
-  return Boolean(resolveMemorySearchConfig(cfg, agentId));
-}
-
-const MemorySearchSchema = {
-  type: "object",
-  properties: {
-    query: { type: "string" },
-    maxResults: { type: "integer", minimum: 1 },
-    minScore: { type: "number" },
-    corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
-  },
-  required: ["query"],
-  additionalProperties: false,
-} as const satisfies TSchema;
-
-const MemoryGetSchema = {
-  type: "object",
-  properties: {
-    path: { type: "string" },
-    from: { type: "integer", minimum: 1 },
-    lines: { type: "integer", minimum: 1 },
-    corpus: { type: "string", enum: ["memory", "wiki", "all"] },
-  },
-  required: ["path"],
-  additionalProperties: false,
-} as const satisfies TSchema;
-
 function createLazyMemoryTool(params: {
   options: MemoryToolOptions;
-  label: string;
-  name: "memory_search" | "memory_get";
-  description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
+  contract: MemoryToolContract;
   load: (module: MemoryToolsModule, options: MemoryToolOptions) => AnyAgentTool | null;
 }): AnyAgentTool | null {
-  if (!hasMemoryToolContext(params.options)) {
+  const initialContext = resolveMemoryToolContext(params.options);
+  if (!initialContext) {
     return null;
   }
 
@@ -110,10 +60,10 @@ function createLazyMemoryTool(params: {
   };
 
   return {
-    label: params.label,
-    name: params.name,
-    description: params.description,
-    parameters: params.parameters,
+    label: params.contract.label,
+    name: params.contract.name,
+    description: params.contract.describe(initialContext.sources),
+    parameters: params.contract.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const tool = await loadTool();
       if (!tool) {
@@ -131,11 +81,7 @@ function createLazyMemoryTool(params: {
 function createLazyMemorySearchTool(options: MemoryToolOptions): AnyAgentTool | null {
   return createLazyMemoryTool({
     options,
-    label: "Memory Search",
-    name: "memory_search",
-    description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
-    parameters: MemorySearchSchema,
+    contract: MEMORY_SEARCH_TOOL_CONTRACT,
     load: (module, loadOptions) => module.createMemorySearchTool(loadOptions),
   });
 }
@@ -143,16 +89,15 @@ function createLazyMemorySearchTool(options: MemoryToolOptions): AnyAgentTool | 
 function createLazyMemoryGetTool(options: MemoryToolOptions): AnyAgentTool | null {
   return createLazyMemoryTool({
     options,
-    label: "Memory Get",
-    name: "memory_get",
-    description:
-      "Safe exact excerpt read from MEMORY.md or memory/*.md. Defaults to a bounded excerpt when lines are omitted, includes truncation/continuation info when more content exists, and `corpus=wiki` reads from registered compiled-wiki supplements.",
-    parameters: MemoryGetSchema,
+    contract: MEMORY_GET_TOOL_CONTRACT,
     load: (module, loadOptions) => module.createMemoryGetTool(loadOptions),
   });
 }
 
-function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentTool | null {
+function createLazyStandingIntentTool(
+  ctx: OpenClawPluginToolContext,
+  reportUnavailable: (reason: string) => void,
+): AnyAgentTool | null {
   if (ctx.senderIsOwner !== true) {
     return null;
   }
@@ -160,6 +105,7 @@ function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentT
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();
   if (!cfg) {
+    reportUnavailable("runtime config is unavailable for this turn");
     return null;
   }
   const { sessionAgentId: agentId } = resolveSessionAgentIds({
@@ -185,7 +131,7 @@ function createLazyStandingIntentTool(ctx: OpenClawPluginToolContext): AnyAgentT
     label: "Standing Intent",
     name: "intent",
     description:
-      "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use cron or scheduled tasks for time-based reminders.",
+      "Create, list, or explicitly cancel event-conditioned standing intents. A created intent is armed; the system injects the reminder automatically when it triggers. Do not deliver it early or cancel it unless the user asks. Use scheduled tasks for time-based reminders.",
     parameters: {
       type: "object",
       properties: {
@@ -225,7 +171,9 @@ function resolveMemoryToolOptions(
   ctx: OpenClawPluginToolContext,
   host: MemoryCoreRuntimeHost,
 ): MemoryToolOptions {
-  const getConfig = () => ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
+  const getConfig = ctx.getRuntimeConfig
+    ? () => ctx.getRuntimeConfig?.()
+    : () => ctx.runtimeConfig ?? ctx.config;
   return {
     config: getConfig(),
     getConfig,
@@ -252,6 +200,16 @@ function createLazyMemoryRuntime(host: MemoryCoreRuntimeHost): MemoryPluginRunti
         throw new Error("memory-core runtime search authorization is unavailable");
       }
       return await runtime.authorizeSearchHits(params);
+    },
+    async classifyWorkspaceMemoryPaths(params) {
+      const [{ classifyWorkspaceMemoryPaths }, dreamingState] = await Promise.all([
+        import("./src/workspace-path-classifier.js"),
+        import("./src/dreaming-state.js"),
+      ]);
+      if (host.openKeyedStore) {
+        dreamingState.configureMemoryCoreDreamingState(host.openKeyedStore);
+      }
+      return await classifyWorkspaceMemoryPaths(params);
     },
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
@@ -283,7 +241,24 @@ export default definePluginEntry({
     registerShortTermPromotionDreaming(api);
     registerSessionBackfillGatewayMethods(api);
     api.registerMemoryCapability({
-      promptBuilder: buildPromptSection,
+      deterministicRecallToolName: "memory_search",
+      supportsPrivateTranscriptRecall: true,
+      promptBuilder: (params) => {
+        if (
+          !params.availableTools.has("memory_search") &&
+          !params.availableTools.has("memory_get")
+        ) {
+          return [];
+        }
+        const liveConfig = api.runtime.config?.current ? api.runtime.config.current() : api.config;
+        const context = resolveMemoryToolContext({
+          // SAFETY: Runtime config is host-validated and this resolver only reads the snapshot.
+          config: liveConfig as OpenClawConfig,
+          agentId: params.agentId,
+          agentSessionKey: params.agentSessionKey,
+        });
+        return context ? buildMemoryPromptSection({ ...params, sources: context.sources }) : [];
+      },
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,
       publicArtifacts: {
@@ -302,9 +277,13 @@ export default definePluginEntry({
       names: ["memory_get"],
     });
 
-    api.registerTool((ctx) => createLazyStandingIntentTool(ctx), {
-      names: ["intent"],
-    });
+    api.registerTool(
+      (ctx) =>
+        createLazyStandingIntentTool(ctx, (reason) => {
+          api.logger.warn(`memory-core: intent tool unavailable: ${reason}`);
+        }),
+      { names: ["intent"] },
+    );
 
     api.on("before_prompt_build", async (event, ctx) => {
       if (ctx.trigger !== "user") {

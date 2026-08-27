@@ -15,8 +15,10 @@ import {
   resolveDefaultGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
-import type { StoredConversationReference } from "../conversation-store.js";
-import type { MSTeamsConversationStore } from "../conversation-store.js";
+import type {
+  StoredConversationReference,
+  MSTeamsConversationStore,
+} from "../conversation-store.js";
 import { formatUnknownError } from "../errors.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMonitorLogger } from "../monitor-types.js";

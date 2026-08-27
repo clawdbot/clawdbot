@@ -18,6 +18,7 @@ import {
   type ExecSecurity,
   type SystemRunApprovalPlan,
   commandRequiresSecurityAuditSuppressionApproval,
+  countObsoleteGeneratedExecApprovals,
   evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
   hasNodeCommandAllowAlwaysMarker,
@@ -42,7 +43,7 @@ import {
   invokeNodeSystemRun,
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
-import { renderExecUpdateText } from "./bash-tools.exec-output.js";
+import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -253,7 +254,15 @@ export function formatNodeRunToolResult(params: {
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
-  const output = [stdout, stderr, errorText].filter(Boolean).join("\n");
+  const timedOut = payloadObj.timedOut === true;
+  // Failure must be visible in the text the model reads, matching the
+  // local/gateway host rendering — output alone reads as success.
+  const outcomeNote = timedOut
+    ? appendExecTimeoutRetryGuidance("Command timed out.", "overall-timeout")
+    : !success && exitCode !== null && exitCode !== 0
+      ? `(Command exited with code ${exitCode})`
+      : "";
+  const output = [stdout, stderr, errorText, outcomeNote].filter(Boolean).join("\n");
   return {
     content: [
       {
@@ -269,6 +278,7 @@ export function formatNodeRunToolResult(params: {
       exitCode,
       durationMs: Date.now() - params.startedAt,
       aggregated: output,
+      ...(timedOut ? { timedOut: true } : {}),
       cwd: params.cwd,
     } satisfies ExecToolDetails,
   };
@@ -570,6 +580,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
   let nodeApprovalsFileKnown = false;
+  let obsoleteGeneratedApprovalCount = 0;
   const inlineEvalHit =
     params.request.strictInlineEval === true
       ? (policyCommandEvals
@@ -621,6 +632,7 @@ export async function analyzeNodeApprovalRequirement(params: {
           agentId: params.prepared.agentId,
           overrides: { security: "full" },
         });
+        obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovals(resolved.file);
         // Allowlist-only precheck; safe bins are node-local and may diverge.
         // POSIX node transport wraps commands, so mirror node policy by
         // accepting either the prepared wrapper or its semantic inner command.
@@ -689,6 +701,15 @@ export async function analyzeNodeApprovalRequirement(params: {
       autoReviewSegment.raw.trim() === autoReviewBindingCommand.trim())
       ? autoReviewSegment.argv
       : undefined;
+  if (
+    (params.hostSecurity === "allowlist" || params.prepared.execPolicy?.security === "allowlist") &&
+    !allowlistSatisfied &&
+    obsoleteGeneratedApprovalCount > 0
+  ) {
+    params.request.warnings.push(
+      `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive on this node because they are not tied to a working directory. Run "openclaw doctor --fix" on the node, then rerun the workflow and choose "Always allow here".`,
+    );
+  }
   return {
     analysisOk,
     allowlistSatisfied,

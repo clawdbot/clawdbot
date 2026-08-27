@@ -1,12 +1,12 @@
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { CronConfig } from "../../config/types.cron.js";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
-  CronDeliveryStatus,
-  CronFailureNotificationDelivery,
   CronJob,
+  CronDeliveryTrace,
+  CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
 } from "../types.js";
@@ -292,33 +292,21 @@ export function isScheduledTerminalOneShotRetry(
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
+  delivery?: CronDeliveryTrace;
   delivered?: boolean;
   deliveryAttempted?: boolean;
   error?: string;
-  globalFailureDestination?: CronConfig["failureAlert"];
-}): {
-  delivered?: boolean;
-  status: CronDeliveryStatus;
-  error?: string;
-  failureNotification: CronFailureNotificationDelivery;
-} {
+}): CronResolvedDeliveryState {
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
-  // Failure destinations can receive alerts even when the primary delivery
-  // path was disabled or failed before direct delivery produced an ack.
-  const alternateFailureNotificationRequested =
-    params.runStatus === "error" &&
-    params.job.delivery?.bestEffort !== true &&
-    resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
+  const noFailureNotification = { status: "not-requested" as const };
   if (!primaryDeliveryRequested) {
     if (primaryDeliveryPlan.mode === "webhook") {
       if (params.delivered === true) {
         return {
           delivered: true,
           status: "delivered",
-          failureNotification: {
-            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
-          },
+          failureNotification: noFailureNotification,
         };
       }
       if (params.deliveryAttempted === true) {
@@ -326,50 +314,31 @@ export function resolveDeliveryState(params: {
           delivered: false,
           status: "not-delivered",
           error: params.error,
-          failureNotification: {
-            status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
-          },
+          failureNotification: noFailureNotification,
         };
       }
     }
     return {
       status: "not-requested",
-      failureNotification: {
-        status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
-      },
+      failureNotification: noFailureNotification,
     };
   }
-  if (params.runStatus === "error") {
-    const failureNotification: CronFailureNotificationDelivery =
-      alternateFailureNotificationRequested ? { status: "unknown" } : { status: "delivered" };
-    if (params.delivered === true) {
+  if (
+    params.runStatus === "error" &&
+    !(params.delivered === true && params.delivery?.delivered === true)
+  ) {
+    if (params.delivered !== undefined) {
       return {
         delivered: false,
         status: "not-delivered",
         error: params.error,
-        failureNotification: alternateFailureNotificationRequested
-          ? failureNotification
-          : { delivered: true, status: "delivered" },
-      };
-    }
-    if (params.delivered === false) {
-      return {
-        delivered: false,
-        status: "not-delivered",
-        error: params.error,
-        failureNotification: alternateFailureNotificationRequested
-          ? failureNotification
-          : {
-              delivered: false,
-              status: "not-delivered",
-              ...(params.error ? { error: params.error } : {}),
-            },
+        failureNotification: noFailureNotification,
       };
     }
     return {
       status: "unknown",
       error: params.error,
-      failureNotification: { status: "unknown" },
+      failureNotification: noFailureNotification,
     };
   }
   if (params.delivered === true) {

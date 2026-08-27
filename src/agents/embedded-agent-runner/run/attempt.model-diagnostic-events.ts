@@ -1,3 +1,4 @@
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
@@ -12,7 +13,6 @@ import {
 import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
-
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
   if (value === null || typeof value !== "object") {
     return undefined;
@@ -187,9 +187,13 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
   return ((model, streamContext, options) => {
+    const requestTimeoutMs = clampPositiveTimerTimeoutMs(
+      (isRecord(model) ? model.requestTimeoutMs : undefined) ?? ctx.requestTimeoutMs,
+    );
     const lifecycle = createModelLifecycle({
       ctx,
       options,
+      requestTimeoutMs,
       createObserver: (capturePromptStats) =>
         createModelObserver({
           streamContext,

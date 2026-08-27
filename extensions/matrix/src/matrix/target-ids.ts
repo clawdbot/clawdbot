@@ -49,6 +49,17 @@ export function isMatrixQualifiedUserId(raw: string): boolean {
   return trimmed.startsWith("@") && trimmed.includes(":");
 }
 
+/**
+ * Whether `raw` is already a literal room ID rather than a name/query to resolve.
+ * Room version 12 (MSC4291) dropped the trailing ":server" from room IDs — they're
+ * now a hash of the create event — so this must not require a colon the way user
+ * IDs and aliases still do.
+ */
+export function isMatrixRoomId(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed.startsWith("!") && trimmed.length > 1;
+}
+
 export function normalizeMatrixResolvableTarget(raw: string): string {
   return stripKnownPrefixes(raw, [MATRIX_PREFIX, ROOM_PREFIX, CHANNEL_PREFIX]);
 }

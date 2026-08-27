@@ -99,4 +99,72 @@ suite.define(() => {
       await context.close();
     }
   });
+
+  it("opens chat pane rename on the stored label, not the account-decorated title", async () => {
+    const cardsKey = "agent:main:telegram:cards:direct:42";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([gatewayDirectRow(cardsKey, Date.now(), "cards")]),
+      },
+      sessionKey: cardsKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, cardsKey));
+      const title = page.locator(".chat-pane__session-title-button");
+      await expect.poll(() => title.textContent()).toContain("Alice · cards");
+      await title.click();
+      const field = page.locator(".chat-pane__session-title-input");
+      await field.waitFor({ state: "visible" });
+      expect(await field.inputValue()).toBe("");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("opens a generated dashboard title as editable text", async () => {
+    const key = "agent:main:dashboard:generated-title";
+    const generatedTitle = "Hide OS tooltips for custom hovers";
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          { ...sessionRow(key, generatedTitle, Date.now()), label: undefined },
+        ]),
+      },
+      sessionKey: key,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+      const title = page.locator(".chat-pane__session-title-button");
+      await expect.poll(() => title.textContent()).toContain(generatedTitle);
+
+      await title.click();
+      const field = page.locator(".chat-pane__session-title-input");
+      await field.waitFor({ state: "visible" });
+      expect(await field.inputValue()).toBe(generatedTitle);
+
+      await field.fill("Editable generated title");
+      await field.press("Enter");
+      const patchRequest = await gateway.waitForRequest("sessions.patch");
+      expect(patchRequest.params).toMatchObject({
+        key,
+        label: "Editable generated title",
+      });
+    } finally {
+      await context.close();
+    }
+  });
 });

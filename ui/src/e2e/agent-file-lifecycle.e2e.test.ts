@@ -128,7 +128,7 @@ suite.define(() => {
             "agents.list": {
               defaultId: "main",
               mainKey: "main",
-              scope: "agent",
+              scope: "per-sender",
               agents: [
                 { id: "main", name: "Main" },
                 { id: "writer", name: "Writer" },
@@ -208,6 +208,129 @@ suite.define(() => {
         const writes = await gateway.getRequests("agents.files.set");
         expect(writes.every((request) => requestAgentId(request) === "main")).toBe(true);
         await capture(page, "03-writer-owned-file.png");
+      },
+    );
+  });
+
+  it("preserves drafts and confirmed saves across overlapping refreshes", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1440 },
+        ...(captureUiProof
+          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+          : {}),
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            "agents.files.get",
+            "agents.files.list",
+            "agents.files.set",
+            "agents.list",
+          ],
+          methodResponses: {
+            "agents.list": {
+              defaultId: "main",
+              mainKey: "main",
+              scope: "per-sender",
+              agents: [{ id: "main", name: "Main" }],
+            },
+            "agents.files.get": fileGetResponses("server revision 1"),
+            "agents.files.list": fileListResponses,
+          },
+          operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        });
+
+        await page.goto(`${suite.server.baseUrl}settings/agents/main/files`);
+        const editor = page.locator(".agent-file-textarea");
+        const fileSection = page.locator(".settings-section").filter({
+          has: page.getByRole("heading", { name: "Core files" }),
+        });
+        const refresh = fileSection.getByRole("button", { name: "Refresh" });
+        const fileActions = page.locator(".agent-file-actions");
+        const reset = fileActions.getByRole("button", { name: "Reset" });
+        const save = fileActions.getByRole("button", { name: "Save" });
+        await expect.poll(() => editor.inputValue()).toBe("server revision 1");
+        expect(await gateway.getRequests("agents.files.get")).toHaveLength(1);
+
+        await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 2"));
+        await refresh.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.files.get")).length)
+          .toBe(2);
+        await expect.poll(() => editor.inputValue()).toBe("server revision 2");
+        await expect.poll(() => editor.isEnabled()).toBe(true);
+        await capture(page, "04-refresh-adopts-authoritative-content.png");
+
+        await editor.fill("local dirty draft");
+        await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 3"));
+        await refresh.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.files.get")).length)
+          .toBe(3);
+        await expect.poll(() => editor.inputValue()).toBe("local dirty draft");
+        await expect.poll(() => editor.isEnabled()).toBe(true);
+        await expect.poll(() => reset.isEnabled()).toBe(true);
+        await capture(page, "05-refresh-preserves-dirty-draft.png");
+        await reset.click();
+        await expect.poll(() => editor.inputValue()).toBe("server revision 3");
+        await expect.poll(() => reset.isDisabled()).toBe(true);
+
+        await expect.poll(() => save.isDisabled()).toBe(true);
+        await capture(page, "06-reset-uses-refreshed-authoritative-content.png");
+
+        await gateway.deferNext("agents.files.get", { agentId: "main", name: "AGENTS.md" });
+        await refresh.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.files.get")).length)
+          .toBe(4);
+        await editor.fill("Saved latest instructions");
+        await gateway.setMethodResponse("agents.files.set", {
+          ok: true,
+          ...fileGet("main", "Saved latest instructions"),
+        });
+        await gateway.setMethodResponse(
+          "agents.files.get",
+          fileGetResponses("Saved latest instructions"),
+        );
+        await save.click();
+        await expect.poll(() => save.isDisabled()).toBe(true);
+        await gateway.resolveDeferred("agents.files.get", fileGet("main", "server revision 3"));
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        await capture(page, "08-save-survives-older-refresh.png");
+        await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
+        await expect.poll(() => reset.isDisabled()).toBe(true);
+
+        const missingFile = { ...fileList("main").files[0], missing: true, content: "" };
+        const missingList = { ...fileList("main"), files: [missingFile] };
+        await gateway.setMethodResponse("agents.files.list", missingList);
+        await gateway.setMethodResponse("agents.files.get", { ...missingList, file: missingFile });
+        await refresh.click();
+        await expect.poll(() => editor.inputValue()).toBe("");
+        const missingHint = page.locator("#agent-file-panel .callout.info");
+        await expect.poll(() => missingHint.isVisible()).toBe(true);
+        await gateway.deferNext("agents.files.list", { agentId: "main" });
+        const listsBeforeSave = (await gateway.getRequests("agents.files.list")).length;
+        await refresh.click();
+        await expect
+          .poll(async () => (await gateway.getRequests("agents.files.list")).length)
+          .toBe(listsBeforeSave + 1);
+        await editor.fill("Saved latest instructions");
+        await gateway.setMethodResponse(
+          "agents.files.get",
+          fileGetResponses("Saved latest instructions"),
+        );
+        await save.click();
+        await expect.poll(() => missingHint.count()).toBe(0);
+        await gateway.resolveDeferred("agents.files.list", missingList);
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        await page.locator(".agents-refresh-btn").click();
+        await expect.poll(() => page.locator(".agents-refresh-btn").isEnabled()).toBe(true);
+        await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
+        expect(await missingHint.count()).toBe(0);
+        await capture(page, "09-created-file-survives-stale-list.png");
       },
     );
   });
@@ -293,7 +416,7 @@ suite.define(() => {
           await expect
             .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
             .toBe("# Saved through real Gateway\n");
-          await capture(page, "04-real-gateway-main-save.png");
+          await capture(page, "07-real-gateway-main-save.png");
         },
       );
     } finally {

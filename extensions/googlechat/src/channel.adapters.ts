@@ -10,8 +10,8 @@ import {
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
-  composeAccountWarningCollectors,
   createAllowlistProviderOpenWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
   createChannelDirectoryAdapter,
@@ -79,19 +79,24 @@ const collectGoogleChatGroupPolicyWarnings =
         'Set channels.googlechat.groupPolicy="allowlist" and configure channels.googlechat.groups',
     },
   });
+const collectGoogleChatOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectGoogleChatGroupPolicyWarnings,
+  checkId: "channels.googlechat.groups.open",
+  severity: "critical",
+  title: "Google Chat security warning",
+});
 
-const collectGoogleChatSecurityWarnings = composeAccountWarningCollectors<
-  ResolvedGoogleChatAccount,
-  {
-    cfg: OpenClawConfig;
-    account: ResolvedGoogleChatAccount;
-  }
->(
-  collectGoogleChatGroupPolicyWarnings,
-  (account) =>
-    account.config.dmPolicy === "open" &&
-    '- Google Chat DMs are open to anyone. Set channels.googlechat.dmPolicy="pairing" or "allowlist".',
-);
+const collectGoogleChatSecurityWarnings = (params: {
+  cfg: OpenClawConfig;
+  account: ResolvedGoogleChatAccount;
+}) => [
+  ...collectGoogleChatOpenGroupFindings(params),
+  ...(params.account.config.dmPolicy === "open"
+    ? [
+        '- Google Chat DMs are open to anyone. Set channels.googlechat.dmPolicy="pairing" or "allowlist".',
+      ]
+    : []),
+];
 
 export const googlechatGroupsAdapter = {
   resolveRequireMention: resolveGoogleChatGroupRequireMention,

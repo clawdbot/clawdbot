@@ -11,10 +11,9 @@ import {
 } from "../../shared/ignore-rules.js";
 // Session skill helpers resolve skills attached to a session and its transcript state.
 import { expandTildePath } from "../../shared/tilde-path.js";
-import { getArchivedSkillFiles } from "../workshop/curator.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
-import { formatSkillsForPromptCore, resolveSkillDisplayName } from "./skill-contract.js";
-import { computeSkillPromptVersion } from "./skill-version.js";
+import { resolveSkillDisplayName } from "./skill-contract.js";
+import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -29,6 +28,7 @@ export interface Skill {
   description: string;
   filePath: string;
   baseDir: string;
+  /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
   source: string;
   sourceInfo: SourceInfo;
@@ -253,7 +253,6 @@ function loadSkillFromFile(
         description: frontmatter.description,
         filePath,
         baseDir: skillDir,
-        promptVersion: computeSkillPromptVersion(rawContent),
         source,
         sourceInfo: createSkillSourceInfo(filePath, skillDir, source),
         disableModelInvocation: invocation.disableModelInvocation,
@@ -277,7 +276,7 @@ function loadSkillFromFile(
  */
 export function formatSkillsForPrompt(skills: Skill[]): string {
   const visibleSkills = skills.filter((s) => !s.disableModelInvocation);
-  return formatSkillsForPromptCore(visibleSkills);
+  return formatSkillsForPromptBounded({ skills: visibleSkills });
 }
 
 interface LoadSkillsOptions {
@@ -302,8 +301,6 @@ function resolveSkillPath(p: string, cwd: string): string {
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const { cwd, agentDir, skillPaths, includeDefaults } = options;
-  // One snapshot-level query enforces archival without polling tool hot paths or touching files.
-  const archivedSkillFiles = getArchivedSkillFiles();
 
   // Resolve agentDir - if not provided, use default from config
   const resolvedAgentDir = agentDir ?? getAgentDir();
@@ -316,9 +313,6 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   function addSkills(result: LoadSkillsResult) {
     allDiagnostics.push(...result.diagnostics);
     for (const skill of result.skills) {
-      if (archivedSkillFiles.has(canonicalizePath(skill.filePath))) {
-        continue;
-      }
       // Resolve symlinks to detect duplicate files
       const realPath = canonicalizePath(skill.filePath);
 
