@@ -161,7 +161,9 @@ export function describeAskUserTool(): string {
   return [
     "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
     "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
-    "Prefer one question. Put the recommended option first and suffix its label with ` (Recommended)`.",
+    "Ask exactly one question per call unless several answers must be submitted together; one single-select question uses native controls on supported messaging channels.",
+    "Put every selectable choice in `options`, never only in the question text. Put the recommended option first and suffix its label with ` (Recommended)`.",
+    "Use `multiSelect` only when the user may choose several options at once; otherwise omit it.",
     "Do not include an Other option; free text is added automatically.",
     "If the result is no_answer, continue with best judgment.",
   ].join(" ");

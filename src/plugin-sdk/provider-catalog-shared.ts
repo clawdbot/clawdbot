@@ -311,32 +311,6 @@ export function buildManifestProviderCatalogFamily(params: {
   };
 }
 
-/** Builds one normalized runtime model row from a provider manifest catalog entry. */
-export function buildManifestModelDefinition(params: {
-  /** Provider id that owns the manifest catalog row. */
-  providerId: string;
-  /** Raw manifest modelCatalog provider block that contains the row. */
-  catalog: unknown;
-  /** Optional provider policy applied after manifest normalization. */
-  decorate?: (model: ModelDefinitionConfig) => ModelDefinitionConfig;
-}): (model: unknown) => ModelDefinitionConfig {
-  if (!params.catalog || typeof params.catalog !== "object" || Array.isArray(params.catalog)) {
-    throw new Error(`Missing modelCatalog.providers.${params.providerId}`);
-  }
-  const catalog = params.catalog;
-  return (rawModel) => {
-    const provider = buildManifestModelProviderConfig({
-      providerId: params.providerId,
-      catalog: { ...catalog, models: [rawModel] },
-    });
-    const model = provider.models[0];
-    if (!model) {
-      throw new Error(`Missing modelCatalog.providers.${params.providerId}.models[0]`);
-    }
-    return params.decorate?.(model) ?? model;
-  };
-}
-
 function normalizeConfiguredCatalogModelInput(
   input: unknown,
 ): ConfiguredProviderCatalogEntry["input"] | undefined {

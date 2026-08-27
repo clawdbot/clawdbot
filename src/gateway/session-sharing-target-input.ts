@@ -4,7 +4,7 @@ import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
-import { verifyBoardViewTicket } from "./board-view-ticket.js";
+import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 
@@ -329,7 +329,9 @@ export function resolveSessionMutationTargets(params: {
   }
   if (params.method === "board.event" || params.method === "board.action") {
     const ticket = readSessionSharingStringParam(params.requestParams, "ticket");
-    const claims = ticket ? verifyBoardViewTicket(ticket) : undefined;
+    const claims = ticket
+      ? resolveAuthorizedBoardViewTicketClaims(ticket, { gatewayContext: params.context })
+      : undefined;
     if (!claims || (requestedAgentId && requestedAgentId !== claims.agentId)) {
       return undefined;
     }

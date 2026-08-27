@@ -2,6 +2,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
+import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -96,6 +97,9 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        await expect
+          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+          .toBe(sessionKey);
         await activePane.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
         const menuTrigger = activePane.getByRole("button", {
@@ -173,6 +177,11 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        // Mock history also renders in the retained boot pane. Wait for this session's pane
+        // before Playwright resolves a control that can stay mounted beneath its replacement.
+        await expect
+          .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
+          .toBe(sessionKey);
         await activePane
           .getByRole("paragraph")
           .filter({ hasText: /^Mobile session menu proof\.$/ })

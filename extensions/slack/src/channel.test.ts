@@ -1764,6 +1764,7 @@ describe("slackPlugin outbound", () => {
         text: "",
         mediaUrls: ["https://example.com/context.png"],
         channelData: {
+          askUser: { questionId, optionValues: ["one", "two"] },
           slack: { blocks: Array.from({ length: 48 }, () => ({ type: "divider" as const })) },
         },
         presentation: {

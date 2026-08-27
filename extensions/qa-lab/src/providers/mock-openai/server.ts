@@ -1101,7 +1101,11 @@ async function buildResponsesPayload(
   ) {
     const targetTool = extractToolSearchTarget(allInputText);
     const plannedArgs = targetTool
-      ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+      ? buildQaToolSearchArgs(
+          targetTool,
+          QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText),
+          allInputText,
+        )
       : {};
     if (
       targetTool &&

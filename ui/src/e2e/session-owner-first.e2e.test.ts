@@ -64,19 +64,21 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${suite.server?.baseUrl ?? ""}chat`);
+      // A literal key avoids the independent slug lookup while the roster is deferred.
+      await page.goto(`${suite.server?.baseUrl ?? ""}chat/main/~key/ada`);
       const subscribe = await gateway.waitForRequest("sessions.subscribe");
       expect(subscribe.params).toEqual(expect.objectContaining({ ownerFirst: true, limit: 60 }));
-      expect(await gateway.getRequests("sessions.list")).toHaveLength(0);
       const adaRow = page.locator('[data-session-key="agent:main:ada"]');
       const bobRow = page.locator('[data-session-key="agent:main:bob"]');
       // The selected session has an optimistic placeholder before roster hydration.
       await expect.poll(() => adaRow.count()).toBe(1);
       await expect.poll(() => bobRow.count()).toBe(0);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(0);
 
       await gateway.resolveDeferred("sessions.subscribe", { subscribed: true, list: sharedRoster });
       await adaRow.waitFor();
       await bobRow.waitFor();
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(0);
       await captureSidebar(page, "owner-first-bootstrap.png");
     } finally {
       await context.close();

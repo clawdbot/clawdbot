@@ -263,15 +263,11 @@ describe("applyPluginNodeInvokePolicy", () => {
 
     const result = await invokeDemoPolicy(context);
 
-    if (result === null) {
-      throw new Error("expected plugin policy failure");
-    }
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected plugin policy failure");
-    }
-    expect(result.code).toBe("PLUGIN_POLICY_MISSING");
-    expect(result.details).toStrictEqual({ nodeCommandDispatched: false });
+    expect(result).toMatchObject({
+      ok: false,
+      code: "PLUGIN_POLICY_MISSING",
+      details: { nodeCommandDispatched: false },
+    });
     expect(invoke).not.toHaveBeenCalled();
   });
 
@@ -735,10 +731,13 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it("binds plugin policy approval requests to the invoking client", async () => {
+  it.each([false, true])("routes approvals for synthetic=%s", async (synthetic) => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
-    const visibleConnIds = new Set(["conn-owner-approval"]);
+    const visibleConnIds = new Set(
+      synthetic ? ["conn-owner-approval", "conn-requester"] : ["conn-owner-approval"],
+    );
     const getApprovalClientConnIds = createApprovalClientLookup([
+      createOperatorClient(),
       createOperatorClient("conn-owner-approval"),
       createApprovalClient({
         connId: "conn-other-approval",
@@ -751,7 +750,9 @@ describe("applyPluginNodeInvokePolicy", () => {
       pluginApprovalManager: manager,
       getApprovalClientConnIds,
     });
-    const resultPromise = invokeDemoPolicy(context, createOperatorClient());
+    const requester = createOperatorClient();
+    requester.internal = synthetic ? { syntheticClient: true } : undefined;
+    const resultPromise = invokeDemoPolicy(context, requester);
 
     const record = await expectSinglePendingApproval(manager);
     expect(record.requestedByConnId).toBe("conn-requester");

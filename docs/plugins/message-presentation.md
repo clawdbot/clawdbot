@@ -82,6 +82,11 @@ type MessagePresentationAction =
       questionId: string;
       optionValue: string;
     }
+  | {
+      type: "question";
+      questionId: string;
+      intent: "custom-input";
+    }
   | { type: "url"; url: string }
   | {
       type: "web-app";
@@ -151,6 +156,12 @@ Button semantics:
   four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
   shapes degrade to label text, and the user can answer with a plain-text
   reply.
+- `intent: "custom-input"` switches a live question to its free-text answer
+  path without resolving it. Producers must also state the free-text route in
+  visible text. A channel can omit this one native control while keeping
+  declared-choice controls native when it cannot target a text composer safely.
+  Telegram maps it to **Other…** and Force Reply. Discord and Slack keep the
+  visible text route.
 - `action.type: "url"` opens a normal link.
 - `action.type: "web-app"` launches a channel-native web app. Set `url` for a
   URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch

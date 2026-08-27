@@ -20,7 +20,10 @@ import {
   copyAgentToolSourceExecutionGuard,
   runAgentToolSourceExecutionGuard,
 } from "./agent-tool-source-execution-guard.js";
-import { recordGenericToolActionDecision } from "./agent-tools.before-tool-call.decision.js";
+import {
+  recordGenericToolActionDecision,
+  runWithGenericToolActionDecision,
+} from "./agent-tools.before-tool-call.decision.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -527,9 +530,6 @@ export function wrapToolWithBeforeToolCallHook(
       // Host capabilities can close while hooks, approval, validation, or
       // steering awaits. Recheck at the final synchronous source boundary.
       runAgentToolSourceExecutionGuard(tool);
-      if (!outcome.ownerDecision) {
-        recordGenericToolActionDecision(tool, toolCallId, "allowed");
-      }
       onImplementationStart?.();
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
@@ -544,13 +544,11 @@ export function wrapToolWithBeforeToolCallHook(
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
-          result = await (execute as ForwardedToolExecution)(
-            toolCallId,
-            executeParams,
-            signal,
-            forwardedOnUpdate,
-            ...executionArgs,
-          );
+          const args = [toolCallId, executeParams, signal, forwardedOnUpdate, ...executionArgs];
+          const invoke = () => (execute as ForwardedToolExecution)(...args);
+          result = outcome.ownerDecision
+            ? await invoke()
+            : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
         } catch (error) {
           throw tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined

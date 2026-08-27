@@ -357,6 +357,27 @@ received relay-signed room roster, never a display name or message content. If a
 authorized bot stops replying during a busy exchange, check the suppression log
 and allow the cooldown to expire before adjusting the budget.
 
+### Passive room context
+
+Set `channels.buzz.historyLimit` to a number from `1` to `20` to include recent
+unmentioned messages with the next accepted turn (mention or authorized command)
+in the same room and thread.
+The default is `0` (off). A new reply thread does not import top-level room history.
+Sender access still applies: denied senders are never recorded, and senders no
+longer in the current room roster are removed before context is included.
+
+Passive messages do not start an agent run, record a session, or send typing.
+History stays in memory for the current connection, separately for each room and
+thread, and is cleared on reconnect or restart. Each message is truncated to
+512 UTF-8 bytes; the newest complete entries fit within a 1,024-byte rendered
+context budget, including labels and markers. Older entries are discarded.
+An accepted turn consumes its context without deleting messages that arrived
+while the reply was running.
+
+Membership is checked against the latest received roster when context is used.
+If the same identity leaves and rejoins before then, its previously authorized
+messages can remain in the window; leaving does not erase conversation history.
+
 ## Manual configuration
 
 Guided setup is recommended. The equivalent configuration looks like:

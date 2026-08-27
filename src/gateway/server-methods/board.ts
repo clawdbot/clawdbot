@@ -1,6 +1,4 @@
 import {
-  ErrorCodes,
-  errorShape,
   type BoardWidgetMaterializedPutParams,
   validateBoardActionParams,
   validateBoardDataReadParams,
@@ -20,7 +18,7 @@ import {
   normalizeBoardWidgetDeclared,
 } from "../../boards/board-capabilities.js";
 import { BoardValidationError } from "../../boards/board-layout.js";
-import { appendBoardEventNotice, BoardEventPayloadError } from "../../boards/board-notices.js";
+import { appendBoardEventNotice } from "../../boards/board-notices.js";
 import type { BoardStore } from "../../boards/board-store.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
@@ -34,14 +32,9 @@ import {
   resolveBoardWidgetContentKindResourceUrls,
 } from "../../plugins/board-widget-content-kinds.js";
 import {
-  capturePluginRegistryLifecycleEpoch,
-  isPluginRegistryLifecycleEpochActive,
-} from "../../plugins/registry-lifecycle.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
-import {
+  captureBoardRequestAuthority,
   readBoardDataBinding,
+  respondBoardError,
   runBoardActionVerb,
   triggerBoardCronJob,
 } from "../board-host-tools.js";
@@ -86,38 +79,6 @@ const defaultMcpAppDependencies: McpAppDependencies = {
   resolveAllowedToolNames: resolveMcpAppAllowedToolNames,
   mintFromTranscript: mintMcpAppViewFromTranscript,
 };
-
-function respondBoardError(
-  error: unknown,
-  respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
-): void {
-  if (error instanceof BoardValidationError || error instanceof BoardEventPayloadError) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-    return;
-  }
-  respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));
-}
-
-function captureBoardRequestAuthority() {
-  const scopedPluginRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  const pluginRegistryEpoch =
-    scopedPluginRegistry && capturePluginRegistryLifecycleEpoch(scopedPluginRegistry);
-  const assertActive = () => {
-    if (
-      isGatewaySubordinateWorkAdmissionClosed() ||
-      (scopedPluginRegistry &&
-        (!pluginRegistryEpoch ||
-          !isPluginRegistryLifecycleEpochActive(scopedPluginRegistry, pluginRegistryEpoch)))
-    ) {
-      throw new Error("board request authority is no longer active");
-    }
-  };
-  assertActive();
-  return {
-    assertActive,
-    pluginRegistry: scopedPluginRegistry ?? getActivePluginRegistry() ?? undefined,
-  };
-}
 
 function resolveBoardSessionKey(
   params: { sessionKey: string; agentId?: string | undefined },
@@ -205,104 +166,110 @@ export function createBoardHandlers(
     "board.get": defineValidatedGatewayMethod(
       "board.get",
       validateBoardGetParams,
-      async ({ params: boardParams, respond, context, client }) => {
-        const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
-        if (!boardSessionKey) {
-          return;
-        }
-        const { snapshot, htmlViewMetadata } =
-          store.getSnapshotWithHtmlViewMetadata(boardSessionKey);
-        let sandboxPort = context.getMcpAppSandboxPort?.();
-        let sandboxOrigin: string | undefined;
-        let sandboxOriginResolved = false;
-        for (const widget of snapshot.widgets) {
-          if (widget.grantState !== "none" && widget.grantState !== "granted") {
-            continue;
+      async (invocation) => {
+        const { params: boardParams, respond, context, client } = invocation;
+        try {
+          const authority = captureBoardRequestAuthority(invocation);
+          const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
+          if (!boardSessionKey) {
+            return;
           }
-          const viewMetadata = htmlViewMetadata.get(widget.name);
-          if (!viewMetadata || viewMetadata.revision !== widget.revision) {
-            continue;
-          }
-          const registration = widget.pluginKind
-            ? resolveBoardWidgetContentKindByPluginKind(
-                getActivePluginRegistry(),
-                widget.pluginKind,
-              )
-            : undefined;
-          const scopedHostUrl = registration
-            ? client?.pluginSurfaceUrls?.[registration.definition.resources.surface]
-            : undefined;
-          const resourceUrls =
-            registration && scopedHostUrl
-              ? resolveBoardWidgetContentKindResourceUrls(registration, scopedHostUrl)
+          const { snapshot, htmlViewMetadata } =
+            store.getSnapshotWithHtmlViewMetadata(boardSessionKey);
+          let sandboxPort = context.getMcpAppSandboxPort?.();
+          let sandboxOrigin: string | undefined;
+          let sandboxOriginResolved = false;
+          for (const widget of snapshot.widgets) {
+            if (widget.grantState !== "none" && widget.grantState !== "granted") {
+              continue;
+            }
+            const viewMetadata = htmlViewMetadata.get(widget.name);
+            if (!viewMetadata || viewMetadata.revision !== widget.revision) {
+              continue;
+            }
+            const registration = widget.pluginKind
+              ? resolveBoardWidgetContentKindByPluginKind(
+                  authority.pluginRegistry,
+                  widget.pluginKind,
+                )
               : undefined;
-          if (
-            widget.contentKind === "plugin" &&
-            (!registration || !resourceUrls || !scopedHostUrl)
-          ) {
-            continue;
-          }
-          const resourceOrigins = resourceUrls
-            ? [...new Set(Object.values(resourceUrls).map((url) => new URL(url).origin))]
-            : undefined;
-          if (sandboxPort === undefined && context.ensureSandboxHostPort) {
-            try {
+            const scopedHostUrl = registration
+              ? client?.pluginSurfaceUrls?.[registration.definition.resources.surface]
+              : undefined;
+            const resourceUrls =
+              registration && scopedHostUrl
+                ? resolveBoardWidgetContentKindResourceUrls(registration, scopedHostUrl)
+                : undefined;
+            if (
+              widget.contentKind === "plugin" &&
+              (!registration || !resourceUrls || !scopedHostUrl)
+            ) {
+              continue;
+            }
+            const resourceOrigins = resourceUrls
+              ? [...new Set(Object.values(resourceUrls).map((url) => new URL(url).origin))]
+              : undefined;
+            if (sandboxPort === undefined && context.ensureSandboxHostPort) {
               sandboxPort = await context.ensureSandboxHostPort();
-            } catch (error) {
-              respondBoardError(error, respond);
-              return;
+              authority.assertActive();
             }
-          }
-          const { ticket } = createBoardViewTicket({
-            sessionKey: snapshot.sessionKey,
-            name: widget.name,
-            revision: widget.revision,
-            viewGeneration: viewMetadata.viewGeneration,
-            ...(registration && scopedHostUrl
-              ? {
-                  pluginFrame: {
-                    pluginKind: registration.pluginKind,
-                    scopedHostUrl,
-                  },
-                }
-              : {}),
-          });
-          if (registration) {
-            widget.kindLabel = registration.definition.label;
-          }
-          widget.frameUrl = buildBoardWidgetFrameUrl({
-            sessionKey: snapshot.sessionKey,
-            name: widget.name,
-            ticket,
-          });
-          widget.viewTicket = ticket;
-          widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
-          widget.viewGeneration = viewMetadata.viewGeneration;
-          if (sandboxPort !== undefined) {
-            widget.sandboxUrl = buildBoardWidgetSandboxPath({
-              ...viewMetadata,
-              ...(resourceOrigins ? { resourceOrigins } : {}),
+            authority.assertActive();
+            const { ticket } = createBoardViewTicket({
+              sessionKey: snapshot.sessionKey,
+              name: widget.name,
+              revision: widget.revision,
+              viewGeneration: viewMetadata.viewGeneration,
+              ...(registration && scopedHostUrl
+                ? {
+                    pluginFrame: {
+                      pluginKind: registration.pluginKind,
+                      scopedHostUrl,
+                    },
+                  }
+                : {}),
+              authority: authority.ticketAuthority,
             });
-            widget.sandboxPort = sandboxPort;
-            if (!sandboxOriginResolved) {
-              const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
-              sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
-              sandboxOriginResolved = true;
+            if (registration) {
+              widget.kindLabel = registration.definition.label;
             }
-            if (sandboxOrigin) {
-              widget.sandboxOrigin = sandboxOrigin;
+            widget.frameUrl = buildBoardWidgetFrameUrl({
+              sessionKey: snapshot.sessionKey,
+              name: widget.name,
+              ticket,
+            });
+            widget.viewTicket = ticket;
+            widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
+            widget.viewGeneration = viewMetadata.viewGeneration;
+            if (sandboxPort !== undefined) {
+              widget.sandboxUrl = buildBoardWidgetSandboxPath({
+                ...viewMetadata,
+                ...(resourceOrigins ? { resourceOrigins } : {}),
+              });
+              widget.sandboxPort = sandboxPort;
+              if (!sandboxOriginResolved) {
+                const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
+                sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
+                sandboxOriginResolved = true;
+              }
+              if (sandboxOrigin) {
+                widget.sandboxOrigin = sandboxOrigin;
+              }
             }
           }
+          authority.assertActive();
+          respond(true, snapshot);
+        } catch (error) {
+          respondBoardError(error, respond);
         }
-        respond(true, snapshot);
       },
     ),
     "board.update": defineValidatedGatewayMethod(
       "board.update",
       validateBoardUpdateParams,
-      ({ params: boardParams, respond, context }) => {
+      (invocation) => {
+        const { params: boardParams, respond, context } = invocation;
         try {
-          const authority = captureBoardRequestAuthority();
+          const authority = captureBoardRequestAuthority(invocation);
           const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
           if (!boardSessionKey) {
             return;
@@ -324,9 +291,10 @@ export function createBoardHandlers(
     "board.widget.put": defineValidatedGatewayMethod(
       "board.widget.put",
       validateBoardWidgetPutParams,
-      async ({ params: requestParams, respond, context }) => {
+      async (invocation) => {
+        const { params: requestParams, respond, context } = invocation;
         try {
-          const authority = captureBoardRequestAuthority();
+          const authority = captureBoardRequestAuthority(invocation);
           const requestedBoardSessionKey = resolveBoardSessionKey(requestParams, context, respond);
           if (!requestedBoardSessionKey) {
             return;
@@ -502,9 +470,10 @@ export function createBoardHandlers(
     "board.widget.grant": defineValidatedGatewayMethod(
       "board.widget.grant",
       validateBoardWidgetGrantParams,
-      ({ params: boardParams, respond, context }) => {
+      (invocation) => {
+        const { params: boardParams, respond, context } = invocation;
         try {
-          const authority = captureBoardRequestAuthority();
+          const authority = captureBoardRequestAuthority(invocation);
           const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
           if (!boardSessionKey) {
             return;
@@ -588,12 +557,15 @@ export function createBoardHandlers(
     "board.event": defineValidatedGatewayMethod(
       "board.event",
       validateBoardEventParams,
-      ({ params: boardParams, respond, context }) => {
+      (invocation) => {
+        const { params: boardParams, respond, context } = invocation;
         try {
-          const authority = captureBoardRequestAuthority();
+          const authority = captureBoardRequestAuthority(invocation);
           const identity =
             "ticket" in boardParams
-              ? resolveAuthorizedBoardWidgetView(store, boardParams.ticket)
+              ? resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
+                  gatewayContext: context,
+                })
               : (() => {
                   const boardSessionKey = resolveBoardSessionKey(boardParams, context, respond);
                   if (!boardSessionKey) {
@@ -629,9 +601,14 @@ export function createBoardHandlers(
     "board.prompt.authorize": defineValidatedGatewayMethod(
       "board.prompt.authorize",
       validateBoardPromptAuthorizeParams,
-      ({ params: boardParams, respond }) => {
+      (invocation) => {
+        const { params: boardParams, respond, context } = invocation;
         try {
-          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket);
+          const authority = captureBoardRequestAuthority(invocation);
+          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
+            gatewayContext: context,
+          });
+          authority.assertActive();
           respond(true, {
             confirmationRequired: !boardWidgetHasGrantedTool(
               document.declared,
@@ -648,11 +625,14 @@ export function createBoardHandlers(
       "board.data.read",
       validateBoardDataReadParams,
       async (invocation) => {
-        const { params: boardParams, respond } = invocation;
+        const { params: boardParams, respond, context } = invocation;
         try {
+          const authority = captureBoardRequestAuthority(invocation);
           const bindingParams = boardParams.params ?? {};
           assertCapabilityParamsSize(bindingParams, "data binding");
-          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket);
+          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
+            gatewayContext: context,
+          });
           if (
             !boardWidgetHasGrantedTool(
               document.declared,
@@ -665,7 +645,14 @@ export function createBoardHandlers(
               `board widget tool is not granted: ${boardParams.bindingId}`,
             );
           }
-          respond(true, await readDataBinding(boardParams.bindingId, bindingParams, invocation));
+          const result = await readDataBinding(
+            boardParams.bindingId,
+            bindingParams,
+            invocation,
+            authority,
+          );
+          authority.assertActive();
+          respond(true, result);
         } catch (error) {
           respondBoardError(error, respond);
         }
@@ -675,9 +662,12 @@ export function createBoardHandlers(
       "board.action",
       validateBoardActionParams,
       async (invocation) => {
-        const { params: boardParams, respond } = invocation;
+        const { params: boardParams, respond, context } = invocation;
         try {
-          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket);
+          const authority = captureBoardRequestAuthority(invocation);
+          const { document } = resolveAuthorizedBoardWidgetView(store, boardParams.ticket, {
+            gatewayContext: context,
+          });
           const capability =
             "jobId" in boardParams ? `cron.trigger:${boardParams.jobId}` : boardParams.action;
           if (!boardWidgetHasGrantedTool(document.declared, document.grantState, capability)) {
@@ -687,12 +677,21 @@ export function createBoardHandlers(
             );
           }
           if ("jobId" in boardParams) {
-            respond(true, await triggerCronJob(boardParams.jobId, invocation));
+            const result = await triggerCronJob(boardParams.jobId, invocation, authority);
+            authority.assertActive();
+            respond(true, result);
             return;
           }
           const actionParams = boardParams.params ?? {};
           assertCapabilityParamsSize(actionParams, "action");
-          respond(true, await runActionVerb(boardParams.action, actionParams, invocation));
+          const result = await runActionVerb(
+            boardParams.action,
+            actionParams,
+            invocation,
+            authority,
+          );
+          authority.assertActive();
+          respond(true, result);
         } catch (error) {
           respondBoardError(error, respond);
         }
