@@ -253,14 +253,14 @@ async function installCandidatePackage(
       ...(candidate.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
       install: async (spec) => {
         usedClawHubSpec = spec;
-        const capabilityConsent = await prepareConsent("clawhub", spec);
+        const attemptConsent = await prepareConsent("clawhub", spec);
         const result = await installPluginFromClawHub({
           spec,
           config: params.config,
           extensionsDir,
           env: params.env,
           expectedPluginId: candidate.pluginId,
-          onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,
+          onBeforePluginArtifactCommit: attemptConsent.onBeforePluginArtifactCommit,
           mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
           logger: {
             terminalLinks: false,
@@ -269,7 +269,7 @@ async function installCandidatePackage(
           ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
           ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
         });
-        return { result, capabilityConsent };
+        return { result, capabilityConsent: attemptConsent };
       },
       isRetryable: (attempt) => !attempt.result.ok && isUnavailableClawHubTarget(attempt.result),
       onFallback: (message) => {

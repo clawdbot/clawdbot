@@ -29,7 +29,10 @@ const {
 vi.mock("../../plugins/install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/install.js")>()),
   installPluginFromNpmPackArchive: installPluginFromNpmPackArchiveMock,
-  installPluginFromNpmSpec: installPluginFromNpmSpecMock,
+  installPluginFromNpmSpec: invokePluginArtifactInstallMock.bind(
+    null,
+    installPluginFromNpmSpecMock,
+  ),
   installPluginFromPath: installPluginFromPathMock,
 }));
 
@@ -187,44 +190,58 @@ describe("chat plugin install release stream", () => {
     await workspaceHarness.cleanupWorkspaces();
   });
 
-  it("installs the beta artifact for an official plugin on a beta gateway", async () => {
-    const cfg = {
-      commands: { text: true, plugins: true },
-      plugins: { enabled: true },
-      update: { channel: "beta" },
-    } as OpenClawConfig;
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: true,
-      pluginId: "brave",
-      targetDir: "/tmp/brave",
-      version: "1.0.0",
-      extensions: ["index.js"],
-      npmResolution: {
-        name: "@openclaw/brave-plugin",
+  it.each([false, true])(
+    "keeps beta artifact selection with capability acceptance %s",
+    async (acceptCapabilities) => {
+      const cfg: OpenClawConfig = {
+        commands: { text: true, plugins: true },
+        plugins: { enabled: true },
+        update: { channel: "beta" },
+      };
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: true,
+        pluginId: "brave",
+        targetDir: "/tmp/brave",
         version: "1.0.0",
-        resolvedSpec: "@openclaw/brave-plugin@1.0.0",
-      },
-    });
-    persistPluginInstallMock.mockResolvedValue({});
-
-    await withTempHome("openclaw-command-plugins-home-", async (home) => {
-      await fs.writeFile(
-        path.join(home, ".openclaw", "openclaw.json"),
-        `${JSON.stringify(cfg, null, 2)}
-`,
-      );
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const params = buildPluginsCommandParams({
-        commandBodyNormalized: "/plugins install npm:@openclaw/brave-plugin",
-        cfg,
-        workspaceDir,
-        gatewayClientScopes: ["operator.admin", "operator.write", "operator.pairing"],
+        extensions: ["index.js"],
+        npmResolution: {
+          name: "@openclaw/brave-plugin",
+          version: "1.0.0",
+          resolvedSpec: "@openclaw/brave-plugin@1.0.0",
+        },
       });
+      persistPluginInstallMock.mockResolvedValue({});
 
-      await handlePluginsCommand(params, true);
+      await withTempHome("openclaw-command-plugins-home-", async (home) => {
+        await fs.writeFile(
+          path.join(home, ".openclaw", "openclaw.json"),
+          `${JSON.stringify(cfg, null, 2)}
+`,
+        );
+        const workspaceDir = await workspaceHarness.createWorkspace();
+        const params = buildPluginsCommandParams({
+          commandBodyNormalized: `/plugins install npm:@openclaw/brave-plugin${acceptCapabilities ? " --accept-capabilities" : ""}`,
+          cfg,
+          workspaceDir,
+          gatewayClientScopes: ["operator.admin", "operator.write", "operator.pairing"],
+        });
 
-      const call = installPluginFromNpmSpecMock.mock.calls[0]?.[0] as { spec?: string } | undefined;
-      expect(call?.spec).toBe("@openclaw/brave-plugin@beta");
-    });
-  });
+        const result = await handlePluginsCommand(params, true);
+
+        expect(mockFirstObjectArg(installPluginFromNpmSpecMock).spec).toBe(
+          "@openclaw/brave-plugin@beta",
+        );
+        if (acceptCapabilities) {
+          expect(persistPluginInstallMock).toHaveBeenCalledWith(
+            expect.objectContaining({
+              install: expect.objectContaining({ acceptedSurfaceHash: expect.any(String) }),
+            }),
+          );
+        } else {
+          expect(result?.reply?.text).toContain("Plugin capabilities require approval");
+          expect(persistPluginInstallMock).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 });
