@@ -523,34 +523,58 @@ function emitStructCompatibilityInitializer(
       }
       return `            ${propName}: ${propName}`;
     });
-    const mixedInitializerParams = Object.entries(props).map(([key, prop]) => {
-      const propName = swiftStoredPropertyName(name, key);
-      if (key === "model") {
-        return `        ${propName}: AnyCodable?`;
-      }
-      if (agentsUpdateNullableStringKeys.has(key)) {
-        // Mixed emoji/avatar omit defaults so
-        // AgentsUpdateParams(agentid:modelvalue:) uniquely matches the raw
-        // initializer instead of this String-label overload.
-        return `        ${safeName(key)}: String?`;
-      }
-      return `        ${swiftInitializerParam({
-        name: propName,
-        schema: prop,
-        required: required.has(key),
-      })}`;
-    });
-    const mixedDelegatedArgs = Object.keys(props).map((key) => {
-      const propName = swiftStoredPropertyName(name, key);
-      if (key === "model") {
+    const emitMixedInitializer = (params: {
+      comment: string;
+      identityLabels: ReadonlySet<string>;
+    }): string => {
+      const mixedInitializerParams = Object.entries(props).flatMap(([key, prop]) => {
+        const propName = swiftStoredPropertyName(name, key);
+        if (key === "model") {
+          return [`        ${propName}: AnyCodable?`];
+        }
+        if (agentsUpdateNullableStringKeys.has(key)) {
+          if (!params.identityLabels.has(key)) {
+            return [];
+          }
+          // Mixed String labels omit defaults so
+          // AgentsUpdateParams(agentid:modelvalue:) uniquely matches the raw
+          // initializer instead of a String-label overload.
+          return [`        ${safeName(key)}: String?`];
+        }
+        return [
+          `        ${swiftInitializerParam({
+            name: propName,
+            schema: prop,
+            required: required.has(key),
+          })}`,
+        ];
+      });
+      const mixedDelegatedArgs = Object.keys(props).map((key) => {
+        const propName = swiftStoredPropertyName(name, key);
+        if (key === "model") {
+          return `            ${propName}: ${propName}`;
+        }
+        if (agentsUpdateNullableStringKeys.has(key)) {
+          if (!params.identityLabels.has(key)) {
+            return `            ${propName}: nil`;
+          }
+          const publicName = safeName(key);
+          return `            ${propName}: ${publicName}.map { AnyCodable($0) }`;
+        }
         return `            ${propName}: ${propName}`;
-      }
-      if (agentsUpdateNullableStringKeys.has(key)) {
-        const publicName = safeName(key);
-        return `            ${propName}: ${publicName}.map { AnyCodable($0) }`;
-      }
-      return `            ${propName}: ${propName}`;
-    });
+      });
+      return (
+        `\n\n    /// ${params.comment}\n` +
+        "    public init(\n" +
+        mixedInitializerParams.join(",\n") +
+        ")\n" +
+        "    {\n" +
+        "        self.init(\n" +
+        mixedDelegatedArgs.join(",\n") +
+        ")\n" +
+        "    }"
+      );
+    };
     return (
       "\n\n    public init(\n" +
       initializerParams.join(",\n") +
@@ -560,15 +584,18 @@ function emitStructCompatibilityInitializer(
       delegatedArgs.join(",\n") +
       ")\n" +
       "    }" +
-      "\n\n    /// Shipped mixed call shape: raw modelvalue plus String emoji/avatar labels.\n" +
-      "    public init(\n" +
-      mixedInitializerParams.join(",\n") +
-      ")\n" +
-      "    {\n" +
-      "        self.init(\n" +
-      mixedDelegatedArgs.join(",\n") +
-      ")\n" +
-      "    }"
+      emitMixedInitializer({
+        comment: "Shipped mixed call shape: raw modelvalue plus String emoji/avatar labels.",
+        identityLabels: new Set(["emoji", "avatar"]),
+      }) +
+      emitMixedInitializer({
+        comment: "Shipped mixed call shape: raw modelvalue plus String emoji label.",
+        identityLabels: new Set(["emoji"]),
+      }) +
+      emitMixedInitializer({
+        comment: "Shipped mixed call shape: raw modelvalue plus String avatar label.",
+        identityLabels: new Set(["avatar"]),
+      })
     );
   }
   if (name !== "ChatSendParams" || !props.fastMode) {

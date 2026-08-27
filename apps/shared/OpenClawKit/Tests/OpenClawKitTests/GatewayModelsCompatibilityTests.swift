@@ -282,15 +282,51 @@ struct GatewayModelsCompatibilityTests {
 
     @Test
     func `agent update keeps mixed modelvalue plus String emoji avatar call sites`() throws {
+        let noneParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable(NSNull()))
+        let emojiOnlyParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable("openai/gpt-5.6-luna"),
+            emoji: "🦞")
+        let avatarOnlyParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable("openai/gpt-5.6-luna"),
+            avatar: "https://example.com/a.png")
         let mixedParams = AgentsUpdateParams(
             agentid: "work",
             modelvalue: AnyCodable(NSNull()),
             emoji: "🦞",
             avatar: "https://example.com/a.png")
+        let noneJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(noneParams))
+                as? [String: Any])
+        let emojiOnlyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(emojiOnlyParams))
+                as? [String: Any])
+        let avatarOnlyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(avatarOnlyParams))
+                as? [String: Any])
         let mixedJSON = try #require(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(mixedParams))
                 as? [String: Any])
 
+        #expect(noneParams.modelvalue?.value is NSNull)
+        #expect(noneParams.emoji == nil)
+        #expect(noneParams.avatar == nil)
+        #expect(noneJSON["model"] is NSNull)
+        #expect(noneJSON["emoji"] == nil)
+        #expect(noneJSON["avatar"] == nil)
+        #expect(emojiOnlyParams.model == "openai/gpt-5.6-luna")
+        #expect(emojiOnlyParams.emoji == "🦞")
+        #expect(emojiOnlyParams.avatar == nil)
+        #expect(emojiOnlyJSON["emoji"] as? String == "🦞")
+        #expect(emojiOnlyJSON["avatar"] == nil)
+        #expect(avatarOnlyParams.model == "openai/gpt-5.6-luna")
+        #expect(avatarOnlyParams.emoji == nil)
+        #expect(avatarOnlyParams.avatar == "https://example.com/a.png")
+        #expect(avatarOnlyJSON["emoji"] == nil)
+        #expect(avatarOnlyJSON["avatar"] as? String == "https://example.com/a.png")
         #expect(mixedParams.modelvalue?.value is NSNull)
         #expect(mixedParams.emoji == "🦞")
         #expect(mixedParams.avatar == "https://example.com/a.png")

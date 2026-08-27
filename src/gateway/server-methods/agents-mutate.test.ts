@@ -1502,7 +1502,16 @@ describe("agents.update", () => {
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("restores IDENTITY.md when config commit fails after a successful identity write", async () => {
+  it.each([
+    {
+      name: "restores IDENTITY.md when it still contains this mutation's write after config commit failure",
+      concurrentEdit: false,
+    },
+    {
+      name: "does not restore IDENTITY.md over a concurrent agents.files.set edit after config commit failure",
+      concurrentEdit: true,
+    },
+  ] as const)("$name", async ({ concurrentEdit }) => {
     const identityMarkdown = [
       "# IDENTITY.md - Agent Identity",
       "",
@@ -1512,10 +1521,29 @@ describe("agents.update", () => {
       "Creature: Familiar",
       "",
     ].join("\n");
-    mocks.rootRead.mockResolvedValue({
-      buffer: Buffer.from(identityMarkdown),
-      realPath: "/workspace/test-agent/IDENTITY.md",
-      stat: { size: identityMarkdown.length, mtimeMs: 1 },
+    const concurrentMarkdown = [
+      "# IDENTITY.md - Agent Identity",
+      "",
+      "Name: Concurrent Agent",
+      "Creature: Familiar",
+      "",
+    ].join("\n");
+    let lastWritten: string | undefined;
+    mocks.rootRead.mockImplementation(async () => {
+      const content =
+        lastWritten === undefined
+          ? identityMarkdown
+          : concurrentEdit
+            ? concurrentMarkdown
+            : lastWritten;
+      return {
+        buffer: Buffer.from(content),
+        realPath: "/workspace/test-agent/IDENTITY.md",
+        stat: { size: content.length, mtimeMs: 1 },
+      };
+    });
+    mocks.rootWrite.mockImplementation(async (params?: unknown) => {
+      lastWritten = String((params as { data?: string | Buffer }).data);
     });
     mocks.writeConfigFile.mockRejectedValueOnce(new Error("config write failed"));
 
@@ -1534,6 +1562,11 @@ describe("agents.update", () => {
     });
     expect(String(clearedWrite.data)).not.toMatch(/Emoji\s*:/);
     expect(String(clearedWrite.data)).not.toMatch(/Avatar\s*:/);
+    if (concurrentEdit) {
+      expect(mocks.rootWrite).toHaveBeenCalledOnce();
+      expect(lastWritten).toBe(String(clearedWrite.data));
+      return;
+    }
     const restoredWrite = expectRecordFields(mockCallArg(mocks.rootWrite, 1), {
       rootDir: "/workspace/test-agent",
       relativePath: "IDENTITY.md",

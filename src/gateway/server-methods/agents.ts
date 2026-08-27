@@ -1102,11 +1102,20 @@ export const agentsHandlers: GatewayRequestHandlers = {
             try {
               await updateAgentConfigEntry(agentConfigUpdate);
             } catch (error) {
-              await restoreWorkspaceFile({
-                workspaceDir: identityWorkspaceDir,
-                name: DEFAULT_IDENTITY_FILENAME,
-                previousContent: previousIdentityContent,
-              });
+              // Restore only when IDENTITY.md still contains this mutation's
+              // write. agents.files.set can edit the same file without the
+              // config lock; a stale snapshot restore would overwrite that edit.
+              const currentIdentityContent = await readWorkspaceFileContent(
+                identityWorkspaceDir,
+                DEFAULT_IDENTITY_FILENAME,
+              ).catch(() => undefined);
+              if (currentIdentityContent === builtIdentity.content) {
+                await restoreWorkspaceFile({
+                  workspaceDir: identityWorkspaceDir,
+                  name: DEFAULT_IDENTITY_FILENAME,
+                  previousContent: previousIdentityContent,
+                });
+              }
               throw error;
             }
             return true;
