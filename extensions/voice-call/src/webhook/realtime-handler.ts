@@ -252,6 +252,10 @@ type StreamSessionRequest = {
   direction?: "inbound" | "outbound";
 };
 
+type RealtimeCallerMeta = Omit<PendingStreamToken, "expiry" | "providerName"> & {
+  providerName?: StreamFrameAdapter["providerName"];
+};
+
 export type StreamSession = {
   token: string;
   streamUrl: string;
@@ -312,7 +316,20 @@ type UserTranscriptOwnerAdoption = {
   previous?: UserTranscriptState;
 };
 
-type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
+export type RealtimeCallEndCause = "disconnect" | "shutdown" | "inactivity" | "error";
+
+export type RealtimeCarrierSocket = {
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+  send(message: string | Buffer): void;
+  close(code?: number, reason?: string): void;
+};
+
+export type RealtimeTelephonyStream = {
+  receiveAudio(audio: Buffer): void;
+  acknowledgeMark(): void;
+  close(cause: RealtimeCallEndCause): Promise<void>;
+};
 
 // Each socket keeps its exact binding; the call map only grants current-generation
 // record termination. Replacement can retire old audio without a late close killing its successor.
@@ -591,6 +608,43 @@ export class RealtimeCallHandler {
     this.toolHandlers.set(name, fn);
   }
 
+  attachTelephonyStream(params: {
+    streamId: string;
+    providerCallId: string;
+    socket: RealtimeCarrierSocket;
+    adapter: StreamFrameAdapter;
+    callId?: string;
+    from?: string;
+    to?: string;
+    direction?: "inbound" | "outbound";
+  }): RealtimeTelephonyStream | null {
+    const binding = this.handleCall(
+      params.streamId,
+      params.providerCallId,
+      params.socket,
+      {
+        providerName: params.adapter.providerName,
+        callId: params.callId,
+        from: params.from,
+        to: params.to,
+        direction: params.direction,
+      },
+      params.adapter,
+    );
+    if (!binding) {
+      return null;
+    }
+    this.streamDisconnectLifecycle.connect(params.providerCallId, params.streamId);
+    return {
+      receiveAudio: (audio) => {
+        binding.noteMediaActivity();
+        binding.bridge.sendAudio(audio);
+      },
+      acknowledgeMark: () => binding.bridge.acknowledgeMark(),
+      close: (cause) => binding.close(cause),
+    };
+  }
+
   speak(callId: string, instructions: string): RealtimeSpeakResult {
     const bridge = this.activeBridgesByCallId.get(callId);
     if (!bridge) {
@@ -668,13 +722,13 @@ export class RealtimeCallHandler {
   private handleCall(
     streamSid: string,
     callSid: string,
-    ws: WebSocket,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
+    socket: RealtimeCarrierSocket,
+    callerMeta: RealtimeCallerMeta,
     adapter: StreamFrameAdapter,
   ): RealtimeTelephonyBinding | null {
     const preparedCall = this.prepareCallInManager(callSid, callerMeta);
     if (!preparedCall) {
-      ws.close(1008, "Caller rejected by policy");
+      socket.close(1008, "Caller rejected by policy");
       return null;
     }
 
@@ -717,7 +771,7 @@ export class RealtimeCallHandler {
       if (!hadPredecessorOnAdmission) {
         void emitCallEnd("error");
       }
-      ws.close(1011, "Check realtime configuration for routed agent");
+      socket.close(1011, "Check realtime configuration for routed agent");
       return null;
     }
 
@@ -795,40 +849,46 @@ export class RealtimeCallHandler {
       `[voice-call] Realtime bridge starting for call ${callId} (providerCallId=${callSid}, initialGreeting=${initialGreetingInstructions ? "queued" : "absent"})`,
     );
 
-    const sendString = (message: string): boolean => {
-      if (ws.readyState !== WebSocket.OPEN) {
+    const sendFrame = (message: string | Buffer): boolean => {
+      if (socket.readyState !== WebSocket.OPEN) {
         return false;
       }
-      if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
+      if (socket.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
         console.warn(
-          `[voice-call] realtime outbound websocket backpressure before send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
+          `[voice-call] realtime outbound carrier backpressure before send callId=${callId} providerCallId=${callSid} bufferedBytes=${socket.bufferedAmount}`,
         );
-        ws.close(1013, "Backpressure: send buffer exceeded");
+        socket.close(1013, "Backpressure: send buffer exceeded");
         return false;
       }
-      ws.send(message);
-      if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
+      socket.send(message);
+      if (socket.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
         console.warn(
-          `[voice-call] realtime outbound websocket backpressure after send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
+          `[voice-call] realtime outbound carrier backpressure after send callId=${callId} providerCallId=${callSid} bufferedBytes=${socket.bufferedAmount}`,
         );
-        ws.close(1013, "Backpressure: send buffer exceeded");
+        socket.close(1013, "Backpressure: send buffer exceeded");
         return false;
       }
       return true;
     };
+    // Providers without remote playback marks acknowledge once the paced mark
+    // reaches the carrier boundary; prior audio frames have already been sent.
+    const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     const audioPacer = new RealtimeAudioPacer({
-      send: sendString,
+      send: sendFrame,
       serializer: {
         media: (payload) => adapter.serializeMedia(payload),
         clear: () => adapter.serializeClear(),
         mark: (name) => adapter.serializeMark(name),
       },
+      onMarkSent: adapter.acknowledgeMarksOnSend
+        ? () => nativeConsultOwner.current?.acknowledgeMark()
+        : undefined,
       onBackpressure: () => {
         console.warn(
           `[voice-call] realtime paced audio backpressure callId=${callId} providerCallId=${callSid}`,
         );
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1013, "Backpressure: paced audio queue exceeded");
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1013, "Backpressure: paced audio queue exceeded");
         }
       },
     });
@@ -841,8 +901,6 @@ export class RealtimeCallHandler {
       typeof providerConfig.interruptResponseOnInputAudio === "boolean"
         ? providerConfig.interruptResponseOnInputAudio
         : undefined;
-    // Providers may close synchronously before createBridge returns; no consult can exist yet.
-    const nativeConsultOwner: { current?: ActiveRealtimeVoiceBridge } = {};
     // Provisional ownership accepts callbacks fired during createBridge. Commit
     // retires the predecessor only after creation succeeds; failure restores it.
     const userTranscriptAdoption = this.beginUserTranscriptOwnerAdoption(callId);
@@ -858,7 +916,7 @@ export class RealtimeCallHandler {
       initialGreetingInstructions,
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
       audioSink: {
-        isOpen: () => ws.readyState === WebSocket.OPEN,
+        isOpen: () => socket.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
           harness.recordOutputAudio(muLaw);
           audioPacer.sendAudio(muLaw);
@@ -1083,8 +1141,8 @@ export class RealtimeCallHandler {
           return;
         }
         this.streamDisconnectLifecycle.retire(callSid, streamSid);
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1011, "Bridge disconnected");
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1011, "Bridge disconnected");
         }
         // A provisional replacement may fail before its bridge owner is assigned.
         // The active predecessor still owns call termination until creation succeeds.
@@ -1108,8 +1166,8 @@ export class RealtimeCallHandler {
       if (!hadPredecessorOnAdmission || !this.activeBridgesByCallId.has(callId)) {
         void emitCallEnd("error");
       }
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.close(1011, "Failed to create realtime bridge");
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close(1011, "Failed to create realtime bridge");
       }
       console.error("[voice-call] Failed to create realtime bridge:", error);
       return null;
@@ -1206,8 +1264,8 @@ export class RealtimeCallHandler {
         // Close the provider session before the carrier socket so no pending
         // response can reach the caller after the hang-up request succeeds.
         void closeBinding(telephonyBinding);
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1000, "Call ended");
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.close(1000, "Call ended");
         }
       },
       noteMediaActivity: () => {
@@ -1224,8 +1282,8 @@ export class RealtimeCallHandler {
           );
           livenessTimer = setTimeout(() => {
             void telephonyBinding.close("inactivity");
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.close(1000, "Media inactivity");
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.close(1000, "Media inactivity");
             }
           }, REALTIME_DISCONNECT_HANGUP_GRACE_MS);
           livenessTimer.unref?.();
@@ -1258,7 +1316,7 @@ export class RealtimeCallHandler {
         if (ownsCallState) {
           void emitCallEnd("error");
         }
-        ws.close(1011, "Failed to connect");
+        socket.close(1011, "Failed to connect");
       }
     });
 
@@ -1683,10 +1741,7 @@ export class RealtimeCallHandler {
     }
   }
 
-  private prepareCallInManager(
-    callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry"> = {},
-  ) {
+  private prepareCallInManager(callSid: string, callerMeta: RealtimeCallerMeta = {}) {
     const timestamp = Date.now();
     const baseFields = {
       providerCallId: callSid,
@@ -1710,7 +1765,7 @@ export class RealtimeCallHandler {
 
   private resolveRealtimeCall(
     callSid: string,
-    callerMeta: Omit<PendingStreamToken, "expiry">,
+    callerMeta: RealtimeCallerMeta,
     baseFields: {
       providerCallId: string;
       timestamp: number;

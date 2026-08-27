@@ -20,18 +20,18 @@ type RealtimeAudioQueueItem =
       type: "mark";
     };
 
-/** WebSocket send callback for realtime audio frames. */
-type RealtimeAudioSend = (message: string) => boolean;
+/** Carrier send callback for realtime audio frames. */
+type RealtimeAudioSend<TMessage> = (message: TMessage) => boolean;
 
 /** Provider-specific serializer for media, clear, and mark frames. */
-interface RealtimeAudioSerializer {
-  media(payloadBase64: string): string;
-  clear(): string;
-  mark(name: string): string;
+export interface RealtimeAudioSerializer<TMessage = string> {
+  media(payloadBase64: string): TMessage;
+  clear(): TMessage;
+  mark(name: string): TMessage;
 }
 
 /** Paces outgoing mulaw audio frames at telephony cadence. */
-export class RealtimeAudioPacer {
+export class RealtimeAudioPacer<TMessage = string> {
   private queue: RealtimeAudioQueueItem[] = [];
   private queueHead = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -43,8 +43,9 @@ export class RealtimeAudioPacer {
     private readonly params: {
       maxQueuedAudioBytes?: number;
       onBackpressure?: () => void;
-      send: RealtimeAudioSend;
-      serializer: RealtimeAudioSerializer;
+      onMarkSent?: (name: string) => void;
+      send: RealtimeAudioSend<TMessage>;
+      serializer: RealtimeAudioSerializer<TMessage>;
     },
   ) {}
 
@@ -182,6 +183,9 @@ export class RealtimeAudioPacer {
         this.queuedAudioBytes = 0;
         this.streamClockMs = null;
         return;
+      }
+      if (item.type === "mark") {
+        this.params.onMarkSent?.(item.name);
       }
     }
 

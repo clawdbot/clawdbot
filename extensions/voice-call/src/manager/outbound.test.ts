@@ -181,10 +181,12 @@ describe("voice-call outbound helpers", () => {
     expect(generateNotifyTwimlMock).toHaveBeenCalledWith("hello there", "Polly.Joanna");
     expect(initiateProviderCall).toHaveBeenCalledWith({
       callId,
+      mode: "notify",
       from: "+14155550100",
       to: "+14155550123",
       webhookUrl: "https://example.com/webhook",
       inlineTwiml: "<Response />",
+      preConnectTwiml: undefined,
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
     expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("agent:main:work");
@@ -282,6 +284,7 @@ describe("voice-call outbound helpers", () => {
     );
     expect(initiateProviderCall).toHaveBeenCalledWith({
       callId,
+      mode: "conversation",
       from: "+14155550100",
       to: "+14155550123",
       webhookUrl: "https://example.com/webhook",

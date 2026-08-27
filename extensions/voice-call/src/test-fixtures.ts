@@ -3,7 +3,7 @@ import type { VoiceCallConfig } from "./config.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 export function createVoiceCallBaseConfig(params?: {
-  provider?: "telnyx" | "twilio" | "plivo" | "mock";
+  provider?: "telnyx" | "twilio" | "plivo" | "asterisk" | "mock";
   tunnelProvider?: "none" | "ngrok";
 }): VoiceCallConfig {
   return {

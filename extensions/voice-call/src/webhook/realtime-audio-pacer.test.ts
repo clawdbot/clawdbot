@@ -1,8 +1,6 @@
 // Voice Call tests cover realtime audio pacer plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { RealtimeAudioPacer } from "./realtime-audio-pacer.js";
-
-type RealtimeAudioSerializer = ConstructorParameters<typeof RealtimeAudioPacer>[0]["serializer"];
+import { RealtimeAudioPacer, type RealtimeAudioSerializer } from "./realtime-audio-pacer.js";
 
 function createTwilioSerializer(streamSid: string): RealtimeAudioSerializer {
   return {

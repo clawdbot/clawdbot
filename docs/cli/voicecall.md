@@ -87,7 +87,7 @@ openclaw voicecall smoke --to "+15555550123" --yes  # live notify call
 ```
 
 <Note>
-For external providers (`plivo`, `telnyx`, `twilio`), `setup` and `smoke` require a public webhook URL from `publicUrl`, a tunnel, or Tailscale exposure. A loopback or private serve fallback is rejected because carriers cannot reach it.
+For webhook providers (`plivo`, `telnyx`, `twilio`), `setup` and `smoke` require a public webhook URL from `publicUrl`, a tunnel, or Tailscale exposure. A loopback or private serve fallback is rejected because carriers cannot reach it. Asterisk uses its configured ARI and AudioSocket endpoints instead.
 </Note>
 
 ## Call lifecycle

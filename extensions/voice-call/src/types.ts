@@ -6,7 +6,7 @@ import type { CallMode } from "./config.js";
 // Provider Identifiers
 // -----------------------------------------------------------------------------
 
-const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "mock"]);
+const ProviderNameSchema = z.enum(["telnyx", "twilio", "plivo", "asterisk", "mock"]);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
 // -----------------------------------------------------------------------------
@@ -216,6 +216,7 @@ export type ProviderWebhookParseResult = {
 
 export type InitiateCallInput = {
   callId: CallId;
+  mode?: CallMode;
   from: string;
   to: string;
   webhookUrl: string;
