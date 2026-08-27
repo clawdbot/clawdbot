@@ -749,5 +749,11 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  // Fresh rows and placeholder aliases have no running model to replace. Model
+  // and context-window initialization must not queue a switch on their first turn.
+  if (!existing?.sessionId) {
+    delete next.liveModelSwitchPending;
+  }
+
   return { ok: true, entry: next };
 }
