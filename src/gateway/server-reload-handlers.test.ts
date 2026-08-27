@@ -235,7 +235,6 @@ type GmailWatcherRestartParams = {
     error: (msg: string) => void;
   };
   onSkipped?: () => void;
-  isCancelled?: () => boolean;
   signal?: AbortSignal;
 };
 
@@ -3881,9 +3880,9 @@ describe("gateway Gmail hot reload handlers", () => {
     const [restartParams] = hoisted.startGmailWatcherWithLogs.mock.calls[0] ?? [];
     expect(restartParams).toMatchObject({ cfg: nextConfig });
     expect(restartParams?.signal).toBe(abortController.signal);
-    expect(restartParams?.isCancelled?.()).toBe(false);
+    expect(restartParams?.signal?.aborted).toBe(false);
     abortController.abort();
-    expect(restartParams?.isCancelled?.()).toBe(true);
+    expect(restartParams?.signal?.aborted).toBe(true);
     expect(clearGmailRestartAbortController).toHaveBeenCalledWith(abortController);
   });
 

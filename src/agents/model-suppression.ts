@@ -139,37 +139,7 @@ function resolveBuiltInModelSuppressionFromManifest(params: {
   });
 }
 
-function resolveBuiltInModelSuppression(params: {
-  provider?: string | null;
-  id?: string | null;
-  baseUrl?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}) {
-  const manifestResult = resolveBuiltInModelSuppressionFromManifest(params);
-  if (manifestResult?.suppress) {
-    return manifestResult;
-  }
-  const provider = normalizeProviderId(params.provider ?? "");
-  const modelId = normalizeLowercaseStringOrEmpty(params.id);
-  if (!provider || !modelId) {
-    return undefined;
-  }
-  return undefined;
-}
-
 /** Return true when plugin manifest metadata suppresses a built-in model entry. */
-export function shouldSuppressBuiltInModelFromManifest(params: {
-  provider?: string | null;
-  id?: string | null;
-  baseUrl?: string | null;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-}) {
-  return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
-}
-
-/** Return true when any built-in suppression rule applies to a model entry. */
 export function shouldSuppressBuiltInModelCore(params: {
   provider?: string | null;
   id?: string | null;
@@ -177,7 +147,7 @@ export function shouldSuppressBuiltInModelCore(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }) {
-  return resolveBuiltInModelSuppression(params)?.suppress ?? false;
+  return resolveBuiltInModelSuppressionFromManifest(params)?.suppress ?? false;
 }
 
 /**
@@ -205,7 +175,7 @@ export function buildSuppressedBuiltInModelError(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): string | undefined {
-  return resolveBuiltInModelSuppression(params)?.errorMessage;
+  return resolveBuiltInModelSuppressionFromManifest(params)?.errorMessage;
 }
 
 /** Build a reusable suppression predicate for repeated catalog filtering. */

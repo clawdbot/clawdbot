@@ -205,7 +205,7 @@ export async function modelsListCommand(
   const promotionsRefreshPromise = promotionsModulePromise
     ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
     .catch(() => undefined);
-  const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
+  const rowContext = {
     cfg,
     agentId,
     agentDir,
@@ -222,10 +222,9 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
-    skipRuntimeModelSuppression,
     metadataSnapshot,
     workspaceDir,
-  });
+  };
   const rows: ModelRow[] = [];
 
   if (includePreparedCatalog) {
@@ -233,7 +232,7 @@ export async function modelsListCommand(
     await appendAllModelRowSources({
       rows,
       entries,
-      context: buildRowContext(false),
+      context: rowContext,
       modelRegistry,
       registryModels,
     });
@@ -243,7 +242,7 @@ export async function modelsListCommand(
       rows,
       entries,
       modelRegistry,
-      context: buildRowContext(!modelRegistry),
+      context: rowContext,
     });
   }
 

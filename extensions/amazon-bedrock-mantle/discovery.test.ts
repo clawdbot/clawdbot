@@ -632,6 +632,23 @@ describe("bedrock mantle discovery", () => {
     expect(json).not.toHaveBeenCalled();
   });
 
+  it("rejects invalid UTF-8 model discovery responses", async () => {
+    const prefix = new TextEncoder().encode('{"data":[{"id":"anthropic.');
+    const suffix = new TextEncoder().encode('.model","object":"model"}]}');
+    const invalidBody = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const mockFetch = vi.fn<typeof fetch>(
+      async () => new Response(invalidBody, { headers: { "content-type": "application/json" } }),
+    );
+
+    const models = await discoverMantleModels({
+      region: testRegion,
+      bearerToken: "test-token",
+      fetchFn: mockFetch,
+    });
+
+    expect(models).toStrictEqual([]);
+  });
+
   // ---------------------------------------------------------------------------
   // Discovery caching
   // ---------------------------------------------------------------------------

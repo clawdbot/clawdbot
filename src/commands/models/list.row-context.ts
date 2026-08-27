@@ -23,7 +23,6 @@ export type RowBuilderContext = {
   configuredByKey: Map<string, ConfiguredEntry>;
   discoveredKeys: Set<string>;
   filter: RowFilter;
-  skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
 };

@@ -236,10 +236,6 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("../../agents/model-suppression.js", () => ({
     shouldSuppressBuiltInModelCore: suppressOpenAiSpark,
-    shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
-    createManifestBuiltInModelSuppressor: vi.fn(
-      () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),
-    ),
   }));
 
   vi.doMock("./load-config.js", () => ({
