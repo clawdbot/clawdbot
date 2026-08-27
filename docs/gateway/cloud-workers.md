@@ -85,7 +85,7 @@ Keep the token out of repository config and shell arguments.
 ### Daytona
 
 <Warning>
-Direct Daytona cloud-worker dispatch remains unsupported. Omitting `settings.class` removes OpenClaw's class requirement, but does not establish compatibility with its fixed-ID replay, setup transport, and cleanup contracts. Setting a class such as `beast` is not a workaround: Crabbox's Daytona backend rejects `--class` because the snapshot controls sizing.
+Direct Daytona cloud-worker dispatch remains unsupported. With `settings.class` omitted, Crabbox 0.46.0 rejects OpenClaw's fixed `--lease-id` before allocation. OpenClaw preserves that backend incompatibility diagnostic instead of treating it as an outdated CLI; upgrading alone does not establish direct-backend support. Setting a class such as `beast` is not a workaround: Crabbox's Daytona backend rejects `--class` because the snapshot controls sizing.
 </Warning>
 
 For managed Daytona evaluation, use Crabbox 0.46.0 with an authenticated managed coordinator configured for Daytona. Omit `settings.class`, leave `settings.warmImage` and `settings.desktop` disabled, and prepare Node.js, `npx`, and the matching OpenClaw installation through the existing [setup prerequisites](/gateway/cloud-workers#the-setup-command). Keep provider credentials and snapshot selection in Crabbox's configuration, not OpenClaw profile settings.

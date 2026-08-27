@@ -2744,16 +2744,48 @@ describe("Crabbox worker provider", () => {
   });
 
   it.each([
-    ["old backend", 2, "provider=aws does not support fixed idempotent lease IDs"],
-    ["old CLI", 2, "unknown flag: --lease-id"],
-    ["intent drift", 4, "lease_id_conflict: lease is bound to another create intent"],
-    ["terminal reuse", 4, "lease_id_conflict: fixed lease is terminal and cannot be replayed"],
-  ])("treats %s as a permanent provider rejection", async (_name, code, stderr) => {
-    const provider = providerWithRunner(async () => commandResult({ code, stderr }));
+    [
+      "unsupported backend",
+      2,
+      "provider=daytona does not support fixed idempotent lease IDs",
+      "provider=daytona does not support fixed idempotent lease IDs",
+    ],
+    [
+      "old CLI",
+      2,
+      "unknown flag: --lease-id",
+      "Crabbox 0.41.1 or newer with fixed lease ID support is required",
+    ],
+    [
+      "intent drift",
+      4,
+      "lease_id_conflict: lease is bound to another create intent",
+      "lease_id_conflict",
+    ],
+    [
+      "terminal reuse",
+      4,
+      "lease_id_conflict: fixed lease is terminal and cannot be replayed",
+      "lease_id_conflict",
+    ],
+  ])("reports %s accurately before enrollment", async (_name, code, stderr, diagnosis) => {
+    const runCommand = vi.fn<CrabboxCommandRunner>(async () => commandResult({ code, stderr }));
+    const provider = providerWithRunner(runCommand);
+    const beginNodeEnrollment = vi.fn();
 
-    await expect(provider.provision(PROFILE, OPERATION_ID)).rejects.toMatchObject({
+    await expect(
+      provider.provision({ ...CLASSLESS_PROFILE, provider: "daytona" }, OPERATION_ID, {
+        beginNodeEnrollment,
+      }),
+    ).rejects.toMatchObject({
       code: "invalid_profile",
+      message: expect.stringContaining(diagnosis),
     });
+    expect(beginNodeEnrollment).not.toHaveBeenCalled();
+    expect(runCommand).toHaveBeenCalledOnce();
+    const argv = runCommand.mock.calls[0]?.[0];
+    expect(argv).toEqual(expect.arrayContaining(["warmup", "--lease-id", LEASE_ID]));
+    expect(argv).not.toContain("--class");
   });
 
   it("keeps unresolved direct AWS inventory convergence retryable", async () => {

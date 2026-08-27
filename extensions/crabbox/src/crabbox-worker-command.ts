@@ -50,7 +50,6 @@ export function provisionProfileError(result: SpawnResult): WorkerProviderError 
   }
   const output = `${result.stderr}\n${result.stdout}`;
   if (
-    /\bprovider=\S+\s+does not support fixed idempotent lease IDs\b/u.test(output) ||
     /(?:unknown|unrecognized) (?:flag|option)[^\r\n]*--lease-id/iu.test(output) ||
     /flag provided but not defined:\s*-lease-id/iu.test(output)
   ) {
@@ -58,9 +57,11 @@ export function provisionProfileError(result: SpawnResult): WorkerProviderError 
       "Crabbox 0.41.1 or newer with fixed lease ID support is required",
     );
   }
+  // A backend capability rejection is not evidence of an obsolete CLI.
   if (
-    /\blease_id_conflict\b/u.test(output) &&
-    !/\bretry after provider inventory converges\b/iu.test(output)
+    /\bprovider=\S+\s+does not support fixed idempotent lease IDs\b/u.test(output) ||
+    (/\blease_id_conflict\b/u.test(output) &&
+      !/\bretry after provider inventory converges\b/iu.test(output))
   ) {
     return permanentCrabboxCommandError("warmup", result);
   }

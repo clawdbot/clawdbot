@@ -1001,7 +1001,7 @@ The bundled `crabbox` provider provisions a disposable machine through the local
 }
 ```
 
-- `settings.provider` (required): Crabbox backend passed through `--provider`; `aws` selects the direct AWS backend.
+- `settings.provider` (required): Crabbox backend passed through `--provider`; `aws` selects AWS. Crabbox's own coordinator configuration determines direct versus managed routing.
 - `settings.class`: optional Crabbox machine class passed to `--class`. Omission leaves selection to Crabbox unless the placement supplies `machineClass`; OpenClaw does not invent a default or hardware size. Explicit `null`, empty or whitespace strings, and nonstring values are invalid. Edit classless profiles through **Settings → Advanced**.
 - `settings.ttl` and `settings.idleTimeout` (required): positive Go duration strings passed to `--ttl` and `--idle-timeout` as provider-side failsafes.
 - `settings.warmImage`: captures a reusable machine image at each stop and starts later workers with the same profile from it; pair with `suspendAfter` so suspended sessions wake warm. Enabled by default, except for profiles that set `setupEnv`, whose forwarded host environment could leave setup-derived credentials in a shared image; set `true` or `false` to choose explicitly. Images incur provider snapshot storage charges and retain machine-level caches, including per-repository Git seeds, alongside whatever `setup` wrote outside the scrubbed worker state. Capture adds at most about three minutes to a stop on providers with slow native snapshots, ten on `machine0`, then degrades to cold-only provisioning.

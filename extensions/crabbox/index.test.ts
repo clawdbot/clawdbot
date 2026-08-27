@@ -36,6 +36,7 @@ function inspectResult(leaseId: string): SpawnResult {
       host: "worker.example.test",
       id: leaseId,
       ready: true,
+      providerMetadata: { instanceProfileAttached: false },
       sshHost: "worker.example.test",
       sshKey: "/mock/worker-key",
       sshPort: 2222,
@@ -70,7 +71,7 @@ describe("Crabbox plugin generation lifecycle", () => {
   });
 
   it.each([
-    { backend: "daytona", executionMode: "worker-turn" },
+    { backend: "aws", executionMode: "worker-turn" },
     { backend: "hetzner", executionMode: "remote-exec" },
   ] as const)(
     "supports a classless $backend profile through $executionMode lifecycle",
@@ -78,6 +79,9 @@ describe("Crabbox plugin generation lifecycle", () => {
       const runCommand = vi
         .spyOn(processRuntime, "runCommandWithTimeout")
         .mockImplementation(async (argv) => {
+          if (argv[1] === "config") {
+            return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+          }
           if (argv[1] === "providers") {
             return commandResult({
               stdout: JSON.stringify([
@@ -127,6 +131,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         const calls = runCommand.mock.calls.map(([argv]) => argv);
         expect(calls.map((argv) => argv[1])).toEqual([
           "providers",
+          ...(backend === "aws" ? ["config"] : []),
           "warmup",
           "inspect",
           "run",
