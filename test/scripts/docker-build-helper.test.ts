@@ -101,6 +101,7 @@ const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
+const UPGRADE_SURVIVOR_CONFIG_PARKING_PATH = "scripts/e2e/lib/upgrade-survivor/config-parking.mjs";
 const GATEWAY_NETWORK_DOCKER_E2E_PATH = "scripts/e2e/gateway-network-docker.sh";
 const BROWSER_CDP_SNAPSHOT_DOCKER_E2E_PATH = "scripts/e2e/browser-cdp-snapshot-docker.sh";
 const SANDBOX_BROWSER_SIDECAR_DOCKER_E2E_PATH = "scripts/e2e/sandbox-browser-sidecar-docker.sh";
@@ -2622,12 +2623,11 @@ docker_e2e_docker_run_cmd run demo
     }
     expectTextToIncludeAll(publishedRunner, [
       "park_prepublish_authored_config",
-      "park-prepublish-auth-config",
+      "park-prepublish",
       "assert_prepublish_fixture_idle",
       "assert-no-requests",
       "restore_prepublish_authored_config",
-      "restore-prepublish-auth-config",
-      "cmp -s",
+      "config-parking.mjs",
       "'^(GATEWAY_AUTH_TOKEN_REF|OPENCLAW_CLAWHUB_URL)='",
       "OPENCLAW_CLAWHUB_URL=%s",
     ]);
@@ -2641,9 +2641,10 @@ docker_e2e_docker_run_cmd run demo
       publishedRunner.lastIndexOf("write_update_restart_service_env"),
     );
     for (const script of [runner, updateRestartAuth]) {
-      expect(script).not.toContain("park-prepublish-auth-config");
       expect(script).not.toContain("assert-no-requests");
     }
+    expect(updateRestartAuth).toContain("park-restart-probe");
+    expect(updateRestartAuth).toContain('"$OPENCLAW_CONFIG_PATH"');
     expect(publishedRunner).not.toContain(
       '\nexport MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"\n',
     );
@@ -2658,6 +2659,16 @@ docker_e2e_docker_run_cmd run demo
     expect(
       runner.match(
         /-e OPENCLAW_UPGRADE_SURVIVOR_CLAWHUB_FIXTURE_SERVER=\/tmp\/openclaw-clawhub-fixture-server\.cjs/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-v "\$HARNESS_ROOT_DIR\/scripts\/e2e\/lib\/upgrade-survivor\/config-parking\.mjs:\/tmp\/openclaw-config-parking\.mjs:ro"/gu,
+      ),
+    ).toHaveLength(2);
+    expect(
+      runner.match(
+        /-e OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER=\/tmp\/openclaw-config-parking\.mjs/gu,
       ),
     ).toHaveLength(2);
   });
@@ -3141,6 +3152,9 @@ exit 23
     const script = repoShell(workDir)`
 export PATH="$TMPDIR/bin:$PATH"
 export CAPTURE_DIR="$TMPDIR"
+export OPENCLAW_CONFIG_PATH="$TMPDIR/openclaw.json"
+export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+printf '%s\n' '{"gateway":{"mode":"local"}}' >"$OPENCLAW_CONFIG_PATH"
 unset OPENCLAW_UPDATE_IN_PROGRESS
 unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
 unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
@@ -3187,6 +3201,130 @@ fi
         "",
       ].join("\n"),
     );
+  });
+
+  it.each([
+    ["doctor", 41],
+    ["readiness", 42],
+    ["service-env", 43],
+    ["install", 44],
+  ] as const)(
+    "restores the canonical authored config after %s failure",
+    (failureStage, expectedStatus) => {
+      const workDir = tempDirs.make(`openclaw-upgrade-survivor-${failureStage}-failure-`);
+      writeExecutables(join(workDir, "bin"), {
+        openclaw: `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s %s\n' "$OPENCLAW_CONFIG_PATH" "$*" >>"$CAPTURE_DIR/openclaw-calls"
+if [ "$FAILURE_STAGE" = doctor ] && [ "\${1:-}" = doctor ]; then
+  exit 41
+fi
+if [ "\${1:-}" = gateway ] && [ "\${2:-}" = install ]; then
+  [ "$FAILURE_STAGE" != install ] || exit 44
+  exit 0
+fi
+sleep 30
+`,
+      });
+
+      const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export CAPTURE_DIR="$TMPDIR"
+export FAILURE_STAGE="${failureStage}"
+export OPENCLAW_STATE_DIR="$TMPDIR/state"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+export OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE="$TMPDIR/gateway.pid"
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_JSON="$TMPDIR/install.json"
+export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SERVICE_INSTALL_ERR="$TMPDIR/install.err"
+export GATEWAY_AUTH_TOKEN_REF=upgrade-survivor-token
+mkdir -p "$OPENCLAW_STATE_DIR"
+authored_config='{"channels":{"discord":{"dm":{"policy":"allowlist","allowFrom":["123"]}}}}'
+printf '%s\n' "$authored_config" >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+seed_update_restart_probe_device_auth() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}
+openclaw_e2e_wait_gateway_ready() {
+  [ "$FAILURE_STAGE" != readiness ] || return 42
+}
+write_update_restart_service_auth_env() {
+  [ "$FAILURE_STAGE" != service-env ] || return 43
+}
+status=0
+prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1 || status=$?
+printf '%s\n' "$status" >"$CAPTURE_DIR/status"
+cmp -s "$OPENCLAW_CONFIG_PATH" <(printf '%s\n' "$authored_config")
+[ ! -e "$TMPDIR/gateway.log.authored-config" ]
+if [ -n "\${gateway_pid:-}" ]; then
+  kill "$gateway_pid" >/dev/null 2>&1 || true
+  wait "$gateway_pid" >/dev/null 2>&1 || true
+fi
+`;
+
+      const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(workDir, "status"), "utf8")).toBe(`${expectedStatus}\n`);
+      const calls = readFileSync(join(workDir, "openclaw-calls"), "utf8");
+      expect(calls).toContain(join(workDir, "state", "openclaw.json"));
+      expect(calls).not.toContain("OPENCLAW_CONFIG_PATH=");
+    },
+  );
+
+  it("prefers restore failure and retains the authored config snapshot", () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-restore-failure-");
+    writeExecutables(join(workDir, "bin"), {
+      openclaw: `#!/usr/bin/env bash
+set -euo pipefail
+exit 41
+`,
+      "config-parking-wrapper.mjs": `import { spawnSync } from "node:child_process";
+
+const args = process.argv.slice(2);
+if (args[0] === "restore") {
+  process.exit(57);
+}
+const result = spawnSync(
+  process.execPath,
+  [process.env.REAL_CONFIG_PARKING_HELPER, ...args],
+  { stdio: "inherit", env: process.env },
+);
+process.exit(result.status ?? 1);
+`,
+    });
+
+    const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_STATE_DIR="$TMPDIR/state"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+export REAL_CONFIG_PARKING_HELPER="$ROOT_DIR/${UPGRADE_SURVIVOR_CONFIG_PARKING_PATH}"
+export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER="$TMPDIR/bin/config-parking-wrapper.mjs"
+mkdir -p "$OPENCLAW_STATE_DIR"
+printf '%s\n' '{"channels":{"discord":{"dm":{"policy":"allowlist"}}}}' >"$OPENCLAW_CONFIG_PATH"
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+seed_update_restart_probe_device_auth() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}
+status=0
+prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1 || status=$?
+printf '%s\n' "$status" >"$TMPDIR/status"
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(workDir, "status"), "utf8")).toBe("57\n");
+    expect(existsSync(join(workDir, "gateway.log.authored-config"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(workDir, "state", "openclaw.json"), "utf8"))).toEqual({
+      gateway: expect.objectContaining({ reload: { mode: "off" } }),
+    });
   });
 
   it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
