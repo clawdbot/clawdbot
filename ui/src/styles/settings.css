@@ -103,6 +103,29 @@
   color: var(--muted);
 }
 
+.settings-typography-preview {
+  width: 100%;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.settings-typography-preview__caption {
+  color: var(--muted);
+  font: 600 var(--control-ui-text-sm) / 1.5 var(--font-body);
+}
+
+.settings-typography-preview__prose {
+  margin: var(--space-3) 0;
+  /* Chat transcript line-height, so the sample reads like real messages. */
+  font: 400 var(--chat-text-size) / 1.65 var(--font-chat);
+}
+
+.settings-typography-preview__code {
+  color: var(--muted);
+  font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
+}
+
 /* ── Section ── */
 
 .settings-section {

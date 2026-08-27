@@ -37,6 +37,7 @@ import {
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import type { TypefaceId } from "../../app/typography.ts";
 import { confirmAndStartUpdate, type UpdateProgress } from "../../app/update-confirmation.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import {
@@ -926,6 +927,28 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
+  private currentFontPref(key: "fontUi" | "fontChat"): ServerUiPrefState<TypefaceId> {
+    return resolveServerUiPrefState(
+      this.context.runtimeConfig.state.configSnapshot?.config,
+      key,
+      this.context.gateway.connection.gatewayUrl,
+      this.settings,
+      {
+        canSync: this.serverUiPrefsCanSync(key),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
+    );
+  }
+
+  private setFont(key: "fontUi" | "fontChat", font: TypefaceId | undefined) {
+    const preference = this.currentFontPref(key);
+    if (preference.overridden && font === preference.resetValue) {
+      this.resetSyncedAppearancePref(key);
+    } else {
+      this.applySettings({ [key]: font });
+    }
+  }
+
   private currentChatSendShortcutPref(): ServerUiPrefState<ChatSendShortcut> {
     return resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
@@ -946,12 +969,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
-  private serverUiPrefsCanSync(key?: "theme" | "themeMode" | "accent"): boolean | null {
+  private serverUiPrefsCanSync(
+    key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
+  ): boolean | null {
     const runtimeConfig = this.context.runtimeConfig;
     if (!runtimeConfig.state.connected) {
       return null;
     }
     const gateway = this.context.gateway.snapshot;
+    if ((key === "fontUi" || key === "fontChat") && !gateway?.selfUser) {
+      return false;
+    }
     return key && gateway?.selfUser
       ? hasOperatorWriteAccess(gateway.hello?.auth ?? null)
       : runtimeConfig.canPatch !== false;
@@ -971,9 +999,24 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private resetSyncedAppearancePref(
-    key: "theme" | "themeMode" | "accent" | "chatSendShortcut" | "chatFollowUpMode",
+    key:
+      | "theme"
+      | "themeMode"
+      | "accent"
+      | "fontUi"
+      | "fontChat"
+      | "chatSendShortcut"
+      | "chatFollowUpMode",
   ) {
     switch (key) {
+      case "fontUi":
+      case "fontChat":
+        this.settings = resetServerUiPref(
+          key,
+          this.currentFontPref(key),
+          this.context.gateway.connection.gatewayUrl,
+        );
+        break;
       case "theme":
         this.settings = resetServerUiPref(
           "theme",
@@ -1282,6 +1325,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       accent: this.settings.accent,
       accentOverridden: accentPref.overridden,
       accentProvenance: accentPref.provenance,
+      fontUi: this.settings.fontUi,
+      fontChat: this.settings.fontChat,
+      fontUiProvenance: this.currentFontPref("fontUi").provenance,
+      fontChatProvenance: this.currentFontPref("fontChat").provenance,
+      setFontUi: (font) => this.setFont("fontUi", font),
+      setFontChat: (font) => this.setFont("fontChat", font),
       systemLocale: i18n.getSystemLocale(),
       localeOverride: isSupportedLocale(localePref.value) ? localePref.value : undefined,
       localeOverridden: localePref.overridden,

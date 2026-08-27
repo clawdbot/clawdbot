@@ -70,12 +70,8 @@ import {
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import {
-  resolveTheme,
-  syncThemeFontStylesheet,
-  syncThemePaletteStylesheet,
-  type ThemeMode,
-} from "./theme.ts";
+import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
+import { applyTypefaceOverrides, resolveTypefaces, syncTypefaceStylesheets } from "./typography.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -93,7 +89,8 @@ function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void
   root.classList.toggle("wa-dark", root.dataset.themeMode === "dark");
   root.style.colorScheme = root.dataset.themeMode;
   root.style.setProperty("--control-ui-text-scale", `${(settings.textScale ?? 100) / 100}`);
-  syncThemeFontStylesheet(settings.theme);
+  syncTypefaceStylesheets(resolveTypefaces(settings.theme, settings.fontUi, settings.fontChat));
+  applyTypefaceOverrides(settings.fontUi, settings.fontChat);
   syncCustomThemeStyleTag(settings.customTheme);
   applyControlUiAccent(settings.accent);
   syncControlUiSystemChrome();

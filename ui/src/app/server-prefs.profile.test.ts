@@ -7,10 +7,14 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { resolveServerUiPrefStateFromSnapshot } from "./server-prefs-state.ts";
+import {
+  extractServerUiPrefs,
+  resolveServerUiPrefStateFromSnapshot,
+} from "./server-prefs-state.ts";
 import { configWithPrefs, createServerPrefsWriter } from "./server-prefs.test-support.ts";
 import {
   changedServerUiPrefs,
+  flushServerUiPrefs,
   pushServerUiPrefs,
   refreshProfileAppearancePrefs,
   resetServerUiPref,
@@ -101,13 +105,21 @@ describe("profile-bound appearance preferences", () => {
   });
 
   it("normalizes profile overrides above config while rejecting malformed stored values", async () => {
-    const config = configWithPrefs({ theme: "claw", themeMode: "dark", accent: "#123456" });
+    const config = configWithPrefs({
+      theme: "claw",
+      themeMode: "dark",
+      accent: "#123456",
+      fontUi: "unsupported",
+      fontChat: "lora",
+    });
     const request = vi.fn(async () => ({
       status: "ok" as const,
       entries: {
         "ui.theme": "knot",
         "ui.themeMode": { mode: "light" },
         "ui.accent": "#AbC123",
+        "ui.fontUi": "geist",
+        "ui.fontChat": { family: "lora" },
       },
     }));
     const writer = createServerPrefsWriter(request, scope);
@@ -122,9 +134,36 @@ describe("profile-bound appearance preferences", () => {
     });
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: ["ui.theme", "ui.themeMode", "ui.accent"],
+      keys: ["ui.theme", "ui.themeMode", "ui.accent", "ui.fontUi", "ui.fontChat"],
     });
-    expect(onApplied).toHaveBeenCalledWith({ theme: "knot", themeMode: "dark", accent: "#abc123" });
+    expect(onApplied).toHaveBeenCalledWith({
+      theme: "knot",
+      themeMode: "dark",
+      accent: "#abc123",
+      fontUi: "geist",
+    });
+    expect(loadSettings().fontChat).toBeUndefined();
+    expect(extractServerUiPrefs(config)).toEqual({
+      theme: "claw",
+      themeMode: "dark",
+      accent: "#123456",
+    });
+    expect(
+      resolveServerUiPrefState(config, "fontUi", scope, loadSettings(), { profileId }),
+    ).toEqual({
+      overridden: true,
+      provenance: "profile",
+      resetValue: undefined,
+      value: "geist",
+    });
+    expect(
+      resolveServerUiPrefState(config, "fontChat", scope, loadSettings(), { profileId }),
+    ).toEqual({
+      overridden: false,
+      provenance: "default",
+      resetValue: undefined,
+      value: undefined,
+    });
     expect(resolveServerUiPrefState(config, "theme", scope, loadSettings(), { profileId })).toEqual(
       { overridden: true, provenance: "profile", resetValue: "claw", value: "knot" },
     );
@@ -154,6 +193,70 @@ describe("profile-bound appearance preferences", () => {
       }),
     );
   });
+
+  it.each(["fontUi", "fontChat"] as const)(
+    "syncs %s through the profile and deletes its override to restore theme typography",
+    async (key) => {
+      const preferenceKey = UI_APPEARANCE_PREFERENCE_KEYS[key];
+      const config = configWithPrefs({});
+      const request = vi.fn(async (method: string) =>
+        method === "users.prefs.get"
+          ? { status: "ok" as const, entries: { [preferenceKey]: "lora" } }
+          : { status: "ok" as const },
+      );
+      const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
+      await refreshProfileAppearancePrefs({
+        client: writer.state.client!,
+        profileId,
+        configObject: config,
+        scope,
+        onApplied: vi.fn(),
+      });
+      expect(loadSettings()[key]).toBe("lora");
+
+      patchSettings({ [key]: "system" });
+      pushServerUiPrefs(writer, { [key]: "system" }, { profileId, canWrite: true });
+      await waitForFast(() =>
+        expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
+          entries: { [preferenceKey]: "system" },
+        }),
+      );
+
+      const previous = loadSettings();
+      const state = resolveServerUiPrefState(config, key, scope, previous, { profileId });
+      const next = resetServerUiPref(key, state, scope);
+      expect(next[key]).toBeUndefined();
+      expect(changedServerUiPrefs(previous, next)).toEqual({ [key]: null });
+      pushServerUiPrefs(writer, { [key]: null }, { profileId, canWrite: true });
+      await waitForFast(() =>
+        expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
+          entries: { [preferenceKey]: null },
+        }),
+      );
+      expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps profile-only fonts out of config writes after offline=%s edits",
+    async (offline) => {
+      const request = vi.fn(async () => ({}));
+      const writer = createServerPrefsWriter(request, scope, !offline);
+      patchSettings({ fontUi: "geist", fontChat: "lora" });
+      pushServerUiPrefs(writer, { fontUi: "geist", fontChat: "lora", theme: "dash" });
+      if (offline) {
+        expect(request).not.toHaveBeenCalled();
+        flushServerUiPrefs(createServerPrefsWriter(request, scope));
+      }
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledExactlyOnceWith("config.patch", {
+          raw: JSON.stringify({ ui: { prefs: { theme: "dash" } } }),
+          note: "control-ui prefs sync",
+        }),
+      );
+      expect(loadSettings()).toMatchObject({ fontUi: "geist", fontChat: "lora" });
+    },
+  );
 
   it("keeps pending local edits above incoming profile updates", async () => {
     let releaseWrite!: (value: unknown) => void;
@@ -292,7 +395,12 @@ describe("profile-bound appearance preferences", () => {
     const config = configWithPrefs({});
     const prefsByProfile: Record<string, Record<string, string>> = {
       "profile-a": { "ui.theme": "knot" },
-      "profile-b": { "ui.theme": "dash", "ui.accent": "#123456" },
+      "profile-b": {
+        "ui.theme": "dash",
+        "ui.accent": "#123456",
+        "ui.fontUi": "geist",
+        "ui.fontChat": "lora",
+      },
     };
     let activeProfile = "profile-a";
     const request = vi.fn(async () => ({
@@ -316,9 +424,12 @@ describe("profile-bound appearance preferences", () => {
     await refresh("profile-b");
     expect(loadSettings().theme).toBe("dash");
     expect(loadSettings().accent).toBe("#123456");
+    expect(loadSettings()).toMatchObject({ fontUi: "geist", fontChat: "lora" });
     await refresh("profile-a");
     expect(loadSettings().theme).toBe("knot");
     // B's accent must not linger on A even though A's scope never recorded one.
     expect(loadSettings().accent).toBeUndefined();
+    expect(loadSettings().fontUi).toBeUndefined();
+    expect(loadSettings().fontChat).toBeUndefined();
   });
 });
