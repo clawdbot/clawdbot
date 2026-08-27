@@ -185,9 +185,24 @@ export function collectCededChannelIdsByPlugin(params: {
   // who lets auto-enable decide.
   const declaredChannelClaimants = new Map<string, string[]>();
   for (const [claimedId, claimants] of claimantsByChannel) {
+    // The declarant has to be able to load. A declaration entitles its claimants to the channel
+    // only while the plugin making it participates in THIS load: a disabled declarant, or one
+    // outside a scoped load, never registers, so enforcing its declaration turns an enabled
+    // namesake away and leaves the channel with no owner at all -- the mirror of the singleton
+    // case this map was added for.
     const declaresReplacement = claimants.some((claimantId) => {
       const claimant = params.registry.plugins.find((entry) => entry.id === claimantId);
-      return claimant ? policy.resolveChannelPreferOverIds(claimant, claimedId).length > 0 : false;
+      if (!claimant || policy.resolveChannelPreferOverIds(claimant, claimedId).length === 0) {
+        return false;
+      }
+      return (
+        policy.isPluginActive(claimantId, claimedId) &&
+        matchesScopedPluginOrDreamingSidecar({
+          onlyPluginIdSet: params.onlyPluginIdSet,
+          pluginId: claimantId,
+          sidecar: params.dreamingSidecar,
+        })
+      );
     });
     if (declaresReplacement) {
       declaredChannelClaimants.set(claimedId, claimants);

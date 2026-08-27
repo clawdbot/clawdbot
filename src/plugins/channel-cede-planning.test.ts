@@ -130,6 +130,25 @@ describe("collectCededChannelIdsByPlugin", () => {
     expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);
   });
 
+  // Codex P2 3876090875, the mirror of the singleton namesake fix. A declaration only entitles its
+  // claimants to the channel while the DECLARANT can actually load: a disabled one, or one outside
+  // a scoped load, never registers, so enforcing its declaration turns an enabled namesake away
+  // and leaves the channel with no owner at all.
+  it("drops a declaration whose only declarant cannot participate in this load", () => {
+    const { declaredChannelClaimants } = cededFor([ringClaimant("zz-decl-off", ["zzalpha"])], {
+      plugins: { entries: { "zz-decl-off": { enabled: false } } },
+    });
+
+    expect(declaredChannelClaimants.has("zzalpha")).toBe(false);
+  });
+
+  // The guard must survive for a declarant that DOES load, or the singleton namesake fix is undone.
+  it("keeps the declaration when its only declarant loads", () => {
+    const { declaredChannelClaimants } = cededFor([ringClaimant("zz-decl-on", ["zzalpha"])]);
+
+    expect(declaredChannelClaimants.get("zzalpha")).toEqual(["zz-decl-on"]);
+  });
+
   // The P1 shape (comment 3840887960): two independent declarations leave two active,
   // undisplaced claimants, and ceding only the displaced ids let registration order pick between
   // them while schema ownership named its one winner. Every active non-winner cedes.
