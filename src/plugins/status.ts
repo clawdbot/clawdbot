@@ -196,6 +196,8 @@ type PluginReportParams = {
   env?: NodeJS.ProcessEnv;
   logger?: PluginLogger;
   metadataSnapshot?: PluginMetadataSnapshot;
+  /** Run plugin registration in the non-activating tool-discovery mode. */
+  toolDiscovery?: boolean;
 };
 
 function buildPluginReport(
@@ -276,6 +278,9 @@ function buildPluginReport(
               loadModules,
               cache: false,
               onlyPluginIds,
+              ...(params?.toolDiscovery !== undefined
+                ? { toolDiscovery: params.toolDiscovery }
+                : {}),
             }),
           ),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },

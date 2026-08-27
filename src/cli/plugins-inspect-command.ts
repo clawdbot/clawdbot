@@ -152,6 +152,7 @@ export async function runPluginsInspectCommand(
             buildPluginDiagnosticsReport({
               config: cfg,
               ...loggerParams,
+              toolDiscovery: true,
             }),
           { command: "inspect", all: true },
         )
@@ -274,6 +275,7 @@ export async function runPluginsInspectCommand(
             config: cfg,
             ...loggerParams,
             onlyPluginIds: [targetPlugin.id],
+            toolDiscovery: true,
           }),
         { command: "inspect", pluginId: targetPlugin.id },
       )
