@@ -42,12 +42,11 @@ describe("maybeRestartService", () => {
       },
       healthy: true,
       staleGatewayPids: [],
-      gatewayBuildId: null,
-      controlUiBuildSource: "configured",
+      gatewayBuildId: "new-build",
     });
   });
 
-  it("accepts a healthy configured-root gateway without bundled build identity", async () => {
+  it("forwards the built Git identity into restart verification", async () => {
     const result = {
       status: "ok",
       mode: "git",

@@ -72,9 +72,9 @@ function applyExpectedBuildId(
   snapshot: GatewayRestartSnapshot,
   expectedBuildId: string | undefined,
 ): GatewayRestartSnapshot {
-  // Only an explicit configured-root handshake may omit the package build ID;
-  // keep legacy or incomplete handshakes strict so a failed restart cannot pass.
-  if (!expectedBuildId || snapshot.controlUiBuildSource === "configured") {
+  // Git restart verification owns Gateway runtime identity. UI artifact source
+  // must not exempt a stale process from this check.
+  if (!expectedBuildId) {
     return snapshot;
   }
   if (snapshot.gatewayBuildId === expectedBuildId) {
@@ -186,7 +186,6 @@ export async function inspectGatewayRestart(params: {
               staleGatewayPids: [],
               gatewayVersion: reachable.gatewayVersion,
               gatewayBuildId: reachable.gatewayBuildId,
-              controlUiBuildSource: reachable.controlUiBuildSource,
               ...(reachable.activatedPluginErrors.length > 0
                 ? { activatedPluginErrors: reachable.activatedPluginErrors }
                 : {}),
@@ -230,13 +229,11 @@ export async function inspectGatewayRestart(params: {
   let healthy = running && ownsPort;
   let gatewayVersion: string | null | undefined;
   let gatewayBuildId: string | null | undefined;
-  let controlUiBuildSource: GatewayReachability["controlUiBuildSource"] | undefined;
   if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
     const reachable = await loadReachability();
     healthy = reachable.reachable;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
-    controlUiBuildSource = reachable.controlUiBuildSource;
     if (reachable.activatedPluginErrors.length > 0) {
       healthy = false;
     }
@@ -249,7 +246,6 @@ export async function inspectGatewayRestart(params: {
     healthy = reachable.reachable;
     gatewayVersion = reachable.gatewayVersion;
     gatewayBuildId = reachable.gatewayBuildId;
-    controlUiBuildSource = reachable.controlUiBuildSource;
   }
   const staleGatewayPids = Array.from(
     new Set([
@@ -281,7 +277,6 @@ export async function inspectGatewayRestart(params: {
           staleGatewayPids,
           ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
           ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
-          ...(controlUiBuildSource !== undefined ? { controlUiBuildSource } : {}),
           ...(probeError ? { probeError } : {}),
           ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
           ...(channelProbeErrors.length ? { channelProbeErrors } : {}),

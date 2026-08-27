@@ -1,6 +1,5 @@
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
-import type { GatewayControlUiBuildSource } from "../../gateway/probe.js";
 import type { PortUsage } from "../../infra/ports.js";
 
 export type GatewayRestartWaitOutcome =
@@ -20,7 +19,6 @@ export type GatewayRestartSnapshot = {
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
   gatewayBuildId?: string | null;
-  controlUiBuildSource?: GatewayControlUiBuildSource | null;
   probeError?: string;
   activatedPluginErrors?: PluginHealthErrorSummary[];
   channelProbeErrors?: Array<{ id: string; error: string }>;

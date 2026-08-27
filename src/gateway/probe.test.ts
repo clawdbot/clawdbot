@@ -18,12 +18,7 @@ const gatewayClientState = vi.hoisted(() => ({
     version: "2026.4.24",
     buildId: "build-test",
     connId: "conn-test",
-  } as {
-    version: string;
-    buildId?: string;
-    controlUiBuildSource?: "bundled" | "configured";
-    connId: string;
-  },
+  } as { version: string; buildId?: string; connId: string },
   connectError: "scope upgrade pending approval (requestId: req-123)",
   connectErrorDetails: {
     code: "PAIRING_REQUIRED",
@@ -426,22 +421,6 @@ describe("probeGateway", () => {
     expect(result.server).toEqual({
       version: "2026.4.24",
       buildId: "build-test",
-      connId: "conn-test",
-    });
-  });
-
-  it("preserves the Control UI build source from the gateway hello", async () => {
-    gatewayClientState.helloServer = {
-      version: "2026.4.24",
-      controlUiBuildSource: "configured",
-      connId: "conn-test",
-    };
-
-    const result = await runTokenLightweightProbe();
-
-    expect(result.server).toEqual({
-      version: "2026.4.24",
-      controlUiBuildSource: "configured",
       connId: "conn-test",
     });
   });
