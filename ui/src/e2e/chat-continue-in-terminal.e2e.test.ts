@@ -3,7 +3,12 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { decodeResumeHandoff } from "../../../src/shared/resume-handoff.js";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -100,6 +105,13 @@ suite.define(() => {
         await expect
           .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
           .toBe(sessionKey);
+        await waitForControlUiRoute(page, {
+          routeId: "chat",
+          pathname: controlUiSessionPath(sessionKey, basePath),
+          pathnamePrefix: `${basePath}/chat/`,
+          search: "",
+          hash: "",
+        });
         await activePane.getByText("Ready for terminal continuation.").waitFor({ timeout: 10_000 });
 
         const menuTrigger = activePane.getByRole("button", {
@@ -182,6 +194,7 @@ suite.define(() => {
         await expect
           .poll(() => activePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
           .toBe(sessionKey);
+        await waitForControlUiRoute(page, { routeId: "chat" });
         await activePane
           .getByRole("paragraph")
           .filter({ hasText: /^Mobile session menu proof\.$/ })
