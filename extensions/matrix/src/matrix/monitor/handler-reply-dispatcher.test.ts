@@ -13,9 +13,9 @@ vi.mock("./replies.js", async () => {
   };
 });
 
-function createDispatcher() {
+function createDispatcher(reasoningDefault: "off" | "on" | "stream" = "stream") {
   return createMatrixReplyDispatcher({
-    cfg: {},
+    cfg: { agents: { defaults: { reasoningDefault } } },
     prefixOptions: { responsePrefixContextProvider: () => ({ identityName: undefined }) },
     humanDelay: { mode: "off" },
     typingCallbacks: {
@@ -52,8 +52,26 @@ describe("createMatrixReplyDispatcher", () => {
     deliverMatrixRepliesMock.mockClear();
   });
 
+  it("disables both reasoning lanes when visibility is off", () => {
+    const dispatcher = createDispatcher("off");
+
+    expect(dispatcher.reasoningPayloadsEnabled).toBe(false);
+    expect(dispatcher.turnDispatcherOptions.onReasoningStream).toBeUndefined();
+    expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
+  });
+
+  it("enables only durable reasoning when visibility is on", () => {
+    const dispatcher = createDispatcher("on");
+
+    expect(dispatcher.reasoningPayloadsEnabled).toBe(true);
+    expect(dispatcher.turnDispatcherOptions.onReasoningStream).toBeUndefined();
+    expect(dispatcher.turnDispatcherOptions.onReasoningEnd).toBeUndefined();
+  });
+
   it("delivers stream-mode reasoning when the reasoning block ends", async () => {
     const dispatcher = createDispatcher();
+
+    expect(dispatcher.reasoningPayloadsEnabled).toBe(false);
 
     expect(dispatcher.turnDispatcherOptions.onReasoningStream?.({ text: "Checking tools" })).toBe(
       false,

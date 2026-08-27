@@ -421,6 +421,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       draftControllerRef = draftController;
       const replyDispatcher = createMatrixReplyDispatcher({
         cfg,
+        agentId: _route.agentId,
+        sessionKey: _route.sessionKey,
         prefixOptions,
         humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
         typingCallbacks,
@@ -437,7 +439,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         mediaLocalRoots,
         logVerboseMessage,
       });
-      const { deliverReply, onReplyError, turnDispatcherOptions } = replyDispatcher;
+      const { deliverReply, onReplyError, reasoningPayloadsEnabled, turnDispatcherOptions } =
+        replyDispatcher;
       const pinnedMainDmOwner = isDirectMessage
         ? await (async () => {
             const { liveCfg, liveDmAllowFrom } = await handlerState.resolveLiveAccountAllowlists();
@@ -566,7 +569,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             replyOptions: {
               preserveProgressCallbackStartOrder: true,
               skillFilter: roomConfig?.skills,
-              reasoningPayloadsEnabled: true,
+              reasoningPayloadsEnabled: reasoningPayloadsEnabled || undefined,
               // Preserve explicit block streaming with draft previews: drafts update the live
               // block, while block deliveries finalize completed blocks as separate events.
               disableBlockStreaming: !blockStreamingEnabled,
