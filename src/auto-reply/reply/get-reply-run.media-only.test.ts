@@ -332,7 +332,7 @@ function createGatewayDrainingError(): Error {
 }
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
-  "Treat the current message as observed room activity. Default: no reply; most room events need no response from you. Send a visible reply via message(action=send) only when you are directly addressed or have concrete value to add; your final text here stays private either way.";
+  "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.";
 
 function createInboundBody<T extends string>(body: T) {
   return { Body: body, RawBody: body, CommandBody: body };
@@ -3753,9 +3753,12 @@ describe("runPreparedReply media-only handling", () => {
       expect(heartbeatRun.sourceReplyDeliveryMode).toBe(stableMode);
       expect(roomEventRun.extraSystemPrompt).toBe(expectedPrompt);
       expect(requireRunReplyAgentCall(0).followupRun.currentInboundContext?.text).toContain(
-        "your final text here stays private either way",
+        "You were not explicitly tagged or mentioned in this room event",
       );
       expect(roomEventRun.extraSystemPromptStatic).toBe(expectedPrompt);
+      expect(roomEventRun.extraSystemPromptStatic).not.toContain(
+        "You were not explicitly tagged or mentioned in this room event",
+      );
       expect(primaryRun.extraSystemPromptStatic).toBe(roomEventRun.extraSystemPromptStatic);
       expect(heartbeatRun.extraSystemPromptStatic).toBe(roomEventRun.extraSystemPromptStatic);
       expect(roomEventRun.cliSessionBindingFacts).toEqual({
