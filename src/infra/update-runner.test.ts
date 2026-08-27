@@ -3075,28 +3075,54 @@ describe("runGatewayUpdate", () => {
     },
   );
 
-  it("returns the build identity produced by a Git update build", async () => {
-    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
-    const uiIndexPath = await setupUiIndex();
-    const stableTag = "v1.0.1-1";
+  it("returns the build identity produced by a dev Git update build", async () => {
+    await setupGitPackageManagerFixture();
     const buildId = "2026.8.1-target-build";
-    const { runCommand } = await createStableTagRunner({
-      stableTag,
-      uiIndexPath,
-      onBuild: async () => {
-        await fs.writeFile(
-          path.join(tempDir, "dist", "build-info.json"),
-          `${JSON.stringify({ buildId })}\n`,
-          "utf8",
-        );
+    const { runCommand } = await createDevGitRunner({
+      onCommand: async (key) => {
+        if (key === "pnpm build") {
+          await fs.mkdir(path.join(tempDir, "dist"), { recursive: true });
+          await fs.writeFile(
+            path.join(tempDir, "dist", "build-info.json"),
+            `${JSON.stringify({ buildId })}\n`,
+            "utf8",
+          );
+        }
+        return undefined;
       },
     });
 
-    const result = await runWithCommand(runCommand, { channel: "stable" });
+    const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
     expect(result.after?.buildId).toBe(buildId);
   });
+
+  it.each(["stable", "beta"] as const)(
+    "does not return a build identity for a %s Git update",
+    async (channel) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      const uiIndexPath = await setupUiIndex();
+      const stableTag = "v1.0.1-1";
+      const buildId = "2026.8.1-channel-build";
+      const { runCommand } = await createStableTagRunner({
+        stableTag,
+        uiIndexPath,
+        onBuild: async () => {
+          await fs.writeFile(
+            path.join(tempDir, "dist", "build-info.json"),
+            `${JSON.stringify({ buildId })}\n`,
+            "utf8",
+          );
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel });
+
+      expect(result.status).toBe("ok");
+      expect(result.after?.buildId).toBeUndefined();
+    },
+  );
 
   it.each(["missing", "incomplete"] as const)(
     "repairs %s Control UI assets left by the doctor pass",

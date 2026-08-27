@@ -195,6 +195,7 @@ describe("maybeRestartService", () => {
           steps: [],
           durationMs: 0,
         },
+        channel: "stable",
         opts: { json: true },
         refreshServiceEnv: false,
         gatewayPort: 18789,

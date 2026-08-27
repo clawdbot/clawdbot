@@ -559,7 +559,7 @@ export async function updateGitCheckout(params: {
     }
 
     const failedStep = findBlockingGitFailure(steps);
-    const afterBuildId = await readBuiltGatewayBuildId(gitRoot);
+    const afterBuildId = channel === "dev" ? await readBuiltGatewayBuildId(gitRoot) : null;
     const afterShaStep = await runStep(
       step("git rev-parse HEAD (after)", ["git", "-C", gitRoot, "rev-parse", "HEAD"], gitRoot),
     );

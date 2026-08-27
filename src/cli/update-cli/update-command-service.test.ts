@@ -60,6 +60,7 @@ describe("maybeRestartService", () => {
       maybeRestartService({
         shouldRestart: true,
         result,
+        channel: "dev",
         opts: { json: true },
         refreshServiceEnv: false,
         serviceEnv: { HOME: "/home/operator" },
@@ -75,4 +76,37 @@ describe("maybeRestartService", () => {
       expect.objectContaining({ expectedBuildId: "new-build" }),
     );
   });
+
+  it.each(["stable", "beta"] as const)(
+    "does not enforce Git build identity for the %s channel",
+    async (channel) => {
+      const result = {
+        status: "ok",
+        mode: "git",
+        root: "/tmp/openclaw-channel-update",
+        after: { buildId: "new-build" },
+        steps: [],
+        durationMs: 0,
+      } satisfies UpdateRunResult;
+
+      await expect(
+        maybeRestartService({
+          shouldRestart: true,
+          result,
+          channel,
+          opts: { json: true },
+          refreshServiceEnv: false,
+          serviceEnv: { HOME: "/home/operator" },
+          serviceInstallEnv: {},
+          gatewayPort: 18789,
+          restartScriptPath: "/tmp/openclaw-channel-restart.sh",
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe(true);
+
+      expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+        expect.not.objectContaining({ expectedBuildId: expect.anything() }),
+      );
+    },
+  );
 });

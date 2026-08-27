@@ -32,6 +32,7 @@ import { readGatewayServiceState, resolveGatewayService } from "../../daemon/ser
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import type { UpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -1052,6 +1053,7 @@ export async function gatewayServiceCommandUsesRoot(params: {
 export async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
+  channel: UpdateChannel;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
@@ -1220,7 +1222,7 @@ export async function maybeRestartService(params: {
         ? normalizeOptionalString(params.result.after?.version)
         : undefined;
       const expectedGatewayBuildId =
-        params.result.mode === "git"
+        params.channel === "dev" && params.result.mode === "git"
           ? normalizeOptionalString(params.result.after?.buildId)
           : undefined;
       const isPackageUpdate = isPackageManagerUpdateMode(params.result.mode);
