@@ -671,13 +671,17 @@ async function downloadOutputFile(params: {
   }
 }
 
-// Sync check mirroring resolveComfyApiKey's existing veto exactly: an env
-// ref can be confirmed synchronously (env access needs no I/O), so only a
-// genuinely empty/unset env var, or any non-env ref (file/keychain/exec --
-// inspect mode never attempts those, no sync way to confirm them), counts
-// as unavailable. Hide the capability in that case rather than advertise a
-// tool call that always throws on invocation; runComfyWorkflow's async path
-// still attempts full resolution for a non-env ref at request time.
+// Only vetoes on a *definite* negative: a configured env ref whose env var
+// is confirmed empty/unset (env access needs no I/O, so this is decidable
+// synchronously, same check resolveComfyApiKey already does for apiKey). A
+// file/keychain/exec ref is NOT vetoed here even though inspect mode can't
+// confirm it either way -- unlike apiKey's cloud-only gate, this function
+// guards every local-mode image/video/music tool, so treating "can't
+// confirm yet" as "unavailable" would permanently hide the tool for any
+// operator using a legitimately-configured non-env credential provider (a
+// real regression, not a safety margin: silently vanishing a working
+// capability is worse than letting a genuinely broken one surface its
+// error at actual invocation, in runComfyWorkflow's async resolution).
 function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): boolean {
   if (!isRecord(value)) {
     return false;
@@ -689,11 +693,8 @@ function hasUnavailableComfyHeaderSecret(value: unknown, cfg?: OpenClawConfig): 
       defaults: cfg?.secrets?.defaults,
       mode: "inspect",
     });
-    if (inspected.status === "available" || inspected.status === "missing") {
+    if (inspected.status !== "configured_unavailable" || inspected.ref.source !== "env") {
       return false;
-    }
-    if (inspected.ref.source !== "env") {
-      return true;
     }
     const envVarName = inspected.ref.id.trim();
     const resolvable =

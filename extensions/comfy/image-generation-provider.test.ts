@@ -601,6 +601,17 @@ describe("comfy image-generation provider", () => {
     expect(isComfyCapabilityConfigured({ cfg, capability: "image" })).toBe(true);
   });
 
+  it("keeps a local capability configured for a non-env SecretRef header, since the async resolver can still resolve it", () => {
+    const cfg = buildComfyConfig({
+      ...testWorkflowConfig(),
+      headers: {
+        Authorization: { source: "file", provider: "comfyheaderfile", id: "value" },
+      },
+    });
+
+    expect(isComfyCapabilityConfigured({ cfg, capability: "image" })).toBe(true);
+  });
+
   it("injects a fresh random seed per submission when seedNodeId is configured", async () => {
     mockLocalImageResponses("seed-prompt-1");
     mockLocalImageResponses("seed-prompt-2");
