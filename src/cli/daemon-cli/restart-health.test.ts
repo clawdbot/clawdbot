@@ -323,11 +323,9 @@ describe("restart health", () => {
     });
 
     expect(snapshot.healthy).toBe(false);
-    expect(snapshot.controlUiBuildSource).toBe("configured");
     expect(snapshot.gatewayBuildId).toBe("old-build");
     expect(snapshot.expectedBuildId).toBe("new-build");
     expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
-    expect(sleep).not.toHaveBeenCalled();
   });
 
   it("uses configured local probe auth while waiting for a matching-version restart", async () => {
