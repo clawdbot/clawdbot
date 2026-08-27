@@ -3395,6 +3395,7 @@ export const en: TranslationMap = {
     detailCategory: "Category",
     detailPackage: "Package",
     detailPluginId: "Plugin ID",
+    capabilities: "Capabilities",
     offlineTitle: "Gateway offline",
     offlineBody: "Connect to browse installed and recommended plugins.",
     optionalCapability: "Optional OpenClaw capability.",

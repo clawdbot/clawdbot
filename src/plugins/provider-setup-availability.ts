@@ -3,7 +3,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { enablePluginInConfig } from "./enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "./enable.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -34,27 +35,37 @@ export async function detectAvailableSetupProviderIds(params: {
       choice.assistantVisibility !== "manual-only" &&
       supportsTextInference(choice),
   );
-  let discoveryConfig = params.config;
-  const enabledChoices = choices.filter((choice) => {
-    const enabled = enablePluginInConfig(discoveryConfig, choice.pluginId);
-    discoveryConfig = enabled.config;
-    return enabled.enabled;
-  });
-  if (enabledChoices.length === 0) {
-    return new Set();
-  }
-
-  const providers = resolvePluginProvidersCore({
-    config: discoveryConfig,
-    workspaceDir: params.workspaceDir,
-    env,
-    mode: "setup",
-    includeUntrustedWorkspacePlugins: false,
-    onlyPluginIds: uniqueStrings(enabledChoices.map((choice) => choice.pluginId)),
+  // Keep the accepted artifact stable through import, then release before provider probes.
+  const discovery = await withPluginLifecycleLease({ env }, async () => {
+    let discoveryConfig = params.config;
+    const enabledChoices: ProviderAuthChoiceMetadata[] = [];
+    for (const choice of choices) {
+      // Discovery executes plugin code: only probe existing accepted or legacy runtimes.
+      const enabled = await enablePluginWithCapabilityConsent(params.config, choice.pluginId, {
+        env,
+        workspaceDir: params.workspaceDir,
+      });
+      if (enabled.enabled) {
+        discoveryConfig = enablePluginInConfig(discoveryConfig, choice.pluginId).config;
+        enabledChoices.push(choice);
+      }
+    }
+    const providers =
+      enabledChoices.length === 0
+        ? []
+        : resolvePluginProvidersCore({
+            config: discoveryConfig,
+            workspaceDir: params.workspaceDir,
+            env,
+            mode: "setup",
+            includeUntrustedWorkspacePlugins: false,
+            onlyPluginIds: uniqueStrings(enabledChoices.map((choice) => choice.pluginId)),
+          });
+    return { discoveryConfig, enabledChoices, providers };
   });
   const detected = await Promise.all(
-    enabledChoices.map(async (choice) => {
-      const provider = providers.find(
+    discovery.enabledChoices.map(async (choice) => {
+      const provider = discovery.providers.find(
         (candidate) =>
           candidate.pluginId === choice.pluginId &&
           normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
@@ -67,7 +78,7 @@ export async function detectAvailableSetupProviderIds(params: {
       }
       try {
         return (await method.appGuidedSetup.detectAvailability({
-          config: discoveryConfig,
+          config: discovery.discoveryConfig,
           env,
           workspaceDir: params.workspaceDir,
         }))

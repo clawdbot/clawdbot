@@ -19,6 +19,7 @@ import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import * as pluginEnable from "../plugins/enable.js";
 import { withoutPluginInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -42,6 +43,7 @@ import {
   disposeOpenClawAgentDatabaseByPath,
 } from "../state/openclaw-agent-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import { cleanupSystemAgentSession, createSystemAgentSession } from "./agent-turn.js";
 import { runSystemAgentTurnWithDeps } from "./agent-turn.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -657,6 +659,47 @@ describe("applySystemAgentModelSelection", () => {
 });
 
 describe("detectSetupInference", () => {
+  it("keeps unconsented provider choices visible without executing their discovery runtime", async () => {
+    const enable = vi
+      .spyOn(pluginEnable, "enablePluginWithCapabilityConsent")
+      .mockImplementation(async (config, pluginId) => ({
+        config,
+        pluginId,
+        enabled: false,
+        reason: "Plugin requires capability consent.",
+      }));
+    const resolvePluginProviders = vi.fn(() => []);
+    try {
+      const detection = await detectSetupInference({
+        detectInferenceBackends: async () => [],
+        probeLocalCommand: vi.fn(async (command) => ({ command, found: false })),
+        resolveManifestProviderAuthChoices: () => [
+          {
+            pluginId: "local-plugin",
+            providerId: "local",
+            methodId: "ambient",
+            choiceId: "local-model",
+            choiceLabel: "Local Server",
+            appGuidedDiscovery: true,
+            appGuidedSecret: true,
+          },
+        ],
+        resolvePluginProviders,
+      });
+
+      expect(resolvePluginProviders).not.toHaveBeenCalled();
+      expect(detection.candidates).toEqual([]);
+      expect(detection.prepareOptions).toContainEqual(
+        expect.objectContaining({ id: "local-model" }),
+      );
+      expect(detection.manualProviders).toContainEqual(
+        expect.objectContaining({ id: "local-model" }),
+      );
+    } finally {
+      enable.mockRestore();
+    }
+  });
+
   it("preserves the shared inference candidate order", async () => {
     const resolveManifestProviderAuthChoices = vi.fn(() => [
       {
@@ -1382,6 +1425,20 @@ async function runCodexSetupWithFinalConfig(params: {
 }
 
 describe("activateSetupInference", () => {
+  it.each([new WizardCancelledError(), new WizardNavigationError("back")])(
+    "preserves $name from a runtime capability review",
+    async (controlFlowError) => {
+      vi.spyOn(pluginEnable, "enablePluginWithCapabilityConsent").mockRejectedValueOnce(
+        controlFlowError,
+      );
+      const runEmbeddedAgent = vi.fn();
+      await expect(activateCodexSetup({ deps: { runEmbeddedAgent } })).rejects.toBeInstanceOf(
+        controlFlowError.constructor,
+      );
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    },
+  );
+
   it("omits the token cap when harness selection is automatic", () => {
     expect(resolveSetupInferenceProbeStreamParams("auto")).toEqual({});
     expect(resolveSetupInferenceProbeStreamParams("openclaw")).toEqual({

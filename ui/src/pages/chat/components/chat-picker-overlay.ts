@@ -63,7 +63,7 @@ function dismissChatComposerPickersOutside(event: PointerEvent): void {
 }
 
 function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
-  if (event.key !== "Escape") {
+  if (event.key !== "Escape" || document.querySelector(".shell-nav[aria-modal='true']")) {
     return;
   }
   const pickers = openChatComposerPickers();

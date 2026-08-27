@@ -165,6 +165,13 @@ suite.define(() => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
+    expect(
+      await page.evaluate(() =>
+        performance
+          .getEntriesByType("resource")
+          .some((entry) => entry.name.includes("nav-drawer-swipe")),
+      ),
+    ).toBe(false);
     const toggle = page.locator(".shell-chrome-controls__nav-toggle");
     await expect.poll(() => toggle.isVisible()).toBe(true);
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
@@ -172,6 +179,12 @@ suite.define(() => {
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
     await toggle.click();
     await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+
+    await page.locator(".sidebar-issues-button").click();
+    const desktopInbox = page.locator("#sidebar-issues-panel");
+    await desktopInbox.waitFor();
+    await expect.poll(() => desktopInbox.getAttribute("aria-modal")).toBeNull();
+    await page.keyboard.press("Escape");
   });
 
   it("keeps pointer-triggered sidebar focus from opening its tooltip", async () => {
@@ -512,6 +525,54 @@ suite.define(() => {
     await page.locator(".cmd-palette__input").waitFor({ state: "visible" });
   });
 
+  it("opens the mobile drawer by swipe across the full mobile-layout range", async () => {
+    const page = await openPage({ hasTouch: true, height: 393, nativeNav: false, width: 852 });
+    const shell = page.locator(".shell");
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--mobile-nav");
+
+    await page.locator(".content").evaluate((content) => {
+      const touch = (clientX: number, clientY: number) =>
+        new Touch({
+          identifier: 1,
+          target: content,
+          clientX,
+          clientY,
+          pageX: clientX,
+          pageY: clientY,
+          screenX: clientX,
+          screenY: clientY,
+        });
+      content.dispatchEvent(
+        new TouchEvent("touchstart", {
+          bubbles: true,
+          composed: true,
+          touches: [touch(24, 180)],
+          changedTouches: [touch(24, 180)],
+        }),
+      );
+      content.dispatchEvent(
+        new TouchEvent("touchmove", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          touches: [touch(210, 184)],
+          changedTouches: [touch(210, 184)],
+        }),
+      );
+      content.dispatchEvent(
+        new TouchEvent("touchend", {
+          bubbles: true,
+          composed: true,
+          touches: [],
+          changedTouches: [touch(210, 184)],
+        }),
+      );
+    });
+
+    await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
+    await expect.poll(() => page.locator(".shell-nav.nav-drawer").isVisible()).toBe(true);
+  });
+
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
     const page = await openPage({
       nativeNav: false,
@@ -521,7 +582,6 @@ suite.define(() => {
       width: 900,
     });
     const navigation = page.locator(".shell-nav");
-    const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
     const dialog = page.getByRole("dialog", { name: "Navigation" });
     const trigger = page.locator(".chat-pane__nav-toggle").first();
     const readFocusLocation = () =>
@@ -535,7 +595,7 @@ suite.define(() => {
       });
 
     await expect.poll(() => navigation.getAttribute("inert")).toBe("");
-    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(0);
+    await expect.poll(() => page.locator(".shell-nav-backdrop").count()).toBe(1);
     await expect.poll(() => dialog.isVisible()).toBe(false);
     await page.locator(".shell-skip-link").focus();
     await page.keyboard.press("Tab");
@@ -546,15 +606,7 @@ suite.define(() => {
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
     await trigger.focus();
-    const afterShowMarker = "data-e2e-after-show";
-    await drawer.evaluate((element, marker) => {
-      element.removeAttribute(marker);
-      element.addEventListener("wa-after-show", () => element.setAttribute(marker, ""), {
-        once: true,
-      });
-    }, afterShowMarker);
     await page.keyboard.press("Enter");
-    await expect.poll(() => drawer.getAttribute(afterShowMarker)).toBe("");
     await expect.poll(readFocusLocation).toBe("navigation");
 
     await expect
@@ -562,6 +614,9 @@ suite.define(() => {
       .toContain("shell--nav-drawer-open");
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
     await expect.poll(() => dialog.isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-nav-backdrop").getAttribute("aria-hidden"))
+      .toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
 
@@ -586,6 +641,16 @@ suite.define(() => {
     await expect.poll(() => sessionMenu.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
 
+    const pageDetails = page.locator(".chat-controls__model-picker").first();
+    await pageDetails.evaluate((element) => ((element as HTMLDetailsElement).open = true));
+    await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => pageDetails.getAttribute("open")).toBe("");
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+
+    await trigger.click();
+    await expect.poll(() => dialog.isVisible()).toBe(true);
+
     await page.keyboard.press("Escape");
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
@@ -597,16 +662,47 @@ suite.define(() => {
       .toBe(true);
 
     await trigger.click();
+    const inbox = navigation.locator(".sidebar-issues-button");
+    await inbox.click();
+    const attentionDialog = page.getByRole("dialog", { name: "Inbox" });
+    await attentionDialog.waitFor();
+    await expect.poll(() => attentionDialog.getAttribute("aria-modal")).toBe("true");
+    const attentionControls = attentionDialog.locator("button, a[href], summary");
+    const lastAttentionControl = attentionControls.last();
+    await lastAttentionControl.focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() =>
+        page.evaluate(() => document.activeElement?.closest("#sidebar-issues-panel") !== null),
+      )
+      .toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => attentionDialog.count()).toBe(0);
     await expect.poll(() => dialog.isVisible()).toBe(true);
+
+    await page.evaluate(() => {
+      window.dispatchEvent(new CustomEvent("openclaw:debug-overlay-request"));
+    });
+    const debugOverlay = page.locator(".debug-overlay");
+    await debugOverlay.waitFor();
+    await expect.poll(() => dialog.isVisible()).toBe(false);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => debugOverlay.count()).toBe(0);
+
+    await trigger.click();
     await page.mouse.click(899, 450);
     await expect.poll(() => dialog.isVisible()).toBe(false);
     await expect
       .poll(() => trigger.evaluate((element) => element === document.activeElement))
       .toBe(true);
 
+    await trigger.click();
+    await navigation.locator(".sidebar-issues-button").click();
+    await attentionDialog.waitFor();
     await page.setViewportSize({ width: 1280, height: 900 });
+    await expect.poll(() => attentionDialog.count()).toBe(0);
     await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
-    await expect.poll(() => drawer.count()).toBe(0);
+    await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });
 
   it.each(["dark", "light"] as const)(
@@ -619,7 +715,7 @@ suite.define(() => {
         scenario: TOAST_SCENARIO,
         width: 390,
       });
-      const drawer = page.locator("openclaw-modal-dialog.nav-drawer");
+      const drawer = page.locator(".shell-nav.nav-drawer");
       const dialog = page.getByRole("dialog", { name: "Navigation" });
       await page.locator(".chat-pane__nav-toggle").first().click();
       await expect.poll(() => dialog.isVisible()).toBe(true);
@@ -649,10 +745,10 @@ suite.define(() => {
         await page.setViewportSize({ width: 1280, height: 900 });
         await expect.poll(() => drawer.count()).toBe(0);
       }
-      const handedOffToast = page.locator(".shell > openclaw-toast-host .app-toast");
-      await expect.poll(() => handedOffToast.textContent()).toContain("Codex hidden");
+      const retainedToast = page.locator(".shell > openclaw-toast-host .app-toast");
+      await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
       const [toastBounds, composerBounds] = await Promise.all([
-        handedOffToast.boundingBox(),
+        retainedToast.boundingBox(),
         page.locator(".agent-chat__composer-shell").boundingBox(),
       ]);
       if (!toastBounds || !composerBounds) {
@@ -660,8 +756,8 @@ suite.define(() => {
       }
       expect(Math.round(toastBounds.y)).toBe(20);
       expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
-      await handedOffToast.getByRole("button", { name: "Dismiss" }).click();
-      await expect.poll(() => handedOffToast.isVisible()).toBe(false);
+      await retainedToast.getByRole("button", { name: "Dismiss" }).click();
+      await expect.poll(() => retainedToast.isVisible()).toBe(false);
     },
   );
 

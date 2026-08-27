@@ -2,8 +2,10 @@ import { rm } from "node:fs/promises";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import type { ClawHubRiskAcknowledgementRequest } from "../../../plugins/clawhub.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { resolveCompatibilityHostVersion } from "../../../version.js";
@@ -70,6 +72,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
   /**
    * Optional pre-seeded records. When provided, this map is used instead of
    * the disk-loaded install-record snapshot. Pass the in-memory records
@@ -87,6 +90,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+    ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
 }
@@ -101,6 +105,7 @@ export async function repairMissingPluginInstallsForIds(params: {
   baselineRecords?: Record<string, PluginInstallRecord>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
@@ -120,6 +125,7 @@ export async function repairMissingPluginInstallsForIds(params: {
     ),
     ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
     ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+    ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),
   });
 }
@@ -133,7 +139,17 @@ async function repairMissingPluginInstalls(params: {
   baselineRecords?: Record<string, PluginInstallRecord>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  onCapabilityConsent?: PluginCapabilityConsentHandler;
 }): Promise<RepairMissingPluginInstallsResult> {
+  // Baseline, awaited review, package publication, and the index write share one generation.
+  return await withPluginLifecycleLease({ env: params.env }, () =>
+    repairMissingPluginInstallsWithLease(params),
+  );
+}
+
+async function repairMissingPluginInstallsWithLease(
+  params: Parameters<typeof repairMissingPluginInstalls>[0],
+): Promise<RepairMissingPluginInstallsResult> {
   const env = params.env ?? process.env;
   const {
     knownIds,
@@ -247,6 +263,7 @@ async function repairMissingPluginInstalls(params: {
       },
       ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     });
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
@@ -346,6 +363,7 @@ async function repairMissingPluginInstalls(params: {
         : {}),
       ...(params.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
       ...(params.onClawHubRisk ? { onClawHubRisk: params.onClawHubRisk } : {}),
+      ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];

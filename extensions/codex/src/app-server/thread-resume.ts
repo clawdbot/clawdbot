@@ -1,10 +1,13 @@
 /** Owns Codex thread/resume subscription safety. */
 import {
   assertCodexThreadResumeSubscription,
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   CodexAppServerUnsafeSubscriptionError,
+  unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import {
   CodexAppServerRpcError,
+  isCodexAppServerOverloadError,
   isCodexAppServerPrewriteRequestCancellationError,
   type CodexAppServerClient,
 } from "./client.js";
@@ -12,7 +15,7 @@ import { assertCodexThreadResumeResponse } from "./protocol-validators.js";
 import type { CodexThreadResumeParams, CodexThreadResumeResponse } from "./protocol.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 
-/** Resumes one thread and retires the physical client when acceptance is indeterminate. */
+/** Resumes one thread, releasing or isolating every possible native subscription. */
 export async function resumeCodexAppServerThread(params: {
   client: CodexAppServerClient;
   abandonClient: () => Promise<void>;
@@ -20,6 +23,9 @@ export async function resumeCodexAppServerThread(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  /** Identifies ownership rejection by the request's physical pre-write fence only. */
+  isPrewriteOwnershipError?: (error: unknown) => boolean;
+  onSubscriptionReleased?: () => void;
 }): Promise<CodexThreadResumeResponse> {
   const threadId = params.request.threadId;
   let response: CodexThreadResumeResponse;
@@ -33,17 +39,26 @@ export async function resumeCodexAppServerThread(params: {
     );
     assertCodexThreadResumeSubscription(threadId, response.thread.id);
   } catch (error) {
-    params.assertCurrent?.();
     if (
+      params.isPrewriteOwnershipError?.(error) ||
       isCodexAppServerStartSelectionChangedError(error) ||
-      isCodexAppServerPrewriteRequestCancellationError(error)
+      isCodexAppServerPrewriteRequestCancellationError(error) ||
+      isCodexAppServerOverloadError(error)
     ) {
       throw error;
     }
     if (error instanceof CodexAppServerRpcError) {
-      // A structured RPC error proves Codex rejected the resume, so the client
-      // holds no hidden subscription and can safely stay in the shared pool.
-      throw error;
+      // Codex can subscribe before later response assembly fails. A completed
+      // RPC lets this attempt release only its exact thread without retiring siblings.
+      const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
+        threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        assertCurrent: params.assertCurrent,
+      }).catch(() => false);
+      if (subscriptionReleased) {
+        params.onSubscriptionReleased?.();
+        throw error;
+      }
     }
     try {
       await params.abandonClient();

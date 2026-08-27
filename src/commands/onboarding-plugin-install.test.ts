@@ -4,11 +4,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord as PersistedPluginInstallRecord } from "../config/types.plugins.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
 import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
+import type { PluginInstallArtifactConsentHandler } from "../plugins/install-types.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { VERSION } from "../version.js";
+import { WizardNavigationError } from "../wizard/prompts.js";
 
 function expectedNpmInstallSpec(spec: string): string {
   return resolveNpmInstallSpecsForUpdateChannel({
@@ -104,12 +108,15 @@ vi.mock("../plugins/installs.js", () => ({
 }));
 
 const clearPluginMetadataLifecycleCaches = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/plugin-metadata-lifecycle.js", () => ({
+vi.mock("../plugins/plugin-metadata-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-lifecycle.js")>()),
   clearPluginMetadataLifecycleCaches,
 }));
 const clearLoadInstalledPluginIndexInstallRecordsCache = vi.hoisted(() => vi.fn());
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/installed-plugin-index-records.js")>()),
   clearLoadInstalledPluginIndexInstallRecordsCache,
+  loadInstalledPluginIndexInstallRecords: async () => ({}),
 }));
 
 const withPluginLifecycleLease = vi.hoisted(() =>
@@ -122,6 +129,16 @@ vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
 const withTimeout = vi.hoisted(() => vi.fn(async <T>(promise: Promise<T>) => await promise));
 vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
+}));
+
+const prepareManagedPluginArtifactConsentHandler = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../plugins/capability-consent.js").prepareManagedPluginArtifactConsentHandler
+  >(),
+);
+vi.mock("../plugins/capability-consent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/capability-consent.js")>()),
+  prepareManagedPluginArtifactConsentHandler,
 }));
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
@@ -184,27 +201,7 @@ type ClawHubInstallCall = {
   timeoutMs?: number;
 };
 
-type PluginInstallRecord = {
-  artifactFormat?: string;
-  artifactKind?: string;
-  clawhubPackage?: string;
-  clawpackSize?: number;
-  installPath?: string;
-  integrity?: string;
-  npmIntegrity?: string;
-  npmShasum?: string;
-  npmTarballName?: string;
-  pluginId?: string;
-  resolvedAt?: string;
-  resolvedName?: string;
-  resolvedSpec?: string;
-  resolvedVersion?: string;
-  shasum?: string;
-  source?: string;
-  sourcePath?: string;
-  spec?: string;
-  version?: string;
-};
+type PluginInstallRecord = Partial<PersistedPluginInstallRecord> & { pluginId?: string };
 
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
@@ -212,8 +209,133 @@ describe("ensureOnboardingPluginInstalled", () => {
     delete process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES;
     delete process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES;
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
+    prepareManagedPluginArtifactConsentHandler.mockResolvedValue({
+      onBeforePluginArtifactCommit: async () => {},
+      applyAcceptedSurface: (_pluginId, record) => record,
+    });
     invalidatePluginRuntimeDiscoveryAfterConfigMutation.mockResolvedValue(undefined);
   });
+
+  it.each([
+    ...(["npm", "clawhub", "npm-pack", "local"] as const).flatMap((source) =>
+      [false, true].map((accepted) => ({ source, accepted, promptError: undefined })),
+    ),
+    { source: "local" as const, accepted: false, promptError: new WizardNavigationError("back") },
+    ...(["npm", "clawhub"] as const).map((source) => ({
+      source,
+      accepted: false,
+      promptError: new Error("capability review guard rejected the operation"),
+    })),
+  ])(
+    "reviews $source artifact capabilities before onboarding activation, accepted=$accepted promptError=$promptError",
+    async ({ source, accepted, promptError }) => {
+      const actual = await vi.importActual<typeof import("../plugins/capability-consent.js")>(
+        "../plugins/capability-consent.js",
+      );
+      prepareManagedPluginArtifactConsentHandler.mockImplementationOnce(
+        actual.prepareManagedPluginArtifactConsentHandler,
+      );
+      await withTestDir({ prefix: "openclaw-onboarding-consent-" }, async (artifactDir) => {
+        createColdPluginFixture({
+          rootDir: artifactDir,
+          pluginId: "demo-plugin",
+          manifest: { contracts: { tools: ["demo.write"] } },
+        });
+        let committed = false;
+        const install = async (params: {
+          onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+        }) => {
+          await params.onBeforePluginArtifactCommit?.({
+            pluginId: "demo-plugin",
+            stagedArtifactDir: artifactDir,
+            mode: "install",
+          });
+          committed = true;
+          return {
+            ok: true,
+            pluginId: "demo-plugin",
+            targetDir: artifactDir,
+            version: "1.0.0",
+            clawhub: { source: "clawhub", clawhubPackage: "demo-plugin" },
+          };
+        };
+        if (source === "npm-pack") {
+          process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES = "1";
+          process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES = JSON.stringify({
+            "demo-plugin": `npm-pack:${path.join(artifactDir, "plugin.tgz")}`,
+          });
+          installPluginFromNpmPackArchive.mockImplementationOnce(install);
+        } else if (source === "clawhub") {
+          installPluginFromClawHub.mockImplementationOnce(install);
+        } else if (source === "npm") {
+          installPluginFromNpmSpec.mockImplementationOnce(install);
+        }
+        const confirm = vi.fn(async () => {
+          if (promptError) {
+            throw promptError;
+          }
+          return accepted;
+        });
+        const note = vi.fn(async () => {});
+        const log = vi.fn();
+        if (accepted || source === "local") {
+          const actualEnable =
+            await vi.importActual<typeof import("../plugins/enable.js")>("../plugins/enable.js");
+          enablePluginInConfig.mockImplementationOnce(
+            actualEnable.enableExplicitlySelectedPluginInConfig,
+          );
+        }
+        const cfg: OpenClawConfig = { plugins: { entries: { "demo-plugin": { enabled: false } } } };
+        const pending = ensureOnboardingPluginInstalled({
+          cfg,
+          entry: {
+            pluginId: "demo-plugin",
+            label: "Demo Plugin",
+            install:
+              source === "local"
+                ? { localPath: artifactDir }
+                : source === "clawhub"
+                  ? { clawhubSpec: "clawhub:demo-plugin@1.0.0" }
+                  : { npmSpec: "@example/demo-plugin@1.0.0" },
+            preferRemoteInstall: source !== "local",
+          },
+          prompter: {
+            confirm,
+            note,
+            progress: () => ({ update: vi.fn(), stop: vi.fn() }),
+          } as never,
+          runtime: { log, error: vi.fn() } as never,
+          promptInstall: false,
+          workspaceDir: artifactDir,
+        });
+        if (promptError) {
+          await expect(pending).rejects.toBe(promptError);
+          expect(committed).toBe(false);
+          expect(recordPluginInstall).not.toHaveBeenCalled();
+          return;
+        }
+        const result = await pending;
+
+        expect(confirm).toHaveBeenCalledOnce();
+        expect([...note.mock.calls, ...log.mock.calls].flat().join("\n")).toContain("demo.write");
+        if (source !== "local") {
+          expect(committed).toBe(accepted);
+        }
+        if (accepted) {
+          expect(result).toMatchObject({ installed: true, status: "installed" });
+          expect(result.cfg.plugins?.entries?.["demo-plugin"]?.enabled).toBe(true);
+          expect(result.cfg.plugins?.installs?.["demo-plugin"]).toMatchObject({
+            acceptedSurface: { tools: ["demo.write"] },
+            acceptedSurfaceHash: expect.stringMatching(/^[a-f\d]{64}$/),
+            acceptedSurfaceAt: expect.any(String),
+          });
+        } else {
+          expect(result).toMatchObject({ installed: false, status: "failed", cfg });
+          expect(recordPluginInstall).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
 
   it("localizes plugin install choices", async () => {
     const previousLocale = process.env.OPENCLAW_LOCALE;
@@ -1632,6 +1754,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       expect(recordUpdate).toEqual({
         pluginId: "demo-plugin",
         source: "path",
+        installPath: realPluginDir,
         sourcePath: "./plugins/demo",
         spec: "@demo/plugin@1.2.3",
       });
@@ -1648,6 +1771,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         "demo-plugin": {
           pluginId: "demo-plugin",
           source: "path",
+          installPath: realPluginDir,
           sourcePath: "./plugins/demo",
           spec: "@demo/plugin@1.2.3",
         },
@@ -1811,6 +1935,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         expect(recordUpdate).toEqual({
           pluginId: "demo-plugin",
           source: "path",
+          installPath: realPluginDir,
           sourcePath: "./plugins/demo",
           spec: "@demo/plugin@1.2.3",
         });
@@ -1820,6 +1945,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           "demo-plugin": {
             pluginId: "demo-plugin",
             source: "path",
+            installPath: realPluginDir,
             sourcePath: "./plugins/demo",
             spec: "@demo/plugin@1.2.3",
           },
@@ -1866,6 +1992,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       expect(recordUpdate).toEqual({
         pluginId: "demo-plugin",
         source: "path",
+        installPath: realPluginDir,
         sourcePath: "./plugins/demo",
       });
     });
