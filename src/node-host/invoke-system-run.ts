@@ -331,6 +331,14 @@ const POLICY_OWNED_DENIED_REASONS = new Set<SystemRunDeniedReason>([
   "execution-plan-miss",
 ]);
 
+/**
+ * Structured policy reasons the mac app exec host's final policy evaluator
+ * emits verbatim; recognized host responses keep the escalation hint while
+ * freeform ones (cancelled prompt, unavailable approval store, permission
+ * prompts) are suppressed.
+ */
+const MAC_HOST_POLICY_OWNED_REASONS = new Set(["security=deny", "allowlist-miss"]);
+
 function deniedMessageWithEscalationHint(params: {
   reason: SystemRunDeniedReason;
   message: string;
@@ -1031,10 +1039,10 @@ async function executeSystemRunPhase(
       await sendSystemRunDenied(opts, phase.execution, {
         reason: normalizeDeniedReason(response.error.reason),
         message: response.error.message,
-        // Freeform host-authored message (cancelled prompt, temporarily
-        // unavailable approval store, permission prompts) — the normalized
-        // reason does not establish that an exec-policy change would fix it.
-        suppressEscalationHint: true,
+        // Freeform host-authored messages (cancelled prompt, temporarily
+        // unavailable approval store, permission prompts) carry no policy
+        // guarantee; the host's structured policy verdicts do.
+        suppressEscalationHint: !MAC_HOST_POLICY_OWNED_REASONS.has(response.error.reason ?? ""),
       });
       return;
     } else {

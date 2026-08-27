@@ -802,6 +802,43 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectInvokeErrorMessage(result.sendInvokeResult, "approval prompt cancelled", true);
   });
 
+  it("keeps the escalation hint for structured mac policy denials", async () => {
+    // The mac host's final policy evaluator emits structured security=deny /
+    // allowlist-miss verdicts through the same response path; those are
+    // policy-owned and keep the sanctioned next step.
+    const denied = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: command not allowed by security policy",
+          reason: "security=deny",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      denied.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: command not allowed by security policy — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
+
+    const miss = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: command not on the allowlist",
+          reason: "allowlist-miss",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      miss.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: command not on the allowlist — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      true,
+    );
+  });
+
   it("does not append the escalation hint to screen-recording permission denials", async () => {
     // The fix for a missing Screen Recording permission is granting the macOS
     // permission, not adjusting exec policy — the hint would misdirect.
