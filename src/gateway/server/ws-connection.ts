@@ -543,30 +543,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               }
             }
             currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
-            if (
-              disconnectedNodeHistory &&
-              currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
-            ) {
-              try {
-                await recordPairedNodeDisconnection({
-                  nodeId: disconnectedNodeHistory.nodeId,
-                  connectedAtMs: disconnectedNodeHistory.connectedAtMs,
-                  disconnectedAtMs: disconnectedNodeHistory.disconnectedAtMs,
-                  expectedPairingGeneration: {
-                    nodeId: disconnectedNodeHistory.nodeId,
-                    key: disconnectedNodeHistory.pairingGeneration,
-                  },
-                });
-              } catch (error) {
-                logGateway.warn(
-                  `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
-                );
-              }
-            }
           } finally {
             retainClientUntilNodeDrain = false;
           }
         }
+        // Retire node-owned projections before history persistence yields; a reconnect
+        // may own this node id by the time the write finishes.
         if (
           client?.presenceKey &&
           (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
@@ -581,6 +563,26 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           removeRemoteNodeInfo(currentDisconnectedNodeId);
           context.nodeUnsubscribeAll(currentDisconnectedNodeId);
           clearNodeWakeState(currentDisconnectedNodeId);
+        }
+        if (
+          disconnectedNodeHistory &&
+          currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
+        ) {
+          try {
+            await recordPairedNodeDisconnection({
+              nodeId: disconnectedNodeHistory.nodeId,
+              connectedAtMs: disconnectedNodeHistory.connectedAtMs,
+              disconnectedAtMs: disconnectedNodeHistory.disconnectedAtMs,
+              expectedPairingGeneration: {
+                nodeId: disconnectedNodeHistory.nodeId,
+                key: disconnectedNodeHistory.pairingGeneration,
+              },
+            });
+          } catch (error) {
+            logGateway.warn(
+              `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
+            );
+          }
         }
       }
       logWs("out", "close", {
