@@ -78,6 +78,75 @@ describe("legacy session typing config migrate", () => {
 });
 
 describe("compatibility binding repair migrate", () => {
+  it("migrates legacy match.peer.kind dm values to direct", () => {
+    const res = migrateLegacyConfigForTest({
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "telegram", peer: { kind: "dm", id: "123" } },
+        },
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "telegram", peer: { kind: "group", id: "456" } },
+        },
+        { type: "route", agentId: "alpha", match: { channel: "discord" } },
+      ],
+    });
+
+    const bindings = res.config?.bindings as Array<{
+      match?: { peer?: { kind?: string } };
+    }>;
+    expect(bindings[0]?.match?.peer).toEqual({ kind: "direct", id: "123" });
+    expect(bindings[1]?.match?.peer).toEqual({ kind: "group", id: "456" });
+    expect(
+      res.changes.some((change) =>
+        change.includes(
+          'Moved deprecated bindings[].match.peer.kind "dm" → "direct" for 1 binding.',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports pluralized dm peer kind migrations and leaves canonical kinds untouched", () => {
+    const res = migrateLegacyConfigForTest({
+      bindings: [
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "whatsapp", peer: { kind: "dm", id: "a" } },
+        },
+        {
+          type: "route",
+          agentId: "main",
+          match: { channel: "telegram", peer: { kind: "dm", id: "b" } },
+        },
+      ],
+    });
+
+    const bindings = res.config?.bindings as Array<{ match?: { peer?: { kind?: string } } }>;
+    expect(bindings.every((binding) => binding.match?.peer?.kind === "direct")).toBe(true);
+    expect(res.changes.some((change) => change.includes('"dm" → "direct" for 2 bindings.'))).toBe(
+      true,
+    );
+  });
+
+  it("leaves configs without dm peer kinds unchanged", () => {
+    const res = migrateLegacyConfigForTest({
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "telegram", peer: { kind: "group", id: "456" } },
+        },
+      ],
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
   it("prunes bindings for missing agents when agents.list is valid", () => {
     const res = repairBindingsForTest({
       agents: {
