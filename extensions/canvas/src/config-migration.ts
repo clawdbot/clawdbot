@@ -14,13 +14,19 @@ import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const RETIRED_HOST_KEYS = ["root", "port", "liveReload"] as const;
 
+function readLegacyCanvasRoot(config: OpenClawConfig): unknown {
+  // Stable releases merged canvasHost into plugin host config; plugin keys won.
+  const legacyHost = readRecord(readRecord(config)?.canvasHost);
+  const pluginHost = readRecord(resolvePluginConfigObject(config, "canvas")?.host);
+  return { ...legacyHost, ...pluginHost }.root;
+}
+
 export function resolveLegacyCanvasDocumentsDir(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
 }): string | null {
-  const pluginConfig = resolvePluginConfigObject(params.config, "canvas");
-  const configuredRoot = readString(readRecord(pluginConfig?.host)?.root)?.trim();
+  const configuredRoot = readString(readLegacyCanvasRoot(params.config))?.trim();
   if (!configuredRoot) {
     return null;
   }
@@ -28,7 +34,19 @@ export function resolveLegacyCanvasDocumentsDir(params: {
     path.resolve(resolveUserPath(configuredRoot, params.env)),
     "documents",
   );
-  return legacyDir === path.resolve(params.stateDir, "canvas", "documents") ? null : legacyDir;
+  const coreDir = path.resolve(params.stateDir, "canvas", "documents");
+  if (legacyDir === coreDir) {
+    return null;
+  }
+  try {
+    if (fs.realpathSync(legacyDir) === fs.realpathSync(coreDir)) {
+      return null;
+    }
+  } catch {
+    // Missing or unreadable paths still need source inspection; only a proven
+    // canonical alias may bypass migration without examining its documents.
+  }
+  return legacyDir;
 }
 
 export function listLegacyCanvasDocumentIds(documentsDir: string): string[] {
@@ -55,27 +73,22 @@ export function migrateCanvasHostConfig(config: OpenClawConfig): {
   changes: string[];
 } | null {
   const legacyHost = readRecord((config as { canvasHost?: unknown }).canvasHost);
-  const plugins = readRecord(config.plugins);
-  const entries = readRecord(plugins?.entries);
-  const canvasEntry = readRecord(entries?.canvas);
-  const canvasConfig = readRecord(canvasEntry?.config);
+  const canvasConfig = resolvePluginConfigObject(config, "canvas");
   const existingHost = readRecord(canvasConfig?.host);
+  const configuredRoot = readLegacyCanvasRoot(config);
   // An unresolved template is not evidence that its source directory is absent.
   // Doctor's resolved config pass can retire it once the source is inspectable.
-  if (readString(existingHost?.root)?.includes("${")) {
-    return null;
-  }
-  const legacyDir = resolveLegacyCanvasDocumentsDir({
-    config,
-    env: process.env,
-    stateDir: resolveStateDir(),
-  });
-  let retainRoot = false;
-  if (legacyDir) {
+  let retainRoot = readString(configuredRoot)?.includes("${") === true;
+  if (!retainRoot) {
     // Normalization also runs before migration and through setup. Only a verified
     // empty source may lose its retry locator; unreadable sources remain pending.
     try {
-      retainRoot = listLegacyCanvasDocumentIds(legacyDir).length > 0;
+      const legacyDir = resolveLegacyCanvasDocumentsDir({
+        config,
+        env: process.env,
+        stateDir: resolveStateDir(),
+      });
+      retainRoot = legacyDir !== null && listLegacyCanvasDocumentIds(legacyDir).length > 0;
     } catch {
       retainRoot = true;
     }
@@ -95,13 +108,13 @@ export function migrateCanvasHostConfig(config: OpenClawConfig): {
   const nextEntry = readRecord(nextEntries.canvas) ?? {};
   const nextPluginConfig = readRecord(nextEntry.config) ?? {};
 
-  if (existingHost || enabled !== undefined) {
+  if (existingHost || enabled !== undefined || retainRoot) {
     if (enabled === undefined && !retainRoot) {
       delete nextPluginConfig.host;
     } else {
       nextPluginConfig.host = {
         ...(enabled !== undefined ? { enabled } : {}),
-        ...(retainRoot ? { root: existingHost?.root } : {}),
+        ...(retainRoot ? { root: configuredRoot } : {}),
       };
     }
     nextEntry.config = nextPluginConfig;
@@ -113,9 +126,11 @@ export function migrateCanvasHostConfig(config: OpenClawConfig): {
   const changes: string[] = [];
   if (legacyHost) {
     changes.push(
-      enabled === undefined
-        ? "Removed retired canvasHost configuration."
-        : "Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled.",
+      retainRoot
+        ? "Migrated canvasHost to plugins.entries.canvas.config.host; retained root for document migration retry."
+        : enabled === undefined
+          ? "Removed retired canvasHost configuration."
+          : "Migrated canvasHost.enabled to plugins.entries.canvas.config.host.enabled.",
     );
   }
   if (retiredKeys.length > 0) {
