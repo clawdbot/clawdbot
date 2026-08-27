@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1063,39 +1064,68 @@ describe("Crabbox worker provider", () => {
     });
   });
 
-  it("preserves the node enrollment diagnosis after the Crabbox banner and setup noise", async () => {
-    const diagnosis =
-      "Error: Codex remote-exec requires the exact official @openclaw/codex@2026.8.1 plugin to be installed by cloudWorkers profile setup";
-    const stderr = [
-      `workspace owner acquired wait=218ms recovered=false run context: run=${"a".repeat(32)} lease=${LEASE_ID} slug=openclaw-${"b".repeat(32)} provider=machine0 ssh=openclaw@worker.example.test:2222 workspace=/workspace/openclaw`,
-      "x".repeat(2_000),
-      diagnosis,
-      "    at prepareCodex ([eval]:20:11)",
-      "    at runScriptInThisContext (node:internal/vm:209:10)",
-      "    at node:internal/process/execution:446:12",
-      "    at [eval]-wrapper:6:24",
-      "    at runScriptInContext (node:internal/process/execution:444:60)",
-      "    at evalFunction (node:internal/process/execution:279:30)",
-      "Node.js v24.15.0",
-    ].join("\n");
-    const provider = providerWithRunner(async (argv) => {
-      if (argv[1] === "status") {
-        return commandResult({ stdout: inspectJson() });
-      }
-      return argv[1] === "run"
-        ? commandResult({ code: 1, stderr, stdout: "setup progress ".repeat(200) })
-        : commandResult();
-    });
+  it.skipIf(process.platform === "win32")(
+    "preserves the actual node enrollment diagnosis after setup noise",
+    async () => {
+      const diagnosis =
+        "Error: Codex remote-exec requires the exact official @openclaw/codex@2026.8.1 plugin to be installed by cloudWorkers profile setup";
+      const home = tempDirs.make("crabbox-enrollment-");
+      const bin = path.join(home, "bin");
+      fs.mkdirSync(bin);
+      fs.symlinkSync(process.execPath, path.join(bin, "node"));
+      fs.writeFileSync(
+        path.join(bin, "openclaw"),
+        [
+          "#!/bin/sh",
+          'case "$*" in',
+          '  --version) echo "OpenClaw 2026.8.1" ;;',
+          '  "plugins inspect codex --json") echo \'{"ok":false}\'; exit 1 ;;',
+          '  *) echo "unexpected command: $*" >&2; exit 99 ;;',
+          "esac",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+      const calls: string[][] = [];
+      const provider = providerWithRunner(async (argv, options) => {
+        calls.push(argv);
+        if (argv[1] === "status") {
+          return commandResult({ stdout: inspectJson() });
+        }
+        if (argv[1] !== "run") {
+          return commandResult();
+        }
+        const result = spawnSync("/bin/bash", [], {
+          input: options.input,
+          encoding: "utf8",
+          timeout: 10_000,
+          env: {
+            HOME: home,
+            PATH: `${bin}:/usr/bin:/bin`,
+            CRABBOX_WORKER_SETUP_CODE: "fixture-setup",
+          },
+        });
+        expect(result.status).toBe(1);
+        return commandResult({
+          code: result.status,
+          stdout: "setup progress ".repeat(200),
+          stderr: `workspace owner acquired\n${result.stderr}\nworkspace owner released\nremote command exited 1`,
+        });
+      });
 
-    await expect(
-      provider.provision({ ...PROFILE, provider: "machine0" }, OPERATION_ID, {
-        executionMode: "remote-exec",
-      }),
-    ).rejects.toMatchObject({
-      code: "invalid_profile",
-      message: expect.stringContaining(diagnosis),
-    });
-  });
+      await expect(
+        provider.provision({ ...PROFILE, provider: "machine0" }, OPERATION_ID, {
+          executionMode: "remote-exec",
+        }),
+      ).rejects.toMatchObject({
+        code: "invalid_profile",
+        message: expect.stringContaining(diagnosis),
+      });
+      expect(calls.at(-1)?.[1]).toBe("stop");
+      expect(
+        fs.existsSync(path.join(home, ".openclaw", "cloud-workers", LEASE_ID, "node.pid")),
+      ).toBe(false);
+    },
+  );
 
   it("preserves the allocated lease and both failures when setup cleanup times out", async () => {
     let releaseCommitted = false;

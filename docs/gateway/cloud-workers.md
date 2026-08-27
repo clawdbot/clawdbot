@@ -184,11 +184,32 @@ openclaw config set cloudWorkers.profiles.aws.settings.setup \
   "${existing_setup}; sudo npm install -g openclaw@${gateway_version}; openclaw plugins install npm:@openclaw/codex@${gateway_version} --pin --force"
 ```
 
-`--force` allows setup replay to converge when the plugin is already installed. After upgrading the Gateway, update both appended package versions to match it while preserving the rest of the setup. Unreleased source builds require exact locally packed packages instead of registry versions.
+`--force` allows setup replay to converge when the plugin is already installed. After upgrading the Gateway, update both appended package versions to match it while preserving the rest of the setup. This recipe requires both exact versions to exist in the registry. For unreleased source builds, use a complete custom node package as described below; a standalone local plugin tarball does not carry official npm provenance.
+
+### Build a complete custom node package
+
+For a trusted source build, produce the node distribution from the same source revision as the Gateway. The canonical package builder can explicitly include source-owned plugins that the ordinary core package excludes:
+
+```bash
+source_sha="$(git rev-parse HEAD)"
+node scripts/package-openclaw-for-docker.mjs \
+  --bundle-plugin codex \
+  --pnpm-pack \
+  --allow-unreleased-changelog \
+  --output-dir .artifacts/cloud-node \
+  --output-name "openclaw-cloud-${source_sha}.tgz"
+shasum -a 256 ".artifacts/cloud-node/openclaw-cloud-${source_sha}.tgz"
+```
+
+Run this in a clean, trusted checkout with dependencies installed. The builder compiles the runtime, includes the selected plugin's built entrypoints and import closure, and regenerates the installation inventory. It temporarily adds the plugin's exact runtime dependency pins to the distribution manifest, rejecting conflicting or unpinned dependencies, then restores the source manifest and inventory. Repeat `--bundle-plugin <id>` for additional source plugins. Without that option, the ordinary core package and external plugin publication contracts are unchanged.
+
+Publish the resulting archive through your existing immutable artifact delivery path and make `settings.setup` verify its SHA-256 before installing it globally with normal npm lifecycle scripts enabled. Record both source SHA and archive digest: different unreleased builds can share a version. Do not copy a plugin into an installed release or substitute a standalone `npm-pack:` plugin archive for this distribution.
+
+Native dependencies are declared at the distribution root and installed for the target operating system and CPU; the archive does not copy the build host's plugin `node_modules`. Target installation still needs registry access and is not an offline dependency bundle. Verify each target architecture you deploy. Use `--skip-build` only when reusing a complete build from that same source revision with all selected plugin outputs present.
 
 ### Bundle installation
 
-The setup bootstrap first reuses an installed `openclaw` binary when its version exactly matches the Gateway, then tries the exact `openclaw@<version>` registry package. For an unreleased source build, install a locally packed candidate with the same version in `settings.setup`; the provider will select it before touching the registry. After the node connects and publishes its session-host inventory, the Gateway pushes one content-addressed worker bundle through the paired channel. The node verifies and publishes those exact bytes without installing the normal OpenClaw package dependency tree. A stale Gateway build retires the environment and reprovisions against the current bundle rather than downgrading the execution-context protocol.
+The setup bootstrap first reuses an installed `openclaw` binary when its version exactly matches the Gateway, then tries the exact `openclaw@<version>` registry package. For an unreleased source build, install the matching [complete custom node package](/gateway/cloud-workers#build-a-complete-custom-node-package) in `settings.setup`; the provider will select it before touching the registry. After the node connects and publishes its session-host inventory, the Gateway pushes one content-addressed worker bundle through the paired channel. The node verifies and publishes those exact bytes without installing the normal OpenClaw package dependency tree. A stale Gateway build retires the environment and reprovisions against the current bundle rather than downgrading the execution-context protocol.
 
 Codex remote execution additionally requires `settings.setup` or the cloud image to install the exact official npm `@openclaw/codex` plugin matching the Gateway version, including its pinned platform-native `@openai/codex` dependency. An exact-version bundled plugin is also accepted. Enrollment preserves the plugin's official npm or bundled provenance in the node's isolated per-lease state; it does not install plugins from npm or accept an untrusted local plugin path. A missing, mismatched, or untrusted plugin fails before the node starts.
 
