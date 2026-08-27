@@ -14,8 +14,13 @@ import type {
   ExecApprovalDecision,
   ExecApprovalRequestPayload as InfraExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
+import {
+  captureGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../process/gateway-work-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { AgentRuntimeDelegatedAuthority } from "./agent-runtime-identity-token.js";
+import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -128,6 +133,10 @@ type ExecApprovalManagerOptions<TPayload> = {
     context: { approvalId: string; approvalKind: OperatorApprovalKind; operation: "expire" },
   ) => void;
   onLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
+  /** Cron-context allow-always requests mint a scoped standing grant in the
+   * durable resolution transaction. Returning null keeps the decision
+   * grant-free (non-cron requests, aborted runs, missing bindings). */
+  resolveStandingGrantMint?: (request: TPayload) => CronStandingGrantMintSpec | null;
   /** Durable timeout expiry can be first observed by a timer, lookup, or replay.
    * Publish from the local settlement owner so every ordering reaches reviewers. */
   onExpired?: (record: OperatorApprovalRecord, liveRecord: ExecApprovalRecord<TPayload>) => void;
@@ -166,6 +175,7 @@ type PendingEntry<TPayload = ExecApprovalRequestPayload> = {
   handoffReleasedAtMs: number | null;
   retainForManagerLifetime: boolean;
   promise: Promise<ExecApprovalDecision | null>;
+  admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
 };
 
 export type ExecApprovalIdLookupResult =
@@ -369,6 +379,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       handoffReleasedAtMs: null,
       retainForManagerLifetime: false,
       promise,
+      admissionContinuation: captureGatewayRootWorkAdmissionContinuationScope(),
     };
     this.pending.set(record.id, entry);
     this.scheduleExpiryTimer(entry);
@@ -513,6 +524,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return { outcome: "not-found" };
     }
 
+    const standingGrant =
+      decision === "allow-always" && localEntry
+        ? (this.options.resolveStandingGrantMint?.(localEntry.record.request) ?? undefined)
+        : undefined;
     let result: ResolveOperatorApprovalResult;
     try {
       result = resolveOperatorApproval({
@@ -522,6 +537,7 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
         expectedKind: this.approvalKind,
         runtimeEpoch: persistence.runtimeEpoch,
         databaseOptions: persistence.databaseOptions,
+        ...(standingGrant ? { standingGrant } : {}),
       });
     } catch (error) {
       this.settleLocalStorageFailure(recordId);
@@ -773,6 +789,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     pending.record.consumedAtMs = params.consumedAtMs ?? null;
     pending.record.consumedBy = params.consumedBy ?? null;
     pending.retainForManagerLifetime ||= params.retainForManagerLifetime === true;
+    pending.admissionContinuation?.release();
+    pending.admissionContinuation = null;
     // Keep resolved entries briefly so late waitDecision and system.run replay
     // validation see the same durable verdict that released this waiter.
     pending.resolve(params.decision);
@@ -1082,6 +1100,19 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       return null;
     }
     return entry.record;
+  }
+
+  /** Re-enters the exact admitted request root only while this approval is pending. */
+  runPendingContinuation<T>(recordId: string, run: () => Promise<T>): Promise<T> | null {
+    const entry = this.pending.get(recordId);
+    if (
+      !entry?.admissionContinuation ||
+      entry.record.resolvedAtMs !== undefined ||
+      entry.record.expiresAtMs <= Date.now()
+    ) {
+      return null;
+    }
+    return entry.admissionContinuation.run(run);
   }
 
   listPendingRecords(): ExecApprovalRecord<TPayload>[] {

@@ -240,17 +240,6 @@ function listFilesystemTestFiles(rootPath: string) {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
-/** List tracked or filesystem-discovered test files for extension roots. */
-export function listTrackedTestFilesForRoots(roots: string[]) {
-  const files = [];
-  for (const root of roots) {
-    const rootPath = path.join(repoRoot, root);
-    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
-    files.push(...trackedFiles);
-  }
-  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
-}
-
 /** List working-tree test files for extension roots, including new untracked tests. */
 export function listExtensionTestFilesForRoots(roots: string[]) {
   const files = roots.flatMap((root) => listFilesystemTestFiles(path.join(repoRoot, root)));

@@ -11,6 +11,20 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
+const setupRegistryWarn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "plugins/setup-registry"
+        ? { ...logger, warn: setupRegistryWarn }
+        : logger;
+    },
+  };
+});
+
 // plugin-module-loader-cache prefers native require() for compiled .js before
 // falling back to jiti. These tests script plugin-loading behavior through the
 // source-transform mock, so force the fallback path and keep the fixture
@@ -258,6 +272,7 @@ describe("setup-registry module loader", () => {
 
   beforeEach(() => {
     resetRegistryJitiMocks();
+    setupRegistryWarn.mockReset();
     setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
   });
 
@@ -283,30 +298,81 @@ describe("setup-registry module loader", () => {
     expect(firstRecordArg(mocks.loadPluginManifestRegistry).pluginIds).toEqual(["test-plugin"]);
   });
 
-  it("uses built setup artifacts for bundled source records when available", () => {
+  it.each([
+    {
+      name: "uses root builds for bundled source records",
+      artifactRootName: "dist",
+      packageManifest: undefined,
+      expectedLabel: "artifact",
+    },
+    {
+      name: "ignores stale staging builds for source-external records",
+      artifactRootName: "dist-runtime",
+      packageManifest: { build: { bundledDist: false as const } },
+      expectedLabel: "source",
+    },
+  ])("$name", ({ artifactRootName, packageManifest, expectedLabel }) => {
     const packageRoot = makeTempDir();
-    const pluginRoot = path.join(packageRoot, "extensions", "slack");
-    const sourceSetup = path.join(pluginRoot, "setup-entry.ts");
-    const builtSetup = path.join(packageRoot, "dist", "extensions", "slack", "setup-entry.js");
+    const pluginRoot = path.join(packageRoot, "extensions", "fixture");
+    const sourceSetup = path.join(pluginRoot, "setup-api.ts");
+    const artifactSetup = path.join(
+      packageRoot,
+      artifactRootName,
+      "extensions",
+      "fixture",
+      "setup-api.js",
+    );
     fs.mkdirSync(path.dirname(sourceSetup), { recursive: true });
-    fs.mkdirSync(path.dirname(builtSetup), { recursive: true });
+    fs.mkdirSync(path.dirname(artifactSetup), { recursive: true });
     fs.writeFileSync(sourceSetup, "export default {};\n", "utf-8");
-    fs.writeFileSync(builtSetup, "export default {};\n", "utf-8");
+    fs.writeFileSync(artifactSetup, "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
-          id: "slack",
+          id: "fixture",
           origin: "bundled",
           rootDir: pluginRoot,
           setupSource: sourceSetup,
+          packageManifest,
+          setup: { providers: [{ id: "fixture" }] },
         },
       ],
       diagnostics: [],
     });
+    const artifactRealPath = fs.realpathSync(artifactSetup);
+    mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
+      default: {
+        register(api: {
+          registerProvider: (provider: { id: string; label: string; auth: [] }) => void;
+        }) {
+          api.registerProvider({
+            id: "fixture",
+            label: modulePath === artifactRealPath ? "artifact" : "source",
+            auth: [],
+          });
+        },
+      },
+    }));
 
-    resolvePluginSetupRegistry({ env: {} });
+    expect(resolvePluginSetupProviderCore({ provider: "fixture", env: {} })?.label).toBe(
+      expectedLabel,
+    );
+  });
 
-    expect(mockArg(mocks.createJiti, 0, 0)).toBe(builtSetup);
+  it("keeps bundled setup artifact selection independent of active runtime state", () => {
+    const setupRegistrySource = fs.readFileSync(
+      new URL("./setup-registry.ts", import.meta.url),
+      "utf8",
+    );
+    const selectionSource = fs.readFileSync(
+      new URL("./plugin-runtime-artifact-selection.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(setupRegistrySource).not.toContain("plugin-runtime-artifact-resolution");
+    expect(setupRegistrySource).not.toContain('from "./runtime.js"');
+    expect(selectionSource).not.toContain("plugin-runtime-artifact-resolution");
+    expect(selectionSource).not.toMatch(/from ["']\.\/runtime(?:\.js|\/)/u);
   });
 
   it("skips setup-api loading when config has no relevant migration triggers", () => {
@@ -495,7 +561,8 @@ describe("setup-registry module loader", () => {
           register(api: {
             registerProvider: (provider: {
               id: string;
-              aliases: string[];
+              aliases?: string[];
+              hookAliases?: string[];
               label: string;
               auth: [];
             }) => void;
@@ -503,7 +570,13 @@ describe("setup-registry module loader", () => {
             api.registerProvider({
               id: "openai",
               aliases: ["openai"],
-              label: "OpenAI",
+              label: "OpenAI legacy match",
+              auth: [],
+            });
+            api.registerProvider({
+              id: "openai-current",
+              hookAliases: ["openai"],
+              label: "OpenAI current match",
               auth: [],
             });
           },
@@ -512,8 +585,8 @@ describe("setup-registry module loader", () => {
     });
 
     const provider = requireRecord(resolvePluginSetupProviderCore({ provider: "openai", env: {} }));
-    expect(provider.id).toBe("openai");
-    expect(provider.label).toBe("OpenAI");
+    expect(provider.id).toBe("openai-current");
+    expect(provider.label).toBe("OpenAI current match");
   });
 
   it("treats explicit descriptor-only setup as a runtime cutoff", () => {
@@ -887,6 +960,49 @@ describe("setup-registry module loader", () => {
     expect(registry.providers).toStrictEqual([]);
     expect(registry.diagnostics).toMatchObject([
       { pluginId: "broken-entry", code: "setup-entry-load-failed" },
+    ]);
+  });
+
+  it("surfaces setup entry load failures from targeted provider lookup", () => {
+    const brokenRoot = makeTempDir();
+    writeSetupApiStub(brokenRoot);
+    mockSinglePlugin({
+      id: "broken-provider",
+      rootDir: brokenRoot,
+      setup: { providers: [{ id: "broken-provider" }] },
+    });
+    mocks.createJiti.mockImplementation(() => () => {
+      throw new Error("targeted module parse failed");
+    });
+
+    expect(
+      resolvePluginSetupProviderCore({ provider: "broken-provider", env: {} }),
+    ).toBeUndefined();
+    expect(setupRegistryWarn).toHaveBeenCalledWith(
+      expect.stringContaining("setup-entry-load-failed"),
+    );
+  });
+
+  it("reports unavailable setup runtime access with the plugin id and registration mode", () => {
+    const pluginRoot = makeTempDir();
+    writeSetupApiStub(pluginRoot);
+    mockSinglePlugin({ id: "runtime-dependent-setup", rootDir: pluginRoot });
+    mocks.createJiti.mockImplementation(() => () => ({
+      default: {
+        register(api: import("./types.js").OpenClawPluginApi) {
+          api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+        },
+      },
+    }));
+
+    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toMatchObject([
+      {
+        pluginId: "runtime-dependent-setup",
+        code: "setup-registration-failed",
+        message: expect.stringContaining(
+          'Plugin "runtime-dependent-setup" runtime is intentionally unavailable during "setup-only" registration.',
+        ),
+      },
     ]);
   });
 

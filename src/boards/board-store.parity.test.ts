@@ -990,7 +990,7 @@ describe("SqliteBoardStore persistence", () => {
             .get(sessionKey) as { manifest: string }
         ).manifest,
       ),
-    ).toEqual({ tools: ["health"], grantSemanticsVersion: 2 });
+    ).toEqual({ contentOwner: "html", tools: ["health"], grantSemanticsVersion: 2 });
   });
 
   it("reopens durable boards and isolates owning agent databases", () => {

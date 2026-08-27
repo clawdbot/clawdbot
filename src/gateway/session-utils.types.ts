@@ -124,6 +124,7 @@ export type GatewaySessionRow = {
   pinnedAt?: number;
   unread?: boolean;
   lastReadAt?: number;
+  markedUnreadAt?: number;
   agentStatus?: SessionEntry["agentStatus"];
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -189,6 +190,7 @@ export type GatewaySessionRow = {
   effectiveQueueMode?: QueueMode;
   modelProvider?: string;
   model?: string;
+  modelOverrideSource?: "user" | "auto" | null;
   modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;

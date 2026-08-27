@@ -185,7 +185,13 @@ describe("Codex supervision catalog", () => {
         },
         {
           id: "thread-preview",
-          preview: "Match appears only in private preview text",
+          preview: "Unrelated private preview text",
+          status: { type: "idle" },
+          source: "cli",
+        },
+        {
+          id: "thread-fallback",
+          preview: "Match visible fallback title",
           status: { type: "idle" },
           source: "cli",
         },
@@ -206,6 +212,13 @@ describe("Codex supervision catalog", () => {
           cwd: "/workspace/one",
           status: "idle",
           source: "vscode",
+          archived: false,
+        },
+        {
+          threadId: "thread-fallback",
+          fallbackName: "Match visible fallback title",
+          status: "idle",
+          source: "cli",
           archived: false,
         },
       ],

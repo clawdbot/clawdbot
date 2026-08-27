@@ -148,6 +148,9 @@ function replacementForCandidate(params: {
   mode: AuthorizedShellRenderMode;
   satisfiedBy: ExecSegmentSatisfiedBy | undefined;
 }): AuthorizedShellRenderResult | SourceReplacement | null {
+  if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
+    return { ok: false, reason: "shell expansion in enforced arguments" };
+  }
   if (!shouldRewriteCandidate({ mode: params.mode, satisfiedBy: params.satisfiedBy })) {
     return null;
   }
@@ -157,9 +160,6 @@ function replacementForCandidate(params: {
   }
   if (params.satisfiedBy === "safeBins" && hasArgumentShellExpansionSource(params.candidate)) {
     return { ok: false, reason: "shell expansion in safe-bin arguments" };
-  }
-  if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
-    return { ok: false, reason: "shell expansion in enforced arguments" };
   }
   if (params.mode === "enforced" && params.candidate.transport.kind === "shell-wrapper") {
     return { ok: false, reason: "shell quoting required in wrapper payload" };

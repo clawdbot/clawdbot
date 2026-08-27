@@ -411,6 +411,30 @@ describe("OpenAI Codex OAuth flow", () => {
       message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
   });
+
+  it("retains the existing refresh token when OpenAI does not rotate it", async () => {
+    mockTokenResponse({ access_token: "renewed-access-token", expires_in: 3600 });
+
+    await expect(refreshOpenAIAccessToken("existing-refresh-token")).resolves.toMatchObject({
+      type: "success",
+      access: "renewed-access-token",
+      refresh: "existing-refresh-token",
+    });
+  });
+
+  it("preserves the shared 30-second token-refresh deadline", async () => {
+    mockTokenResponse({
+      access_token: "renewed-access-token",
+      refresh_token: "rotated-refresh-token",
+      expires_in: 3600,
+    });
+
+    await refreshOpenAIAccessToken("existing-refresh-token");
+
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+  });
 });
 
 async function listenLoopbackServer(server: Server): Promise<number> {
@@ -435,6 +459,31 @@ async function closeServer(server: Server): Promise<void> {
 }
 
 describe("OpenAI Codex OAuth bounded token response reads", () => {
+  it("retains an unrotated refresh token from a real loopback HTTP response", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ access_token: "loopback-renewed-access", expires_in: 3600 }));
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => undefined);
+
+    try {
+      ssrfMocks.fetchWithSsrFGuard.mockImplementationOnce(async ({ init, signal }) => ({
+        response: await globalThis.fetch(`http://127.0.0.1:${port}`, { ...init, signal }),
+        release,
+      }));
+
+      await expect(refreshOpenAIAccessToken("loopback-existing-refresh")).resolves.toMatchObject({
+        type: "success",
+        access: "loopback-renewed-access",
+        refresh: "loopback-existing-refresh",
+      });
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it.each([
     { operation: "exchange", envelope: "null", value: null },
     { operation: "exchange", envelope: "array", value: [] },

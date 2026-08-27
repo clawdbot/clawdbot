@@ -292,6 +292,42 @@ describe("nodeHandlers node.runnerInventory.update", () => {
     runtime.nodeRegistry.unregister("conn-1");
   });
 
+  it("publishes and retires negotiated portal-stream capability without exposing a private command", async () => {
+    const inventoryChanged = vi.fn();
+    const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
+    setNodeRunnerStateChangedListener(runtime.nodeRegistry, inventoryChanged);
+    const client = createWorkerSupervisorNodeClient();
+    runtime.nodeRegistry.register(client, {
+      pairingIdentity: "identity-1",
+      pairingGeneration: "generation-1",
+    });
+    const publish = async (portalStream: boolean) => {
+      await runnerInventoryHandler(
+        runnerInventoryOptions({
+          nodeRegistry: runtime.nodeRegistry,
+          client,
+          declaration: {
+            ...availableHost,
+            workerHost: {
+              ...availableHost.workerHost,
+              ...(portalStream ? { portalStream: 1 } : {}),
+            },
+          },
+        }),
+      );
+      const [proof] = await runtime.nodeWorkerSupervisorTransport.listCurrentNodes();
+      return proof;
+    };
+
+    expect((await publish(false))?.workerHost.portalStream).toBeUndefined();
+    const supported = await publish(true);
+    expect(supported?.workerHost.portalStream).toBe(1);
+    expect(supported?.commands).not.toContain("worker.portal.stream.v1");
+    expect((await publish(false))?.workerHost.portalStream).toBeUndefined();
+    expect(inventoryChanged).toHaveBeenCalledTimes(3);
+    runtime.nodeRegistry.unregister("conn-1");
+  });
+
   it("requires a fresh current-generation publication after same-connection promotion", async () => {
     const runtime = createNodeRegistryRuntime(() => new NodeRegistry());
     const client = createWorkerSupervisorNodeClient();
@@ -681,6 +717,13 @@ describe("nodeHandlers node.runnerInventory.update", () => {
       params: {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, bundleStatus: 2 },
+      },
+    },
+    {
+      name: "unsupported portal stream version",
+      params: {
+        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+        workerHost: { enabled: true, capacity: AVAILABLE_CAPACITY, portalStream: 2 },
       },
     },
     {

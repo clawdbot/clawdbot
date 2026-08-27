@@ -1,6 +1,9 @@
 // Parallels Windows Git tests cover host-side MinGit preparation.
+import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const { runMock } = vi.hoisted(() => ({
   runMock: vi.fn(),
@@ -18,17 +21,47 @@ vi.mock("../../scripts/e2e/parallels/host-command.ts", async (importOriginal) =>
 
 import { prepareMinGitZip } from "../../scripts/e2e/parallels/windows-git.ts";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  runMock.mockReset();
+});
+
+function mockMinGitDownload(params: {
+  assetName: string;
+  assetUrl: string;
+  expectedSha256: string;
+  payload: Buffer;
+}): void {
+  runMock.mockImplementation((command: string, args: string[]) => {
+    if (command === "python3") {
+      return {
+        status: 0,
+        stderr: "",
+        stdout: `${params.assetName}\n${params.assetUrl}\nsha256:${params.expectedSha256}\n`,
+      };
+    }
+    if (command === "curl") {
+      const outputIndex = args.indexOf("-o");
+      const destination = args[outputIndex + 1];
+      if (!destination) {
+        throw new Error("curl output path missing");
+      }
+      writeFileSync(destination, params.payload);
+    }
+    return { status: 0, stderr: "", stdout: "" };
+  });
+}
+
 describe("Parallels Windows MinGit preparation", () => {
-  it("bounds the host asset download across connections, transfers, and retries", async () => {
-    const assetName = "MinGit-2.55.0.3-64-bit.zip";
+  it("bounds and verifies the host asset download", async () => {
+    const assetName = "MinGit-2.55.0.4-64-bit.zip";
     const assetUrl = `https://example.test/${assetName}`;
-    const targetDir = path.join("tmp", "windows-smoke");
+    const targetDir = tempDirs.make("openclaw-windows-smoke-");
     const targetPath = path.join(targetDir, assetName);
-    runMock.mockImplementation((command: string) => ({
-      status: 0,
-      stderr: "",
-      stdout: command === "python3" ? `${assetName}\n${assetUrl}\n` : "",
-    }));
+    const payload = Buffer.from("verified MinGit archive");
+    const expectedSha256 = createHash("sha256").update(payload).digest("hex");
+    mockMinGitDownload({ assetName, assetUrl, expectedSha256, payload });
 
     await expect(prepareMinGitZip(targetDir)).resolves.toBe(targetPath);
     expect(runMock).toHaveBeenCalledWith(
@@ -52,5 +85,19 @@ describe("Parallels Windows MinGit preparation", () => {
       ],
       { timeoutMs: 270_000 },
     );
+  });
+
+  it("rejects a MinGit fallback whose bytes do not match the release digest", async () => {
+    const assetName = "MinGit-2.55.0.4-arm64.zip";
+    const assetUrl = `https://example.test/${assetName}`;
+    const targetDir = tempDirs.make("openclaw-windows-smoke-");
+    mockMinGitDownload({
+      assetName,
+      assetUrl,
+      expectedSha256: "0".repeat(64),
+      payload: Buffer.from("tampered MinGit archive"),
+    });
+
+    await expect(prepareMinGitZip(targetDir)).rejects.toThrow("MinGit SHA-256 mismatch");
   });
 });

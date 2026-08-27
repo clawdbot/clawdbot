@@ -904,12 +904,6 @@ h3.plugins-subheader {
 
 /* ---------- responsive ---------- */
 
-@media (max-width: 768px) {
-  .plugins-content-header {
-    display: flex;
-  }
-}
-
 @media (max-width: 560px) {
   .plugins-toolbar--fields > .settings-segmented {
     height: auto;

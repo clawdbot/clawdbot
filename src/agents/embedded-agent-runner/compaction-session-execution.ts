@@ -302,6 +302,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               model: modelId,
               api: effectiveModel.api,
               transport: session.agent.transport,
+              requestTimeoutMs: compactionTimeoutMs,
               contextTokenBudget,
               trace: compactionModelCallTrace,
               contentCapture: resolveDiagnosticModelContentCapturePolicy(params.config),

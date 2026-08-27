@@ -55,8 +55,48 @@ export type SessionTranscriptProjectionState = {
   needsRebuild: boolean;
 };
 
+// FTS rebuilds cost about 60 ms per 1,000 events/1 MiB on dev hardware; cap synchronous
+// work near a 250 ms event-loop stall and leave larger projections to the reconcile worker.
+export const SYNC_REBUILD_MAX_ROWS = 4_000;
+export const SYNC_REBUILD_MAX_BYTES = 4 * 1024 * 1024;
+
 function getIndexKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<TranscriptIndexDatabase>(db);
+}
+
+/** Size the old projection and incoming rows before their owning transaction mutates either. */
+export function shouldRebuildSessionTranscriptIndexSynchronously(
+  db: DatabaseSync,
+  sessionId: string,
+  events: readonly unknown[] = [],
+): boolean {
+  if (events.length > SYNC_REBUILD_MAX_ROWS) {
+    return false;
+  }
+  const stored = executeSqliteQueryTakeFirstSync(
+    db,
+    getIndexKysely(db)
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.countAll<number>().as("event_count"),
+        eb.fn.sum<number>(eb.fn<number>("length", ["event_json"])).as("event_bytes"),
+      ])
+      .where("session_id", "=", sessionId),
+  );
+  if ((stored?.event_count ?? 0) + events.length > SYNC_REBUILD_MAX_ROWS) {
+    return false;
+  }
+  let bytes = stored?.event_bytes ?? 0;
+  if (bytes > SYNC_REBUILD_MAX_BYTES) {
+    return false;
+  }
+  for (const event of events) {
+    bytes += JSON.stringify(event).length;
+    if (bytes > SYNC_REBUILD_MAX_BYTES) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function readSessionTranscriptProjectionState(
@@ -310,7 +350,10 @@ function applyForwardIndex(
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
-function markSessionTranscriptIndexDirtyInTransaction(db: DatabaseSync, sessionId: string): void {
+export function markSessionTranscriptIndexDirtyInTransaction(
+  db: DatabaseSync,
+  sessionId: string,
+): void {
   const now = Date.now();
   const watermark = readSessionTranscriptProjectionState(db, sessionId);
   writeWatermark(

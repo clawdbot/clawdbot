@@ -451,7 +451,7 @@ suite.define(() => {
           .evaluateAll((items) => items.map((item) => item.getAttribute("role"))),
       ).toEqual(["listitem", "listitem"]);
       const openclawProject = section.locator(
-        '[data-session-catalog-project="/Users/dev/openclaw"]',
+        '[data-session-catalog-project="project:/Users/dev/openclaw"]',
       );
       const openclawProjectItem = openclawProject.locator("..");
       const openclawProjectList = openclawProjectItem.locator(":scope > [role=list]");
@@ -504,12 +504,8 @@ suite.define(() => {
       // instead of reserving a phantom second line.
       for (const metric of threadRowMetrics) {
         expect(metric.singleLine).toBe(true);
+        expect(metric.height).toBeCloseTo(30, 1);
       }
-      const singleLineHeights = new Set(threadRowMetrics.map((metric) => metric.height));
-      expect(singleLineHeights.size).toBe(1);
-      const [collapsedHeight] = [...singleLineHeights];
-      // Collapsed rows sit on the 30px min-height floor; renderer sub-pixels vary.
-      expect(collapsedHeight).toBeCloseTo(30, 1);
       for (const metric of threadRowMetrics) {
         expect(metric).toMatchObject({
           minHeight: "30px",
@@ -549,7 +545,7 @@ suite.define(() => {
       expect(projectLabelTone.distanceToText).toBeLessThan(projectLabelTone.distanceToMuted);
       expect(
         await section
-          .locator('[data-session-catalog-project="/Users/dev/other"]')
+          .locator('[data-session-catalog-project="project:/Users/dev/other"]')
           .locator(".sidebar-session-catalog-project__label")
           .textContent(),
       ).toBe("other");
@@ -639,7 +635,7 @@ suite.define(() => {
           (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
           collapsedSessionSectionsStorageKey,
         ),
-      ).toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+      ).toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       await openclawProject.click();
       await expect.poll(() => openclawProject.getAttribute("aria-expanded")).toBe("true");
@@ -650,7 +646,7 @@ suite.define(() => {
           (key) => JSON.parse(localStorage.getItem(key) ?? "[]"),
           collapsedSessionSectionsStorageKey,
         ),
-      ).not.toContain("catalog-project:codex:gateway:local:/Users/dev/openclaw");
+      ).not.toContain("catalog-project:codex:gateway:local:project:/Users/dev/openclaw");
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
@@ -969,15 +965,15 @@ suite.define(() => {
         (request) => (request.params as { agentId?: string } | undefined)?.agentId === "main",
       ),
     ).toBe(true);
-    const read = await gateway.waitForRequest("sessions.catalog.read");
-    expect(read.params).toMatchObject({
+    expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
       agentId: "main",
       catalogId: "codex",
       hostId: "gateway:local",
       threadId: "thread-1",
     });
     const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
-    await composer.fill("continue with the final checks");
+    await composer.fill("continue with the final checks /status");
+    expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
     await gateway.setMethodResponse("sessions.list", {
       count: 1,
       defaults: {
@@ -1011,7 +1007,7 @@ suite.define(() => {
     const sent = await gateway.waitForRequest("chat.send");
     expect(sent.params).toMatchObject({
       sessionKey: "agent:main:adopted-codex",
-      message: "continue with the final checks",
+      message: "continue with the final checks /status",
     });
     await expect
       .poll(() => new URL(page.url()).pathname)

@@ -155,7 +155,11 @@ extension OnboardingView {
         guard !configuredGatewayProbe.isSuppressedForTemporaryConnectionCheck else { return nil }
         // Persist the latest selection before GatewayEndpointStore resolves the
         // route, so an immediate probe cannot attach to the previous endpoint.
-        guard gatewaySelectionPersister() else { return nil }
+        guard gatewaySelectionPersister() else {
+            self.aiSetup.showConfiguredGatewayProbeUnavailable(
+                summary: "Could not save Gateway settings. Check your connection settings and try again.")
+            return nil
+        }
         let expectedMode = state.connectionMode
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         let expectedPendingState = OnboardingSystemAgentResumeStore.pendingState(

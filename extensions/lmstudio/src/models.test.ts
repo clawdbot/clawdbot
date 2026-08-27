@@ -249,6 +249,7 @@ describe("lmstudio-models", () => {
       supportsTemperature: false,
       supportsUsageInStreaming: false,
       supportsTools: false,
+      codeMode: "preferred",
       supportsStrictMode: false,
       supportsJsonSchemaResponseFormat: false,
       requiresStringContent: true,
@@ -294,6 +295,7 @@ describe("lmstudio-models", () => {
           supportsPromptCacheKey: 1,
           visibleReasoningDetailTypes: ["reasoning.summary", 1],
           maxTokensField: "max_output_tokens",
+          codeMode: "unsupported",
           thinkingFormat: "unsupported",
           toolSchemaProfile: 1,
           unsupportedToolSchemaKeywords: ["additionalProperties", ""],
@@ -895,8 +897,9 @@ describe("lmstudio-models", () => {
     expect(bytesEmitted).toBeLessThan(32 * 1024 * 1024);
   });
 
-  it("bounds model load error bodies", async () => {
-    const body = `${"lmstudio load unavailable ".repeat(512)}tail`;
+  it("suppresses truncated model load error bodies", async () => {
+    const credential = "split-credential-xyz";
+    const body = `${"x".repeat(8 * 1024 - 2)}${credential}${"y".repeat(1000)}`;
     const tracked = cancelTrackedResponse(body, { status: 503 });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
     const fetchMock = vi.fn(async (url: string | URL) => {
@@ -914,15 +917,104 @@ describe("lmstudio-models", () => {
 
     const error = await ensureLmstudioModelLoaded({
       baseUrl: "http://localhost:1234/v1",
+      apiKey: credential,
       modelKey: "qwen3-8b-instruct",
     }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(
-      /LM Studio model load failed \(503\): lmstudio load unavailable/,
-    );
-    expect((error as Error).message).not.toContain("tail");
+    expect((error as Error).message).toBe("LM Studio model load failed (503)");
+    expect((error as Error).message).not.toContain(credential);
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    name: string;
+    params: Pick<Parameters<typeof ensureLmstudioModelLoaded>[0], "apiKey" | "headers">;
+    body: string;
+    status: number;
+    expected: string;
+  }>([
+    {
+      name: "redacts trimmed short API keys without losing safe diagnostics",
+      params: { apiKey: "  sk-test  " },
+      body: "upstream rejected Bearer sk-test; GPU out of memory",
+      status: 502,
+      expected: "LM Studio model load failed (502): upstream rejected ***; GPU out of memory",
+    },
+    {
+      name: "redacts bare credentials from lowercase header-only bearer auth",
+      params: { headers: { authorization: "bearer opaque-short" } },
+      body: "upstream rejected opaque-short",
+      status: 502,
+      expected: "LM Studio model load failed (502): upstream rejected ***",
+    },
+    {
+      name: "redacts opaque custom authentication header values",
+      params: { headers: { "X-Proxy-Auth": "proxy-p7" } },
+      body: "proxy rejected proxy-p7",
+      status: 502,
+      expected: "LM Studio model load failed (502): proxy rejected ***",
+    },
+    {
+      name: "redacts overlapping credentials longest first",
+      params: { apiKey: "abc", headers: { "X-Proxy-Auth": "abcdef" } },
+      body: "proxy rejected abcdef and abc",
+      status: 502,
+      expected: "LM Studio model load failed (502): proxy rejected *** and ***",
+    },
+    {
+      name: "redacts only the authorization value actually sent",
+      params: { apiKey: "fresh", headers: { Authorization: "Bearer replaced-old" } },
+      body: "stale replaced-old; active fresh",
+      status: 502,
+      expected: "LM Studio model load failed (502): stale replaced-old; active ***",
+    },
+    {
+      name: "preserves synthetic markers and the generated content type",
+      params: { apiKey: "lmstudio-local" },
+      body: "lmstudio-local rejected application/json; GPU out of memory",
+      status: 502,
+      expected:
+        "LM Studio model load failed (502): lmstudio-local rejected application/json; GPU out of memory",
+    },
+    {
+      name: "redacts unrelated recognizable provider credentials",
+      params: {},
+      body: "upstream Authorization: Bearer sk-test",
+      status: 502,
+      expected: "LM Studio model load failed (502): upstream Authorization: Bearer ***",
+    },
+    {
+      name: "redacts reflected credentials in successful unexpected statuses",
+      params: { headers: { authorization: "bearer opaque-short" } },
+      body: "backend rejected opaque-short",
+      status: 200,
+      expected: "LM Studio model load returned unexpected status: backend rejected ***",
+    },
+  ])("$name", async ({ params, body, status, expected }) => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return jsonResponse({
+          models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+        });
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return status === 200 ? jsonResponse({ status: body }) : new Response(body, { status });
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    const error = await ensureLmstudioModelLoaded({
+      baseUrl: "http://localhost:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      ...params,
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      message: expected,
+      resolvedModelKey: "qwen3-8b-instruct",
+    });
   });
 
   it("loads model with clamped context length and merged headers", async () => {

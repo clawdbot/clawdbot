@@ -10,7 +10,7 @@ import {
   type ResolvedCliBackend,
 } from "../agents/cli-backends.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { getClaudeGeneration } from "../agents/cli-runner/claude-live-registry.js";
+import { getCliLiveSessionGeneration } from "../agents/cli-runner/cli-live-session-registry.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
@@ -284,11 +284,6 @@ describeLive("gateway live (cli backend)", () => {
 
       clearRuntimeConfigSnapshot();
       applyCliBackendLiveEnv(preservedEnv);
-      if (CLI_CACHE_PROBE) {
-        // Cache proof crosses the production prepared-runtime and MCP dispatch boundary.
-        // Minimal Gateway mode intentionally omits that publication and cannot prove this path.
-        setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
-      }
 
       const token = `test-${randomUUID()}`;
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
@@ -643,7 +638,7 @@ describeLive("gateway live (cli backend)", () => {
         }
         logCliBackendLiveStep("agent-request:done", { status: payload?.status });
 
-        let cacheProbeOwner: Parameters<typeof getClaudeGeneration>[0] | undefined;
+        let cacheProbeOwner: Parameters<typeof getCliLiveSessionGeneration>[0] | undefined;
         let cacheProbeSteadyGeneration: string | undefined;
         if (CLI_CACHE_PROBE) {
           const history = await activeClient.request<{ sessionId?: string }>("chat.history", {
@@ -742,7 +737,7 @@ describeLive("gateway live (cli backend)", () => {
           ).toBe(true);
         } else if (CLI_RESUME) {
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
-          let continuityOwner: Parameters<typeof getClaudeGeneration>[0] | undefined;
+          let continuityOwner: Parameters<typeof getCliLiveSessionGeneration>[0] | undefined;
           let expectedLiveSessionGeneration: string | undefined;
           if (resumeContinuityProbe) {
             const nativeHistory = await activeClient.request<{
@@ -750,7 +745,9 @@ describeLive("gateway live (cli backend)", () => {
               sessionId?: string;
             }>("chat.history", { sessionKey });
             const cliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
-            expect(JSON.stringify(nativeHistory.messages ?? [])).toContain(memoryToken);
+            // Hook-only runtime context belongs to the provider session, not the operator-visible
+            // transcript. The resumed reply below proves that the live provider retained it.
+            expect(JSON.stringify(nativeHistory.messages ?? [])).not.toContain(memoryToken);
             expect(cliSessionId).toBeTruthy();
             const continuitySessionId = nativeHistory.sessionId;
             expect(continuitySessionId).toBeTruthy();
@@ -763,7 +760,7 @@ describeLive("gateway live (cli backend)", () => {
               sessionId: continuitySessionId,
               sessionKey,
             };
-            expectedLiveSessionGeneration = getClaudeGeneration(continuityOwner);
+            expectedLiveSessionGeneration = getCliLiveSessionGeneration(continuityOwner);
             expect(expectedLiveSessionGeneration).toBeTruthy();
           }
           const resumePayload = await requestWithCodexTimeoutRetry(
@@ -803,10 +800,6 @@ describeLive("gateway live (cli backend)", () => {
           const resumeText = extractPayloadText(resumePayload?.result);
           if (CLI_CACHE_PROBE) {
             expect(resumeText).toContain(schemaProbePlugin?.resultToken);
-            // The first turn advertises one bootstrap-only tool. Establish the process baseline
-            // after that tool retires so steady-turn reuse is not confused with valid schema drift.
-            cacheProbeSteadyGeneration = getClaudeGeneration(cacheProbeOwner!);
-            expect(cacheProbeSteadyGeneration).toBeTruthy();
           } else if (providerId === "codex-cli") {
             expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
           } else if (resumeContinuityProbe) {
@@ -815,7 +808,9 @@ describeLive("gateway live (cli backend)", () => {
             if (!continuityOwner || !expectedLiveSessionGeneration) {
               throw new Error("Claude CLI continuity probe lost its live-session generation");
             }
-            expect(getClaudeGeneration(continuityOwner)).toBe(expectedLiveSessionGeneration);
+            expect(getCliLiveSessionGeneration(continuityOwner)).toBe(
+              expectedLiveSessionGeneration,
+            );
           } else {
             expect(
               matchesCliBackendReply(resumeText, `CLI backend RESUME OK ${resumeNonce}.`),
@@ -851,6 +846,19 @@ describeLive("gateway live (cli backend)", () => {
               expect(extractPayloadText(probePayload.result)).toContain(marker);
               return logCliCacheUsage(turn, probePayload.result);
             };
+            const settleNonce = randomBytes(3).toString("hex").toUpperCase();
+            const settleHitRate = await requestCacheProbeTurn(
+              "resume1-settle",
+              `CLI-CACHE-SETTLE-${settleNonce}`,
+            );
+            if (settleHitRate === undefined) {
+              return;
+            }
+            // The first turn advertises one bootstrap-only tool. Allow the no-tool settle turn to
+            // run hot or cold, then capture the steady process after any valid schema rotation.
+            cacheProbeSteadyGeneration = getCliLiveSessionGeneration(cacheProbeOwner!);
+            expect(cacheProbeSteadyGeneration).toBeTruthy();
+
             const cacheNonce = randomBytes(3).toString("hex").toUpperCase();
             // Dirty the workspace between captured turns while the compatible Claude flag keeps
             // its native Git-status section out of the stable prompt prefix.
@@ -863,7 +871,7 @@ describeLive("gateway live (cli backend)", () => {
               return;
             }
             expect(cacheHitRate).toBeGreaterThanOrEqual(CLI_BACKEND_MIN_CACHE_HIT_RATE);
-            expect(getClaudeGeneration(cacheProbeOwner!)).toBe(cacheProbeSteadyGeneration);
+            expect(getCliLiveSessionGeneration(cacheProbeOwner!)).toBe(cacheProbeSteadyGeneration);
 
             const thinkingPatchPayload = await activeClient.request("sessions.patch", {
               key: sessionKey,
@@ -890,7 +898,7 @@ describeLive("gateway live (cli backend)", () => {
             // models that render the thinking configuration ahead of them. Assert the required
             // process rotation here; the following steady turn proves the new prefix is reusable.
             // https://platform.claude.com/docs/en/build-with-claude/prompt-caching#what-invalidates-the-cache
-            const switchedGeneration = getClaudeGeneration(cacheProbeOwner!);
+            const switchedGeneration = getCliLiveSessionGeneration(cacheProbeOwner!);
             expect(switchedGeneration).toBeTruthy();
             expect(switchedGeneration).not.toBe(cacheProbeSteadyGeneration);
 
@@ -903,7 +911,7 @@ describeLive("gateway live (cli backend)", () => {
               return;
             }
             expect(steadyHitRate).toBeGreaterThanOrEqual(CLI_BACKEND_MIN_CACHE_HIT_RATE);
-            expect(getClaudeGeneration(cacheProbeOwner!)).toBe(switchedGeneration);
+            expect(getCliLiveSessionGeneration(cacheProbeOwner!)).toBe(switchedGeneration);
           }
         }
 

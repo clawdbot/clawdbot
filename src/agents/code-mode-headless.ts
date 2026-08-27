@@ -86,7 +86,7 @@ function headlessFailure(params: {
 }
 
 function remainingHeadlessMs(deadline: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = Math.ceil(deadline - performance.now());
   if (remaining <= 0) {
     throw new CodeModeHeadlessTimeoutError();
   }
@@ -209,7 +209,7 @@ export async function runCodeModeScriptHeadless(params: {
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
-  const deadline = Date.now() + wallClockMs;
+  const deadline = performance.now() + wallClockMs;
   const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
   const output: unknown[] = [];
   let pending: PendingBridgeState[] = [];
@@ -220,13 +220,14 @@ export async function runCodeModeScriptHeadless(params: {
     const codeModeRunId = `cm_headless_${randomUUID()}`;
     const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
       prepareInput: true,
+      validateInput: true,
     });
     const bridgeDispatch = createCodeModeBridgeDispatchState();
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const preparedSource = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      deadlineMs: deadline,
+      remainingMs: remainingHeadlessMs(deadline),
       signal: abortScope.signal,
       createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
       createAbortError: headlessAbortError,
@@ -311,7 +312,7 @@ export async function runCodeModeScriptHeadless(params: {
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,
-          deadlineMs: deadline,
+          remainingMs: remainingHeadlessMs(deadline),
           ctx: params.ctx,
           signal: abortScope.signal,
           bridgeDispatch,
@@ -331,7 +332,7 @@ export async function runCodeModeScriptHeadless(params: {
       }
       await awaitCodeModeDeadline({
         operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
-        deadlineMs: deadline,
+        remainingMs: remainingHeadlessMs(deadline),
         signal: abortScope.signal,
         createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
         createAbortError: headlessAbortError,

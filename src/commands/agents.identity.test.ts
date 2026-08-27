@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   baseConfigSnapshot,
@@ -64,6 +65,21 @@ async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity =
     config: { agents: { entries: { main: { workspace } } } },
   });
   await agentsSetIdentityCommand({ workspace, fromIdentity }, runtime);
+}
+
+async function expectIdentityCommandFailure(
+  options: Parameters<typeof agentsSetIdentityCommand>[0],
+  message: string,
+) {
+  await expect(agentsSetIdentityCommand(options, runtime)).rejects.toMatchObject({
+    name: "ExpectedCliError",
+    message,
+    humanOutput: message,
+    machineOutput: message,
+  });
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(runtime.exit).not.toHaveBeenCalled();
+  expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
 }
 
 describe("agents set-identity command", () => {
@@ -130,7 +146,8 @@ describe("agents set-identity command", () => {
 
   it("errors when multiple agents match the same workspace", async () => {
     const { workspace } = await createIdentityWorkspace("shared");
-    await writeIdentityFile(workspace, ["- Name: Echo"]);
+    const identityPath = await writeIdentityFile(workspace, ["- Name: Echo"]);
+    const originalIdentity = await fs.readFile(identityPath, "utf8");
 
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -141,13 +158,28 @@ describe("agents set-identity command", () => {
       },
     });
 
-    await agentsSetIdentityCommand({ workspace }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expectIdentityCommandFailure(
+      { workspace },
       `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`,
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
+  });
+
+  it("rejects an unmatched workspace before reading or changing its identity file", async () => {
+    const { workspace } = await createIdentityWorkspace("unmatched");
+    const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
+    const originalIdentity = await fs.readFile(identityPath, "utf8");
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: {} } } },
+    });
+
+    await expectIdentityCommandFailure(
+      { workspace, name: "Override", json: true },
+      `No agent workspace matches ${workspace}. Pass --agent to target a specific agent.`,
+    );
+
+    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
   });
 
   it("overrides identity file values with explicit flags", async () => {
@@ -269,13 +301,10 @@ describe("agents set-identity command", () => {
         config: { agents: { entries: { main: {} } } },
       });
 
-      await agentsSetIdentityCommand({ agent, name: "Ghost" }, runtime);
-
-      expect(runtime.error).toHaveBeenCalledWith(
+      await expectIdentityCommandFailure(
+        { agent, name: "Ghost", json: true },
         `Agent "${agent}" not found. Create it with \`openclaw agents add\`.`,
       );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     },
   );
 
@@ -287,15 +316,25 @@ describe("agents set-identity command", () => {
         config: { agents: { entries: { ops: {} } } },
       });
 
-      await agentsSetIdentityCommand({ agent: agentId, name: "Hijack" }, runtime);
-
-      expect(runtime.error).toHaveBeenCalledWith(
+      await expectIdentityCommandFailure(
+        { agent: agentId, name: "Hijack" },
         `Agent "${agentId}" not found. Create it with \`openclaw agents add\`.`,
       );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects an unknown agent before attempting to read its explicit identity file", async () => {
+    const { workspace } = await createIdentityWorkspace();
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: { workspace } } } },
+    });
+
+    await expectIdentityCommandFailure(
+      { agent: "ghost", identityFile: path.join(workspace, "missing.md"), json: true },
+      'Agent "ghost" not found. Create it with `openclaw agents add`.',
+    );
+  });
 
   it("still updates a real existing agent", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
@@ -353,27 +392,55 @@ describe("agents set-identity command", () => {
       config: { agents: { entries: { main: {} } } },
     });
 
-    await agentsSetIdentityCommand({ agent: "main", identityFile: identityPath }, runtime);
+    const originalIdentity = await fs.readFile(identityPath, "utf8");
+    const error = await agentsSetIdentityCommand(
+      { agent: "main", identityFile: identityPath, json: true },
+      runtime,
+    ).catch((caught: unknown) => caught);
 
-    const renderedError = String(runtime.error.mock.calls[0]?.[0]);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    const renderedError = (error as ExpectedCliError).message;
     expect(renderedError).toContain(
       `Identity file ${identityPath} exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
     );
     expect(renderedError).toContain(`File exceeds ${TEST_MAX_IDENTITY_FILE_BYTES} bytes:`);
     expect(renderedError).toContain("too-large");
-    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect((error as ExpectedCliError).humanOutput).toBe(renderedError);
+    expect((error as ExpectedCliError).machineOutput).toBe(renderedError);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
   });
 
   it("errors when identity data is missing", async () => {
     const { workspace } = await createIdentityWorkspace();
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: { workspace } } } },
+    });
 
-    await runIdentityCommandFromWorkspace(workspace);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expectIdentityCommandFailure(
+      { workspace, fromIdentity: true, json: true },
       `No identity data found in ${path.join(workspace, "IDENTITY.md")}.`,
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+    await expect(fs.access(path.join(workspace, "IDENTITY.md"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("leaves unexpected configuration write failures with the shared root owner", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { entries: { main: {} } } },
+    });
+    const writeFailure = new Error("configuration storage is unavailable");
+    configMocks.replaceConfigFile.mockRejectedValueOnce(writeFailure);
+
+    await expect(
+      agentsSetIdentityCommand({ agent: "main", name: "Updated", json: true }, runtime),
+    ).rejects.toBe(writeFailure);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });

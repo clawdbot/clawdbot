@@ -20,7 +20,7 @@ scenario:
   codeRefs:
     - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
     - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
-    - src/agents/embedded-agent-runner/run/code-mode-repair.ts
+    - src/agents/embedded-agent-runner/run/code-mode-outcome.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow

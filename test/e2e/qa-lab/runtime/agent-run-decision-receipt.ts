@@ -109,11 +109,18 @@ function assertNoGenericApprovalDuplicate(
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get("execution_decision_facts");
     if (table) {
-      const count = database
-        .prepare("SELECT COUNT(*) AS count FROM execution_decision_facts")
-        .get() as { count: number };
-      if (count.count !== 0) {
-        throw new Error("operator approval was duplicated into execution_decision_facts");
+      const rows = database
+        .prepare(
+          `SELECT action_family, reason_code, owner
+           FROM execution_decision_facts
+           WHERE owner = 'tool-action' AND reason_code = 'generic_action_attributed'
+           ORDER BY occurred_at, receipt_id`,
+        )
+        .all();
+      if (rows.length !== 0) {
+        throw new Error(
+          `operator approval was duplicated into execution_decision_facts: ${JSON.stringify(rows)}`,
+        );
       }
     }
   } finally {

@@ -75,6 +75,7 @@ export const SessionRowSchema = Type.Object(
     pinnedAt: Type.Optional(Type.Number()),
     unread: Type.Optional(Type.Boolean()),
     lastReadAt: Type.Optional(Type.Number()),
+    markedUnreadAt: Type.Optional(Type.Number()),
     lastActivityAt: Type.Optional(Type.Number()),
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(
@@ -151,6 +152,10 @@ export const SessionRowSchema = Type.Object(
     estimatedCostUsd: Type.Optional(Type.Number()),
     model: Type.Optional(Type.String()),
     modelProvider: Type.Optional(Type.String()),
+    /** Persisted override provenance; null means inherited, omission means not projected. */
+    modelOverrideSource: Type.Optional(
+      Type.Union([Type.Literal("user"), Type.Literal("auto"), Type.Null()]),
+    ),
     toolOverrides: Type.Optional(SessionToolOverridesSchema),
   },
   { additionalProperties: true },
