@@ -415,6 +415,81 @@ describe("cli session history", () => {
     });
   });
 
+  it("records internal_system provenance for harness-injected user turns only", async () => {
+    await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
+      await fs.writeFile(
+        filePath,
+        [
+          {
+            type: "user",
+            uuid: "operator-1",
+            timestamp: "2026-03-26T16:29:54.800Z",
+            message: { role: "user", content: "run the review" },
+          },
+          {
+            type: "user",
+            uuid: "skill-meta-1",
+            isMeta: true,
+            sourceToolUseID: "toolu_skill",
+            timestamp: "2026-03-26T16:29:55.000Z",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+                },
+              ],
+            },
+          },
+          {
+            type: "user",
+            uuid: "compact-summary-1",
+            isCompactSummary: true,
+            timestamp: "2026-03-26T16:29:56.000Z",
+            message: {
+              role: "user",
+              content: "This session is being continued from a previous conversation.",
+            },
+          },
+          {
+            type: "user",
+            uuid: "transcript-only-1",
+            isVisibleInTranscriptOnly: true,
+            timestamp: "2026-03-26T16:29:57.000Z",
+            message: {
+              role: "user",
+              content: "Transcript-only synthetic context row.",
+            },
+          },
+        ]
+          .map((line) => JSON.stringify(line))
+          .join("\n"),
+        "utf-8",
+      );
+
+      const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
+
+      expect(messages).toHaveLength(4);
+      // The operator-authored turn stays free of injected provenance.
+      expectFields(messages[0], { role: "user" });
+      expect(readRecord(messages[0]).provenance).toBeUndefined();
+      // Harness-written turns carry the provenance recorded by the CLI flags.
+      expectFields(readRecord(messages[1]).provenance, {
+        kind: "internal_system",
+        sourceTool: "cli_harness_context",
+      });
+      expectFields(readRecord(messages[2]).provenance, {
+        kind: "internal_system",
+        sourceTool: "cli_harness_context",
+      });
+      expectFields(readRecord(messages[3]).provenance, {
+        kind: "internal_system",
+        sourceTool: "cli_harness_context",
+      });
+    });
+  });
+
   it("recovers the current user text from legacy reseed envelopes", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       const reseedPrompt = buildLegacyReseedPrompt();

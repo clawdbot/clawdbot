@@ -1907,8 +1907,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-board-glyph svg {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.7px;

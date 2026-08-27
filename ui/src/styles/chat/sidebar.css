@@ -1811,59 +1811,60 @@ openclaw-session-discussion {
 }
 
 /* Code syntax palette is shared with highlighted message code via base tokens. */
-.file-view .tok-comment {
+:is(.file-view, .code-highlight) .tok-comment {
   color: var(--muted);
   font-style: italic;
 }
 
-.file-view .tok-keyword {
+:is(.file-view, .code-highlight) .tok-keyword {
   color: var(--hljs-keyword);
 }
 
-.file-view
+:is(.file-view, .code-highlight)
   :where(.tok-number, .tok-literal, .tok-atom, .tok-bool, .tok-variableName, .tok-variableName2) {
   color: var(--hljs-number);
 }
 
-.file-view :where(.tok-string, .tok-string2) {
+:is(.file-view, .code-highlight) :where(.tok-string, .tok-string2) {
   color: var(--hljs-string);
 }
 
-.file-view :where(.tok-heading, .tok-definition) {
+:is(.file-view, .code-highlight) :where(.tok-heading, .tok-definition) {
   color: var(--hljs-title);
 }
 
-.file-view :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
+:is(.file-view, .code-highlight)
+  :where(.tok-typeName, .tok-className, .tok-namespace, .tok-macroName) {
   color: var(--hljs-type);
 }
 
-.file-view :where(.tok-propertyName, .tok-labelName) {
+:is(.file-view, .code-highlight) :where(.tok-propertyName, .tok-labelName) {
   color: var(--hljs-attribute);
 }
 
-.file-view :where(.tok-link, .tok-url) {
+:is(.file-view, .code-highlight) :where(.tok-link, .tok-url) {
   color: var(--accent-2);
 }
 
-.file-view .tok-meta {
+:is(.file-view, .code-highlight) .tok-meta {
   color: var(--hljs-meta);
 }
 
-.file-view .tok-deleted {
+:is(.file-view, .code-highlight) .tok-deleted {
   color: var(--hljs-deletion);
   background: var(--danger-subtle);
 }
 
-.file-view .tok-inserted {
+:is(.file-view, .code-highlight) .tok-inserted {
   color: var(--hljs-addition);
   background: var(--ok-subtle);
 }
 
-.file-view .tok-emphasis {
+:is(.file-view, .code-highlight) .tok-emphasis {
   font-style: italic;
 }
 
-.file-view .tok-strong {
+:is(.file-view, .code-highlight) .tok-strong {
   font-weight: 600;
 }
 

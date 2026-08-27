@@ -1963,6 +1963,45 @@ describe("buildCachedChatItems", () => {
     expect(filtered.some((item) => item.kind === "notice")).toBe(false);
   });
 
+  it("renders CLI harness-injected user turns as collapsed context, not operator bubbles", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          userMessage("run the review", 1000),
+          userMessage(
+            "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+            1001,
+            {
+              provenance: { kind: "internal_system", sourceTool: "cli_harness_context" },
+              __openclaw: {
+                id: "skill-meta-1",
+                importedFrom: "claude-cli",
+                cliSessionId: "cli-1",
+                externalId: "skill-meta-1",
+              },
+            },
+          ),
+          assistantMessage("review finished", 1002),
+        ],
+      }),
+    );
+
+    // The operator turn keeps its bubble; the injected turn becomes a
+    // collapsed system notice that does not start a new operator turn.
+    expect(items.map((item) => item.kind)).toEqual(["group", "notice", "group"]);
+    expect(items[0]).toMatchObject({ kind: "group", role: "user" });
+    expect(items[1]).toMatchObject({
+      kind: "notice",
+      icon: "cpu",
+      label: "System · injected context",
+      collapsedBody: true,
+      text: "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+      timestamp: 1001,
+    });
+    expect((items[1] as { startsTurn?: true }).startsTurn).toBeUndefined();
+    expect(items[2]).toMatchObject({ kind: "group", role: "assistant" });
+  });
+
   it("attributes assistant groups to the latest user in multi-sender threads", () => {
     const groups = messageGroups({
       messages: [

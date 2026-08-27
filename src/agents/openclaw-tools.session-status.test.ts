@@ -205,7 +205,12 @@ function createConfigModuleMock() {
 function createModelCatalogModuleMock() {
   return {
     loadProviderScopedThinkingCatalog: async () => [],
-    loadPreparedModelCatalog: async () => [
+    // A run's captured config goes stale after any Gateway config republish; the exact
+    // loader then throws, and session_status must read the published owner instead.
+    loadPreparedModelCatalog: async () => {
+      throw new Error("prepared model catalog owner config was replaced during the read (/tmp)");
+    },
+    loadPublishedPreparedModelCatalog: async () => [
       {
         provider: "anthropic",
         id: "claude-sonnet-4-6",

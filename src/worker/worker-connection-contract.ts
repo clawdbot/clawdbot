@@ -1,4 +1,5 @@
 import { toStructuredErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ClientOptions, WebSocket } from "ws";
 import type {
@@ -75,11 +76,41 @@ export class WorkerAdmissionError extends Error {
   }
 }
 
+// One worker admission window; the launch adapter also uses it to cap re-arms
+// within the minted credential's lifetime.
+export const WORKER_ADMISSION_DEADLINE_MS = 120_000;
+
 export class WorkerAdmissionDeadlineExceededError extends Error {
   constructor(diagnosis: string) {
     super(diagnosis);
     this.name = "WorkerAdmissionDeadlineExceededError";
   }
+}
+
+// Only the initial admission boundary can author this result. A reconnect deadline
+// after execution started cannot prove that replaying the turn is safe.
+export type WorkerAdmissionDeadlineResult = {
+  status: "not-started";
+  reason: "admission-deadline";
+  errorText: string;
+};
+
+export function parseWorkerAdmissionDeadlineResult(
+  value: unknown,
+): WorkerAdmissionDeadlineResult | undefined {
+  if (
+    isRecord(value) &&
+    Object.keys(value).length === 3 &&
+    value.status === "not-started" &&
+    value.reason === "admission-deadline" &&
+    typeof value.errorText === "string" &&
+    value.errorText.length > 0 &&
+    Buffer.byteLength(value.errorText, "utf8") <= 4_096 &&
+    !/[\r\n\0]/u.test(value.errorText)
+  ) {
+    return { status: value.status, reason: value.reason, errorText: value.errorText };
+  }
+  return undefined;
 }
 
 export class WorkerFencedError extends Error {

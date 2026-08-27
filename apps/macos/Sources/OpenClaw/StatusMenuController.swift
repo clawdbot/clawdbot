@@ -345,15 +345,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     private func scheduleDebugMenuOpen() {
         #if DEBUG
+        // launchctl setenv races `open`; arguments are reliable for captures.
+        let arguments = CommandLine.arguments
         let environment = ProcessInfo.processInfo.environment
-        if environment["OPENCLAW_DEBUG_OPEN_MENU"] == "1" {
+        func flag(_ env: String, _ arg: String) -> Bool {
+            environment[env] == "1" || arguments.contains(arg)
+        }
+        // Screenshot/demo helper: seed synthetic menu content so UI proof
+        // captures show populated rows without a configured gateway.
+        if flag("OPENCLAW_DEBUG_MENU_FIXTURES", "--debug-menu-fixtures") {
+            CronJobsStore.shared.seedDebugFixtureJobs()
+        }
+        if flag("OPENCLAW_DEBUG_OPEN_MENU", "--debug-open-menu") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button else { return }
                 self.statusItem?.menu = self.menu
                 button.performClick(nil)
             }
         }
-        if environment["OPENCLAW_DEBUG_PROBE_RIGHTCLICK"] == "1" {
+        if flag("OPENCLAW_DEBUG_PROBE_RIGHTCLICK", "--debug-probe-rightclick") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let self, let button = self.statusItem?.button,
                       let window = button.window else { return }

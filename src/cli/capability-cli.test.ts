@@ -202,12 +202,15 @@ const mocks = vi.hoisted(() => ({
   getProviderEnvVars: vi.fn((providerId: string) => [
     `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
   ]),
+  embedBatch: vi.fn(async (inputs: unknown[], options?: { inputType?: string }) =>
+    inputs.map(() => (options?.inputType === "document" ? [0.1, 0.2] : [9, 9])),
+  ),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
       id: "openai",
       model: "text-embedding-3-small",
-      embedQuery: async () => [0.1, 0.2],
-      embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
+      embed: async () => [0.1, 0.2],
+      embedBatch: (...args: Parameters<typeof mocks.embedBatch>) => mocks.embedBatch(...args),
       close: closeEmbeddingProviderMock,
     },
   })),
@@ -3682,6 +3685,8 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.capability).toBe("embedding.create");
     expect(firstJsonOutput()?.provider).toBe("openai");
     expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
+    expect(firstJsonOutput()).toMatchObject({ outputs: [{ embedding: [0.1, 0.2] }] });
+    expect(mocks.embedBatch).toHaveBeenCalledWith(["hello"], { inputType: "document" });
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3691,7 +3696,7 @@ describe("capability cli", () => {
       provider: {
         id: "openai",
         model: "text-embedding-3-small",
-        embedQuery: async () => [0.1, 0.2],
+        embed: async () => [0.1, 0.2],
         embedBatch: async () => {
           throw new Error("embedding failed");
         },

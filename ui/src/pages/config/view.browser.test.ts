@@ -877,6 +877,114 @@ describe("config view", () => {
     expect(onWebPushSubscribe).toHaveBeenCalledOnce();
   });
 
+  it.each(["tabs", "accordion"] as const)(
+    "groups channel settings without changing patch paths (%s)",
+    (settingsLayout) => {
+      const { container, props } = renderConfigView({
+        activeSection: "channels",
+        settingsLayout,
+        forceShowAdvanced: true,
+        schema: {
+          type: "object",
+          properties: {
+            channels: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                telegram: {
+                  type: "object",
+                  properties: { username: { type: "string", title: "Bot username" } },
+                },
+                "custom-chat": {
+                  anyOf: [
+                    { type: "object", properties: { room: { type: "string", title: "Room" } } },
+                    { type: "null" },
+                  ],
+                },
+                defaults: {
+                  type: "object",
+                  properties: { groupPolicy: { type: "string", title: "Group policy" } },
+                },
+                modelByChannel: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    additionalProperties: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+        },
+        uiHints: {
+          "channels.telegram": { label: "Telegram" },
+          "channels.custom-chat": { label: "Custom Chat" },
+          "channels.modelByChannel": { label: "Channel Model Overrides" },
+        },
+        formValue: {
+          channels: {
+            telegram: { username: "test_bot" },
+            "custom-chat": { room: "team" },
+            defaults: { groupPolicy: "allowlist" },
+            modelByChannel: {},
+          },
+        },
+      });
+      document.body.append(container);
+      try {
+        const picker = queryRequired(container, "select", HTMLSelectElement);
+        expect(picker.labels?.[0]?.textContent).toContain("Channel settings");
+        expect(Array.from(picker.options, (option) => option.textContent?.trim())).toEqual([
+          "Custom Chat",
+          "Telegram",
+          "Other",
+        ]);
+        expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
+        const content = () =>
+          normalizedText(queryRequired(container, ".settings-page", HTMLElement));
+        expect(content()).toContain("Group policy");
+        expect(content()).toContain("Channel Model Overrides");
+        expect(content()).not.toContain("Bot username");
+        props.onSubsectionChange = (key) => {
+          props.activeSubsection = key;
+          render(renderConfig(props), container);
+        };
+        render(renderConfig(props), container);
+        const choose = (key: string) => {
+          picker.value = key;
+          picker.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+        choose("telegram");
+        expect(content()).toContain("Bot username");
+        expect(content()).not.toContain("Group policy");
+        expect(content()).not.toContain("Room");
+        const username = queryRequired(container, 'input[type="text"]', HTMLInputElement);
+        expect(username.value).toBe("test_bot");
+        username.value = "updated_bot";
+        username.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(props.onFormPatch).toHaveBeenCalledWith(
+          ["channels", "telegram", "username"],
+          "updated_bot",
+        );
+        choose("custom-chat");
+        expect(content()).toContain("Room");
+        expect(content()).not.toContain("Bot username");
+        choose("");
+        const policy = queryRequired(container, 'input[type="text"]', HTMLInputElement);
+        policy.value = "open";
+        policy.dispatchEvent(new Event("input", { bubbles: true }));
+        expect(props.onFormPatch).toHaveBeenCalledWith(
+          ["channels", "defaults", "groupPolicy"],
+          "open",
+        );
+        render(renderConfig({ ...props, formMode: "raw" }), container);
+        expect(container.querySelector("select")).toBeNull();
+      } finally {
+        container.remove();
+      }
+    },
+  );
+
   it("resets config content scroll when switching top-tab sections", async () => {
     const { container } = renderConfigView({
       activeSection: "channels",

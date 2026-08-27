@@ -85,8 +85,13 @@ const policyTestWatches = [
   },
   {
     testFile: "ui/src/styles/base-theme-tokens.node.test.ts",
-    ownerGlobs: ["ui/src/**/*.css"],
-    watchGlobs: ["ui/src/**/*.css", "ui/src/**/*.ts"],
+    ownerGlobs: ["ui/src/**/*.css", "ui/public/themes/*.css"],
+    watchGlobs: ["ui/src/**/*.css", "ui/src/**/*.ts", "ui/public/themes/*.css"],
+  },
+  {
+    testFile: "ui/src/styles/base-theme-contrast.node.test.ts",
+    ownerGlobs: ["ui/src/styles/base.css", "ui/public/themes/*.css"],
+    watchGlobs: ["ui/src/styles/base.css", "ui/public/themes/*.css"],
   },
   {
     testFile: "ui/src/styles/cursor-policy.node.test.ts",

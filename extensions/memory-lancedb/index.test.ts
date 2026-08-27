@@ -736,7 +736,7 @@ describe("memory plugin e2e", () => {
       provider: {
         id: "openai",
         model: options.model,
-        embedQuery,
+        embed: embedQuery,
         embedBatch: vi.fn(async () => [[0.1, 0.2, 0.3]]),
         close: closeProvider,
       },
@@ -831,6 +831,7 @@ describe("memory plugin e2e", () => {
       expect(closeProvider).toHaveBeenCalledTimes(2);
       expect(createProvider).toHaveBeenCalledOnce();
       expect(embedQuery).toHaveBeenCalledWith("project memory", {
+        inputType: "query",
         signal: expect.any(AbortSignal),
       });
     } finally {
@@ -847,7 +848,7 @@ describe("memory plugin e2e", () => {
         provider: {
           id: "openai",
           model: options.model ?? "text-embedding-3-small",
-          embedQuery: vi.fn(async (text: string) => {
+          embed: vi.fn(async (text: string) => {
             requests.push({ agentDir, text });
             return [0.1, 0.2, 0.3];
           }),

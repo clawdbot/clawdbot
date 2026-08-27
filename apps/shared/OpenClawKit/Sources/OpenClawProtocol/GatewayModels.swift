@@ -11255,6 +11255,24 @@ public struct AuditListResult: Codable, Sendable {
     }
 }
 
+public struct UsersPrefsChangedEvent: Codable, Sendable {
+    public let profileid: String
+    public let keys: [String]
+
+    public init(
+        profileid: String,
+        keys: [String])
+    {
+        self.profileid = profileid
+        self.keys = keys
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case keys
+    }
+}
+
 public struct TaskSuggestion: Codable, Sendable {
     public let id: String
     public let title: String

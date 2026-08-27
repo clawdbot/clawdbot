@@ -30,6 +30,39 @@ function createTarball(
 }
 
 describe("prepublish plugin registry shell helper", () => {
+  it("derives the immutable Docker mount contract from the registry artifact", () => {
+    const root = tempDirs.make("openclaw-prepublish-registry-mount-");
+    const manifestPath = join(root, "prepublish-plugin-registry.json");
+    writeFileSync(
+      manifestPath,
+      `${JSON.stringify({ candidateVersion: VERSION, packages: [], sourceSha: SOURCE_SHA })}\n`,
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `
+set -euo pipefail
+source "$HELPER"
+openclaw_prepublish_plugin_registry_configure_docker_args "$ARTIFACT_DIR"
+printf '%s\n' "\${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"
+`,
+      ],
+      { encoding: "utf8", env: { ...process.env, ARTIFACT_DIR: root, HELPER: SCRIPT } },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(`OPENCLAW_DOCKER_E2E_SELECTED_SHA=${SOURCE_SHA}`);
+    expect(result.stdout).toContain(
+      `OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=${VERSION}`,
+    );
+    expect(result.stdout).toContain(`${root}:/tmp/openclaw-prepublish-plugin-registry:ro`);
+    expect(result.stdout).toContain(
+      `OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256=${sha256(manifestPath)}`,
+    );
+  });
+
   it("verifies and serves every artifact package plus caller-owned fixtures", () => {
     const root = tempDirs.make("openclaw-prepublish-registry-shell-");
     const artifactDir = join(root, "artifact");
@@ -85,10 +118,12 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='["@openclaw/codex"]'
-openclaw_prepublish_plugin_registry_start \
-  "$ARTIFACT_DIR" "$SOURCE_SHA" "$VERSION" "$MANIFEST_SHA256" \
-  "$REGISTRY_ROOT" registry_pid \
+export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="$ARTIFACT_DIR"
+export OPENCLAW_DOCKER_E2E_SELECTED_SHA="$SOURCE_SHA"
+export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION="$VERSION"
+export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256="$MANIFEST_SHA256"
+openclaw_prepublish_plugin_registry_start_mounted \
+  "$REGISTRY_ROOT" registry_pid '["@openclaw/codex"]' \
   "@openclaw/brave-plugin" "$VERSION" "$EXTRA_TARBALL"
 node <<'NODE'
 const packages = ["@openclaw/codex", "@openclaw/telegram", "@openclaw/brave-plugin"];

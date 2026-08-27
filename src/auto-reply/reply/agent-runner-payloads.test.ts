@@ -97,16 +97,20 @@ describe("buildReplyPayloads media filter integration", () => {
               resolveReplyTransport: ({
                 threadId,
                 replyToId,
+                replyToIsExplicit,
                 replyDelivery,
-              }: ResolveReplyTransportParams) => ({
-                replyToId:
-                  replyDelivery?.replyToMode === "off"
-                    ? threadId != null
-                      ? String(threadId)
-                      : undefined
-                    : (replyToId ?? (threadId != null ? String(threadId) : undefined)),
-                threadId: null,
-              }),
+              }: ResolveReplyTransportParams) => {
+                const allowedReply = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
+                // Slack uses the known root for inherited replies, but explicit targets win.
+                const resolved =
+                  replyToIsExplicit === false
+                    ? (threadId ?? allowedReply)
+                    : (allowedReply ?? threadId);
+                return {
+                  replyToId: resolved == null ? undefined : String(resolved),
+                  threadId: null,
+                };
+              },
             },
           },
           source: "test",

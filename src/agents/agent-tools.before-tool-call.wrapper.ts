@@ -13,12 +13,17 @@ import {
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tools.js";
 import { recordRunSkillUsage } from "../skills/runtime/run-usage.js";
+import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
 import {
   copyAgentToolSourceExecutionGuard,
   runAgentToolSourceExecutionGuard,
 } from "./agent-tool-source-execution-guard.js";
+import {
+  recordGenericToolActionDecision,
+  runWithGenericToolActionDecision,
+} from "./agent-tools.before-tool-call.decision.js";
 import {
   buildToolContentPrivateData,
   emitSkillUsedDiagnostic,
@@ -71,7 +76,7 @@ import {
   getBeforeToolCallSourceTool,
   type BeforeToolCallDiagnosticOptions,
 } from "./before-tool-call-metadata.js";
-import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
+import { getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
@@ -86,7 +91,6 @@ import {
   protectNetworkToolExecutionError,
   registerTrustedToolNoStartError,
 } from "./tool-result-error.js";
-import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type BeforeToolCallWrapperOptions = {
@@ -388,7 +392,11 @@ export function wrapToolWithBeforeToolCallHook(
         reason: string;
         deniedReason: HookBlockedReason;
         toolParams: unknown;
+        genericDecision?: true;
       }) => {
+        if (blockedCall.genericDecision) {
+          recordGenericToolActionDecision(tool, toolCallId, "denied");
+        }
         const eventBase = buildEventBase(blockedCall.toolParams);
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
@@ -466,6 +474,7 @@ export function wrapToolWithBeforeToolCallHook(
           reason: outcome.reason,
           deniedReason: outcome.deniedReason ?? "plugin-before-tool-call",
           toolParams: outcome.params ?? hookParams,
+          genericDecision: outcome.genericDecision,
         });
       }
       let executeParams: unknown;
@@ -499,6 +508,7 @@ export function wrapToolWithBeforeToolCallHook(
       if (prepareControl) {
         const decision = await prepareControl.pause(executeParams);
         if (!decision.launch) {
+          recordGenericToolActionDecision(tool, toolCallId, "suppressed");
           return INTERNAL_DISPOSED_RESULT;
         }
         onImplementationStart = decision.start;
@@ -534,13 +544,11 @@ export function wrapToolWithBeforeToolCallHook(
       try {
         let result: Awaited<ReturnType<ForwardedToolExecution>>;
         try {
-          result = await (execute as ForwardedToolExecution)(
-            toolCallId,
-            executeParams,
-            signal,
-            forwardedOnUpdate,
-            ...executionArgs,
-          );
+          const args = [toolCallId, executeParams, signal, forwardedOnUpdate, ...executionArgs];
+          const invoke = () => (execute as ForwardedToolExecution)(...args);
+          result = outcome.ownerDecision
+            ? await invoke()
+            : await runWithGenericToolActionDecision(tool, toolCallId, invoke);
         } catch (error) {
           throw tool.resultContentSource === "network" &&
             getBeforeToolCallFailureDisposition(error) === undefined
@@ -682,9 +690,7 @@ export function wrapToolWithBeforeToolCallHook(
       prepared.dispose();
     }
   };
-  copyPluginToolMeta(tool, wrappedTool);
-  copyChannelAgentToolMeta(tool as never, wrappedTool as never);
-  copyToolTerminalPresentation(tool, wrappedTool);
+  copyBeforeToolCallWrapperMetadata(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
@@ -721,9 +727,7 @@ export function rewrapToolWithBeforeToolCallHook(
     execute: sourceTool.execute,
   };
   clearBeforeToolCallWrappedMarker(rewrapSource);
-  copyPluginToolMeta(tool, rewrapSource);
-  copyChannelAgentToolMeta(tool as never, rewrapSource as never);
-  copyToolTerminalPresentation(tool, rewrapSource);
+  copyBeforeToolCallWrapperMetadata(tool, rewrapSource);
   copyAgentToolSourceExecutionGuard(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
 }

@@ -72,20 +72,33 @@ final class StatusMenuSummaries: NSObject {
 
     func configureAutomations(_ item: NSMenuItem) {
         let jobs = self.enabledJobs
-        let count = jobs.count
         let detail = if let next = jobs.compactMap(\.nextRunDate).min() {
-            String(localized: "\(count) jobs · next \(Self.relativeRun(next))")
+            String(localized: "\(jobs.count) · \(Self.relativeRun(next))")
         } else {
-            String(localized: "\(count) jobs")
+            String(localized: "\(jobs.count)")
         }
-        item.image = NSImage(systemSymbolName: "clock.badge.checkmark", accessibilityDescription: nil)
-        item.title = StatusMenuMetrics.fittedTitle(String(localized: "Automations · \(detail)"))
+        item.title = String(localized: "Automations")
+        item.image = nil
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSummaryCard(
+                symbolName: "clock.badge.checkmark",
+                title: String(localized: "Automations"),
+                detail: detail),
+            highlights: true)
 
         var entries = jobs.prefix(8).map { job in
-            MenuEntry(id: "cron.job.\(job.id)") { item in
-                let next = job.nextRunDate.map(Self.relativeRun)
-                item.title = StatusMenuMetrics.fittedTitle(next.map { "\(job.displayName) · \($0)" } ?? job.displayName)
-                item.isEnabled = false
+            MenuEntry(id: "cron.job.\(job.id)") { [weak self] item in
+                item.title = job.displayName
+                item.target = self
+                item.action = #selector(Self.openAutomations(_:))
+                item.isEnabled = true
+                StatusMenuRenderer.configureHostedView(
+                    item,
+                    rootView: StatusJobRow(
+                        name: job.displayName,
+                        nextRun: job.nextRunDate.map(Self.relativeRun)),
+                    highlights: true)
             }
         }
         if !entries.isEmpty {
@@ -101,13 +114,15 @@ final class StatusMenuSummaries: NSObject {
     }
 
     func configureUsage(_ item: NSMenuItem) {
-        let title = if let summary = self.usageSummary {
-            String(localized: "Usage · \(summary)")
-        } else {
-            String(localized: "Usage")
-        }
-        item.image = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: nil)
-        item.title = StatusMenuMetrics.fittedTitle(title)
+        item.title = String(localized: "Usage")
+        item.image = nil
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSummaryCard(
+                symbolName: "chart.bar.xaxis",
+                title: String(localized: "Usage"),
+                detail: self.usageSummary),
+            highlights: true)
 
         var entries = self.orderedUsageRows.map { row in
             MenuEntry(id: "usage.provider.\(row.id)") { item in
@@ -145,9 +160,15 @@ final class StatusMenuSummaries: NSObject {
 
     func configureDevices(_ item: NSMenuItem) {
         let count = self.connectedDeviceCount
-        item.image = NSImage(systemSymbolName: "laptopcomputer.and.iphone", accessibilityDescription: nil)
-        item.title = StatusMenuMetrics.fittedTitle(
-            String(localized: "Devices · \(count) connected"))
+        item.title = String(localized: "Devices")
+        item.image = nil
+        StatusMenuRenderer.configureHostedView(
+            item,
+            rootView: StatusSummaryCard(
+                symbolName: "laptopcomputer.and.iphone",
+                title: String(localized: "Devices"),
+                detail: String(localized: "\(count) connected")),
+            highlights: true)
 
         var entries: [MenuEntry] = []
         if let gateway = self.gatewayEntry() {

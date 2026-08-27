@@ -64,6 +64,12 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
 const updateRunPackageSelfUpgradeCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
+const npmOnboardLaneOptions = {
+  prepublishPluginPackages: ["@openclaw/codex"],
+  resources: ["service"],
+  stateScenario: "empty",
+  weight: 3,
+} satisfies LaneOptions;
 
 const LIVE_RETRY_PATTERNS = [
   /529\b/i,
@@ -461,17 +467,17 @@ export const mainLanes: DockerE2eLane[] = [
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   npmLane(
     "npm-onboard-discord-channel-agent",
     "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   npmLane(
     "npm-onboard-slack-channel-agent",
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   // Prerelease validation must pair frozen core bytes with matching target plugin bytes.
   // Keep the registry-backed lanes above unchanged for published-package proof.
@@ -481,7 +487,7 @@ export const mainLanes: DockerE2eLane[] = [
       "e2e/npm-onboard-channel-agent-docker.sh",
       "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
     ),
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   npmLane(
     "npm-onboard-slack-candidate-channel-agent",
@@ -489,7 +495,7 @@ export const mainLanes: DockerE2eLane[] = [
       "e2e/npm-onboard-channel-agent-docker.sh",
       "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
     ),
-    { resources: ["service"], stateScenario: "empty", weight: 3 },
+    npmOnboardLaneOptions,
   ),
   npmLane(
     "release-user-journey",

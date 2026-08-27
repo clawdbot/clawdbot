@@ -229,13 +229,12 @@ function buildFeishuCardElementsForBlock(
       },
     ];
   }
-  const labels = block.options.map((option) => `- ${option.label}`).join("\n");
   return [
     {
       tag: "markdown",
-      content: `${escapeFeishuCardMarkdownText(
-        block.placeholder?.trim() || "Options",
-      )}:\n${escapeFeishuCardMarkdownText(labels)}`,
+      content: escapeFeishuCardMarkdownText(
+        renderMessagePresentationFallbackText({ presentation: { blocks: [block] } }),
+      ),
     },
   ];
 }

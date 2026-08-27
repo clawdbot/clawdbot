@@ -73,7 +73,7 @@ describe("memory index", () => {
         provider: {
           id: string;
           model: string;
-          embedQuery: (text: string) => Promise<number[]>;
+          embed: (text: string) => Promise<number[]>;
           embedBatch: (texts: string[]) => Promise<number[][]>;
           close: () => Promise<void>;
         };
@@ -81,7 +81,7 @@ describe("memory index", () => {
     ).provider = {
       id: "local",
       model: "local-model",
-      embedQuery: async () => [1, 0],
+      embed: async () => [1, 0],
       embedBatch: async (texts: string[]) => texts.map(() => [1, 0]),
       close: async () => {},
     };
@@ -112,7 +112,7 @@ describe("memory index", () => {
       provider: {
         id: string;
         model: string;
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
         embedBatch: (texts: string[]) => Promise<number[][]>;
         close: () => Promise<void>;
       } | null;
@@ -210,13 +210,13 @@ describe("memory index", () => {
     });
     const fields = manager as unknown as {
       provider: {
-        embedQuery: (text: string) => Promise<number[]>;
+        embed: (text: string) => Promise<number[]>;
       } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
-    fields.provider.embedQuery = async () => {
+    fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
 

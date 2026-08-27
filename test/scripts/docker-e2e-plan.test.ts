@@ -144,6 +144,22 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 }
 
 describe("scripts/lib/docker-e2e-plan", () => {
+  it("prepares the matching Codex package for candidate npm onboarding", () => {
+    const laneNames = [
+      "npm-onboard-channel-agent",
+      "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
+      "npm-onboard-discord-candidate-channel-agent",
+      "npm-onboard-slack-candidate-channel-agent",
+    ];
+    const lanes = laneNames.map((name) => findLaneByName(name));
+
+    expect(lanes.map((lane) => lane?.name)).toEqual(laneNames);
+    expect(requiredPrepublishPluginPackagesForLanes(lanes.flatMap((lane) => lane ?? []))).toEqual([
+      "@openclaw/codex",
+    ]);
+  });
+
   it("omits a package-script lane unavailable from the candidate", () => {
     const plan = planFor({
       candidatePackageRoot: writeCandidatePackage({}),

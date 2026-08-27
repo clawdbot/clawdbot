@@ -4434,6 +4434,48 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
+  it("allows pointer selection in the embedded side-chat transcript", async () => {
+    const page = await openBrowserPage(1024, 768);
+    try {
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+        <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded">
+          <div class="chat-session-rail__thread">
+            <article class="chat-session-rail__exchange">
+              <div class="chat-session-rail__answer">
+                <span data-selection-target>Copy this side chat answer.</span>
+              </div>
+            </article>
+          </div>
+        </section>
+      </body></html>`);
+
+      const target = page.locator("[data-selection-target]");
+      const box = await target.boundingBox();
+      if (!box) {
+        throw new Error("Expected side-chat selection target");
+      }
+      await page.mouse.move(box.x + 1, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 8 });
+      await page.mouse.up();
+
+      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      if (artifactDir) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "side-chat-selection.png"),
+        });
+      }
+
+      expect(await page.evaluate(() => window.getSelection()?.toString().trim())).toBe(
+        "Copy this side chat answer.",
+      );
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
   it("keeps the embedded side-chat composer trailing and flush with the tab strip", async () => {
     const page = await openBrowserPage(1024, 768);
     try {

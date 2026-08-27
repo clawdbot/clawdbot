@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -325,20 +326,14 @@ describe("memory index", () => {
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
     const degraded = manager as unknown as {
-      provider: {
-        id: string;
-        model: string;
-        embedQuery: () => Promise<number[]>;
-        embedBatch: (texts: string[]) => Promise<number[][]>;
-        close: () => Promise<void>;
-      } | null;
+      provider: EmbeddingProvider | null;
       markLocalEmbeddingProviderDegraded: (err: unknown) => void;
     };
     const provider = degraded.provider;
     if (!provider) {
       throw new Error("Expected a test embedding provider");
     }
-    provider.embedQuery = async () => {
+    provider.embed = async () => {
       throw providerFixture.createLocalWorkerExitError();
     };
     degraded.markLocalEmbeddingProviderDegraded = () => {

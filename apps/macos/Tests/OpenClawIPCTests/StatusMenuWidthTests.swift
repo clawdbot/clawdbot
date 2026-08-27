@@ -75,7 +75,10 @@ struct StatusMenuWidthTests {
 
         #expect(menu.minimumWidth == StatusMenuMetrics.width)
         #expect(menu.size.width == StatusMenuMetrics.width)
-        #expect(menu.items.contains { $0.title == "Automations · 5 jobs · next in 1h" })
+        let automations = try #require(menu.items.first {
+            $0.representedObject as? String == "summary.automations"
+        })
+        #expect(automations.view is HostedMenuRowView)
         #expect(menu.items.contains { $0.representedObject as? String == "gateway.header" })
         #expect(menu.items.contains { $0.representedObject as? String == "gateway.primary" })
         #expect(menu.items.contains { $0.representedObject as? String == "gateway.profile:remote-office" })

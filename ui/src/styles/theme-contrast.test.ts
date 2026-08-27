@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -95,7 +95,15 @@ function readOpacity(ruleBody: string): number {
 }
 
 describe("Control UI theme contrast", () => {
-  const baseCss = readFileSync(path.join(here, "base.css"), "utf8");
+  const themesDir = path.join(here, "..", "..", "public", "themes");
+  // Palettes moved out of the startup stylesheet; read them back for coverage.
+  const baseCss = [
+    readFileSync(path.join(here, "base.css"), "utf8"),
+    ...readdirSync(themesDir)
+      .filter((entry) => entry.endsWith(".css"))
+      .toSorted()
+      .map((entry) => readFileSync(path.join(themesDir, entry), "utf8")),
+  ].join("\n");
   const groupedCss = readFileSync(path.join(here, "chat", "grouped.css"), "utf8");
   const chatLayoutCss = readFileSync(path.join(here, "chat", "layout.css"), "utf8");
   const layoutCss = readFileSync(path.join(here, "layout.css"), "utf8");
@@ -141,7 +149,7 @@ describe("Control UI theme contrast", () => {
     expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
     expect(readOpacity(sessionLabelRule)).toBe(1);
 
-    const light = readCssVarBlock(baseCss, ':root[data-theme-mode="light"]');
+    const light = readCssVarBlock(baseCss, ':root:where([data-theme-mode="light"])');
     for (const selector of [
       null,
       ':root[data-theme="openknot-light"]',
