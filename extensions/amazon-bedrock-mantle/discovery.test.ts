@@ -636,16 +636,14 @@ describe("bedrock mantle discovery", () => {
     const prefix = new TextEncoder().encode('{"data":[{"id":"anthropic.');
     const suffix = new TextEncoder().encode('.model","object":"model"}]}');
     const invalidBody = new Uint8Array([...prefix, 0xff, ...suffix]);
-    const mockFetch = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(invalidBody, { headers: { "content-type": "application/json" } }),
-      );
+    const mockFetch = vi.fn<typeof fetch>(
+      async () => new Response(invalidBody, { headers: { "content-type": "application/json" } }),
+    );
 
     const models = await discoverMantleModels({
-      region: "us-east-1",
+      region: testRegion,
       bearerToken: "test-token",
-      fetchFn: mockFetch as unknown as typeof fetch,
+      fetchFn: mockFetch,
     });
 
     expect(models).toStrictEqual([]);
