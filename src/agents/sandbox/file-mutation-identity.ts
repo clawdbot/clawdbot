@@ -1,6 +1,22 @@
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
 
+type SandboxFileIdentityParams = {
+  filePath: string;
+  cwd?: string;
+  signal?: AbortSignal;
+};
+
+export const SANDBOX_FILE_IDENTITY = Symbol.for("openclaw.sandboxFileIdentity");
+
+type SandboxFileIdentityBridge = SandboxFsBridge & {
+  [SANDBOX_FILE_IDENTITY](params: SandboxFileIdentityParams): string | Promise<string>;
+};
+
+function hasSandboxFileIdentity(bridge: SandboxFsBridge): bridge is SandboxFileIdentityBridge {
+  return SANDBOX_FILE_IDENTITY in bridge;
+}
+
 export async function resolveSandboxFileMutationQueueKey(params: {
   bridge: SandboxFsBridge;
   root: string;
@@ -9,8 +25,8 @@ export async function resolveSandboxFileMutationQueueKey(params: {
   signal?: AbortSignal;
 }): Promise<string> {
   let identity: string;
-  if (params.bridge.resolveFileIdentity) {
-    identity = await params.bridge.resolveFileIdentity({
+  if (hasSandboxFileIdentity(params.bridge)) {
+    identity = await params.bridge[SANDBOX_FILE_IDENTITY]({
       filePath: params.filePath,
       cwd: params.cwd,
       signal: params.signal,

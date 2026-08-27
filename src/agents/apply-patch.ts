@@ -24,7 +24,7 @@ import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-iden
 import {
   resolveFileMutationQueueKey,
   withFileMutationQueueKeyResolution,
-  withFileMutationQueueKeyResolutions,
+  withFileMutationQueueKeysResolution,
 } from "./sessions/tools/file-mutation-queue.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -230,13 +230,13 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     const moveTargetResolution = hunk.movePath
       ? resolvePatchPath(hunk.movePath, options)
       : undefined;
-    await withFileMutationQueueKeyResolutions(
-      [
+    await withFileMutationQueueKeysResolution(
+      Promise.all([
         targetResolution.then((target) => target.queueKey),
         ...(moveTargetResolution
           ? [moveTargetResolution.then((moveTarget) => moveTarget.queueKey)]
           : []),
-      ],
+      ]),
       async () => {
         const target = await targetResolution;
         const moveTarget = moveTargetResolution ? await moveTargetResolution : undefined;

@@ -9,6 +9,7 @@ import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
+import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
 import {
   SANDBOX_CREATE_EXISTS_EXIT_CODE,
   SANDBOX_PINNED_MUTATION_PYTHON,
@@ -65,7 +66,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
-  async resolveFileIdentity(params: {
+  async [SANDBOX_FILE_IDENTITY](params: {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;

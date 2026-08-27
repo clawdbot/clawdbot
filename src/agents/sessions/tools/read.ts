@@ -33,10 +33,10 @@ import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import {
   resolveFileMutationQueueKey,
-  withFileMutationQueueKeyResolution,
+  withFileMutationQueueKeysResolution,
 } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
+import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
@@ -243,12 +243,18 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   return resolveToCwd(filePath, cwd);
 }
 
-async function resolveReadToolPath(
+async function resolveReadToolInputPath(
   ops: ReadOperations,
   filePath: string,
   cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
+
+async function resolveReadToolPathFromAbsolute(
+  ops: ReadOperations,
+  absolutePath: string,
 ): Promise<{ absolutePath: string; note?: string }> {
-  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
   try {
     await ops.access(absolutePath);
     return { absolutePath };
@@ -526,22 +532,30 @@ export function createReadToolDefinition(
             try {
               // Share write/edit ordering through byte capture only. Decode the
               // immutable snapshot below after releasing the path queue.
-              const absoluteInputPath = resolveToCwd(path, cwd);
-              const queueKey = resolveFileMutationQueueKey(
-                absoluteInputPath,
-                ops.resolveQueueKey,
-                signal,
+              const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
+              const queueKeysResolution = inputPathResolution.then(
+                async (absoluteInputPath) =>
+                  await Promise.all(
+                    getReadQueuePaths(absoluteInputPath).map(
+                      async (candidate) =>
+                        await resolveFileMutationQueueKey(candidate, ops.resolveQueueKey, signal),
+                    ),
+                  ),
               );
-              const snapshot = await withFileMutationQueueKeyResolution(queueKey, async () => {
-                const resolved = await resolveReadToolPath(ops, path, cwd);
-                if (aborted) {
-                  return undefined;
-                }
-                return {
-                  ...resolved,
-                  buffer: await ops.readFile(resolved.absolutePath),
-                };
-              });
+              const snapshot = await withFileMutationQueueKeysResolution(
+                queueKeysResolution,
+                async () => {
+                  const absoluteInputPath = await inputPathResolution;
+                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  if (aborted) {
+                    return undefined;
+                  }
+                  return {
+                    ...resolved,
+                    buffer: await ops.readFile(resolved.absolutePath),
+                  };
+                },
+              );
               if (!snapshot) {
                 return;
               }

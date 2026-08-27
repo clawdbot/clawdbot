@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
+import { resolveSandboxFileMutationQueueKey } from "./file-mutation-identity.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
@@ -120,29 +121,43 @@ describe("remote sandbox fs bridge", () => {
         const bridge = createRemoteShellSandboxFsBridge({ sandbox, runtime });
         const remotePath = path.join(remoteWorkspaceDir, "race-target.txt");
         const hostPath = path.join(workspaceDir, "race-target.txt");
-        const aliasIdentity = await bridge.resolveFileIdentity!({
+        const aliasIdentity = await resolveSandboxFileMutationQueueKey({
+          bridge,
+          root: workspaceDir,
           filePath: remotePath,
           cwd: workspaceDir,
         });
         await expect(
-          bridge.resolveFileIdentity!({ filePath: hostPath, cwd: workspaceDir }),
+          resolveSandboxFileMutationQueueKey({
+            bridge,
+            root: workspaceDir,
+            filePath: hostPath,
+            cwd: workspaceDir,
+          }),
         ).resolves.toBe(aliasIdentity);
 
-        const resolveFileIdentity = bridge.resolveFileIdentity!.bind(bridge);
         const writeIdentityStarted = createDeferred();
         const releaseWriteIdentity = createDeferred();
         const readIdentityResolved = createDeferred();
-        vi.spyOn(bridge, "resolveFileIdentity").mockImplementation(async (params) => {
-          if (params.filePath === remotePath) {
+        const runRemoteShellScript = runtime.runRemoteShellScript.bind(runtime);
+        let identityCallCount = 0;
+        runtime.runRemoteShellScript = async (command) => {
+          const isTargetIdentity =
+            command.script.includes('target="$1"') && command.args?.[0] === remotePath;
+          if (!isTargetIdentity) {
+            return await runRemoteShellScript(command);
+          }
+          const identityCall = ++identityCallCount;
+          if (identityCall === 1) {
             writeIdentityStarted.resolve();
             await releaseWriteIdentity.promise;
           }
-          const identity = await resolveFileIdentity(params);
-          if (params.filePath === hostPath) {
+          const result = await runRemoteShellScript(command);
+          if (identityCall === 2) {
             readIdentityResolved.resolve();
           }
-          return identity;
-        });
+          return result;
+        };
         const statSpy = vi.spyOn(bridge, "stat");
         const writeTool = createSandboxedWriteTool({ root: workspaceDir, bridge });
         const readTool = createSandboxedReadTool({ root: workspaceDir, bridge });

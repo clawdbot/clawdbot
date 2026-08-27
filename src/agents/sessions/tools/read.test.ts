@@ -826,4 +826,43 @@ describe("read tool", () => {
     expect(readAccess).toHaveBeenCalledOnce();
     expect(textContent(result)).toBe("first snapshot");
   });
+
+  it("queues every accepted Unicode spelling before reading a new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-order-");
+    const writePath = path.join(tempDir, "caf\u00e9.txt");
+    const readPath = path.join(tempDir, "cafe\u0301.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = withFileMutationQueue(writePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+
+    const writeResult = createWriteToolDefinition(tempDir).execute(
+      "write",
+      { path: writePath, content: "normalized snapshot" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
+
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalled();
+    expect(textContent(result)).toContain("normalized snapshot");
+  });
 });

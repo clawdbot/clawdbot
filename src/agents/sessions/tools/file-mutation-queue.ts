@@ -36,21 +36,22 @@ export async function withFileMutationQueueKeyResolution<T>(
   keyResolution: Promise<string>,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return await withFileMutationQueueKeyResolutions([keyResolution], fn);
+  return await withFileMutationQueueKeysResolution(
+    keyResolution.then((key) => [key]),
+    fn,
+  );
 }
 
-export async function withFileMutationQueueKeyResolutions<T>(
-  keyResolutions: readonly Promise<string>[],
+export async function withFileMutationQueueKeysResolution<T>(
+  keysResolution: Promise<readonly string[]>,
   fn: () => Promise<T>,
 ): Promise<T> {
   const scope = getAgentToolExecutionContext()?.assistantMessage ?? keyAdmissions.fallbackScope;
   const previousAdmission = keyAdmissions.tails.get(scope) ?? Promise.resolve();
-  for (const keyResolution of keyResolutions) {
-    void keyResolution.catch(() => undefined);
-  }
+  void keysResolution.catch(() => undefined);
   let operation!: Promise<T>;
   const admission = previousAdmission.then(async () => {
-    const keys = await Promise.all(keyResolutions);
+    const keys = await keysResolution;
     operation = enqueueFileMutationQueueKeys(keys, fn);
   });
   const tail = admission.then(
