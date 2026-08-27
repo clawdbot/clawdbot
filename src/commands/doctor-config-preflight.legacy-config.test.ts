@@ -29,6 +29,9 @@ const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() => vi.fn());
 const migrateLegacyMediaPersistence = vi.hoisted(() =>
   vi.fn(() => ({ changes: [], warnings: [] })),
 );
+const migrateLegacyConfigMachineState = vi.hoisted(() =>
+  vi.fn(() => ({ changes: [], warnings: [] })),
+);
 const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ changes: [], warnings: [] })),
 );
@@ -43,6 +46,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyPluginDoctorState,
   autoMigrateLegacyTaskStateSidecars,
   migrateLegacyMediaPersistence,
+  migrateLegacyConfigMachineState,
 }));
 
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
