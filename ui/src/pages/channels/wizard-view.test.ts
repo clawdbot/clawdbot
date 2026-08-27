@@ -2,6 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
@@ -202,7 +203,7 @@ describe("renderChannelWizard", () => {
   )(
     "keeps channel-copy success $copied accessible across a $phase locale rerender",
     async ({ copied, phase }) => {
-      const write = Promise.withResolvers<void>();
+      const write = createDeferred<void>();
       const writeText = vi.fn(() => write.promise);
       const execCommand = vi.fn(() => false);
       vi.stubGlobal("navigator", { clipboard: { writeText } });

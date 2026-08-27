@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
 import { OpenClawFilePreviewModal } from "./file-preview-modal.ts";
 
@@ -246,7 +247,7 @@ describe("openclaw-file-preview-modal", () => {
   it.each([true, false])(
     "restores localized file-copy labels after pending success %s",
     async (copied) => {
-      const write = Promise.withResolvers<void>();
+      const write = createDeferred<void>();
       const writeText = vi.fn(() => write.promise);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });
@@ -298,7 +299,7 @@ describe("openclaw-file-preview-modal", () => {
       );
       expect(feedback.hidden).toBe(false);
       expect(button.getAttribute("aria-label")).toBe(feedback.textContent);
-      expect(writeText).toHaveBeenCalledWith(files[0].contents);
+      expect(writeText).toHaveBeenCalledWith("Morning digest template");
       const reset = schedule.mock.calls.find(
         ([, delay]) => delay === (copied ? 1_500 : 2_000),
       )?.[0];
