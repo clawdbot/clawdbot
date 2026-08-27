@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveFfmpegBin, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import type { SpeechProviderConfig } from "openclaw/plugin-sdk/speech-core";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildCliSpeechProvider } from "./speech-provider.js";
 
@@ -17,7 +17,7 @@ function firstOggPacketPrefix(buffer: Buffer, length: number): string {
 
 describeLive("buildCliSpeechProvider live", () => {
   it("synthesizes through a real local CLI fixture and ffmpeg", async () => {
-    await withTestDir("openclaw-cli-tts-live-", async (dir) => {
+    await withTempDir("openclaw-cli-tts-live-", async (dir) => {
       const script = path.join(dir, "copy-audio.mjs");
       const wavPath = path.join(dir, "source.wav");
       await runFfmpeg([

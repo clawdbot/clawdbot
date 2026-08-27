@@ -11,7 +11,7 @@ import {
 } from "../plugin-sdk/infra-runtime.js";
 import {
   enqueueRoutedSystemEvent,
-  enqueueSystemEvent as enqueueSystemEventViaSdk,
+  enqueuePluginSystemEvent as enqueueSystemEventViaSdk,
 } from "../plugin-sdk/system-event-runtime.js";
 import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import {

@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.factory.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
@@ -40,7 +40,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
-  return withTestDir("openclaw-config-compat-", run);
+  return withTempDir("openclaw-config-compat-", run);
 }
 
 async function writeConfig(

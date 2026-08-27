@@ -13,7 +13,7 @@ import {
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
   buildPluginSnapshotReportMock,
@@ -2079,7 +2079,7 @@ describe("plugins cli install", () => {
   it.each(OFFICIAL_EXTERNAL_NPM_INSTALLS_WITHOUT_INTEGRITY)(
     "keeps official external npm installs trusted without integrity for $pluginId",
     async ({ pluginId, npmSpec }) => {
-      await withTestDir("openclaw-official-plugin-install-", async (cwd) => {
+      await withTempDir("openclaw-official-plugin-install-", async (cwd) => {
         const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
         try {
           primeSuccessfulPluginPersistence(pluginId);

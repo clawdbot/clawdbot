@@ -6,7 +6,7 @@
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 
 export const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
-export const adjustedParamsByToolCallId = new Map<string, unknown>();
+const adjustedParamsByToolCallId = new Map<string, unknown>();
 export const preExecutionBlockedToolCallIds = new Set<string>();
 export const structuredReplaySafeToolCallIds = new Set<string>();
 const startedToolCallIds = new Set<string>();

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -17,7 +17,7 @@ describe("session permission filesystem tools", () => {
   it.each(["guarded", "workspace"] as const)(
     "separates a nested session cwd from its %s permission boundary",
     async (mode) => {
-      await withTestDir("openclaw-permission-root-", async (root) => {
+      await withTempDir("openclaw-permission-root-", async (root) => {
         const cwd = path.join(root, "packages", "app");
         const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);
         const escape = path.join(root, "escape.txt");
@@ -72,7 +72,7 @@ describe("session permission filesystem tools", () => {
   );
 
   it("removes mutating filesystem tools in read-only mode", async () => {
-    await withTestDir("openclaw-permission-read-only-", async (root) => {
+    await withTempDir("openclaw-permission-read-only-", async (root) => {
       const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);
       await fs.writeFile(path.join(root, "inside.txt"), "inside", "utf8");
       await fs.writeFile(outside, "outside", "utf8");
@@ -104,7 +104,7 @@ describe("session permission filesystem tools", () => {
   });
 
   it("keeps full mode filesystem access unrestricted", async () => {
-    await withTestDir("openclaw-permission-full-", async (root) => {
+    await withTempDir("openclaw-permission-full-", async (root) => {
       const outside = path.join(path.dirname(root), `outside-${path.basename(root)}.txt`);
       await fs.writeFile(outside, "outside", "utf8");
       try {

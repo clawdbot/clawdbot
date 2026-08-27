@@ -14,31 +14,29 @@ import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  cancelPendingDelegates,
+  consumePendingDelegates,
+  emitContinuationDelegateFireSpan,
+  emitContinuationDelegateSpan,
+  emitContinuationWorkFireSpan,
+  emitContinuationWorkSpan,
+  resetContinueDelegateTurnAdmissionForTests,
+  type ContinueWorkRequest,
+} from "openclaw/plugin-sdk/continuation-test-runtime";
+import {
   emitTrustedDiagnosticEvent,
   parseDiagnosticTraceparent,
   waitForDiagnosticEventsDrained,
   type DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { runWithDiagnosticTraceContext } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect, test } from "vitest";
-import {
-  cancelPendingDelegates,
-  consumePendingDelegates,
-} from "../../../src/auto-reply/continuation/delegate-store.js";
-import { resetContinueDelegateTurnAdmissionForTests } from "../../../src/auto-reply/continuation/delegate-turn-admission.js";
-import type { ContinueWorkRequest } from "../../../src/auto-reply/continuation/types.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-} from "../../../src/config/config.js";
-import {
-  emitContinuationDelegateFireSpan,
-  emitContinuationDelegateSpan,
-  emitContinuationWorkFireSpan,
-  emitContinuationWorkSpan,
-} from "../../../src/infra/continuation-tracer.js";
-import { resetTaskFlowRegistryForTests } from "../../../src/tasks/task-runtime.test-helpers.js";
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resetTaskFlowRegistryForTests } from "openclaw/plugin-sdk/task-flow-test-runtime";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
+import { expect, test } from "vitest";
 import { dynamicToolBuildState } from "../../codex/src/app-server/dynamic-tool-build-state.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,

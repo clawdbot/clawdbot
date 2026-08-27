@@ -1,6 +1,6 @@
 // Discord plugin module implements listeners behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { requestPluginHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
@@ -391,7 +391,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       );
       burstCommitted = true;
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-      requestHeartbeat({
+      requestPluginHeartbeat({
         source: "notifications-event",
         intent: "immediate",
         reason: "wake",

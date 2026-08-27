@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { collectRepositoryWrapperShadowing } from "../../scripts/check-wrapper-shadowing.mts";
-import { withTestDir } from "../../src/test-utils/temp-dir.js";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 const guardScriptPath = fileURLToPath(
   new URL("../../scripts/check-wrapper-shadowing.mts", import.meta.url),
@@ -13,7 +13,7 @@ const guardScriptPath = fileURLToPath(
 type GuardFixture = Record<string, string>;
 
 async function runFixture(files: GuardFixture) {
-  return await withTestDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
+  return await withTempDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
     await Promise.all(
       Object.entries(files).map(async ([repoPath, content]) => {
         const filePath = path.join(repoRoot, repoPath);

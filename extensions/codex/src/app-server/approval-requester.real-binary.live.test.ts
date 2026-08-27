@@ -9,7 +9,7 @@ import {
   createAgentHarnessHostCapabilitiesForTest,
   createMockPluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
@@ -33,7 +33,7 @@ afterEach(() => {
 
 describeLive("Codex app-server approval requester real-binary bridge", () => {
   it("runs owner-gated apply_patch under default yolo without approval requests", async () => {
-    await withTestDir("openclaw-codex-approval-requester-", async (root) => {
+    await withTempDir("openclaw-codex-approval-requester-", async (root) => {
       const workspace = path.join(root, "workspace");
       const agentDir = path.join(root, "agent");
       const target = path.join(workspace, "memory", "real-binary-owner.md");

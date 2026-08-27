@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { withEnvAsync, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { buildBrowserExtensionPairing } from "./extension-pairing.js";
@@ -10,7 +10,7 @@ const ensureToken = async () => RELAY_KEY;
 
 describe("buildBrowserExtensionPairing", () => {
   it("pairs with the first writer's key when its file is already open but empty", async () => {
-    await withTestDir("openclaw-pairing-", async (dir) => {
+    await withTempDir("openclaw-pairing-", async (dir) => {
       const stateDir = fs.realpathSync(dir);
       const credentials = path.join(stateDir, "credentials");
       fs.mkdirSync(credentials, { mode: 0o700 });

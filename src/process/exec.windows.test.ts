@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const execaMock = vi.fn();
@@ -243,7 +243,7 @@ describe("Windows command execution", () => {
   });
 
   it("resolves implicit batch shims before Execa can consult ComSpec", async () => {
-    await withTestDir("openclaw-execa-windows-shim-", async (binDir) => {
+    await withTempDir("openclaw-execa-windows-shim-", async (binDir) => {
       const shimPath = path.join(binDir, "custom-shim.cmd");
       fs.writeFileSync(shimPath, "@echo off\r\n", "utf8");
       resolveExecutableFromPathEnvMock.mockReturnValueOnce(shimPath);

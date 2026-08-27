@@ -4,12 +4,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createConfigIO } from "./io.factory.js";
 import { isInvalidConfigError } from "./io.invalid-config.js";
 
 function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
-  return withTestDir("openclaw-config-scalar-root-", run);
+  return withTempDir("openclaw-config-scalar-root-", run);
 }
 
 describe("config load with a scalar root", () => {

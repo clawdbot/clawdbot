@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyCodexAppServerAuthProfile,
@@ -343,7 +343,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it.each(["subscription", "api-key"] as const)(
     "rejects an unimported agent-scoped Codex auth file for a %s route without fallback",
     async (authRequirement) => {
-      await withTestDir("openclaw-codex-unimported-auth-", async (agentDir) => {
+      await withTempDir("openclaw-codex-unimported-auth-", async (agentDir) => {
         const codexHome = resolveCodexAppServerHomeDir(agentDir);
         await writeCodexCliAuthFile(codexHome);
         vi.stubEnv("CODEX_API_KEY", "");
@@ -371,7 +371,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it.each(["CODEX_API_KEY", "OPENAI_API_KEY"] as const)(
     "preserves the %s fallback when a stale agent auth file remains",
     async (envVar) => {
-      await withTestDir("openclaw-codex-stale-auth-api-key-", async (agentDir) => {
+      await withTempDir("openclaw-codex-stale-auth-api-key-", async (agentDir) => {
         await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
         vi.stubEnv("CODEX_API_KEY", "");
         vi.stubEnv("OPENAI_API_KEY", "");
@@ -411,7 +411,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it.each(["websocket", "unix"] as const)(
     "ignores an agent-scoped auth file for %s transports",
     async (transport) => {
-      await withTestDir("openclaw-codex-remote-auth-", async (agentDir) => {
+      await withTempDir("openclaw-codex-remote-auth-", async (agentDir) => {
         await writeCodexCliAuthFile(resolveCodexAppServerHomeDir(agentDir));
         const startOptions = createStartOptions({ transport });
 
@@ -423,7 +423,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   );
 
   it("provisions the native Computer Use client before auto-install startup", async () => {
-    await withTestDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
       computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockResolvedValueOnce(
         "/managed/openai-bundled",
       );
@@ -452,7 +452,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("does not provision the native client without auto-install authorization", async () => {
-    await withTestDir("openclaw-codex-computer-use-service-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-service-", async (agentDir) => {
       await reconcileCodexComputerUseStartArtifacts({
         startOptions: createStartOptions(),
         agentDir,
@@ -465,7 +465,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("rejects a desktop candidate whose exact bundled marketplace is unavailable", async () => {
-    await withTestDir("openclaw-codex-computer-use-source-missing-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-source-missing-", async (agentDir) => {
       computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource.mockResolvedValueOnce(
         undefined,
       );
@@ -487,7 +487,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("rejects a desktop candidate whose exact signed service is unavailable", async () => {
-    await withTestDir("openclaw-codex-computer-use-service-missing-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-service-missing-", async (agentDir) => {
       computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath.mockResolvedValueOnce(
         undefined,
       );
@@ -513,7 +513,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
     { marketplacePath: "/tmp/custom-marketplace/marketplace.json" },
     { marketplaceName: "custom-marketplace" },
   ])("keeps an exact desktop candidate with configured marketplace selection", async (selector) => {
-    await withTestDir("openclaw-codex-computer-use-custom-source-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-custom-source-", async (agentDir) => {
       await expect(
         reconcileCodexComputerUseStartArtifacts({
           startOptions: createStartOptions({
@@ -533,7 +533,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   it.each(["marketplace", "service"] as const)(
     "keeps package fallback artifacts on one complete desktop owner when ChatGPT lacks %s",
     async (missingArtifact) => {
-      await withTestDir("openclaw-codex-computer-use-package-owner-", async (agentDir) => {
+      await withTempDir("openclaw-codex-computer-use-package-owner-", async (agentDir) => {
         const candidates = resolveMacOSDesktopCodexAppPathCandidates("darwin");
         const codexCandidate = candidates.find((candidate) => candidate.appName === "Codex.app");
         if (!codexCandidate) {
@@ -589,7 +589,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   );
 
   it("does not replace the native service app for user-scoped homes", async () => {
-    await withTestDir("openclaw-codex-computer-use-user-home-", async (root) => {
+    await withTempDir("openclaw-codex-computer-use-user-home-", async (root) => {
       const codexHome = path.join(root, "user-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
 
@@ -605,7 +605,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("does not replace the native service app for an explicit CODEX_HOME", async () => {
-    await withTestDir("openclaw-codex-computer-use-explicit-home-", async (root) => {
+    await withTempDir("openclaw-codex-computer-use-explicit-home-", async (root) => {
       const codexHome = path.join(root, "explicit-codex-home");
 
       await reconcileCodexComputerUseStartArtifacts({
@@ -637,7 +637,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("refreshes shared cache once per selected desktop source generation", async () => {
-    await withTestDir("openclaw-codex-computer-use-cache-owner-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-cache-owner-", async (agentDir) => {
       computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue({
         status: "shared",
         changed: true,
@@ -684,7 +684,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("does not let a stale desktop generation publish artifacts after its successor", async () => {
-    await withTestDir("openclaw-codex-computer-use-generation-", async (agentDir) => {
+    await withTempDir("openclaw-codex-computer-use-generation-", async (agentDir) => {
       const firstMarketplaceStarted = createDeferred<void>();
       const releaseFirstMarketplace = createDeferred<void>();
       let activeMarketplaceCalls = 0;
@@ -743,7 +743,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("uses the native user Codex home for coexistence mode", async () => {
-    await withTestDir("openclaw-codex-user-home-", async (root) => {
+    await withTempDir("openclaw-codex-user-home-", async (root) => {
       const agentDir = path.join(root, "agent");
       const codexHome = path.join(root, "user-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
@@ -760,7 +760,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("places the ephemeral auth-store override after configured root overrides", async () => {
-    await withTestDir("openclaw-codex-auth-store-", async (agentDir) => {
+    await withTempDir("openclaw-codex-auth-store-", async (agentDir) => {
       const startOptions = createStartOptions({
         args: ["-c", 'cli_auth_credentials_store="keyring"', "app-server"],
       });
@@ -778,7 +778,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("does not mistake an option value for the app-server subcommand", async () => {
-    await withTestDir("openclaw-codex-profile-name-", async (agentDir) => {
+    await withTempDir("openclaw-codex-profile-name-", async (agentDir) => {
       const startOptions = createStartOptions({
         args: ["--profile", "app-server", "app-server"],
       });
@@ -796,7 +796,7 @@ describe("bridgeCodexAppServerStartOptions", () => {
   });
 
   it("preserves custom stdio backend arguments", async () => {
-    await withTestDir("openclaw-codex-custom-backend-", async (agentDir) => {
+    await withTempDir("openclaw-codex-custom-backend-", async (agentDir) => {
       const startOptions = createStartOptions({
         command: "custom-codex-compatible-server",
         commandSource: "config",

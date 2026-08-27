@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   buildPluginRegistrySnapshotReportMock,
   enablePluginInConfigMock,
@@ -109,7 +109,7 @@ describe("plugins cli policy mutations", () => {
   });
 
   it("rejects enabling an unconsented installed plugin without --accept-capabilities", async () => {
-    await withTestDir("openclaw-cli-capability-consent-", async (rootDir) => {
+    await withTempDir("openclaw-cli-capability-consent-", async (rootDir) => {
       createColdPluginFixture({ rootDir, pluginId: "alpha" });
       const sourceConfig = {
         plugins: { entries: { alpha: { enabled: false } } },
@@ -128,7 +128,7 @@ describe("plugins cli policy mutations", () => {
   });
 
   it("binds explicit enablement approval to the installed artifact's reviewed surface", async () => {
-    await withTestDir("openclaw-cli-capability-review-", async (rootDir) => {
+    await withTempDir("openclaw-cli-capability-review-", async (rootDir) => {
       const fixture = createColdPluginFixture({ rootDir, pluginId: "alpha" });
       const { recordPluginManifestInstallOwner } =
         await import("../plugins/manifest-install-owner.js");

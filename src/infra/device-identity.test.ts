@@ -8,7 +8,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { resolveDeviceIdentityCoordinatorPaths } from "./device-identity-coordinator-paths.js";
 import { acquireDeviceIdentityCoordinator } from "./device-identity-coordinator.js";
 import { normalizeLegacyDeviceIdentity } from "./device-identity-legacy.js";
@@ -239,7 +239,7 @@ function waitForFileSync(filePath: string): void {
 
 describe("device identity SQLite store", () => {
   it("serializes identity ownership with the shared SQLite coordinator", async () => {
-    await withTestDir("openclaw-device-identity-coordinator-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-coordinator-", async (rootDir) => {
       const databasePath = path.join(rootDir, "state", "openclaw.sqlite");
       const lockDir = path.join(rootDir, "locks");
       const first = acquireDeviceIdentityCoordinator({ databasePath, lockDir, busyTimeoutMs: 0 });
@@ -275,7 +275,7 @@ describe("device identity SQLite store", () => {
   });
 
   it("reads a missing database without creating identity state or coordinator locks", async () => {
-    await withTestDir("openclaw-device-identity-readonly-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-readonly-", async (rootDir) => {
       const options = storeOptions(rootDir);
       const coordinatorPaths = resolveDeviceIdentityCoordinatorPaths({
         databasePath: options.path!,
@@ -294,7 +294,7 @@ describe("device identity SQLite store", () => {
   });
 
   it("reads an existing identity without changing canonical SQLite artifacts", async () => {
-    await withTestDir("openclaw-device-identity-artifact-preserving-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-artifact-preserving-", async (rootDir) => {
       const options = storeOptions(rootDir);
       const created = loadOrCreateDeviceIdentity(options);
       closeOpenClawStateDatabaseForTest();
@@ -307,7 +307,7 @@ describe("device identity SQLite store", () => {
   });
 
   it("creates and reuses the primary identity in SQLite", async () => {
-    await withTestDir("openclaw-device-identity-create-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-create-", async (rootDir) => {
       const options = storeOptions(rootDir);
       const created = loadOrCreateDeviceIdentity(options);
       const loaded = loadOrCreateDeviceIdentity(options);
@@ -320,7 +320,7 @@ describe("device identity SQLite store", () => {
   });
 
   it("keeps empty-bootstrap classification on the pre-commit read snapshot", async () => {
-    await withTestDir("openclaw-device-identity-bootstrap-read-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-bootstrap-read-", async (rootDir) => {
       const creator = await startPausedBootstrapCreator(rootDir);
       try {
         const sqlite = await import("node:sqlite");
@@ -358,7 +358,7 @@ describe("device identity SQLite store", () => {
   }, 30_000);
 
   it("does not classify a partial schema as an identity bootstrap miss", async () => {
-    await withTestDir("openclaw-device-identity-partial-schema-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-partial-schema-", async (rootDir) => {
       const options = storeOptions(rootDir);
       fs.mkdirSync(path.dirname(options.path!), { recursive: true });
       const sqlite = await import("node:sqlite");
@@ -373,7 +373,7 @@ describe("device identity SQLite store", () => {
   });
 
   it("adopts a Swift-created version-zero identity database and completes the shared schema", async () => {
-    await withTestDir("openclaw-device-identity-swift-db-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-swift-db-", async (rootDir) => {
       const options = storeOptions(rootDir);
       const expected = normalizeLegacyDeviceIdentity({
         deviceId: SWIFT_RAW_DEVICE_ID,
@@ -435,7 +435,7 @@ describe("device identity SQLite store", () => {
   });
 
   it("keeps process identities cached by database path and identity key", async () => {
-    await withTestDir("openclaw-device-identity-cache-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-cache-", async (rootDir) => {
       const primaryOptions = storeOptions(rootDir);
       const secondaryOptions = storeOptions(rootDir, "secondary");
       const primary = loadOrCreateProcessDeviceIdentity(primaryOptions);
@@ -455,7 +455,7 @@ describe("device identity SQLite store", () => {
   it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
     "keeps canonical SQLite authoritative when retired %s reappears",
     async (legacyName) => {
-      await withTestDir("openclaw-device-identity-canonical-", async (rootDir) => {
+      await withTempDir("openclaw-device-identity-canonical-", async (rootDir) => {
         const options = storeOptions(rootDir);
         const canonical = loadOrCreateDeviceIdentity(options);
         expect(canonical.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
@@ -472,7 +472,7 @@ describe("device identity SQLite store", () => {
   );
 
   it("returns one authoritative winner to concurrent creators", async () => {
-    await withTestDir("openclaw-device-identity-concurrent-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-concurrent-", async (rootDir) => {
       const [first, second] = await runConcurrentIdentityLoads(rootDir);
 
       expect(second).toEqual(first);
@@ -481,7 +481,7 @@ describe("device identity SQLite store", () => {
   }, 30_000);
 
   it("fails closed for a corrupt persisted row", async () => {
-    await withTestDir("openclaw-device-identity-corrupt-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-corrupt-", async (rootDir) => {
       const options = storeOptions(rootDir);
       loadOrCreateDeviceIdentity(options);
       closeOpenClawStateDatabaseForTest();
@@ -505,7 +505,7 @@ describe("device identity SQLite store", () => {
   it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
     "blocks SQLite access while legacy %s may exist",
     async (legacyName) => {
-      await withTestDir("openclaw-device-identity-legacy-", async (rootDir) => {
+      await withTempDir("openclaw-device-identity-legacy-", async (rootDir) => {
         const options = storeOptions(rootDir);
         const legacyPath = path.join(rootDir, "identity", legacyName);
         fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
@@ -522,7 +522,7 @@ describe("device identity SQLite store", () => {
     ["canonical", (rootDir: string) => path.join(rootDir, "state", "openclaw.sqlite")],
     ["arbitrary", (rootDir: string) => path.join(rootDir, "identity-state.sqlite")],
   ])("derives the legacy root from an explicit %s database path", async (_label, dbPath) => {
-    await withTestDir("openclaw-device-identity-explicit-path-", async (rootDir) => {
+    await withTempDir("openclaw-device-identity-explicit-path-", async (rootDir) => {
       const legacyPath = path.join(rootDir, "identity", "device.json");
       fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
       fs.writeFileSync(legacyPath, "{}\n");

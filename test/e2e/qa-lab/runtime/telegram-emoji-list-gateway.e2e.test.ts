@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { withServer, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
@@ -238,7 +238,7 @@ test("binds Telegram emoji discovery to the current conversation before Bot API 
       });
     },
     async (apiRoot) =>
-      await withTestDir("openclaw-telegram-emoji-list-", async (workspace) => {
+      await withTempDir("openclaw-telegram-emoji-list-", async (workspace) => {
         let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");

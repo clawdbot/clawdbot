@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
-import { withTestDir } from "../src/test-utils/temp-dir.js";
+import { withTempDir } from "../src/test-utils/temp-dir.js";
 import { cliProcessTestFiles } from "./vitest/vitest.cli-process-paths.mjs";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createContractsPluginVitestConfig } from "./vitest/vitest.contracts-plugin.config.ts";
@@ -187,7 +187,7 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("intersects pattern-file shards with each unit-fast lane owner", async () => {
-    await withTestDir("openclaw-unit-fast-patterns-", async (tempDir) => {
+    await withTempDir("openclaw-unit-fast-patterns-", async (tempDir) => {
       const unitFastFile = unitFastTestFiles[0];
       const isolatedFile = unitFastIsolatedTestFiles[0];
       const timerFile = unitFastTimerTestFiles[0];

@@ -223,6 +223,16 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
   },
 }));
+Object.assign(subagentRegistryMock, {
+  clearLazySubagentSteerRestart: (
+    ...args: Parameters<typeof subagentRegistryMock.clearSubagentRunSteerRestart>
+  ) => subagentRegistryMock.clearSubagentRunSteerRestart(...args),
+  getLazySubagentRunByRunId: (...args: [string]) =>
+    subagentRegistryMock.getSubagentRunByRunId(...args),
+  recordLazySubagentSteerDispatch: (
+    ...args: Parameters<typeof subagentRegistryMock.recordAcceptedSubagentSteerDispatch>
+  ) => subagentRegistryMock.recordAcceptedSubagentSteerDispatch(...args),
+});
 const subagentDeliveryTargetHookMock = vi.fn(
   async (
     _eventValue?: unknown,

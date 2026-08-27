@@ -91,9 +91,9 @@ function createWakeHarness(params: {
     dispatchGatewayMethodInProcess,
     getRuntimeConfig: () => ({}) as OpenClawConfig,
     loadSubagentRegistryRuntime: async () => ({
-      clearSubagentRunSteerRestart,
-      getSubagentRunByRunId: vi.fn(async () => sourceEntry),
-      recordAcceptedSubagentSteerDispatch,
+      clearLazySubagentSteerRestart: clearSubagentRunSteerRestart,
+      getLazySubagentRunByRunId: vi.fn(async () => sourceEntry),
+      recordLazySubagentSteerDispatch: recordAcceptedSubagentSteerDispatch,
       replaceSubagentRunAfterSteer,
     }),
   } as unknown as Parameters<typeof wakeSubagentRunAfterDescendants>[1];

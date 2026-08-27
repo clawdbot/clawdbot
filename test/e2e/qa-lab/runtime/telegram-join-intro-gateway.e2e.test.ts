@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { withServer, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
   type MockOpenAiRequestSnapshot,
@@ -226,7 +226,7 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
       });
     },
     async (apiRoot) =>
-      await withTestDir("openclaw-telegram-join-intro-", async (workspace) => {
+      await withTempDir("openclaw-telegram-join-intro-", async (workspace) => {
         let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
         try {
           mock = await startQaMockOpenAiServer();

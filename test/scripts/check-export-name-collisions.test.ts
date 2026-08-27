@@ -10,7 +10,7 @@ import {
   findExportNameCollisions,
   isExcludedExportCollisionSource,
 } from "../../scripts/check-export-name-collisions.mts";
-import { withTestDir } from "../../src/test-utils/temp-dir.js";
+import { withTempDir } from "../../src/test-utils/temp-dir.js";
 
 const guardScriptPath = fileURLToPath(
   new URL("../../scripts/check-export-name-collisions.mts", import.meta.url),
@@ -194,7 +194,7 @@ describe("export name collision guard", () => {
   });
 
   it("discovers JavaScript source collisions", async () => {
-    await withTestDir("openclaw-export-collisions-", async (repoRoot) => {
+    await withTempDir("openclaw-export-collisions-", async (repoRoot) => {
       const sourceRoot = path.join(repoRoot, "src");
       await fs.mkdir(sourceRoot);
       await Promise.all([

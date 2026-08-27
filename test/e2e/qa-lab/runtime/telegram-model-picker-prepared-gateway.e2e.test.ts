@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { withServer, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { startQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 
@@ -228,7 +228,7 @@ test("keeps Telegram model-picker callbacks on the prepared Gateway catalog", as
       void handleRequest(req, res);
     },
     async (apiRoot) =>
-      await withTestDir("openclaw-telegram-model-picker-", async () => {
+      await withTempDir("openclaw-telegram-model-picker-", async () => {
         let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");

@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { withEnv, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -157,7 +157,7 @@ describe("browser config", () => {
     { name: "malformed", content: "not-a-relay-key\n" },
     { name: "valid", content: `${"a1".repeat(32)}\n` },
   ])("normalizes config independently of a $name relay secret", async ({ content }) => {
-    await withTestDir("openclaw-config-relay-", async (dir) => {
+    await withTempDir("openclaw-config-relay-", async (dir) => {
       const stateDir = fs.realpathSync(dir);
       const credentials = path.join(stateDir, "credentials");
       fs.mkdirSync(credentials, { mode: 0o700 });

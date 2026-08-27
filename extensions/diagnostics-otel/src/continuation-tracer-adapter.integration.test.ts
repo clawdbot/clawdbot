@@ -8,6 +8,17 @@ import {
 import { runAgentLoop, type AgentMessage, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  classifyContinuationWorkReason,
+  consumePendingWork,
+  createContinueWorkTool,
+  decodeWorkState,
+  executePendingContinuationWork,
+  resetContinuationWorkDispatchForTests,
+  scheduleContinuationWorkBatch,
+  type ContinuationRuntimeConfig,
+  type ContinueWorkRequest,
+} from "openclaw/plugin-sdk/continuation-test-runtime";
+import {
   emitTrustedDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
@@ -22,26 +33,15 @@ import {
   registerDiagnosticTracePropagationBridge,
   runWithDiagnosticTraceContext,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  listTaskFlowsForOwnerKey,
+  resetTaskFlowRegistryForTests,
+} from "openclaw/plugin-sdk/task-flow-test-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, test, vi } from "vitest";
 // This test spans the core capture/scheduler and plugin resolution boundary.
 // Production plugin code remains restricted to public Plugin SDK imports.
-import {
-  createContinueWorkTool,
-  type ContinueWorkRequest,
-} from "../../../src/agents/tools/continue-work-tool.js";
-import type { ContinuationRuntimeConfig } from "../../../src/auto-reply/continuation/types.js";
-import { executePendingContinuationWork } from "../../../src/auto-reply/continuation/work-dispatch-execution.js";
-import {
-  classifyContinuationWorkReason,
-  resetContinuationWorkDispatchForTests,
-  scheduleContinuationWorkBatch,
-} from "../../../src/auto-reply/continuation/work-dispatch.js";
-import { decodeWorkState } from "../../../src/auto-reply/continuation/work-flow-state.js";
-import { consumePendingWork } from "../../../src/auto-reply/continuation/work-store.js";
-import { resetSystemEventsForTest } from "../../../src/infra/system-events.js";
-import { listTaskFlowsForOwnerKey } from "../../../src/tasks/task-flow-runtime-internal.js";
-import { resetTaskFlowRegistryForTests } from "../../../src/tasks/task-runtime.test-helpers.js";
 import {
   parseDiagnosticTraceparent,
   resetContinuationTracer,

@@ -6,7 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe("infra/device-auth-store", () => {
   it("reads no device auth and creates no database when shared state is absent", async () => {
-    await withTestDir("openclaw-device-auth-readonly-missing-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-readonly-missing-", async (stateDir) => {
       const env = createEnv(stateDir);
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
 
@@ -54,7 +54,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("reads existing device auth without opening writable shared state", async () => {
-    await withTestDir("openclaw-device-auth-readonly-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-readonly-", async (stateDir) => {
       const env = createEnv(stateDir);
       storeDeviceAuthToken({
         deviceId: "device-1",
@@ -89,7 +89,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("never exposes a device token to a different gateway origin", async () => {
-    await withTestDir("openclaw-device-auth-origin-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
       const env = createEnv(stateDir);
       storeOriginDeviceToken({
         gatewayScope: "wss://one.example/rpc",
@@ -125,7 +125,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("upserts and clears only the exact origin, device, and normalized role", async () => {
-    await withTestDir("openclaw-device-auth-origin-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-origin-", async (stateDir) => {
       const env = createEnv(stateDir);
       storeOriginDeviceToken({
         gatewayScope: "wss://one.example",
@@ -183,7 +183,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("stores and loads normalized device auth tokens in SQLite", async () => {
-    await withTestDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
       vi.spyOn(Date, "now").mockReturnValue(1234);
       const env = createEnv(stateDir);
 
@@ -208,7 +208,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("isolates device ids and overwrites only the normalized role", async () => {
-    await withTestDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
       vi.spyOn(Date, "now").mockReturnValueOnce(1).mockReturnValueOnce(2).mockReturnValueOnce(3);
 
@@ -233,7 +233,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("fails closed for malformed canonical scope metadata", async () => {
-    await withTestDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
       const { db } = openOpenClawStateDatabase({ env });
       executeSqliteQuerySync(
@@ -263,7 +263,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("fails closed with repair guidance while retired JSON remains", async () => {
-    await withTestDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
       const legacyPath = path.join(stateDir, "identity", "device-auth.json");
       fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
@@ -320,7 +320,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("clears only the requested role and device", async () => {
-    await withTestDir("openclaw-device-auth-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
       storeDeviceAuthToken({ deviceId: "device-1", role: "operator", token: "operator", env });
       storeDeviceAuthToken({ deviceId: "device-1", role: "node", token: "node", env });
@@ -337,7 +337,7 @@ describe("infra/device-auth-store", () => {
   });
 
   it("keeps credentials rotated after a stale request snapshot", async () => {
-    await withTestDir("openclaw-device-auth-rotation-", async (stateDir) => {
+    await withTempDir("openclaw-device-auth-rotation-", async (stateDir) => {
       const env = createEnv(stateDir);
       const targets = [
         {

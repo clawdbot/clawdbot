@@ -7,7 +7,6 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { FormData as UndiciFormData } from "undici";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -72,61 +71,6 @@ type QueuedRequest = {
   reject: (reason?: unknown) => void;
   routeKey: string;
 };
-
-type FormDataLike = {
-  entries(): IterableIterator<[string, FormDataEntryValue]>;
-};
-
-function isFormDataLike(value: unknown): value is FormDataLike {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "entries" in value &&
-    typeof value.entries === "function"
-  );
-}
-
-function isMockedFetch(fetchImpl: RequestClientOptions["fetch"]): boolean {
-  return (
-    typeof fetchImpl === "function" && "mock" in fetchImpl && typeof fetchImpl.mock === "object"
-  );
-}
-
-function appendFormDataEntry(
-  target: InstanceType<typeof UndiciFormData>,
-  key: string,
-  value: FormDataEntryValue,
-) {
-  const filename = typeof value !== "string" && value.name.trim() ? value.name : undefined;
-  if (filename) {
-    target.append(key, value, filename);
-    return;
-  }
-  target.append(key, value);
-}
-
-function normalizeInitForCustomFetch(
-  fetchImpl: RequestClientOptions["fetch"],
-  init: RequestInit,
-): RequestInit {
-  if (
-    !fetchImpl ||
-    isMockedFetch(fetchImpl) ||
-    !isFormDataLike(init.body) ||
-    init.body instanceof UndiciFormData
-  ) {
-    return init;
-  }
-  const formData = new UndiciFormData();
-  for (const [key, value] of init.body.entries()) {
-    appendFormDataEntry(formData, key, value);
-  }
-  const headers = new Headers(init.headers);
-  headers.delete("content-length");
-  headers.delete("content-type");
-  // SAFETY: undici's FormData implements the WHATWG FormData runtime contract fetch expects; only the nominal DOM lib type differs.
-  return { ...init, headers, body: formData as unknown as BodyInit };
-}
 
 const defaultOptions = {
   tokenHeader: "Bot" as const,
@@ -309,10 +253,7 @@ export class RequestClient {
         body,
         signal,
       };
-      const response = await (this.customFetch ?? fetch)(
-        url,
-        this.customFetch ? normalizeInitForCustomFetch(this.customFetch, init) : init,
-      );
+      const response = await (this.customFetch ?? fetch)(url, init);
       const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);

@@ -50,7 +50,6 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   consumeTrackedToolExecutionStarted,
   resetAdjustedParamsByToolCallIdForTests,
@@ -71,7 +70,6 @@ import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
 const beforeToolCallTesting = {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   structuredReplaySafeToolCallIds,
 };

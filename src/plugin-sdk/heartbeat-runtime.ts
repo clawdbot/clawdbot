@@ -3,7 +3,7 @@ import { requestHeartbeatRaw as requestHeartbeatInternal } from "../infra/heartb
 
 type RequestHeartbeatOptions = Parameters<typeof requestHeartbeatInternal>[0];
 
-export function requestHeartbeat(opts: RequestHeartbeatOptions): void {
+export function requestPluginHeartbeat(opts: RequestHeartbeatOptions): void {
   requestHeartbeatInternal({
     source: opts.source,
     intent: opts.intent,

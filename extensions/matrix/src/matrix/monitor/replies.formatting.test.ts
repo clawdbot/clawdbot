@@ -17,7 +17,7 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import { setMatrixRuntime } from "../../runtime.js";
@@ -135,7 +135,7 @@ describe("Matrix automatic reply table presentation", () => {
   });
 
   it("keeps native tables in automatic media captions", async () => {
-    await withTestDir("matrix-native-table-caption-", async (tempDir) => {
+    await withTempDir("matrix-native-table-caption-", async (tempDir) => {
       const localRoot = await fs.realpath(tempDir);
       const mediaPath = path.join(localRoot, "attachment.txt");
       await fs.writeFile(mediaPath, "caption attachment fixture");

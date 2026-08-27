@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readMacOSDesktopGenerationFingerprint,
@@ -95,7 +95,7 @@ describe("Codex desktop generation owner", () => {
   });
 
   it("detects changes in every desktop candidate that can supply a fallback artifact", async () => {
-    await withTestDir("openclaw-codex-generation-fingerprint-", async (root) => {
+    await withTempDir("openclaw-codex-generation-fingerprint-", async (root) => {
       const chatGpt = candidate(root, "ChatGPT.app");
       const codex = candidate(root, "Codex.app");
       await Promise.all([
@@ -112,7 +112,7 @@ describe("Codex desktop generation owner", () => {
   });
 
   it("settles same-version Computer Use plugin content changes as a new generation", async () => {
-    await withTestDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
+    await withTempDir("openclaw-codex-generation-plugin-fingerprint-", async (root) => {
       const chatGpt = candidate(root, "ChatGPT.app");
       const pluginRoot = path.join(chatGpt.bundledMarketplacePath, "plugins", "computer-use");
       await Promise.all([

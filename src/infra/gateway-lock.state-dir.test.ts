@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayLockDir } from "../config/paths.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
@@ -22,7 +22,7 @@ afterEach(() => {
 
 describe("gateway lock state directory", () => {
   it("releases in-tree locks separately from Gateway lifecycle ownership", async () => {
-    await withTestDir("openclaw-gateway-lock-release-", async (root) => {
+    await withTempDir("openclaw-gateway-lock-release-", async (root) => {
       const stateDir = path.join(await fs.realpath(root), "state");
       const configPath = path.join(stateDir, "openclaw.json");
       await fs.mkdir(stateDir, { recursive: true });
@@ -47,7 +47,7 @@ describe("gateway lock state directory", () => {
   });
 
   it("keeps lock, coordinator, and reclaim paths inside the selected state", async () => {
-    await withTestDir("openclaw-gateway-lock-state-", async (root) => {
+    await withTempDir("openclaw-gateway-lock-state-", async (root) => {
       const canonicalRoot = await fs.realpath(root);
       const stateDir = path.join(canonicalRoot, "selected-state");
       const fakeHome = path.join(canonicalRoot, "home");
@@ -106,7 +106,7 @@ describe("gateway lock state directory", () => {
   });
 
   it("canonicalizes a missing state leaf through a symlinked parent", async () => {
-    await withTestDir("openclaw-gateway-lock-symlink-", async (root) => {
+    await withTempDir("openclaw-gateway-lock-symlink-", async (root) => {
       const canonicalRoot = await fs.realpath(root);
       const realParent = path.join(canonicalRoot, "real");
       const linkedParent = path.join(canonicalRoot, "linked");

@@ -274,9 +274,9 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
   );
   return {
     ...actual,
-    enqueueSystemEvent: (...args: Parameters<typeof actual.enqueueSystemEvent>) => {
+    enqueuePluginSystemEvent: (...args: Parameters<typeof actual.enqueuePluginSystemEvent>) => {
       enqueueSystemEventMock(...args);
-      return actual.enqueueSystemEvent(...args);
+      return actual.enqueuePluginSystemEvent(...args);
     },
   };
 });

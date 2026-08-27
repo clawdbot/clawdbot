@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
@@ -170,7 +170,7 @@ describe("msteamsPlugin", () => {
   });
 
   it("does not fall back from a selected unavailable configured certificate to an env file", async () => {
-    await withTestDir("msteams-certificate-precedence-", async (tempDir) => {
+    await withTempDir("msteams-certificate-precedence-", async (tempDir) => {
       const envCertificate = path.join(tempDir, "env-cert.pem");
       fs.writeFileSync(envCertificate, "available-certificate", "utf8");
       vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", envCertificate);
@@ -219,7 +219,7 @@ describe("msteamsPlugin", () => {
   it.skipIf(process.platform === "win32")(
     "preserves the existing symlink-friendly certificate file policy",
     async () => {
-      await withTestDir("msteams-certificate-symlink-", async (tempDir) => {
+      await withTempDir("msteams-certificate-symlink-", async (tempDir) => {
         const certificate = path.join(tempDir, "certificate.pem");
         const symlink = path.join(tempDir, "certificate-link.pem");
         fs.writeFileSync(certificate, "available-certificate", "utf8");

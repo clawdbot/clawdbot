@@ -54,7 +54,7 @@ function sanitizeSystemEventOptions(
  * (continuation-return) sets them through the direct `infra/system-events`
  * import, not this SDK re-export.
  */
-export function enqueueSystemEvent(
+export function enqueuePluginSystemEvent(
   text: string,
   options: Parameters<typeof enqueueSystemEventInternal>[1],
 ): boolean {

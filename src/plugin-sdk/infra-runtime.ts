@@ -5,10 +5,7 @@
  */
 
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
-import {
-  enqueueSystemEventEntryRaw as enqueueSystemEventEntryInternal,
-  enqueueSystemEventRaw as enqueueSystemEventInternal,
-} from "../infra/system-events.js";
+import { enqueueSystemEventEntryRaw as enqueueSystemEventEntryInternal } from "../infra/system-events.js";
 export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
@@ -309,25 +306,8 @@ export {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 
-/**
- * Untrusted by construction — force `trusted: false` so a plugin importing this
- * deprecated barrel cannot attach trusted-only provenance, and strip
- * `sessionDeliveryAckId` / `sessionDeliveryAckStateDir` so a plugin cannot forge
- * session-delivery ack ids to reach `deleteDeliveryQueueEntry` at an
- * attacker-controlled path. Trusted internal producers use the direct
- * `infra/system-events` import.
- */
-export function enqueueSystemEvent(
-  text: string,
-  options: Parameters<typeof enqueueSystemEventInternal>[1],
-): boolean {
-  return enqueueSystemEventInternal(text, {
-    ...options,
-    trusted: false,
-    sessionDeliveryAckId: undefined,
-    sessionDeliveryAckStateDir: undefined,
-  });
-}
+/** @deprecated Use the focused system-event-runtime subpath. */
+export { enqueuePluginSystemEvent as enqueueSystemEvent } from "./system-event-runtime.js";
 
 export function enqueueSystemEventEntry(
   text: string,

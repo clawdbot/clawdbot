@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 // Codex tests cover config plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
@@ -906,7 +906,7 @@ describe("Codex app-server config", () => {
   });
 
   it("checks shared user config before enabling model-backed approval review", async () => {
-    await withTestDir("openclaw-codex-user-home-", async (codexHome) => {
+    await withTempDir("openclaw-codex-user-home-", async (codexHome) => {
       await fs.writeFile(
         path.join(codexHome, "config.toml"),
         'openai_base_url = "http://localhost:8080/v1"\n',
@@ -1976,7 +1976,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
   });
 
   it("keeps desktop ownership for Computer Use persisted in an agent Codex home", async () => {
-    await withTestDir("openclaw-codex-agent-home-", async (agentDir) => {
+    await withTempDir("openclaw-codex-agent-home-", async (agentDir) => {
       const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
       const codexHome = path.join(agentDir, "codex-home");
       await fs.mkdir(codexHome);
@@ -1995,7 +1995,7 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
   });
 
   it("uses desktop-first when persisted Codex state cannot be read", async () => {
-    await withTestDir("openclaw-codex-unreadable-home-", async (agentDir) => {
+    await withTempDir("openclaw-codex-unreadable-home-", async (agentDir) => {
       const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
       await fs.mkdir(path.join(agentDir, "codex-home"), { recursive: true });
       await fs.mkdir(path.join(agentDir, "codex-home", "config.toml"));

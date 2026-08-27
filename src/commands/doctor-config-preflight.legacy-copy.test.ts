@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 
 const envKeys = ["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] as const;
@@ -38,7 +38,7 @@ describe("doctor legacy config migration failures", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "surfaces a copy failure instead of proceeding as a fresh install",
     async () => {
-      await withTestDir("openclaw-doctor-legacy-copy-", async (home) => {
+      await withTempDir("openclaw-doctor-legacy-copy-", async (home) => {
         const legacyDir = path.join(home, ".clawdbot");
         await fs.mkdir(legacyDir, { recursive: true });
         await fs.writeFile(path.join(legacyDir, "clawdbot.json"), "{}\n", "utf-8");
@@ -63,7 +63,7 @@ describe("doctor legacy config migration failures", () => {
   );
 
   it("migrates the legacy config and reports the change when the copy works", async () => {
-    await withTestDir("openclaw-doctor-legacy-copy-", async (home) => {
+    await withTempDir("openclaw-doctor-legacy-copy-", async (home) => {
       const legacyDir = path.join(home, ".clawdbot");
       await fs.mkdir(legacyDir, { recursive: true });
       await fs.writeFile(path.join(legacyDir, "clawdbot.json"), "{}\n", "utf-8");

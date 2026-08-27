@@ -7,7 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { withEnvAsync, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, type RawData } from "ws";
 import { parsePairingString } from "../../../chrome-extension/modules/relay-core.js";
@@ -55,7 +55,7 @@ describe.sequential("local Gateway extension relay wakeup", () => {
     { name: "disabled Browser", enabled: false, driver: "extension" as const },
     { name: "no extension profiles", enabled: true, driver: "openclaw" as const },
   ])("leaves the relay key absent with $name", async ({ enabled, driver }) => {
-    await withTestDir("openclaw-relay-service-", async (dir) => {
+    await withTempDir("openclaw-relay-service-", async (dir) => {
       const stateDir = await fs.realpath(dir);
       const credentials = path.join(stateDir, "credentials");
       const config = {

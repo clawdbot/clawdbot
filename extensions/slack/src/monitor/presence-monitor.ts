@@ -1,7 +1,7 @@
 // Slack plugin module polls selected participants and routes away-to-active transitions.
 import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { requestPluginHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -174,7 +174,7 @@ export function createSlackPresenceMonitor(params: {
   error?: (message: string) => void;
   nowMs?: () => number;
   enqueue?: typeof enqueueRoutedSystemEvent;
-  wake?: typeof requestHeartbeat;
+  wake?: typeof requestPluginHeartbeat;
 }): SlackPresenceMonitor {
   const resolveClient = params.resolveClient ?? (() => params.client);
   if (!params.client && !params.resolveClient) {
@@ -184,7 +184,7 @@ export function createSlackPresenceMonitor(params: {
   const presenceByUser = new Map<string, PresenceObservation>();
   const nowMs = params.nowMs ?? Date.now;
   const enqueue = params.enqueue ?? enqueueRoutedSystemEvent;
-  const wake = params.wake ?? requestHeartbeat;
+  const wake = params.wake ?? requestPluginHeartbeat;
   let pollOffset = 0;
   let timer: NodeJS.Timeout | undefined;
   let activePoll: Promise<void> | undefined;

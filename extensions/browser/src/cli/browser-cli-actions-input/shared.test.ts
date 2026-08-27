@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { readActionsPayload, readFields } from "./shared.js";
 
@@ -50,7 +50,7 @@ describe("readFields", () => {
   });
 
   it("preserves oversized fields files that normalize to a small request", async () => {
-    await withTestDir("openclaw-browser-fields-", async (tempDir) => {
+    await withTempDir("openclaw-browser-fields-", async (tempDir) => {
       const fieldsPath = path.join(tempDir, "fields.json");
       await fs.writeFile(fieldsPath, `[${" ".repeat(1_048_577)}{"ref":"1","value":"ok"}]`);
 
@@ -75,7 +75,7 @@ describe("readActionsPayload", () => {
 
   it("bounds action files with the same byte limit as stdin", async () => {
     const maxBytes = 1_000_000;
-    await withTestDir("openclaw-browser-actions-", async (tempDir) => {
+    await withTempDir("openclaw-browser-actions-", async (tempDir) => {
       const actionsPath = path.join(tempDir, "actions.json");
       await fs.writeFile(actionsPath, Buffer.alloc(maxBytes + 1, 0x20));
       await expect(readActionsPayload({ actionsFile: actionsPath })).rejects.toMatchObject({
@@ -91,7 +91,7 @@ describe("readActionsPayload", () => {
 
   it("follows a symlinked action file to its bounded target", async () => {
     const maxBytes = 1_000_000;
-    await withTestDir("openclaw-browser-actions-", async (tempDir) => {
+    await withTempDir("openclaw-browser-actions-", async (tempDir) => {
       const targetPath = path.join(tempDir, "actions-target.json");
       const linkPath = path.join(tempDir, "actions-link.json");
       await fs.writeFile(targetPath, Buffer.alloc(maxBytes, 0x20));
@@ -104,7 +104,7 @@ describe("readActionsPayload", () => {
 
   it("rejects an oversized symlinked action file target", async () => {
     const maxBytes = 1_000_000;
-    await withTestDir("openclaw-browser-actions-", async (tempDir) => {
+    await withTempDir("openclaw-browser-actions-", async (tempDir) => {
       const targetPath = path.join(tempDir, "actions-target.json");
       const linkPath = path.join(tempDir, "actions-link.json");
       await fs.writeFile(targetPath, Buffer.alloc(maxBytes + 1, 0x20));
@@ -120,7 +120,7 @@ describe("readActionsPayload", () => {
   it.skipIf(process.platform === "win32")(
     "rejects FIFO action files without opening them",
     async () => {
-      await withTestDir("openclaw-browser-actions-", async (tempDir) => {
+      await withTempDir("openclaw-browser-actions-", async (tempDir) => {
         const fifoPath = path.join(tempDir, "actions.pipe");
         execFileSync("mkfifo", [fifoPath]);
 

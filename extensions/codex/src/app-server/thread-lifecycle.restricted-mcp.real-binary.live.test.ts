@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createIsolatedCodexAppServerClient } from "./shared-client.js";
@@ -21,7 +21,7 @@ afterEach(() => {
 
 describeLive("Codex restricted MCP real-binary lifecycle", () => {
   it("starts with inherited MCP disabled and exposes no tools", async () => {
-    await withTestDir("openclaw-codex-restricted-mcp-", async (root) => {
+    await withTempDir("openclaw-codex-restricted-mcp-", async (root) => {
       const agentDir = path.join(root, "agent");
       const workspace = path.join(root, "workspace");
       const launchMarker = path.join(root, "mcp-launched");

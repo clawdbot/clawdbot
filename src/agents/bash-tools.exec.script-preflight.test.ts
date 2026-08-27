@@ -10,7 +10,7 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { detectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { validateScriptFileForShellBleed } from "./bash-tools.exec-script-preflight.js";
 import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -63,7 +63,7 @@ beforeEach(() => {
 async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
   hookName: "afterPreOpenLstat" | "beforeOpen";
 }) {
-  await withTestDir("openclaw-exec-preflight-open-race-", async (parent) => {
+  await withTempDir("openclaw-exec-preflight-open-race-", async (parent) => {
     const workdir = path.join(parent, "workdir");
     const scriptPath = path.join(workdir, "script.js");
     const outsidePath = path.join(parent, "outside.js");
@@ -145,7 +145,7 @@ describeNonWin("exec script preflight", () => {
     { name: "denies changed bytes", mutate: true },
     { name: "executes unchanged bytes", mutate: false },
   ])("revalidates gateway approval script operands before spawn: $name", async ({ mutate }) => {
-    await withTestDir("openclaw-exec-approval-binding-", async (tmp) => {
+    await withTempDir("openclaw-exec-approval-binding-", async (tmp) => {
       const script = path.join(tmp, "script.sh");
       await fs.writeFile(script, "#!/bin/sh\necho approved\n");
       const prepared = await prepareSystemRunMutableFileApproval({
@@ -212,7 +212,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("blocks shell env var injection tokens in python scripts before execution", async () => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const pyPath = path.join(tmp, "bad.py");
 
       await fs.writeFile(
@@ -238,7 +238,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("blocks obvious shell-as-js output before node execution", async () => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");
 
       await fs.writeFile(
@@ -274,7 +274,7 @@ describeNonWin("exec script preflight", () => {
       command: "node ..bad.js",
     },
   ])("blocks shell env var injection through $name", async ({ callId, fileName, command }) => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, fileName);
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
@@ -286,7 +286,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("validates in-workdir symlinked script entrypoints", async () => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const targetPath = path.join(tmp, "bad-target.js");
       const linkPath = path.join(tmp, "link.js");
       await fs.writeFile(targetPath, "const value = $DM_JSON;", "utf-8");
@@ -303,7 +303,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("validates scripts under literal tilde directories in workdir", async () => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const literalTildeDir = path.join(tmp, "~");
       await fs.mkdir(literalTildeDir, { recursive: true });
       await fs.writeFile(path.join(literalTildeDir, "bad.js"), "const value = $DM_JSON;", "utf-8");
@@ -341,7 +341,7 @@ describeNonWin("exec script preflight", () => {
       command: "env node bad.js",
     },
   ])("validates $name", async ({ callId, fileName, contents, command }) => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, fileName), contents, "utf-8");
 
       const tool = createPreflightTool();
@@ -389,7 +389,7 @@ describeNonWin("exec script preflight", () => {
       ],
     },
   ])("validates $name", async ({ callId, command, files }) => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       for (const { fileName, contents } of files) {
         await fs.writeFile(path.join(tmp, fileName), contents, "utf-8");
       }
@@ -402,7 +402,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("validates node --require preload modules before a benign entry script", async () => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad-preload.js"), "const value = $DM_JSON;", "utf-8");
       await fs.writeFile(path.join(tmp, "app.js"), "console.log('ok')", "utf-8");
 
@@ -438,7 +438,7 @@ describeNonWin("exec script preflight", () => {
       command: 'node --import bad.js -e "console.log(123)"',
     },
   ])("validates node $name", async ({ callId, command }) => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
       const tool = createPreflightTool();
@@ -449,7 +449,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("skips script-file preflight in yolo host mode", async () => {
-    await withTestDir("openclaw-exec-preflight-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-", async (tmp) => {
       const jsPath = path.join(tmp, "bad.js");
       await fs.writeFile(jsPath, "const value = $DM_JSON;", "utf-8");
 
@@ -487,7 +487,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("skips preflight file reads for script paths outside the workdir", async () => {
-    await withTestDir("openclaw-exec-preflight-parent-", async (parent) => {
+    await withTempDir("openclaw-exec-preflight-parent-", async (parent) => {
       const outsidePath = path.join(parent, "outside.js");
       const workdir = path.join(parent, "workdir");
       await fs.mkdir(workdir, { recursive: true });
@@ -515,7 +515,7 @@ describeNonWin("exec script preflight", () => {
   });
 
   it("opens preflight script reads with O_NONBLOCK to avoid FIFO stalls", async () => {
-    await withTestDir("openclaw-exec-preflight-nonblock-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-nonblock-", async (tmp) => {
       const scriptPath = path.join(tmp, "script.js");
       await fs.writeFile(scriptPath, 'console.log("ok")', "utf-8");
       const scriptRealPath = await fs.realpath(scriptPath);
@@ -603,7 +603,7 @@ describeNonWin("exec script preflight", () => {
 
 describeWin("exec script preflight on windows path syntax", () => {
   it("preserves windows-style python relative path separators during script extraction", async () => {
-    await withTestDir("openclaw-exec-preflight-win-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.py"), "payload = $DM_JSON", "utf-8");
 
       const tool = createPreflightTool();
@@ -617,7 +617,7 @@ describeWin("exec script preflight on windows path syntax", () => {
   });
 
   it("preserves windows-style node relative path separators during script extraction", async () => {
-    await withTestDir("openclaw-exec-preflight-win-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
       await fs.writeFile(path.join(tmp, "bad.js"), "const value = $DM_JSON;", "utf-8");
 
       const tool = createPreflightTool();
@@ -631,7 +631,7 @@ describeWin("exec script preflight on windows path syntax", () => {
   });
 
   it("preserves windows-style python absolute drive paths during script extraction", async () => {
-    await withTestDir("openclaw-exec-preflight-win-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
       const absPath = path.join(tmp, "bad.py");
       await fs.writeFile(absPath, "payload = $DM_JSON", "utf-8");
       const winAbsPath = absPath.replaceAll("/", "\\");
@@ -647,7 +647,7 @@ describeWin("exec script preflight on windows path syntax", () => {
   });
 
   it("preserves windows-style nested relative path separators during script extraction", async () => {
-    await withTestDir("openclaw-exec-preflight-win-", async (tmp) => {
+    await withTempDir("openclaw-exec-preflight-win-", async (tmp) => {
       await fs.mkdir(path.join(tmp, "subdir"), { recursive: true });
       await fs.writeFile(path.join(tmp, "subdir", "bad.py"), "payload = $DM_JSON", "utf-8");
 

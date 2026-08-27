@@ -234,5 +234,3 @@ export async function runHeartbeatOnceCore(opts: HeartbeatRunOptions): Promise<H
     heartbeatTyping?.onCleanup?.();
   }
 }
-
-export const runHeartbeatOnce = runHeartbeatOnceCore;

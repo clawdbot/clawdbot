@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { createDedupeCache } from "./dedupe.js";
 import {
   emitDiagnosticEvent,
@@ -43,7 +43,7 @@ const missingStoreDefaultCases = [
 describe("infra store", () => {
   describe("state migrations fs", () => {
     it("treats array session stores as invalid", async () => {
-      await withTestDir("openclaw-session-store-", async (dir) => {
+      await withTempDir("openclaw-session-store-", async (dir) => {
         const storePath = path.join(dir, "sessions.json");
         await fs.writeFile(storePath, "[]", "utf-8");
 
@@ -54,7 +54,7 @@ describe("infra store", () => {
     });
 
     it("parses JSON5 object session stores", async () => {
-      await withTestDir("openclaw-session-store-", async (dir) => {
+      await withTempDir("openclaw-session-store-", async (dir) => {
         const storePath = path.join(dir, "sessions.json");
         await fs.writeFile(
           storePath,
@@ -74,14 +74,14 @@ describe("infra store", () => {
     it.each(missingStoreDefaultCases)(
       "$name returns defaults when missing",
       async ({ assertDefaults, prefix }) => {
-        await withTestDir(prefix, assertDefaults);
+        await withTempDir(prefix, assertDefaults);
       },
     );
   });
 
   describe("voicewake store", () => {
     it("sanitizes and persists triggers", async () => {
-      await withTestDir("openclaw-voicewake-", async (baseDir) => {
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
         const saved = await setVoiceWakeTriggers(["  hi  ", "", "  there "], baseDir);
         expect(saved.triggers).toEqual(["hi", "there"]);
         expect(saved.updatedAtMs).toBeGreaterThan(0);
@@ -93,14 +93,14 @@ describe("infra store", () => {
     });
 
     it("falls back to defaults when triggers empty", async () => {
-      await withTestDir("openclaw-voicewake-", async (baseDir) => {
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
         const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
         expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
       });
     });
 
     it("ignores retired JSON trigger files at runtime", async () => {
-      await withTestDir("openclaw-voicewake-", async (baseDir) => {
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
         await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
         await fs.writeFile(
           path.join(baseDir, "settings", "voicewake.json"),

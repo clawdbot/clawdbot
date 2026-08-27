@@ -6,7 +6,7 @@ import {
   readFileUtf8AndCleanup,
   stubFetchResponse,
 } from "../test-utils/camera-url-test-helpers.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 
 type PublishOutputFileAtomically =
   typeof import("./output-file.runtime.js").publishOutputFileAtomically;
@@ -75,7 +75,7 @@ let writeScreenSnapshotToFile: typeof import("./nodes-screen.js").writeScreenSna
 let publishOutputFileAtomically: PublishOutputFileAtomically;
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
-  return await withTestDir("openclaw-test-", run);
+  return await withTempDir("openclaw-test-", run);
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {

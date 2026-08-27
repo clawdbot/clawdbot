@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { withServer, withTestDir } from "openclaw/plugin-sdk/test-env";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { startQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 
@@ -93,7 +93,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
       });
     },
     async (apiRoot) =>
-      await withTestDir("openclaw-telegram-failure-settlement-", async (workspace) => {
+      await withTempDir("openclaw-telegram-failure-settlement-", async (workspace) => {
         let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");

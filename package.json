@@ -618,6 +618,9 @@
     "./plugin-sdk/concurrency-runtime": {
       "default": "./dist/plugin-sdk/concurrency-runtime.js"
     },
+    "./plugin-sdk/continuation-test-runtime": {
+      "default": "./dist/plugin-sdk/continuation-test-runtime.js"
+    },
     "./plugin-sdk/dedupe-runtime": {
       "types": "./dist/plugin-sdk/dedupe-runtime.d.ts",
       "default": "./dist/plugin-sdk/dedupe-runtime.js"
@@ -856,6 +859,9 @@
     "./plugin-sdk/lazy-runtime": {
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
+    },
+    "./plugin-sdk/task-flow-test-runtime": {
+      "default": "./dist/plugin-sdk/task-flow-test-runtime.js"
     },
     "./plugin-sdk/temp-path": {
       "types": "./dist/plugin-sdk/temp-path.d.ts",

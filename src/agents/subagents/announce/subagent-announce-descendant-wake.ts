@@ -106,11 +106,11 @@ export async function wakeSubagentRunAfterDescendants(
   });
   const wakeDispatchId = buildAnnounceIdempotencyKey(`${params.announceId}:wake`);
   const registryRuntime = await deps.loadSubagentRegistryRuntime();
-  const sourceEntry = await registryRuntime.getSubagentRunByRunId(params.runId);
+  const sourceEntry = await registryRuntime.getLazySubagentRunByRunId(params.runId);
   if (!sourceEntry) {
     return "not-woken";
   }
-  const reservedDispatch = await registryRuntime.recordAcceptedSubagentSteerDispatch({
+  const reservedDispatch = await registryRuntime.recordLazySubagentSteerDispatch({
     runId: params.runId,
     expected: sourceEntry,
     gatewayRunId: wakeDispatchId,
@@ -129,7 +129,7 @@ export async function wakeSubagentRunAfterDescendants(
     if (reservedDispatch.status === "rejected") {
       return "not-woken";
     }
-    const cleared = await registryRuntime.clearSubagentRunSteerRestart(
+    const cleared = await registryRuntime.clearLazySubagentSteerRestart(
       reservedDispatch.ownerRunId,
       reservedDispatch.owner,
       reservedDispatch.dispatch,
@@ -145,7 +145,7 @@ export async function wakeSubagentRunAfterDescendants(
   const terminateUnownedWake = async (
     gatewayRunId: string,
   ): Promise<SubagentDescendantWakeOutcome> => {
-    const acceptedDispatch = await registryRuntime.recordAcceptedSubagentSteerDispatch({
+    const acceptedDispatch = await registryRuntime.recordLazySubagentSteerDispatch({
       runId: wakeDispatchOwnership.ownerRunId,
       expected: wakeDispatchOwnership.owner,
       gatewayRunId,
@@ -182,7 +182,7 @@ export async function wakeSubagentRunAfterDescendants(
       callGateway: deps.callGateway,
     });
     if (terminated) {
-      await registryRuntime.clearSubagentRunSteerRestart(
+      await registryRuntime.clearLazySubagentSteerRestart(
         wakeDispatchOwnership.ownerRunId,
         wakeDispatchOwnership.owner,
         wakeDispatchOwnership.dispatch,

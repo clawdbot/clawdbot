@@ -132,17 +132,17 @@ const loadSubagentRegistryRuntimeForTest = async () =>
     countPendingDescendantRuns: mod.countPendingDescendantRuns,
     hasDescendantRunAwaitingSettle,
     getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
-    getSubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
+    getLazySubagentRunByRunId: async (runId: string) => mod.getSubagentRunByRunId(runId),
     isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
     listAncestorSessionKeys,
     listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-    recordAcceptedSubagentSteerDispatch: async (
+    recordLazySubagentSteerDispatch: async (
       params: Parameters<typeof mod.recordAcceptedSubagentSteerDispatch>[0],
     ) => mod.recordAcceptedSubagentSteerDispatch(params),
     replaceSubagentRunAfterSteer: async (
       params: Parameters<typeof mod.replaceSubagentRunAfterSteerCore>[0],
     ) => mod.replaceSubagentRunAfterSteerCore(params),
-    clearSubagentRunSteerRestart: async (
+    clearLazySubagentSteerRestart: async (
       ...args: Parameters<typeof mod.clearSubagentRunSteerRestart>
     ) => mod.clearSubagentRunSteerRestart(...args),
     resolveRequesterForChildSession: mod.resolveRequesterForChildSession,

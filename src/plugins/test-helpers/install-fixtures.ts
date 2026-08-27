@@ -1,7 +1,7 @@
 // Plugin install fixture helpers build generated bundle layouts for install tests.
 import fs from "node:fs";
 import path from "node:path";
-import { withTestDir } from "../../test-utils/temp-dir.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
 import type { PluginInstallArtifactConsentHandler } from "../install-types.js";
 import { createColdPluginFixture } from "./cold-plugin-fixtures.js";
 
@@ -37,7 +37,7 @@ export async function invokePluginArtifactInstallMock<
   ) {
     return result;
   }
-  return await withTestDir("openclaw-plugin-staged-", async (rootDir) => {
+  return await withTempDir("openclaw-plugin-staged-", async (rootDir) => {
     const stagedArtifactDir = fs.realpathSync(rootDir);
     createColdPluginFixture({
       rootDir: stagedArtifactDir,

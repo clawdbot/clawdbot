@@ -164,7 +164,7 @@ vi.mock("../infra/heartbeat-runner.js", () => ({
   resolveHeartbeatSchedulerSeed: () => "test-seed",
 }));
 
-vi.mock("../infra/heartbeat-runner-run.js", () => ({ runHeartbeatOnce }));
+vi.mock("../infra/heartbeat-runner-run.js", () => ({ runHeartbeatOnceCore: runHeartbeatOnce }));
 
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(

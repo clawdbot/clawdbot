@@ -5,7 +5,7 @@ import { createExecTool } from "../agents/bash-tools.js";
 import { resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureEnv } from "../test-utils/env.js";
-import { withTestDir } from "../test-utils/temp-dir.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { clearGatewayAgentCliShim, prepareGatewayAgentCliShim } from "./openclaw-cli-shim.js";
 
 const envSnapshot = captureEnv(["OPENCLAW_EXEC_SHELL_SNAPSHOT", "OPENCLAW_PROFILE", "PATH"]);
@@ -24,7 +24,7 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
     { profile: "work", expectedArgs: ["--profile", "work", "probe"] },
     { profile: undefined, expectedArgs: ["probe"] },
   ])("pins the running CLI before configured PATH entries (profile=$profile)", async (testCase) => {
-    await withTestDir("openclaw-agent-cli-shim-", async (root) => {
+    await withTempDir("openclaw-agent-cli-shim-", async (root) => {
       const entryPath = path.join(root, "gateway-entry.mjs");
       const staleBinDir = path.join(root, "stale-bin");
       const staleCliPath = path.join(staleBinDir, "openclaw");
@@ -75,7 +75,7 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
 });
 
 it("renders a Windows PATH launcher for the running CLI", async () => {
-  await withTestDir("openclaw-agent-cli-shim-win-", async (root) => {
+  await withTempDir("openclaw-agent-cli-shim-win-", async (root) => {
     await prepareGatewayAgentCliShim({
       env: { OPENCLAW_PROFILE: "work" },
       invocation: {
