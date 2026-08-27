@@ -57,7 +57,9 @@ describe("chat pane composer prefill attention", () => {
 
     expect(document.activeElement).toBe(textarea);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(599);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -69,10 +71,10 @@ describe("chat pane composer prefill attention", () => {
     lifecycle.updated(new Map([["focusComposer", false]]));
     vi.advanceTimersByTime(300);
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(599);
 
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(300);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
