@@ -81,7 +81,7 @@ export async function rebuildRolledBackGitRuntime(params: {
     return appendFailure("manager-unavailable", manager.reason);
   }
   try {
-    const installEnv = resolveInstallEnv(manager.manager, manager.env);
+    const installEnv = resolveInstallEnv(manager.manager, manager.env ?? params.defaultCommandEnv);
     let installed = await appendStep(
       "git rollback deps install",
       managerInstallArgs(manager.manager, {
