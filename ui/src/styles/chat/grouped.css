@@ -920,10 +920,7 @@ img.chat-avatar.chat-avatar--logo {
   transition: opacity 150ms ease;
 }
 
-.chat-copy-btn__icon-check {
-  opacity: 0;
-}
-
+.chat-copy-btn__icon-check,
 .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
   opacity: 0;
 }

@@ -247,7 +247,7 @@ describe("openclaw-file-preview-modal", () => {
   it.each([true, false])(
     "restores localized file-copy labels after pending success %s",
     async (copied) => {
-      const write = createDeferred<void>();
+      const write = createDeferred();
       const writeText = vi.fn(() => write.promise);
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       Object.defineProperty(document, "execCommand", { configurable: true, value: () => false });

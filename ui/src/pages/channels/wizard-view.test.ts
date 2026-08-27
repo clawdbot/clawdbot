@@ -203,7 +203,7 @@ describe("renderChannelWizard", () => {
   )(
     "keeps channel-copy success $copied accessible across a $phase locale rerender",
     async ({ copied, phase }) => {
-      const write = createDeferred<void>();
+      const write = createDeferred();
       const writeText = vi.fn(() => write.promise);
       const execCommand = vi.fn(() => false);
       vi.stubGlobal("navigator", { clipboard: { writeText } });

@@ -175,7 +175,8 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       opacity: 1;
     }
 
-    .item-icon svg {
+    .item-icon svg,
+    .chat-copy-btn svg {
       width: 16px;
       height: 16px;
       stroke: currentColor;
@@ -283,10 +284,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       transition: opacity 150ms ease;
     }
 
-    .chat-copy-btn__icon-check {
-      opacity: 0;
-    }
-
+    .chat-copy-btn__icon-check,
     .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
       opacity: 0;
     }
@@ -310,16 +308,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border-color: var(--ok-subtle);
       background: var(--ok-subtle);
       color: var(--ok);
-    }
-
-    .chat-copy-btn svg {
-      width: 16px;
-      height: 16px;
-      stroke: currentColor;
-      fill: none;
-      stroke-width: 1.5px;
-      stroke-linecap: round;
-      stroke-linejoin: round;
     }
 
     .chips {

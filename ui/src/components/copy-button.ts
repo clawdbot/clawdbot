@@ -58,7 +58,7 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
 
   button.dataset.copyState = copied ? "copied" : "error";
   // Keep a locale rerender that landed while the clipboard write was pending.
-  idleLabel = readButtonLabel(button) ?? idleLabel;
+  const resetLabel = readButtonLabel(button) ?? idleLabel;
   const feedbackLabel = t(copied ? "common.copied" : "common.copyFailed");
   setButtonLabel(button, feedbackLabel, true);
 
@@ -72,7 +72,7 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
     const renderedLabel = readButtonLabel(button);
     setButtonLabel(
       button,
-      renderedLabel && renderedLabel !== feedbackLabel ? renderedLabel : idleLabel,
+      renderedLabel && renderedLabel !== feedbackLabel ? renderedLabel : resetLabel,
     );
   }, duration);
   return copied;
