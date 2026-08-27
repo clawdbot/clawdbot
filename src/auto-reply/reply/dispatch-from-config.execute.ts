@@ -598,10 +598,10 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
         `dispatch-from-config: deferred final text fallback failed: ${formatErrorMessage(fallbackError)}`,
       );
     }
-    const admittedAgentRun = getAgentRunTerminalOutcome() === "completed";
+    const failedAgentRun = getAgentRunTerminalOutcome() === "failed";
     if (
       params.replyOptions?.isHeartbeat === true ||
-      (!admittedAgentRun && !didDeliverVisiblePartialReply) ||
+      (!failedAgentRun && !didDeliverVisiblePartialReply) ||
       isDispatchOperationAborted()
     ) {
       throw error;

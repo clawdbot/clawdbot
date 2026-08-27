@@ -234,7 +234,7 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       dispatchThroughSharedOwner({
         ...params,
         replyResolver: async (_ctx, options) => {
-          options?.onAgentRunStart?.("provider-500-run");
+          options?.onAgentRunTerminalOutcome?.("failed");
           throw providerError;
         },
       }),

@@ -142,7 +142,22 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     );
   });
 
-  it("records an admitted failure before the first visible reply", async () => {
+  it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
+    const resolverError = new Error("final delivery failed after completion");
+    const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
+      _ctx,
+      options,
+    ) => {
+      options?.onAgentRunTerminalOutcome?.("completed");
+      throw resolverError;
+    };
+
+    await expect(dispatchReplyFromConfig(createVisibleDispatchParams(replyResolver))).rejects.toBe(
+      resolverError,
+    );
+  });
+
+  it("records a terminal agent failure before the first visible reply", async () => {
     const resolverError = new Error("provider failed before output");
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
@@ -153,7 +168,7 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
         throw new Error("reply options required for terminal failure");
       }
       replyOperation = options.replyOperation;
-      options.onAgentRunStart?.("failed-before-output");
+      options.onAgentRunTerminalOutcome?.("failed");
       throw resolverError;
     };
     const dispatchParams = {
