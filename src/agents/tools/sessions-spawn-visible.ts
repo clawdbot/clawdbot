@@ -114,6 +114,11 @@ export async function maybeSpawnVisibleSession(params: {
   const categoryProvided = Object.hasOwn(params.raw, "category");
   const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
   if (params.raw.visible !== true) {
+    if (params.runtime === "acp" && requestedCategory) {
+      throw new ToolInputError(
+        'category is only available for visible dashboard sessions. Choose one: omit category for a hidden or ACP run; or set visible=true, use runtime="subagent", and omit mode and streamTo.',
+      );
+    }
     const visibleOnlyParams = [
       ["category", categoryProvided ? requestedCategory : undefined],
       ["worktree", worktree],
