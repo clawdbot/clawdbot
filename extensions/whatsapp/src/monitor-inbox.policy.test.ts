@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { WebInboundMessage } from "./inbound/types.js";
 import {
   DEFAULT_ACCOUNT_ID,
-  expectPairingPromptSent,
   getAuthDir,
   getMonitorWebInbox,
   getSock,
@@ -11,6 +10,7 @@ import {
   mockLoadConfig,
   settleInboundWork,
   waitForMessageCalls,
+  waitForPairingPromptSent,
 } from "./monitor-inbox.test-harness.js";
 
 const nowSeconds = (offsetMs = 0) => Math.floor((Date.now() + offsetMs) / 1000);
@@ -122,7 +122,7 @@ describe("web monitor inbox", () => {
         }),
       ),
     );
-    await vi.waitFor(() => expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999"));
+    await waitForPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     // Should NOT call onMessage for unauthorized senders
     expect(onMessage).not.toHaveBeenCalled();

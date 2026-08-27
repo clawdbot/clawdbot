@@ -353,7 +353,7 @@ export function buildNotifyMessageUpsert(params: {
   };
 }
 
-export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
@@ -362,6 +362,15 @@ export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164:
     idLine: `Your WhatsApp phone number: ${senderE164}`,
     code: "PAIRCODE",
   });
+}
+
+export async function waitForPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+  await vi.waitFor(
+    () => expectPairingPromptSent(sock, jid, senderE164),
+    // Saturated no-isolate suite runs can stall the worker (sync module fetches
+    // against the shared transform queue) past vi.waitFor's 1s default budget.
+    { timeout: 5_000, interval: 5 },
+  );
 }
 
 let authDir: string | undefined;
