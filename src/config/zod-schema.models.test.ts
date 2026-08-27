@@ -3,6 +3,16 @@ import { describe, expect, it } from "vitest";
 import { ModelsConfigSchema } from "./zod-schema.core.js";
 
 describe("ModelsConfigSchema", () => {
+  const parseModelCompat = (compat: Record<string, unknown>) =>
+    ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          models: [{ id: "custom-model", name: "Custom Model", compat }],
+        },
+      },
+    });
+
   it.each([
     "claude-cli",
     "azure-openai-responses",
@@ -132,5 +142,44 @@ describe("ModelsConfigSchema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it.each([
+    [
+      "openRouterRouting",
+      {
+        openRouterRouting: {
+          allow_fallbacks: false,
+          require_parameters: true,
+          data_collection: "deny",
+          zdr: true,
+          enforce_distillable_text: true,
+          order: ["anthropic", "openai"],
+          only: ["anthropic"],
+          ignore: ["openai"],
+          quantizations: ["fp16"],
+          sort: { by: "latency", partition: null },
+          max_price: { prompt: "0.5", completion: 1, image: 2, audio: 3, request: 4 },
+          preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+          preferred_max_latency: 5,
+        },
+      },
+    ],
+    [
+      "vercelGatewayRouting",
+      { vercelGatewayRouting: { only: ["anthropic"], order: ["anthropic", "openai"] } },
+    ],
+    ["zaiToolStream", { zaiToolStream: true }],
+    ["cacheControlFormat", { cacheControlFormat: "anthropic" }],
+    ["sendSessionAffinityHeaders", { sendSessionAffinityHeaders: true }],
+    ["supportsLongCacheRetention", { supportsLongCacheRetention: false }],
+    ["sendSessionIdHeader", { sendSessionIdHeader: false }],
+    ["supportsEagerToolInputStreaming", { supportsEagerToolInputStreaming: false }],
+  ])("accepts compat.%s", (_field, compat) => {
+    expect(parseModelCompat(compat).success).toBe(true);
+  });
+
+  it("rejects unrelated compat keys", () => {
+    expect(parseModelCompat({ unsupportedCompatSetting: true }).success).toBe(false);
   });
 });
