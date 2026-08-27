@@ -3,6 +3,7 @@ import {
   hasGatewayClientCap,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { SystemPresence } from "../infra/system-presence.js";
 // Gateway WebSocket broadcaster.
 // Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
@@ -210,6 +211,9 @@ function hasEventScope(
 
 export function createGatewayBroadcaster(params: {
   clients: Set<GatewayWsClient>;
+  preparePresenceProjection?: (
+    presence: SystemPresence[],
+  ) => (client: GatewayWsClient) => SystemPresence[];
   sessionMessageSubscribers?: SessionMessageSubscriberRegistry;
   canReceiveSessionEvent?: (
     client: GatewayWsClient,
@@ -244,6 +248,10 @@ export function createGatewayBroadcaster(params: {
       opts?.agentId,
     );
     const isTargeted = Boolean(targetConnIds);
+    const presencePayload =
+      // SAFETY: Internal presence producers emit { presence: SystemPresence[] }; wire input cannot publish events.
+      event === "presence" ? (payload as { presence: SystemPresence[] }) : undefined;
+    let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let outboundEventLogged = false;
     let frameBase:
       | {
@@ -258,7 +266,7 @@ export function createGatewayBroadcaster(params: {
       if (!frameBase) {
         frameBase = {
           eventJSON: JSON.stringify(event),
-          payloadFragment: serializeFrameField("payload", payload),
+          payloadFragment: presencePayload ? "" : serializeFrameField("payload", payload),
           stateVersionFragment:
             opts?.stateVersion === undefined
               ? ""
@@ -377,7 +385,20 @@ export function createGatewayBroadcaster(params: {
       let frame: string;
       try {
         const base = getFrameBase();
-        frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
+        let payloadFragment = base.payloadFragment;
+        if (presencePayload) {
+          // Presence contains session references. Only the connection owner's
+          // recipient projection may cross this boundary; never send the raw roster.
+          if (!params.preparePresenceProjection) {
+            throw new Error("presence recipient projection unavailable");
+          }
+          projectPresence ??= params.preparePresenceProjection(presencePayload.presence);
+          payloadFragment = serializeFrameField("payload", {
+            ...presencePayload,
+            presence: projectPresence(c),
+          });
+        }
+        frame = `{"type":"event","event":${base.eventJSON}${payloadFragment},"seq":${nextSeq}${base.stateVersionFragment}}`;
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
         return;

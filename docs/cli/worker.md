@@ -28,6 +28,11 @@ scheduled-owner identity never enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
 
+The node supervisor uses a private managed entry point that can admit successive
+turns into the same environment while background processes remain. Each turn
+still receives a fresh bounded envelope, Gateway connection, and tool authority.
+The standalone command above remains a single-turn entry point.
+
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the

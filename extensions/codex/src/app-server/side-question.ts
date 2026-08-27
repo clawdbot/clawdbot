@@ -760,7 +760,7 @@ export async function runCodexAppServerSideQuestion(
               ephemeral: true,
               threadSource: "user",
             },
-            requestOptions,
+            requestOptions(),
           );
         },
         onClientChange: rebindClientHandlers,

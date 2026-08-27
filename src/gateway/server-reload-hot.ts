@@ -4,7 +4,6 @@ import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provi
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeReplacementGateId,
 } from "../agents/prepared-model-runtime.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -38,6 +37,7 @@ import {
   type GatewayReloadHandlerParams,
   type GatewayRestartTransactionResult,
 } from "./server-reload-contracts.js";
+import * as mrReload from "./server-reload-model-runtime-scope.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
@@ -102,6 +102,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
+    const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
+    const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
 
     resetPreparedModelRuntimeStateForHotReload();
 
@@ -204,7 +206,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         // retire the prior stores at the commit edge so no request can mix generations.
         preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
           "prepared model runtime owner is stale before config publication",
-          { waitForReplacement: true },
+          { waitForReplacement: true, ...modelRuntimeRefreshScope },
         );
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
@@ -611,11 +613,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      const pluginMetadataSnapshot = params.getPluginMetadataSnapshot?.();
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
-        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+      await mrReload.refreshModelRuntimeAfterHotReload({
+        config: nextConfig,
+        agentIds: modelRuntimeAgentIds,
+        pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
@@ -661,7 +662,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await startGmailWatcherWithLogs({
               cfg: nextConfig,
               log: params.logHooks,
-              isCancelled: () => restartAbortController.signal.aborted,
               signal: restartAbortController.signal,
               onSkipped: () =>
                 params.logHooks.info(

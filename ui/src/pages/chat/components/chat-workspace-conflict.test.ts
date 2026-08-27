@@ -72,7 +72,7 @@ describe("workspace conflict copy actions", () => {
     button?.click();
 
     await vi.waitFor(() => expect(button?.textContent?.trim()).toBe(expected));
-    expect(button?.getAttribute("aria-label")).toBe(expected);
+    expect(button?.getAttribute("aria-label")).toBeNull();
     expect(writeText).toHaveBeenCalledWith(
       "git show 'refs/openclaw/worker-results/claim-test:src/local.ts'",
     );

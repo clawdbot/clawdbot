@@ -563,6 +563,10 @@ export async function runAgentAttempt(params: {
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onContextEngineTurnCandidate?: (facts: ContextEngineTurnAttemptFacts) => void;
   onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
+  onSuccessfulAuthProfile?: (selection: {
+    authProfileId?: string;
+    authProfileIdSource?: "auto" | "user";
+  }) => void;
 }) {
   const runStartedAt = Date.now();
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
@@ -1406,6 +1410,17 @@ export async function runAgentAttempt(params: {
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
     onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
     onUserMessagePersisted: params.onUserMessagePersisted,
+    onSuccessfulAuthProfile: params.onSuccessfulAuthProfile
+      ? (successfulProfileId) =>
+          params.onSuccessfulAuthProfile?.({
+            authProfileId: successfulProfileId,
+            authProfileIdSource: successfulProfileId
+              ? successfulProfileId === authProfileId
+                ? harnessAuthSelection.authProfileIdSource
+                : "auto"
+              : undefined,
+          })
+      : undefined,
     onExecutionStarted: (info) => {
       params.opts.onExecutionStarted?.();
       if (info?.lifecycleGeneration) {

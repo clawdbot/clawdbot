@@ -1034,6 +1034,7 @@ export async function buildIMessageInboundContext(params: {
     sender: {
       id: decision.sender,
       name: decision.senderNormalized,
+      isSelf: params.message.is_from_me === true,
     },
     conversation: {
       kind: decision.isGroup ? "group" : "direct",

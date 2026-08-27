@@ -367,10 +367,11 @@ function makeScopedBroadcastClients() {
 
 function makeScopedBroadcastContext() {
   const scoped = makeScopedBroadcastClients();
-  return {
-    ...scoped,
-    ...createGatewayBroadcaster({ clients: scoped.clients }),
-  };
+  const broadcaster = createGatewayBroadcaster({
+    clients: scoped.clients,
+    preparePresenceProjection: (presence) => () => presence,
+  });
+  return { ...scoped, ...broadcaster };
 }
 
 function sentEvents(socket: RecordingSocket) {

@@ -52,7 +52,7 @@ const workboardDisabled = {
   id: "workboard",
   name: "Workboard",
   description: "Plan and track work",
-  origin: "bundled",
+  origin: "global",
   installed: true,
   enabled: false,
   state: "disabled",
@@ -67,7 +67,7 @@ const workboardEnabled = {
 };
 
 suite.define(() => {
-  it("drains a pending draft before enabling a plugin and refreshes the result", async () => {
+  it("drains a pending draft before re-enabling an accepted external plugin without review", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -146,6 +146,8 @@ suite.define(() => {
         });
 
         await workboardRow.getByRole("button", { name: "Disable", exact: true }).waitFor();
+        expect(await gateway.getRequests("plugins.inspect")).toHaveLength(0);
+        expect(await page.locator("[data-plugin-consent]").count()).toBe(0);
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBeGreaterThanOrEqual(2);

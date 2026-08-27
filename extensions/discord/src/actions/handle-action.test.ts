@@ -799,7 +799,7 @@ describe("handleDiscordMessageAction", () => {
       action: "send",
       params: {
         message: "hello",
-        components,
+        components: JSON.stringify(components),
       },
       cfg,
       toolContext: {

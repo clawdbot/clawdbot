@@ -72,16 +72,16 @@ export function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "fai
   return error.detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE ? "timed_out" : "failed";
 }
 
-/** Infers blocked terminal outcomes from final progress text when the child turn reports one. */
-export function resolveBackgroundTaskTerminalResult(progressSummary: string): {
+/** Infers blocked terminal outcomes from final completion text when the child turn reports one. */
+export function resolveBackgroundTaskTerminalResult(completionText: string): {
   terminalOutcome?: "blocked";
   terminalSummary?: string;
 } {
-  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(progressSummary);
+  const requiredCompletionResult = resolveRequiredCompletionTerminalResult(completionText);
   if (requiredCompletionResult.terminalOutcome) {
     return requiredCompletionResult;
   }
-  const normalized = normalizeText(progressSummary)?.replace(/\s+/g, " ").trim();
+  const normalized = normalizeText(completionText)?.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return {};
   }

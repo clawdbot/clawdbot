@@ -2,6 +2,9 @@ package ai.openclaw.app.voice
 
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.gateway.DeviceAuthStore
+import ai.openclaw.app.gateway.GatewayClientInfo
+import ai.openclaw.app.gateway.GatewayConnectOptions
+import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
@@ -11,6 +14,8 @@ import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
+import android.media.AudioFormat
+import android.media.AudioTrack
 import android.os.Bundle
 import android.os.Looper
 import android.os.SystemClock
@@ -18,6 +23,7 @@ import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.util.Base64
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -28,9 +34,13 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -39,6 +49,17 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -49,10 +70,15 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowAudioTrack
+import org.robolectric.shadows.ShadowSystemClock
 import org.robolectric.shadows.ShadowTextToSpeech
+import java.time.Duration
 import java.util.Locale
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -106,22 +132,20 @@ class TalkModeManagerTest {
   @Test
   fun stopTtsWithoutOutputIdentityCancelsPlaybackWithoutReplacingCancellationWaiter() =
     runTest {
-      val manager = createManager(scope = this)
-      val playbackJob = Job()
-      val pendingClear = CompletableDeferred<String?>()
+      withStartedLocalPlayback { manager, playbackJob, player ->
+        val pendingClear = CompletableDeferred<String?>()
+        setPrivateField(manager, "realtimeSessionId", "relay-1")
+        setPrivateField(manager, "realtimeOutputTurnId", " ")
+        setPrivateField(manager, "pendingRealtimeOutputClear", pendingClear)
+        val stops = player.stopCalls
 
-      setPrivateField(manager, "ttsJob", playbackJob)
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
-      setPrivateField(manager, "realtimeOutputTurnId", " ")
-      setPrivateField(manager, "pendingRealtimeOutputClear", pendingClear)
-      playbackGeneration(manager).set(7L)
+        manager.stopTts()
+        runCurrent()
 
-      manager.stopTts()
-      runCurrent()
-
-      assertTrue(playbackJob.isCancelled)
-      assertEquals(8L, playbackGeneration(manager).get())
-      assertTrue(readPrivateField(manager, "pendingRealtimeOutputClear") === pendingClear)
+        assertTrue(playbackJob.isCancelled)
+        assertEquals(stops + 1, player.stopCalls)
+        assertTrue(readPrivateField(manager, "pendingRealtimeOutputClear") === pendingClear)
+      }
     }
 
   @Test
@@ -142,19 +166,18 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun disablingPlaybackCancelsTrackedJobOnce() {
-    val manager = createManager()
-    val playbackJob = Job()
+  fun disablingPlaybackCancelsTrackedJobOnce() =
+    runTest {
+      withStartedLocalPlayback { manager, playbackJob, player ->
+        val stops = player.stopCalls
+        manager.setPlaybackEnabled(false)
+        manager.setPlaybackEnabled(false)
+        runCurrent()
 
-    setPrivateField(manager, "ttsJob", playbackJob)
-    playbackGeneration(manager).set(11L)
-
-    manager.setPlaybackEnabled(false)
-    manager.setPlaybackEnabled(false)
-
-    assertTrue(playbackJob.isCancelled)
-    assertEquals(12L, playbackGeneration(manager).get())
-  }
+        assertTrue(playbackJob.isCancelled)
+        assertEquals(stops + 1, player.stopCalls)
+      }
+    }
 
   @Test
   fun beginPushToTalkRejectsNewCaptureWhenNewCaptureIsDisallowed() =
@@ -817,6 +840,353 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun cancelledPlaybackCompletionKeepsReplacementSpeaking() =
+    runTest {
+      val synthesizer = FakeTalkSpeechSynthesizer()
+      synthesizer.result.complete(
+        TalkSpeakResult.Success(
+          TalkSpeakAudio(
+            bytes = byteArrayOf(1, 2, 3),
+            provider = "test",
+            outputFormat = "mp3_44100_128",
+            voiceCompatible = true,
+            mimeType = "audio/mpeg",
+            fileExtension = ".mp3",
+          ),
+        ),
+      )
+      val player = FakeTalkAudioPlayer()
+      val managerJob = SupervisorJob()
+      var callbackDepth = 0
+      val manager =
+        createManager(
+          talkSpeakClient = synthesizer,
+          talkAudioPlayer = player,
+          scope = CoroutineScope(coroutineContext + managerJob),
+          onBeforeSpeak = { callbackDepth += 1 },
+          onAfterSpeak = { callbackDepth -= 1 },
+        )
+      withMain {
+        val first = launch { manager.speakAssistantReply("First reply") }
+        var replacement: Job? = null
+        try {
+          runCurrent()
+          assertEquals(1, player.playCalls)
+          assertEquals(1, callbackDepth)
+          assertTrue(manager.isSpeaking.value)
+
+          // Cancellation queues the old caller's cleanup; the replacement may
+          // start before that cleanup runs on another dispatcher.
+          val next = launch(start = CoroutineStart.UNDISPATCHED) { manager.speakAssistantReply("Replacement reply") }
+          replacement = next
+          assertEquals(2, player.playCalls)
+          assertEquals(2, callbackDepth)
+          assertTrue(first.isCancelled)
+          assertFalse(first.isCompleted)
+          assertTrue(manager.isSpeaking.value)
+
+          runCurrent()
+          assertTrue(first.isCompleted)
+          assertTrue(next.isActive)
+          assertFalse(player.finished.isCompleted)
+          assertEquals(1, callbackDepth)
+          assertTrue("The replacement is still playing after the cancelled caller finishes", manager.isSpeaking.value)
+
+          player.finished.complete(Unit)
+          next.join()
+          assertFalse(manager.isSpeaking.value)
+          assertEquals(0, callbackDepth)
+        } finally {
+          manager.stopAllCapture()
+          first.cancelAndJoin()
+          replacement?.cancelAndJoin()
+          managerJob.cancelAndJoin()
+          runCurrent()
+          shadowOf(Looper.getMainLooper()).idle()
+          runCurrent()
+        }
+      }
+    }
+
+  @Test
+  fun localPreparationKeepsRealtimePlaybackSpeaking() =
+    runBlocking {
+      withRealtimePlayback { proof ->
+        val track = startRealtimeAudio(proof)
+        val local = proof.scope.launch { proof.manager.speakAssistantReply("Local reply") }
+        proof.scheduler.runCurrent()
+
+        assertTrue(proof.synthesizer.requested.isCompleted)
+        assertFalse(proof.synthesizer.result.isCompleted)
+        assertTrue(local.isActive)
+        assertEquals(1, proof.callbackDepth())
+        assertEquals(AudioTrack.PLAYSTATE_PLAYING, track.playState)
+        assertTrue("Preparing a local reply must not hide realtime playback", proof.manager.isSpeaking.value)
+      }
+    }
+
+  @Test
+  fun localCompletionKeepsRealtimePlaybackSpeaking() =
+    runBlocking {
+      withRealtimePlayback { proof ->
+        completeRemoteSynthesis(proof.synthesizer)
+        val local = proof.scope.launch { proof.manager.speakAssistantReply("Local reply") }
+        proof.scheduler.runCurrent()
+        assertEquals(1, proof.player.playCalls)
+        val track = startRealtimeAudio(proof)
+
+        proof.player.finished.complete(Unit)
+        proof.scheduler.runCurrent()
+
+        assertTrue(local.isCompleted)
+        assertEquals(0, proof.callbackDepth())
+        assertEquals(AudioTrack.PLAYSTATE_PLAYING, track.playState)
+        assertTrue("Completing a local reply must not hide realtime playback", proof.manager.isSpeaking.value)
+      }
+    }
+
+  @Test
+  fun realtimeClearKeepsLocalPlaybackSpeaking() = assertRealtimeEndKeepsLocalPlaybackSpeaking(clear = true)
+
+  @Test
+  fun realtimeIdleKeepsLocalPlaybackSpeaking() = assertRealtimeEndKeepsLocalPlaybackSpeaking(clear = false)
+
+  private fun assertRealtimeEndKeepsLocalPlaybackSpeaking(clear: Boolean) =
+    runBlocking {
+      withRealtimePlayback { proof ->
+        val track = startRealtimeAudio(proof)
+        completeRemoteSynthesis(proof.synthesizer)
+        val local = proof.scope.launch { proof.manager.speakAssistantReply("Local reply") }
+        proof.scheduler.runCurrent()
+        assertEquals(1, proof.player.playCalls)
+        assertTrue(proof.manager.isSpeaking.value)
+        val localStops = proof.player.stopCalls
+
+        finishRealtimeAudio(proof, track, clear)
+
+        assertTrue(local.isActive)
+        assertFalse(proof.player.finished.isCompleted)
+        assertEquals(localStops, proof.player.stopCalls)
+        assertEquals(1, proof.callbackDepth())
+        assertTrue("Ending realtime output must not hide the local reply", proof.manager.isSpeaking.value)
+        proof.player.finished.complete(Unit)
+        proof.scheduler.runCurrent()
+        assertTrue(local.isCompleted)
+        assertFalse(proof.manager.isSpeaking.value)
+      }
+    }
+
+  private fun finishRealtimeAudio(
+    proof: RealtimePlaybackProof,
+    track: AudioTrack,
+    clear: Boolean,
+  ) {
+    if (clear) {
+      proof.manager.handleGatewayEvent(
+        "talk.event",
+        """{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"turnId":"realtime-turn"}}""",
+      )
+      assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
+    } else {
+      // The stock shadow accounts written frames immediately. Advance both
+      // Android's playback clock and the coroutine idle poll beyond the PCM.
+      val frames = proof.writes.sumOf { it.second.size } / 2
+      assertEquals(frames, track.playbackHeadPosition)
+      ShadowSystemClock.advanceBy(Duration.ofMillis(frames * 1_000L / 24_000 + 20))
+      proof.scheduler.advanceTimeBy(20)
+    }
+    proof.scheduler.runCurrent()
+  }
+
+  private fun startRealtimeAudio(proof: RealtimePlaybackProof): AudioTrack {
+    val pcm = ByteArray(4_800) { if (it % 2 == 0) 0x20 else 0x01 }
+    val priorWrites = proof.writes.size
+    proof.manager.handleGatewayEvent(
+      "talk.event",
+      """{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"realtime-turn"},"audioBase64":"${Base64.encodeToString(pcm, Base64.NO_WRAP)}"}""",
+    )
+    proof.scheduler.runCurrent()
+    assertEquals(priorWrites + 1, proof.writes.size)
+    val (track, written, format) = proof.writes.last()
+    assertArrayEquals(pcm, written)
+    assertEquals(24_000, format.sampleRate)
+    assertEquals(AudioFormat.ENCODING_PCM_16BIT, format.encoding)
+    assertEquals(AudioTrack.PLAYSTATE_PLAYING, track.playState)
+    assertTrue(proof.manager.isSpeaking.value)
+    return track
+  }
+
+  private suspend fun withRealtimePlayback(block: suspend (RealtimePlaybackProof) -> Unit) {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).grantPermissions(Manifest.permission.RECORD_AUDIO)
+    val sessionJob = SupervisorJob()
+    val managerJob = SupervisorJob()
+    val scheduler = TestCoroutineScheduler()
+    val managerScope = CoroutineScope(StandardTestDispatcher(scheduler) + managerJob)
+    val captureTasks = ConcurrentLinkedQueue<Runnable>()
+    val captureDispatcher =
+      object : CoroutineDispatcher() {
+        override fun dispatch(
+          context: CoroutineContext,
+          block: Runnable,
+        ) {
+          captureTasks.add(block)
+        }
+      }
+    val connected = CompletableDeferred<Unit>()
+    val session =
+      GatewaySession(
+        scope = CoroutineScope(sessionJob + Dispatchers.Default),
+        identityStore = testDeviceIdentityStore(app),
+        deviceAuthStore = DeviceAuthStore(SecurePrefs(app, app.getSharedPreferences("talk-playback-${System.nanoTime()}", 0))),
+        onConnected = { connected.complete(Unit) },
+        onDisconnected = {},
+        onEvent = { _, _ -> },
+      )
+    val synthesizer = FakeTalkSpeechSynthesizer()
+    val player = FakeTalkAudioPlayer()
+    var callbackDepth = 0
+    val manager =
+      TalkModeManager(
+        context = app,
+        scope = managerScope,
+        session = session,
+        isConnected = { connected.isCompleted },
+        talkSpeakClient = synthesizer,
+        talkAudioPlayer = player,
+        onBeforeSpeak = { callbackDepth += 1 },
+        onAfterSpeak = { callbackDepth -= 1 },
+        realtimeCaptureDispatcher = captureDispatcher,
+        realtimePlaybackDispatcher = StandardTestDispatcher(scheduler),
+      )
+    val writes = mutableListOf<Triple<AudioTrack, ByteArray, AudioFormat>>()
+    val listener = ShadowAudioTrack.OnAudioDataWrittenListener { track, bytes, format -> writes += Triple(track, bytes, format) }
+    val server = MockWebServer()
+    Dispatchers.setMain(StandardTestDispatcher(scheduler))
+    try {
+      try {
+        server.enqueue(
+          MockResponse().withWebSocketUpgrade(
+            object : WebSocketListener() {
+              override fun onOpen(
+                webSocket: WebSocket,
+                response: Response,
+              ) {
+                webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"talk-playback-test","ts":1700000000123}}""")
+              }
+
+              override fun onMessage(
+                webSocket: WebSocket,
+                text: String,
+              ) {
+                val request = Json.parseToJsonElement(text).jsonObject
+                if (request["type"]?.jsonPrimitive?.content != "req") return
+                val id = request.getValue("id").jsonPrimitive.content
+                val payload =
+                  when (request.getValue("method").jsonPrimitive.content) {
+                    "connect" -> """{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
+                    "talk.config" -> """{"config":{}}"""
+                    "talk.session.create" -> """{"relaySessionId":"playback-relay"}"""
+                    else -> "{}"
+                  }
+                webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":$payload}""")
+              }
+            },
+          ),
+        )
+        server.start()
+        session.connect(
+          endpoint =
+            GatewayEndpoint(
+              stableId = "manual|127.0.0.1|${server.port}",
+              name = "Playback test",
+              host = "127.0.0.1",
+              port = server.port,
+              tlsEnabled = false,
+            ),
+          token = "test-token",
+          bootstrapToken = null,
+          password = null,
+          options =
+            GatewayConnectOptions(
+              role = "operator",
+              scopes = listOf("operator.admin"),
+              caps = emptyList(),
+              commands = emptyList(),
+              permissions = emptyMap(),
+              client = GatewayClientInfo("openclaw-android", "Android playback test", "1.0.0-test", "android", "ui", "playback-test", "android", "test"),
+            ),
+        )
+        withContext(Dispatchers.Default) { withTimeout(5_000) { connected.await() } }
+        manager.setEnabled(true)
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!manager.isListening.value) {
+          scheduler.runCurrent()
+          check(System.nanoTime() < deadline) { "Real gateway session did not start realtime Talk: ${manager.statusText.value}" }
+          withContext(Dispatchers.Default) { delay(10) }
+        }
+        ShadowAudioTrack.addAudioDataListener(listener)
+        block(RealtimePlaybackProof(manager, managerScope, scheduler, synthesizer, player, writes) { callbackDepth })
+      } finally {
+        manager.stopAllCapture()
+        managerJob.cancel()
+        scheduler.runCurrent()
+        while (true) (captureTasks.poll() ?: break).run()
+        scheduler.runCurrent()
+        withTimeout(5_000) { managerJob.join() }
+        shadowOf(Looper.getMainLooper()).idle()
+        scheduler.runCurrent()
+        ShadowAudioTrack.removeAudioDataListener(listener)
+        withContext(Dispatchers.Default) {
+          session.disconnectAndJoin()
+          sessionJob.cancelAndJoin()
+          server.shutdown()
+        }
+      }
+    } finally {
+      Dispatchers.resetMain()
+    }
+  }
+
+  private fun completeRemoteSynthesis(synthesizer: FakeTalkSpeechSynthesizer) {
+    synthesizer.result.complete(
+      TalkSpeakResult.Success(
+        TalkSpeakAudio(byteArrayOf(1, 2, 3), "test", "mp3_44100_128", true, "audio/mpeg", ".mp3"),
+      ),
+    )
+  }
+
+  private suspend fun TestScope.withStartedLocalPlayback(block: suspend (TalkModeManager, Job, FakeTalkAudioPlayer) -> Unit) {
+    val synthesizer = FakeTalkSpeechSynthesizer()
+    completeRemoteSynthesis(synthesizer)
+    val player = FakeTalkAudioPlayer()
+    val managerJob = SupervisorJob()
+    val manager =
+      createManager(
+        talkSpeakClient = synthesizer,
+        talkAudioPlayer = player,
+        scope = CoroutineScope(coroutineContext + managerJob),
+      )
+    withMain {
+      val playback = launch { manager.speakAssistantReply("Local reply") }
+      try {
+        runCurrent()
+        assertEquals(1, player.playCalls)
+        assertTrue(playback.isActive)
+        assertTrue(manager.isSpeaking.value)
+        block(manager, playback, player)
+      } finally {
+        manager.stopAllCapture()
+        playback.cancelAndJoin()
+        managerJob.cancelAndJoin()
+        runCurrent()
+        shadowOf(Looper.getMainLooper()).idle()
+        runCurrent()
+      }
+    }
+  }
+
+  @Test
   fun localFallbackKeepsWholeReplyAndBalancesCallbacksOnCompletionOrStop() =
     runTest {
       for (stopAfterFirst in listOf(false, true)) {
@@ -1341,6 +1711,16 @@ class TalkModeManagerTest {
   ): String = """{"relaySessionId":"relay-1","type":"transcript","role":"$role","text":"$text","final":$final}"""
 }
 
+private data class RealtimePlaybackProof(
+  val manager: TalkModeManager,
+  val scope: CoroutineScope,
+  val scheduler: TestCoroutineScheduler,
+  val synthesizer: FakeTalkSpeechSynthesizer,
+  val player: FakeTalkAudioPlayer,
+  val writes: List<Triple<AudioTrack, ByteArray, AudioFormat>>,
+  val callbackDepth: () -> Int,
+)
+
 private class FakeTalkSpeechSynthesizer : TalkSpeechSynthesizing {
   val requested = CompletableDeferred<Unit>()
   val result = CompletableDeferred<TalkSpeakResult>()
@@ -1358,13 +1738,19 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
   val started = CompletableDeferred<Unit>()
   val finished = CompletableDeferred<Unit>()
   var stopped = false
+  var playCalls = 0
+    private set
+  var stopCalls = 0
+    private set
 
   override suspend fun play(audio: TalkSpeakAudio) {
+    playCalls += 1
     started.complete(Unit)
     finished.await()
   }
 
   override fun stop() {
+    stopCalls += 1
     stopped = true
   }
 }

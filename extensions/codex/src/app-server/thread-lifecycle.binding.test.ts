@@ -12,7 +12,8 @@ import {
 } from "./client-runtime.js";
 import { CodexAppServerClient, CodexAppServerRpcError } from "./client.js";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
-import type { CodexDynamicToolFunctionSpec, JsonValue } from "./protocol.js";
+import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import type { CodexDynamicToolFunctionSpec, JsonValue, RpcRequest } from "./protocol.js";
 import {
   createParams as createRunAttemptParams,
   setupRunAttemptTestHooks,
@@ -28,8 +29,10 @@ import {
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
+  resolveCodexNativeConfigFenceKey,
   retainSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
+import { createClientHarness } from "./test-support.js";
 import { fingerprintEnvironmentSelection } from "./thread-fingerprints.js";
 import {
   buildThreadResumeParams,
@@ -309,6 +312,8 @@ async function createManualResumeFixture(
     missingMetadata?: boolean;
     omitCatalog?: boolean;
     competingLease?: "read" | "release" | "resume";
+    wireClient?: boolean;
+    parentControlledAfterAttach?: boolean;
   } = {},
 ) {
   const dynamicTools = options.dynamicTools ?? [];
@@ -333,7 +338,7 @@ async function createManualResumeFixture(
   const compete = () => {
     // A sibling can start and finish between reads; sole ownership at the
     // final snapshot must not erase that intervening native runtime activity.
-    const release = retainSharedCodexAppServerClientIfCurrent(harness.client);
+    const release = retainSharedCodexAppServerClientIfCurrent(client);
     expect(release).toBeTypeOf("function");
     release?.();
   };
@@ -354,6 +359,9 @@ async function createManualResumeFixture(
       return {
         thread: {
           ...thread,
+          ...(options.parentControlledAfterAttach && resumes > 0
+            ? { canAcceptDirectInput: false }
+            : {}),
           status: options.active
             ? { type: "active", activeFlags: [] }
             : { type: options.cold ? "notLoaded" : "idle" },
@@ -383,13 +391,40 @@ async function createManualResumeFixture(
     }
     throw new Error(`unexpected method: ${method}`);
   });
-  const { client } = harness;
-  Object.assign(client, {
-    initialize: async () => undefined,
-    addTransportExitHandler: () => () => undefined,
-    setThreadSessionRequestGuard: () => undefined,
-    close: () => harness.close(),
-  });
+  const wire = options.wireClient ? createClientHarness() : undefined;
+  const client = wire?.client ?? harness.client;
+  if (wire) {
+    // Keep the existing native response fixture behind the real wire client so
+    // its async request guard and synchronous write edge remain under test.
+    const appendWrites = wire.writes.push.bind(wire.writes);
+    vi.spyOn(wire.writes, "push").mockImplementation((...messages) => {
+      const count = appendWrites(...messages);
+      for (const message of messages) {
+        const request = JSON.parse(message) as RpcRequest;
+        void Promise.resolve(harness.request(request.method, request.params)).then(
+          (result) => wire.send({ id: request.id, result }),
+          (error: unknown) =>
+            wire.send({
+              id: request.id,
+              error: { code: -32603, message: String(error) },
+            }),
+        );
+      }
+      return count;
+    });
+    vi.spyOn(harness, "notify").mockImplementation(async (notification) => {
+      wire.send(notification);
+    });
+    vi.spyOn(client, "initialize").mockResolvedValue(undefined);
+  } else {
+    Object.assign(client, {
+      initialize: async () => undefined,
+      // This fake closes and exits together; notify the pool's physical-client registry too.
+      addTransportExitHandler: client.addCloseHandler.bind(client),
+      setThreadSessionRequestGuard: () => undefined,
+      close: () => harness.close(),
+    });
+  }
   const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(client);
   try {
     await getLeasedSharedCodexAppServerClient({
@@ -407,8 +442,22 @@ async function createManualResumeFixture(
     resolveCodexCommandDeps({
       bindingStore: testCodexAppServerBindingStore,
       codexControlRequest: async (_pluginConfig, method, requestParams, requestOptions) => {
-        const result = await client.request<JsonValue>(method, requestParams);
-        await requestOptions?.onResponse?.(result, client, { authProfileId: undefined });
+        await requestOptions?.beforeRequest?.(
+          <T>({
+            method: preflightMethod,
+            requestParams: preflightParams,
+          }: {
+            method: string;
+            requestParams?: unknown;
+          }) => client.request<T>(preflightMethod, preflightParams, { timeoutMs: 60_000 }),
+        );
+        const result = await client.request<JsonValue>(method, requestParams, {
+          timeoutMs: 60_000,
+        });
+        await requestOptions?.onResponse?.(result, client, {
+          authProfileId: undefined,
+          assertCurrent: () => undefined,
+        });
         return result;
       },
     }),
@@ -438,9 +487,15 @@ async function createManualResumeFixture(
   };
   return {
     ...harness,
+    client,
+    wire,
     close: () => {
       releaseLeasedSharedCodexAppServerClient(client);
-      harness.close();
+      if (wire) {
+        wire.client.close();
+      } else {
+        harness.close();
+      }
     },
     common,
     sessionFile,
@@ -457,6 +512,59 @@ async function createManualResumeFixture(
 }
 
 setupRunAttemptTestHooks();
+
+async function createLeasedLifecycleWireClient(
+  agentDir: string,
+  respond: (request: RpcRequest) => unknown,
+) {
+  const wire = createClientHarness();
+  const appendWrites = wire.writes.push.bind(wire.writes);
+  vi.spyOn(wire.writes, "push").mockImplementation((...messages) => {
+    const count = appendWrites(...messages);
+    for (const message of messages) {
+      const request = JSON.parse(message) as RpcRequest;
+      void Promise.resolve()
+        .then(() => respond(request))
+        .then(
+          (result) => wire.send({ id: request.id, result }),
+          (error: unknown) =>
+            wire.send({
+              id: request.id,
+              error:
+                error instanceof CodexAppServerRpcError
+                  ? { code: error.code, message: error.message }
+                  : { code: -32603, message: String(error) },
+            }),
+        );
+    }
+    return count;
+  });
+  vi.spyOn(wire.client, "initialize").mockResolvedValue(undefined);
+  const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValueOnce(wire.client);
+  try {
+    await getLeasedSharedCodexAppServerClient({
+      startOptions: { ...createThreadLifecycleAppServerOptions().start, command: process.execPath },
+      authProfileId: null,
+      agentDir,
+      config: {},
+    });
+  } finally {
+    start.mockRestore();
+  }
+  // Preserve the wire harness's live transport getters.
+  return Object.assign(wire, {
+    start: (sessionFile: string, workspaceDir: string) =>
+      startOrResumeThread({
+        client: wire.client,
+        params: { ...createParams(sessionFile, workspaceDir), agentDir },
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+        userMcpServersEnabled: false,
+        signal: new AbortController().signal,
+      }),
+  });
+}
 
 describe("Codex app-server thread lifecycle bindings", () => {
   it("persists the native rollout path across thread start and resume", async () => {
@@ -865,7 +973,13 @@ describe("Codex app-server thread lifecycle bindings", () => {
           fixture.request.mock.calls
             .map(([method]) => method)
             .filter((method) => method !== "skills/list"),
-        ).toEqual(["thread/resume", "thread/read", "thread/unsubscribe", "thread/resume"]);
+        ).toEqual([
+          "thread/read",
+          "thread/resume",
+          "thread/read",
+          "thread/unsubscribe",
+          "thread/resume",
+        ]);
       } finally {
         fixture.close();
       }
@@ -884,6 +998,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       error: "immutable native tool catalog",
     },
     { options: { active: true }, error: "native thread is not idle" },
+    {
+      options: { parentControlledAfterAttach: true },
+      error: "controlled by its parent",
+    },
   ])(
     "preserves pending manual resume when native configuration cannot be attested: $options",
     async ({ options, error }) => {
@@ -932,7 +1050,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
           fixture.request.mock.calls
             .map(([method]) => method)
             .filter((method) => method !== "skills/list"),
-        ).toEqual(["thread/resume"]);
+        ).toEqual(["thread/read", "thread/resume"]);
       } finally {
         fixture.close();
       }
@@ -980,7 +1098,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
       const fixture = await createManualResumeFixture({ cold: true, competingLease });
       const before = await readCodexAppServerBinding(fixture.sessionFile);
       try {
-        await expect(fixture.start()).rejects.toThrow("another runner");
+        await expect(fixture.start()).rejects.toMatchObject(
+          competingLease === "resume"
+            ? {
+                name: "CodexAppServerUnsafeSubscriptionError",
+                cause: { name: "CodexAdoptedThreadActiveError" },
+              }
+            : { name: "CodexAdoptedThreadActiveError" },
+        );
         expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
         expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
           false,
@@ -993,6 +1118,51 @@ describe("Codex app-server thread lifecycle bindings", () => {
       }
     },
   );
+
+  it("does not write a pending resume after its sole client lease changes behind the native config fence", async () => {
+    const fixture = await createManualResumeFixture({ wireClient: true });
+    const before = await readCodexAppServerBinding(fixture.sessionFile);
+    const fenceKey = resolveCodexNativeConfigFenceKey({ client: fixture.client });
+    expect(fenceKey).toBeTypeOf("string");
+    const releaseFence = await acquireCodexNativeConfigFence(fenceKey!);
+    const guardEntered = createDeferred<void>();
+    const abort = new AbortController();
+    fixture.client.setThreadSessionRequestGuard(async (options) => {
+      guardEntered.resolve();
+      return await acquireCodexNativeConfigFence(fenceKey!, options);
+    });
+    const starting = fixture.start({ signal: abort.signal });
+    const settled = starting.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    try {
+      await Promise.race([
+        guardEntered.promise,
+        settled.then(() => {
+          throw new Error("manual resume settled before reaching its native config fence");
+        }),
+      ]);
+      const releaseSibling = retainSharedCodexAppServerClientIfCurrent(fixture.client);
+      expect(releaseSibling).toBeTypeOf("function");
+      releaseSibling?.();
+      releaseFence();
+
+      await expect(starting).rejects.toThrow("another runner");
+      expect(await readCodexAppServerBinding(fixture.sessionFile)).toEqual(before);
+      expect(fixture.client.getCloseError()).toBeUndefined();
+      expect(
+        fixture
+          .wire!.writes.map((message) => (JSON.parse(message) as RpcRequest).method)
+          .filter((method) => method === "thread/resume"),
+      ).toEqual(["thread/resume"]);
+    } finally {
+      abort.abort();
+      releaseFence();
+      await settled;
+      fixture.close();
+    }
+  });
 
   it("rejects a pending binding deleted while waiting for the native owner queue", async () => {
     const fixture = await createManualResumeFixture();
@@ -1019,7 +1189,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
       });
       release.resolve();
       await expect(starting).rejects.toThrow("acquiring a pending resume configuration");
-      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
+      expect(fixture.request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/read",
+        "thread/resume",
+      ]);
     } finally {
       release.resolve();
       await blocker;
@@ -1794,7 +1967,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
             mcp_servers: {
               "arbitrary.server": { enabled: false },
               "local helper": { enabled: false },
-              "request-only": { enabled: false },
+              "request-only": { command: "request-mcp", enabled: false },
             },
             web_search: "disabled",
           }),
@@ -1918,7 +2091,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "skills.include_instructions": false,
       "tools.experimental_request_user_input.enabled": false,
       "tools.update_plan.enabled": false,
-      mcp_servers: { inherited: { enabled: false } },
+      mcp_servers: { inherited: { command: "unsafe", enabled: false } },
       web_search: "disabled",
     });
   });
@@ -2544,12 +2717,12 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/resume") {
-        // Only a structured RPC rejection proves Codex holds no resume
-        // subscription; anything else retires the client instead.
         throw new CodexAppServerRpcError({ code: -32_000, message: "stale thread" }, method);
       }
       if (method === "thread/unsubscribe") {
-        return { status: "not_subscribed" };
+        // Pre-acceptance rejection has no membership, but the exact cleanup RPC
+        // makes that fact observable before stale-binding recovery continues.
+        return { status: "notSubscribed" };
       }
       if (method === "thread/start") {
         const response = threadStartResult("thread-new");
@@ -2583,7 +2756,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(binding.modelProvider).toBe("lmstudio");
   });
 
-  it("falls back to a fresh thread when a rejected resume also fails unsubscribe", async () => {
+  it("fails closed when a structured resume failure cannot release its subscription", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
@@ -2595,33 +2768,147 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
     const request = vi.fn(async (method: string) => {
       if (method === "thread/resume") {
-        throw new CodexAppServerRpcError({ code: -32_000, message: "thread not found" }, method);
+        throw new CodexAppServerRpcError({ code: -32_603, message: "resume failed" }, method);
       }
       if (method === "thread/unsubscribe") {
         throw new Error("unsubscribe rejected");
       }
       if (method === "thread/start") {
-        return threadStartResult("thread-recovered");
+        throw new Error("unsafe resume must not start a replacement thread");
       }
       throw new Error(`unexpected method: ${method}`);
     });
 
-    // The RPC rejection already proves no resume subscription exists, so a
-    // failing cosmetic unsubscribe must not block stale-binding recovery.
-    const binding = await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-    });
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        params: createParams(sessionFile, workspaceDir),
+        cwd: workspaceDir,
+        dynamicTools: [],
+        appServer: createThreadLifecycleAppServerOptions(),
+      }),
+    ).rejects.toMatchObject({ name: "CodexAppServerUnsafeSubscriptionError" });
 
-    expect(binding.threadId).toBe("thread-recovered");
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "thread/resume",
       "thread/unsubscribe",
-      "thread/start",
     ]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-existing",
+    });
+  });
+
+  it("retires an ownership-lost resume client while preserving its binding and draining siblings", async () => {
+    const sessionFile = path.join(tempDir, "ownership-lost-session.jsonl");
+    const workspaceDir = path.join(tempDir, "ownership-lost-workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const threadId = "thread-ownership-lost";
+    const rolloutPath = path.join(agentDir, "codex-home", "sessions", `rollout-${threadId}.jsonl`);
+    await fs.mkdir(path.dirname(rolloutPath), { recursive: true });
+    await fs.writeFile(
+      rolloutPath,
+      `${JSON.stringify({ type: "session_meta", payload: { id: threadId, dynamic_tools: [] } })}\n`,
+    );
+    const response = threadStartResult(threadId, { cwd: workspaceDir });
+    let releaseSibling: (() => void) | undefined;
+    const wire = await createLeasedLifecycleWireClient(agentDir, (request) => {
+      if (request.method === "thread/read") {
+        return { thread: { ...response.thread, path: rolloutPath, status: { type: "notLoaded" } } };
+      }
+      if (request.method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      if (request.method === "thread/resume") {
+        // The response is valid, but another lease revokes the adoption proof
+        // after the physical resume write and before configuration is committed.
+        releaseSibling = retainSharedCodexAppServerClientIfCurrent(wire.client);
+        return response;
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    });
+    try {
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId,
+        clientId: wire.client.getInstanceId(),
+        cwd: workspaceDir,
+        model: response.model,
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "[]",
+        pendingResumeConfiguration: true,
+      });
+      const originalBinding = await readCodexAppServerBinding(sessionFile);
+      await expect(wire.start(sessionFile, workspaceDir)).rejects.toMatchObject({
+        name: "CodexAppServerUnsafeSubscriptionError",
+      });
+
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
+      expect(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)).toEqual([
+        "thread/read",
+        "thread/unsubscribe",
+        "thread/resume",
+      ]);
+      expect(releaseSibling).toBeTypeOf("function");
+      const retained = retainSharedCodexAppServerClientIfCurrent(wire.client);
+      retained?.();
+      expect(retained).toBeUndefined();
+      expect(releaseLeasedSharedCodexAppServerClient(wire.client)).toBe(true);
+      expect(wire.stdinDestroyed).toBe(false);
+      await expect(
+        wire.client.request("thread/read", { threadId, includeTurns: false }),
+      ).resolves.toMatchObject({
+        thread: { id: threadId },
+      });
+      releaseSibling?.();
+      expect(wire.stdinDestroyed).toBe(true);
+    } finally {
+      releaseSibling?.();
+      releaseLeasedSharedCodexAppServerClient(wire.client);
+      wire.client.close();
+    }
+  });
+
+  it("preserves the bound thread and shared client after an exact overload rejection", async () => {
+    const sessionFile = path.join(tempDir, "overloaded-session.jsonl");
+    const workspaceDir = path.join(tempDir, "overloaded-workspace");
+    const agentDir = path.join(tempDir, "agent");
+    const overload = new CodexAppServerRpcError(
+      { code: -32_001, message: "queue full" },
+      "thread/resume",
+    );
+    const wire = await createLeasedLifecycleWireClient(agentDir, (request) => {
+      if (request.method === "thread/resume") {
+        throw overload;
+      }
+      throw new Error(`unexpected method: ${request.method}`);
+    });
+    try {
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-overloaded",
+        clientId: wire.client.getInstanceId(),
+        cwd: workspaceDir,
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "[]",
+      });
+      const originalBinding = await readCodexAppServerBinding(sessionFile);
+      await expect(wire.start(sessionFile, workspaceDir)).rejects.toMatchObject({
+        name: "CodexAppServerRpcError",
+        code: -32_001,
+        message: overload.message,
+      });
+
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
+      expect(
+        new Set(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)),
+      ).toEqual(new Set(["thread/resume"]));
+      const retained = retainSharedCodexAppServerClientIfCurrent(wire.client);
+      expect(retained).toBeTypeOf("function");
+      retained?.();
+      expect(wire.stdinDestroyed).toBe(false);
+    } finally {
+      releaseLeasedSharedCodexAppServerClient(wire.client);
+      wire.client.close();
+    }
   });
 
   it("keeps the bound local provider when stale fingerprints force a fresh thread", async () => {

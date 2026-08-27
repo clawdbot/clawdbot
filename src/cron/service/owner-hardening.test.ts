@@ -107,8 +107,9 @@ beforeEach(async () => {
         });
         database.exec(\`
           CREATE TEMP TRIGGER crash_cron_activation
-          BEFORE UPDATE OF running_at_ms ON cron_jobs
-          WHEN OLD.running_at_ms IS NULL AND NEW.running_at_ms IS NOT NULL
+          BEFORE UPDATE OF state_json ON cron_jobs
+          WHEN json_extract(OLD.state_json, '$.runningAtMs') IS NULL
+            AND json_extract(NEW.state_json, '$.runningAtMs') IS NOT NULL
           BEGIN
             SELECT crash_activation();
           END;
@@ -520,7 +521,11 @@ describe("cron durable run ownership", () => {
     const unrelated = makeCommandJob("imported-during-foreign-run", now + 60_000);
     unrelated.state = {};
     upsertCronJobRow(database, cronStoreKey(storePath), unrelated, 1);
-    database.prepare("UPDATE cron_jobs SET next_run_at_ms = NULL WHERE job_id = ?").run(job.id);
+    database
+      .prepare(
+        "UPDATE cron_jobs SET state_json = json_remove(state_json, '$.nextRunAtMs') WHERE job_id = ?",
+      )
+      .run(job.id);
 
     const replacement = makeParentService(storePath);
     try {

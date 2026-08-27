@@ -4,7 +4,7 @@ import { recordMessageToolRunOutcome } from "../../infra/message-tool-run-outcom
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 
-const log = createSubsystemLogger("auto-reply/message-tool-outcome");
+const messageToolOutcomeLog = createSubsystemLogger("auto-reply/message-tool-outcome");
 
 /** Records the durable visible-outcome fact for a message-tool-only run. */
 export function recordMessageToolOnlyRunOutcome(
@@ -18,7 +18,7 @@ export function recordMessageToolOnlyRunOutcome(
   }
   const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
   if (!sessionKey) {
-    log.warn("message-tool-only run outcome missing session key", {
+    messageToolOutcomeLog.warn("message-tool-only run outcome missing session key", {
       runId: result?.runId ?? params.opts?.runId,
       agentId: params.followupRun.run.agentId,
     });
@@ -50,9 +50,9 @@ export function recordMessageToolOnlyRunOutcome(
   };
   try {
     recordMessageToolRunOutcome(values);
-    log.info("recorded message-tool-only run outcome", values);
+    messageToolOutcomeLog.info("recorded message-tool-only run outcome", values);
   } catch (error) {
-    log.warn("failed to record message-tool-only run outcome", {
+    messageToolOutcomeLog.warn("failed to record message-tool-only run outcome", {
       ...values,
       error: formatErrorMessage(error),
     });

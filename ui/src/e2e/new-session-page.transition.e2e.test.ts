@@ -85,13 +85,24 @@ suite.define(() => {
     }
   });
 
-  it("keeps the new-session view live until the focused chat is ready", async () => {
+  it("keeps the selected effort until the focused chat is ready", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const thinkingLevels = ["off", "low", "medium", "high", "xhigh"].map((id) => ({
+      id,
+      label: id,
+    }));
+    const entry = {
+      sessionId: "created-session",
+      modelProvider: "openai",
+      model: "gpt-5.6-sol",
+      thinkingLevel: "xhigh",
+      updatedAt: Date.now(),
+    };
     let releaseChatModule!: () => void;
     let chatModuleRequested = false;
     const chatModuleBlocked = new Promise<void>((resolve) => {
@@ -103,9 +114,21 @@ suite.define(() => {
       await route.continue();
     });
     const gateway = await installMockGateway(page, {
+      agentModel: "openai/gpt-5.6-sol",
+      models: [
+        {
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          provider: "openai",
+          reasoning: true,
+          thinkingDefault: "high",
+          thinkingLevels,
+        },
+      ],
       methodResponses: {
         "sessions.create": {
           key: SESSION_KEY,
+          entry,
           messageSeq: 1,
           runId: RUN_ID,
           runStarted: true,
@@ -115,20 +138,27 @@ suite.define(() => {
     });
     try {
       await page.goto(`${suite.server.baseUrl}new`);
+      const effortPicker = page.locator('[data-chat-thinking-select="true"]');
+      await effortPicker.click();
+      await page.locator('[data-chat-thinking-slider="true"]').fill("4");
+      await page.keyboard.press("Escape");
       const message = page.locator(".new-session-page__message");
       const start = page.locator(".new-session-page__start-submit");
       await message.fill("keep progress moving");
       await expect.poll(() => start.isEnabled()).toBe(true);
 
       await gateway.deferNext("sessions.create");
+      await gateway.deferNext("sessions.list");
       await start.click();
       await gateway.waitForRequest("sessions.create");
       await gateway.resolveDeferred("sessions.create", {
         key: SESSION_KEY,
+        entry,
         messageSeq: 1,
         runId: RUN_ID,
         runStarted: true,
       });
+      await gateway.waitForRequest("sessions.list");
       await expect.poll(() => chatModuleRequested).toBe(true);
 
       await expect.poll(() => start.getAttribute("aria-busy")).toBe("true");
@@ -188,6 +218,12 @@ suite.define(() => {
       await expect
         .poll(() => page.getByText("keep progress moving", { exact: true }).count())
         .toBe(1);
+      const chatEffortPicker = page
+        .locator(".agent-chat__input")
+        .locator('[data-chat-thinking-select="true"]');
+      await expect
+        .poll(() => chatEffortPicker.getAttribute("data-chat-thinking-value"))
+        .toBe("xhigh");
       const invalidFrames = await page.evaluate(() => {
         const frames = Reflect.get(globalThis, "__openclawSessionTransitionFrames") as {
           invalid: number;
@@ -198,6 +234,7 @@ suite.define(() => {
       });
       expect(invalidFrames).toBe(0);
       await captureProof(page, "02-session-route-transition.png");
+      await gateway.resolveDeferred("sessions.list", createdSessionListResult(SESSION_KEY));
       await gateway.resolveDeferred("chat.startup");
       await waitForCommittedChatRoute(page);
       await page.locator("openclaw-chat-page").waitFor();

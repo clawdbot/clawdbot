@@ -52,6 +52,7 @@ describe("startup run repair auto-disable", () => {
         runningAtMs,
         consecutiveErrors: 9,
         lastErrorReason: "timeout",
+        deliverySuppressionReason: "silent",
       },
     };
     const deferredNotifications: Array<() => void> = [];
@@ -76,6 +77,7 @@ describe("startup run repair auto-disable", () => {
       },
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(job.state.deliverySuppressionReason).toBeUndefined();
     expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(deferredNotifications).toHaveLength(1);
 

@@ -246,6 +246,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkerTunnelManager = createNodeWorkerTunnelManager({
     gatewayDeviceId,
     getEnvironment: (environmentId) => params.startup.store.get(environmentId),
+    listEnvironments: () => params.startup.store.list(),
     getTransport: () => deviceRuntime.getNodeTransport(),
     launchNodeWorker: async (request) => await deviceRuntime.launchNodeWorker(request),
     validateWorkerTurn: (binding) => placementGate.validateWorkerTurn(binding),

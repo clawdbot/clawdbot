@@ -22,6 +22,8 @@ type SettingsRowProps = {
   control?: SettingsRowControl;
   /** Full-width control below the text (textareas, segmented sets that wrap). */
   stacked?: boolean;
+  /** Full-width control below the text through the narrow-layout breakpoint. */
+  stackedOnNarrow?: boolean;
 };
 
 export type SettingsSectionProps = {
@@ -94,7 +96,11 @@ export function renderSettingsGroup(rows: unknown, options: { danger?: boolean }
 }
 
 export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
-  const className = props.stacked ? "settings-row settings-row--stacked" : "settings-row";
+  const className = props.stacked
+    ? "settings-row settings-row--stacked"
+    : props.stackedOnNarrow
+      ? "settings-row settings-row--stacked-on-narrow"
+      : "settings-row";
   return html`
     <div class=${className}>
       <div class="settings-row__text">
@@ -112,7 +118,7 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
 
 /** Clickable drill-in row with a trailing chevron. */
 export function renderSettingsNavRow(
-  props: Omit<SettingsRowProps, "stacked"> & { onClick: () => void },
+  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
 ): TemplateResult {
   return html`
     <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>

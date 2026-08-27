@@ -114,6 +114,7 @@ function createWorkerIpcLifetime(): WorkerCommandLifetime {
 export async function runWorkerProcess(
   options: {
     internalWorkerIpc?: boolean;
+    managed?: boolean;
     browserRuntime?: WorkerBrowserRuntime;
   } = {},
 ): Promise<void> {
@@ -123,6 +124,7 @@ export async function runWorkerProcess(
   await runWorkerCommand({
     input: process.stdin,
     output: process.stdout,
+    ...(options.managed ? { managed: true } : {}),
     ...(options.internalWorkerIpc ? { lifetime: createWorkerIpcLifetime() } : {}),
     ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
   });

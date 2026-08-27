@@ -16,8 +16,16 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
-import { getFinishedSession, markTerminalPollObserved } from "./bash-process-registry.js";
+import {
+  getFinishedSession,
+  markTerminalPollObserved,
+  waitForExecScope,
+} from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+} from "./tools/gateway-caller-context.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
@@ -192,6 +200,65 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it("keeps turn authority out of process lifetime while preserving foreground updates", async () => {
+    const exit = createDeferred<RunExit>();
+    const identity = {
+      agentId: "main",
+      sessionKey: "agent:main:exec-lifetime",
+      signedAgentRuntimeIdentityToken: "synthetic-turn-identity",
+    };
+    const spawnIdentity = vi.fn();
+    const updateIdentity = vi.fn();
+    const settledIdentity = vi.fn();
+    const beforeSpawn = vi.fn(async () => {
+      expect(getGatewayToolCallerIdentity()).toMatchObject(identity);
+      return undefined;
+    });
+    let stdout: SpawnInput["onStdout"];
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      spawnIdentity(getGatewayToolCallerIdentity());
+      stdout = input.onStdout;
+      stdout?.("foreground output\n");
+      return { ...runtimeManagedRun(input), wait: () => exit.promise };
+    });
+
+    const run = await withGatewayToolCallerIdentity(identity, () =>
+      runExecProcess({
+        command: "test-command",
+        workdir: "/tmp",
+        env: {},
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+        beforeSpawn,
+        onUpdate: () => updateIdentity(getGatewayToolCallerIdentity()),
+        onSettledBeforeNotify: () => settledIdentity(getGatewayToolCallerIdentity()),
+      }),
+    );
+    run.disableUpdates();
+    stdout?.("background output\n");
+    exit.resolve({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+    const outcome = await run.promise;
+
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(updateIdentity).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(identity));
+    expect(outcome.aggregated).toBe("foreground output\nbackground output");
+    expect(spawnIdentity).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(settledIdentity).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
   it("runs the final authorization check after async preparation and before spawn", async () => {
     const preparation =
       createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
@@ -566,6 +633,87 @@ describe("terminal execution-context release", () => {
       expect(removal).not.toHaveBeenCalled();
     },
   );
+});
+
+describe("exec settlement recovery", () => {
+  it.each([
+    { boundary: "task", trace: ["task:completed", "task:failed", "scope-released"] },
+    {
+      boundary: "enqueue",
+      trace: ["task:completed", "enqueue", "task:failed", "scope-released"],
+    },
+    {
+      boundary: "wake",
+      trace: ["task:completed", "enqueue", "wake", "task:failed", "scope-released"],
+    },
+  ])("retries $boundary failure before releasing the exec scope", async ({ boundary, trace }) => {
+    const exit = createDeferred<RunExit>();
+    const observed: string[] = [];
+    const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
+    const failure = new Error("process settlement failed");
+    const scopeKey = `settlement-recovery:${boundary}`;
+    enqueueSystemEventWithReceiptMock.mockImplementation(() => {
+      observed.push("enqueue");
+      if (boundary === "enqueue") {
+        throw failure;
+      }
+      return vi.fn(() => true);
+    });
+    requestHeartbeatMock.mockImplementation(() => {
+      observed.push("wake");
+      if (boundary === "wake") {
+        throw failure;
+      }
+    });
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+      ...runtimeManagedRun(input, "process output\n"),
+      wait: () => exit.promise,
+    }));
+    const run = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
+      () =>
+        runExecProcess({
+          command: "settlement-recovery",
+          workdir: "/tmp",
+          env: {},
+          usePty: false,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          scopeKey,
+          sessionKey: "agent:main:settlement-recovery",
+          notifyOnExit: true,
+          timeoutSec: null,
+          onSettledBeforeNotify: (outcome) => {
+            observed.push(`task:${outcome.status}`);
+            identities.push(getGatewayToolCallerIdentity());
+            if (boundary === "task" && observed.length === 1) {
+              throw failure;
+            }
+          },
+        }),
+    );
+    markBackgrounded(run.session);
+    const joined = waitForExecScope(scopeKey).then(() => {
+      observed.push("scope-released");
+    });
+    exit.resolve({
+      reason: "exit",
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 1,
+      stdout: "",
+      stderr: "",
+      timedOut: false,
+      noOutputTimedOut: false,
+    });
+
+    const outcome = await run.promise;
+    await joined;
+    expect(outcome.status).toBe("failed");
+    expect(observed).toEqual(trace);
+    expect(identities).toEqual([undefined, undefined]);
+  });
 });
 
 describe("runExecProcess exit outcomes", () => {

@@ -18,7 +18,7 @@ import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-ty
 // New runtime identity uses the `openai` provider.
 const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = Symbol.for("openclaw.codexAppServerClientDisposer");
-// Audited against @openai/codex 0.149.1 (rust-v0.149.1). These exact denies
+// Audited against @openai/codex 0.150.1 (rust-v0.150.1). These exact denies
 // either have no Codex-native equivalent or are enforced by the harness. Keep
 // the list positive and conservative: an omitted tool isolates the native surface.
 const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [

@@ -1,5 +1,6 @@
 // Parallels Npm Update Smoke tests cover parallels npm update smoke script behavior.
-import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -95,12 +96,158 @@ function extractWindowsBackgroundControlMarkers(decoded: string): {
   };
 }
 
+function runPrerequisiteCli(args: string[], env: NodeJS.ProcessEnv = {}) {
+  const childEnv = { ...process.env };
+  for (const name of ["ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "OPENAI_API_KEY"]) {
+    delete childEnv[name];
+  }
+  return spawnSync(process.execPath, ["--import", "tsx", SCRIPT_PATH, ...args], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...childEnv,
+      ...env,
+      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_KILL_GRACE_MS: "invalid",
+      OPENCLAW_PARALLELS_NPM_UPDATE_FRESH_TIMEOUT_S: "invalid",
+      OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S: "invalid",
+    },
+    timeout: 10_000,
+  });
+}
+
+function runFrozenPrerequisiteHelper(env: NodeJS.ProcessEnv = {}) {
+  const source = readFileSync("scripts/e2e/parallels/provider-auth-prerequisite.mjs", "utf8");
+  const dataUrl = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
+  const emptyCwd = tempDirs.make("openclaw-parallels-prerequisite-cwd-");
+  const childEnv = { ...process.env };
+  delete childEnv.OPENAI_API_KEY;
+  const program = `
+const helper = await import(process.argv[1]);
+const exports = Object.keys(helper).sort();
+if (JSON.stringify(exports) !== '["parsePlatformList","resolveParallelsProviderAuth","runParallelsPrerequisiteEval"]') {
+  throw new Error("unexpected helper exports");
+}
+const writes = [];
+const code = helper.runParallelsPrerequisiteEval(
+  ["--prerequisite-check", "--json"],
+  process.env,
+  { write: (value) => writes.push(value) },
+);
+if (writes.length !== 1) {
+  throw new Error("unexpected prerequisite write count");
+}
+process.stdout.write(writes[0]);
+process.exitCode = code;
+`;
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", program, dataUrl], {
+    cwd: emptyCwd,
+    encoding: "utf8",
+    env: { ...childEnv, ...env },
+    timeout: 10_000,
+  });
+}
+
 afterEach(() => {
   vi.useRealTimers();
   tempDirs.cleanup();
 });
 
 describe("parallels npm update smoke", () => {
+  it("reports exact ready prerequisites for default and explicit providers", () => {
+    const defaultSecret = "sentinel-default-provider-secret";
+    const defaultResult = runPrerequisiteCli(["--prerequisite-check", "--json"], {
+      OPENAI_API_KEY: defaultSecret,
+    });
+    expect(defaultResult.status).toBe(0);
+    expect(defaultResult.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
+    );
+    expect(defaultResult.stderr).toBe("");
+    expect(defaultResult.stdout).not.toContain(defaultSecret);
+
+    const explicitSecret = "sentinel-explicit-provider-secret";
+    const explicitResult = runPrerequisiteCli(
+      [
+        "--",
+        "--prerequisite-check",
+        "--only",
+        "linux",
+        "--provider",
+        "anthropic",
+        "--model",
+        "anthropic/custom",
+        "--api-key-env",
+        "CUSTOM_ANTHROPIC_KEY",
+        "--json",
+      ],
+      { CUSTOM_ANTHROPIC_KEY: explicitSecret },
+    );
+    expect(explicitResult.status).toBe(0);
+    expect(explicitResult.stdout).toBe(defaultResult.stdout);
+    expect(explicitResult.stderr).toBe("");
+    expect(`${explicitResult.stdout}${explicitResult.stderr}`).not.toContain(explicitSecret);
+    expect(explicitResult.stdout).not.toContain("CUSTOM_ANTHROPIC_KEY");
+    expect(explicitResult.stdout).not.toContain("anthropic/custom");
+  });
+
+  it("blocks missing credentials before smoke-only validation or side effects", () => {
+    const root = tempDirs.make("openclaw-parallels-prerequisite-");
+    const binDir = path.join(root, "bin");
+    const marker = path.join(root, "side-effect");
+    mkdirSync(binDir);
+    for (const command of ["bash", "git", "npm", "prlctl"]) {
+      const commandPath = path.join(binDir, command);
+      writeFileSync(
+        commandPath,
+        `#!/bin/sh\nprintf invoked >>${JSON.stringify(marker)}\nexit 99\n`,
+      );
+      chmodSync(commandPath, 0o755);
+    }
+    const result = runPrerequisiteCli(
+      [
+        "--prerequisite-check",
+        "--provider",
+        "minimax",
+        "--api-key-env",
+        "CUSTOM_MISSING_KEY",
+        "--json",
+      ],
+      {
+        CUSTOM_MISSING_KEY: "",
+        OPENAI_API_KEY: "sentinel-unselected-provider-secret",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"blocked","reason":"credential_missing"}\n',
+    );
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("CUSTOM_MISSING_KEY");
+    expect(result.stdout).not.toContain("sentinel-unselected-provider-secret");
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("runs the exact helper source with plain Node from an empty cwd", () => {
+    const ready = runFrozenPrerequisiteHelper({
+      OPENAI_API_KEY: "sentinel-frozen-helper-secret",
+    });
+    expect(ready.status).toBe(0);
+    expect(ready.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"ready","reason":null}\n',
+    );
+    expect(ready.stderr).toBe("");
+    expect(ready.stdout).not.toContain("sentinel-frozen-helper-secret");
+
+    const blocked = runFrozenPrerequisiteHelper();
+    expect(blocked.status).toBe(1);
+    expect(blocked.stdout).toBe(
+      '{"schema":"openclaw.parallels-prerequisite.v1","status":"blocked","reason":"credential_missing"}\n',
+    );
+    expect(blocked.stderr).toBe("");
+  });
+
   it("accepts one prepared tarball target for update and fresh install", () => {
     expect(
       parseArgs([

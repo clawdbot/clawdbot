@@ -1971,9 +1971,7 @@ class GatewaySession(
     val scheme = parsed?.scheme ?: "http"
     val port = parsed?.port?.takeIf { it > 0 } ?: if (scheme.equals("https", ignoreCase = true)) 443 else 80
     val usesFallbackHost = host.isBlank() || isLoopbackGatewayHost(host)
-    val gatewayOrigin = "http://${formatGatewayAuthority(endpoint.host.trim().trimEnd('.'), endpoint.port)}".toHttpUrlOrNull()
-    val surfaceOrigin = "http://${formatGatewayAuthority(host.trimEnd('.'), port)}".toHttpUrlOrNull()
-    val isGatewayAuthority = usesFallbackHost || (gatewayOrigin != null && surfaceOrigin == gatewayOrigin)
+    val isGatewayAuthority = usesFallbackHost || endpoint.matchesGatewayAuthority(host, port)
     val path = parsed?.rawPath.orEmpty()
     val capability = path.removePrefix("/__openclaw__/cap/")
     val isRootCapability = path != capability && capability.isNotEmpty() && !capability.contains('/')
@@ -2174,7 +2172,15 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
   }
 }
 
-/** Builds the gateway WebSocket URL from endpoint authority and TLS policy. */
+private fun GatewayEndpoint.matchesGatewayAuthority(
+  surfaceHost: String,
+  surfacePort: Int,
+): Boolean =
+  "http://${formatGatewayAuthority(host.trim().trimEnd('.'), port)}".toHttpUrlOrNull()?.let {
+    it == "http://${formatGatewayAuthority(surfaceHost.trim().trimEnd('.'), surfacePort)}".toHttpUrlOrNull()
+  } == true
+
+/** Retains pins for the same TLS authority, canonicalizing numeric hosts without adding DNS aliases. */
 internal fun gatewayTlsFingerprintForCanvasSurface(
   fingerprint: String?,
   surfaceUrl: String,
@@ -2185,11 +2191,8 @@ internal fun gatewayTlsFingerprintForCanvasSurface(
   val surface = runCatching { java.net.URI(surfaceUrl) }.getOrNull() ?: return null
   if (!surface.scheme.equals("https", ignoreCase = true)) return null
   val surfaceHost = surface.host?.trim()?.trimEnd('.') ?: return null
-  val gatewayHost = endpoint.host.trim().trimEnd('.')
-  val surfacePort = surface.port.takeIf { it > 0 } ?: 443
-  return fingerprint.takeIf {
-    surfaceHost.equals(gatewayHost, ignoreCase = true) && surfacePort == endpoint.port
-  }
+  if (!surfaceHost.equals(endpoint.host.trim().trimEnd('.'), ignoreCase = true) && ':' !in surfaceHost && ':' !in endpoint.host) return null
+  return fingerprint.takeIf { endpoint.matchesGatewayAuthority(surfaceHost, surface.port.takeIf { it > 0 } ?: 443) }
 }
 
 internal fun buildGatewayWebSocketUrl(

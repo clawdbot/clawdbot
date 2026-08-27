@@ -3,6 +3,7 @@ import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.t
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import type { SessionCreateOutcome } from "./create.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
   readSessionChangedEvent,
@@ -18,6 +19,7 @@ import { createSessionEventSubscriptionOwner } from "./session-event-subscriptio
 import { createSessionGroupCatalog } from "./session-group-catalog.ts";
 import {
   normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionEventMatches,
@@ -103,12 +105,41 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const pullRequestEpochs = new Map<string, object>();
   const listeners = new Set<(next: SessionState) => void>();
   const createdListeners = new Set<(key: string) => void>();
+  const thinkingLevelClaims = new Map<
+    string,
+    | readonly [value: string, updatedAt: number]
+    | readonly [value: string, updatedAt: undefined, afterRevision: number]
+  >();
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
   let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
+
+  const thinkingClaimKey = (key: string, agentId?: string | null) => {
+    const ownerAgentId =
+      parseAgentSessionKey(key)?.agentId ??
+      agentId ??
+      resolveUiSelectedGlobalAgentId(gateway.snapshot);
+    return `${normalizeSessionKeyForUiComparison(key)}\0agent:${normalizeAgentId(ownerAgentId)}`;
+  };
+
+  const settleThinkingLevelClaim = (
+    row: GatewaySessionRow,
+    requestRevision: number,
+    agentId?: string,
+  ) => {
+    const key = thinkingClaimKey(row.key, agentId);
+    const claim = thinkingLevelClaims.get(key);
+    const newer =
+      claim?.[1] !== undefined
+        ? (row.updatedAt ?? -1) > claim[1]
+        : claim !== undefined && requestRevision > claim[2];
+    if (claim && (row.thinkingLevel === claim[0] || newer)) {
+      thinkingLevelClaims.delete(key);
+    }
+  };
 
   const publish = (next: SessionState, errorSource?: "session-observer" | "operation") => {
     if (next.error === null) {
@@ -164,8 +195,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     observerError: () => sessionEventSubscriptionError,
     bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
     decorate: decorateRows,
-    onCanonicalList(result) {
+    onCanonicalList(result, requestRevision, agentId, observed) {
       mutations.settlePrepared(result);
+      for (const row of observed?.sessions ?? []) {
+        settleThinkingLevelClaim(row, requestRevision, agentId);
+      }
       canonicalListRevision += 1;
     },
   });
@@ -179,7 +213,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     retryDelayMs: sessionRetryDelayMs,
   });
 
-  const notifyCreated = (key: string) => {
+  const notifyCreated = (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => {
+    if (typeof entry?.thinkingLevel === "string" && typeof entry.updatedAt === "number") {
+      thinkingLevelClaims.set(thinkingClaimKey(key, agentId), [
+        entry.thinkingLevel,
+        entry.updatedAt,
+      ]);
+    }
     for (const listener of createdListeners) {
       listener(key);
     }
@@ -193,6 +233,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,
+    clearThink: (key, agentId) => thinkingLevelClaims.delete(thinkingClaimKey(key, agentId)),
     retirePullRequestSummary,
   });
 
@@ -291,17 +332,41 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       ? { ...options, archivedFilter: "all" as const }
       : options;
     const reconciled = reconcileSessionChanged(previous, payload, reconcileOptions);
+    let claimChanged = false;
+    if (reconciled.applied && reconciled.key && eventInfo) {
+      const claimKey = thinkingClaimKey(reconciled.key, eventInfo.agentId);
+      const claim = thinkingLevelClaims.get(claimKey);
+      const thinkingLevel = eventInfo.thinkingLevel;
+      const eventIsCurrent =
+        eventInfo.updatedAt === null || claim?.[1] === undefined || eventInfo.updatedAt >= claim[1];
+      const removesRow = reconciled.deletedKey || (eventInfo.archived === true && !reconciled.row);
+      if (claim && eventIsCurrent && removesRow) {
+        claimChanged = thinkingLevelClaims.delete(claimKey);
+      } else if (claim && eventIsCurrent && !reconciled.row && typeof thinkingLevel === "string") {
+        const nextClaim =
+          eventInfo.updatedAt === null
+            ? ([thinkingLevel, undefined, roster.requestRevision] as const)
+            : ([thinkingLevel, eventInfo.updatedAt] as const);
+        claimChanged =
+          claim[0] !== nextClaim[0] || claim[1] !== nextClaim[1] || claim[2] !== nextClaim[2];
+        if (claimChanged) {
+          thinkingLevelClaims.set(claimKey, nextClaim);
+        }
+      } else if (claim && eventIsCurrent && thinkingLevel !== undefined) {
+        claimChanged = thinkingLevelClaims.delete(claimKey);
+      }
+    }
     if (reconciled.result !== previous && reconciled.key && eventInfo) {
       mutations.observeArchiveState(reconciled.key, eventInfo.archived, reconciled.row);
     }
-    return { eventInfo, reconciled };
+    return { eventInfo, reconciled, claimChanged };
   };
 
   const reconcileChanged = (
     payload: unknown,
     options?: SessionReconcileOptions,
   ): SessionChangedResult => {
-    const { reconciled: base } = reconcileChangedEvent(payload, options);
+    const { reconciled: base, claimChanged } = reconcileChangedEvent(payload, options);
     const result = decorateRows(base.result);
     const reconciled =
       result === base.result
@@ -314,7 +379,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (reconciled.deletedKey) {
       retirePullRequestSummary(reconciled.deletedKey);
     }
-    if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
+    if (
+      claimChanged ||
+      (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey))
+    ) {
       publishReconciledState({
         ...state,
         result: reconciled.result,
@@ -352,6 +420,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionClient = next.client;
     if (connectionChanged) {
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
+      thinkingLevelClaims.clear();
       roster.reset();
       sessionEventSubscription.reset();
       sessionEventSubscriptionError = null;
@@ -420,7 +489,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (decoratedResult !== state.result) {
       publish({ ...state, result: decoratedResult });
     }
-    const { eventInfo, reconciled } = reconcileChangedEvent(event.payload, {
+    const { eventInfo, reconciled, claimChanged } = reconcileChangedEvent(event.payload, {
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
@@ -450,9 +519,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           eventInfo.agentId,
         ),
       ) === true;
-    if ((eventInfo?.archived !== null && !isTerminalMessage) || primarySnapshotApplied) {
+    if (
+      claimChanged ||
+      (eventInfo?.archived !== null && !isTerminalMessage) ||
+      primarySnapshotApplied
+    ) {
       const result = decorateRows(reconciled.result);
-      if (result !== state.result) {
+      if (claimChanged || result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
@@ -538,6 +611,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     setArchiveVisibility: mutations.setArchiveVisibility,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
+    think: (key, agentId) => thinkingLevelClaims.get(thinkingClaimKey(key, agentId))?.[0],
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,

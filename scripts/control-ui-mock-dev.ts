@@ -41,7 +41,11 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
-import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import {
+  buildPluginCatalogMock,
+  buildPluginInspectMock,
+  buildPluginSetEnabledMock,
+} from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
@@ -2477,6 +2481,8 @@ async function createChatPickerScenario(
         ],
       },
       "plugins.list": buildPluginCatalogMock(),
+      "plugins.inspect": buildPluginInspectMock(),
+      "plugins.setEnabled": buildPluginSetEnabledMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
       "channels.pairing.list": buildChannelsPairingMock(baseTime),
       "channels.pairing.approve": {

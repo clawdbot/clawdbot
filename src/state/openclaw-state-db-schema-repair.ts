@@ -389,6 +389,16 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   ) {
     migrations.push({ kind: "singleton-state-foldin-v12", path: pathname });
   }
+  if (
+    userVersion < 13 &&
+    (tableHasColumn(db, "cron_jobs", "schedule_kind") ||
+      tableHasColumn(db, "subagent_runs", "task") ||
+      tableExists(db, "workspace_attestations") ||
+      tableExists(db, "installed_plugin_index") ||
+      tableExists(db, "auth_profile_stores"))
+  ) {
+    migrations.push({ kind: "state-consolidation-v13", path: pathname });
+  }
   if (!hasCanonicalAgentDatabasesPrimaryKey(db)) {
     migrations.push({ kind: "agent-databases-composite-primary-key", path: pathname });
   }

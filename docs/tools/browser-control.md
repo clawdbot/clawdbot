@@ -310,6 +310,7 @@ OpenClaw supports three "snapshot" styles:
   - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
   - Names containing quotes, backslashes, or YAML punctuation remain actionable; use the ref rather than reconstructing a locator from the displayed name.
+  - A missing displayed name can mean an empty accessible name or one above Playwright's 900 UTF-16-unit limit; keep using the returned ref.
   - Add `--labels` to include a screenshot with overlayed `e12` labels. On
     Playwright-backed profiles this also returns per-ref bounding-box metadata
     (`annotations[]`).
@@ -384,6 +385,10 @@ profiles; send actions individually there.
   `stopOnError` is the default, the array ends at the first failure; with
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero; pass `--json` to preserve the full ordered response for scripts.
+- Nested batches occupy one parent result. If a child action fails, that result
+  reports the first child error. Each batch applies its own `stopOnError`:
+  continuing inside a nested batch does not make it successful or make its
+  parent continue.
 
 ## Wait power-ups
 

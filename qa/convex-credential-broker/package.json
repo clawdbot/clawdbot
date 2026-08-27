@@ -11,6 +11,6 @@
   },
   "dependencies": {
     "convex": "1.44.0",
-    "nostr-tools": "2.24.2"
+    "nostr-tools": "2.24.3"
   }
 }

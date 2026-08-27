@@ -50,11 +50,7 @@ type SourceAuthDatabase = Pick<
 >;
 type SharedAuthMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  | "auth_profile_stores"
-  | "auth_profile_state"
-  | "config_machine_state"
-  | "migration_runs"
-  | "migration_sources"
+  "config_machine_state" | "migration_runs" | "migration_sources"
 >;
 
 type MigrationStage = "copied" | "ownership-flipped" | "completed";
@@ -96,23 +92,42 @@ function readSourceSnapshot(params: { env: NodeJS.ProcessEnv; sourcePath: string
 function readTargetRows(database: DatabaseSync): AuthRows {
   const db = getNodeSqliteKysely<SharedAuthMigrationDatabase>(database);
   return {
+    // Shared auth payloads live in config_machine_state; project the KV cell
+    // back to the historical row shape so digest/row-match verification and
+    // persisted receipts stay byte-compatible.
     store:
-      executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("auth_profile_stores")
-          .select(["store_json", "updated_at"])
-          .where("store_key", "=", TARGET_STORE_KEY),
+      projectStoreRow(
+        executeSqliteQueryTakeFirstSync(
+          database,
+          db
+            .selectFrom("config_machine_state")
+            .select(["value_json", "updated_at_ms"])
+            .where("state_key", "=", "authProfiles.store"),
+        ),
       ) ?? null,
     state:
-      executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("auth_profile_state")
-          .select(["state_json", "updated_at"])
-          .where("store_key", "=", TARGET_STORE_KEY),
+      projectStateRow(
+        executeSqliteQueryTakeFirstSync(
+          database,
+          db
+            .selectFrom("config_machine_state")
+            .select(["value_json", "updated_at_ms"])
+            .where("state_key", "=", "authProfiles.state"),
+        ),
       ) ?? null,
   };
+}
+
+function projectStoreRow(
+  row: { value_json: string; updated_at_ms: number } | undefined,
+): StoreRow | null {
+  return row ? { store_json: row.value_json, updated_at: row.updated_at_ms } : null;
+}
+
+function projectStateRow(
+  row: { value_json: string; updated_at_ms: number } | undefined,
+): StateRow | null {
+  return row ? { state_json: row.value_json, updated_at: row.updated_at_ms } : null;
 }
 
 function rowDigest(row: StoreRow | StateRow | null): string {
@@ -312,20 +327,20 @@ function copyRowsToState(params: {
       if (params.sourceRows.store && !target.store) {
         executeSqliteQuerySync(
           database,
-          db.insertInto("auth_profile_stores").values({
-            store_key: TARGET_STORE_KEY,
-            store_json: params.sourceRows.store.store_json,
-            updated_at: params.sourceRows.store.updated_at,
+          db.insertInto("config_machine_state").values({
+            state_key: "authProfiles.store",
+            value_json: params.sourceRows.store.store_json,
+            updated_at_ms: params.sourceRows.store.updated_at,
           }),
         );
       }
       if (params.sourceRows.state && !target.state) {
         executeSqliteQuerySync(
           database,
-          db.insertInto("auth_profile_state").values({
-            store_key: TARGET_STORE_KEY,
-            state_json: params.sourceRows.state.state_json,
-            updated_at: params.sourceRows.state.updated_at,
+          db.insertInto("config_machine_state").values({
+            state_key: "authProfiles.state",
+            value_json: params.sourceRows.state.state_json,
+            updated_at_ms: params.sourceRows.state.updated_at,
           }),
         );
       }

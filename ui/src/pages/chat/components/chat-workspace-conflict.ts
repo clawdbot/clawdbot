@@ -14,7 +14,6 @@ function renderConflictCopyAction(text: string, label: string) {
   return html`<button
     class="btn btn--sm chat-copy-btn"
     type="button"
-    aria-label=${label}
     @click=${(event: Event) => void handleCopyButton(event, text, label)}
   >
     <span data-copy-label>${label}</span>

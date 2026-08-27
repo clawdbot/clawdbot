@@ -8,7 +8,7 @@ import {
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
-import { OpenClawModalDialog } from "./modal-dialog.ts";
+import "./modal-dialog.ts";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -140,17 +140,6 @@ describe("openclaw-modal-dialog", () => {
     } finally {
       shell.remove();
     }
-  });
-
-  it("keeps the navigation drawer sidebar in a full-height, shrinkable flex column", () => {
-    const styles = OpenClawModalDialog.styles.cssText;
-
-    expect(styles).toMatch(
-      /:host\(\.nav-drawer\)\s+wa-dialog::part\(body\)\s*\{[^}]*display:\s*flex;[^}]*flex-direction:\s*column;[^}]*min-height:\s*0;/u,
-    );
-    expect(styles).toMatch(
-      /::slotted\(\.shell-nav-modal__content\)\s*\{[^}]*display:\s*flex;[^}]*flex:\s*1\s+1\s+auto;[^}]*flex-direction:\s*column;[^}]*height:\s*100%;[^}]*min-height:\s*0;/u,
-    );
   });
 
   it("emits modal-cancel on Escape", async () => {

@@ -26,7 +26,7 @@ openclaw-new-session-page {
   z-index: 45;
 }
 
-.new-session-page__incognito-rail .new-session-page__draft-tooltip {
+.new-session-page__draft-toggle {
   display: none;
 }
 
@@ -77,10 +77,6 @@ html.openclaw-native-macos .new-session-page__incognito-rail {
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .new-session-page__incognito-rail .new-session-page__draft-tooltip {
-    display: inline-flex;
   }
 
   .new-session-page__draft-toggle {
@@ -1099,6 +1095,14 @@ wa-popover.new-session-page__project-popover::part(body) {
   cursor: default;
 }
 
+/* The trailing actions already own the stable right edge on /new. Collapse the
+   empty effort slot while loading unless the open model menu needs its anchor. */
+.new-session-page__composer
+  .chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
+  .chat-controls__effort-picker--reserved {
+  display: none;
+}
+
 /* Phones (and short landscape): match the chat thread's mobile inset, and
    anchor menus to the trigger row instead of their trigger — a near
    viewport-wide panel under a non-leftmost trigger would otherwise run past
@@ -1113,78 +1117,12 @@ wa-popover.new-session-page__project-popover::part(body) {
     gap: 4px 2px;
   }
 
-  /* Visibility chips stay intrinsic and let the model control use the
-     remaining width until the shared narrow-composer treatment takes over. */
-  .new-session-page__composer .agent-chat__composer-controls {
-    display: flex;
-    flex-wrap: wrap;
-  }
-
-  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    max-width: 100%;
-    margin-left: auto;
-  }
-
   .new-session-page__select {
     position: static;
   }
 }
 
 @container chat-composer (max-width: 480px) {
-  .new-session-page__composer .agent-chat__composer-footer {
-    display: flex;
-    gap: 2px;
-  }
-
-  .new-session-page__composer .agent-chat__composer-lead {
-    flex: 0 0 auto;
-    gap: 2px;
-    order: 1;
-  }
-
-  .new-session-page__composer .agent-chat__composer-trail {
-    display: contents;
-  }
-
-  .new-session-page__composer .agent-chat__composer-controls {
-    flex: 1 1 0;
-    min-width: 0;
-    order: 2;
-  }
-
-  .new-session-page__composer .agent-chat__composer-actions {
-    flex: 0 0 auto;
-    gap: 2px;
-    order: 3;
-  }
-
-  .new-session-page__composer .chat-controls__trigger-provider-icon {
-    display: none;
-  }
-
-  .new-session-page__composer .chat-composer-model-control,
-  .new-session-page__composer .chat-controls__model-settings,
-  .new-session-page__composer .chat-controls__model-picker,
-  .new-session-page__composer .chat-controls__model-trigger {
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .new-session-page__composer .agent-chat__input .chat-composer-model-control {
-    flex: 1 1 0;
-  }
-
-  .new-session-page__composer .chat-controls__model-settings {
-    justify-content: flex-end;
-  }
-
-  .new-session-page__composer .chat-controls__model-picker {
-    flex: 0 1 auto;
-  }
-
   .new-session-page__composer .new-session-page__visibility {
     flex: 0 0 var(--chat-composer-control-size);
     width: var(--chat-composer-control-size);
@@ -1198,30 +1136,8 @@ wa-popover.new-session-page__project-popover::part(body) {
 }
 
 @media (max-width: 560px) {
-  .new-session-page__composer .agent-chat__input--mobile-toolbar {
-    --chat-mobile-row-effort-width: calc(
-      var(--chat-mobile-row-icon-size) + var(--chat-mobile-row-chevron-size) +
-        var(--chat-mobile-row-chip-gap) + var(--chat-mobile-row-chip-padding-inline) +
-        var(--chat-mobile-row-chip-padding-inline)
-    );
-  }
-
-  .new-session-page__composer .agent-chat__input--mobile-toolbar .agent-chat__composer-controls {
-    justify-content: flex-end;
-  }
-
-  .new-session-page__composer
-    .agent-chat__input--mobile-toolbar
-    :is(
-      .chat-composer-model-control,
-      .chat-controls__model-settings,
-      .chat-controls__model-picker,
-      .chat-controls__model-trigger
-    ) {
-    flex: 0 0 44px;
-    width: 44px;
-    min-width: 44px;
-    max-width: 44px;
+  .new-session-page .agent-chat__welcome-secondary:has(.agent-chat__suggestions) {
+    display: none;
   }
 
   .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
@@ -1348,34 +1264,5 @@ wa-popover.new-session-page__project-popover::part(body) {
 
   .new-session-page__incognito-notice--visible {
     max-height: 48px;
-  }
-
-  .new-session-page__composer .chat-controls__model-settings {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .new-session-page__composer .agent-chat__input--mobile-toolbar .chat-composer-model-control {
-    flex: 1 1 auto;
-    width: auto;
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .new-session-page__composer .chat-controls__model-picker {
-    flex: 1 1 auto;
-    min-width: 0;
-    max-width: calc(100% - var(--chat-mobile-row-effort-width));
-  }
-
-  .new-session-page__composer .chat-controls__model-trigger {
-    max-width: 100%;
-  }
-
-  .new-session-page__composer .chat-controls__model-trigger .chat-controls__inline-select-label {
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 }

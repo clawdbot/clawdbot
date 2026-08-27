@@ -834,11 +834,14 @@ struct OpenClawTypographyTests {
     }
 
     private static func relativePath(_ url: URL) -> String {
+        // Enumeration and #filePath can use different symlink spellings for the same checkout.
         let rootPath = self.iosRootURL()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+            .resolvingSymlinksInPath()
             .path + "/"
-        return url.path.hasPrefix(rootPath) ? String(url.path.dropFirst(rootPath.count)) : url.path
+        let path = url.resolvingSymlinksInPath().path
+        return path.hasPrefix(rootPath) ? String(path.dropFirst(rootPath.count)) : path
     }
 
     private static func iosRootURL() -> URL {

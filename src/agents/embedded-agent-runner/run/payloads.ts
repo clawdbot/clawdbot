@@ -2,6 +2,7 @@
  * Builds embedded-agent payload objects from attempt inputs and outcomes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { buildCodexLoginRecovery } from "../../../auto-reply/codex-login-recovery.js";
 import { stripContinuationSignal } from "../../../auto-reply/continuation/signal.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
@@ -34,6 +35,7 @@ import {
   sanitizeAssistantFinalAnswerText,
   sanitizeAssistantVisibleText,
 } from "../../../shared/text/assistant-visible-text.js";
+import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -240,19 +242,25 @@ export function buildEmbeddedRunPayloads(params: {
   const rawErrorMessage = lastAssistantNeedsErrorSurface
     ? normalizeOptionalString(assistantForPayload?.errorMessage)
     : undefined;
+  const oauthRefreshFailure = rawErrorMessage ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
+  const codexLoginRecovery = buildCodexLoginRecovery({
+    provider: oauthRefreshFailure?.provider ?? params.provider,
+    oauthReason: oauthRefreshFailure?.reason,
+  });
   const errorText =
     assistantForPayload && lastAssistantNeedsErrorSurface
       ? suppressFailureArtifacts
         ? undefined
         : lastAssistantErrored || rawErrorMessage
-          ? formatUserFacingAssistantErrorText(assistantForPayload, {
+          ? (codexLoginRecovery?.hint ??
+            formatUserFacingAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
               providerOwner: params.providerOwner,
               model: params.model,
               authMode: params.authMode,
-            })
+            }))
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
@@ -283,7 +291,11 @@ export function buildEmbeddedRunPayloads(params: {
     isTimeoutErrorMessage(rawErrorMessage) &&
     errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
   if (errorText && !deferAssistantTimeoutError) {
-    replyItems.push({ text: errorText, isError: true });
+    replyItems.push({
+      text: errorText,
+      isError: true,
+      ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
+    });
   }
   const reasoningText =
     suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface

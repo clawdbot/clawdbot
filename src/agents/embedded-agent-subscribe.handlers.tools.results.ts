@@ -546,7 +546,7 @@ export async function emitToolResultOutput(params: {
       failure: { error: `Approval prompt delivery failed: ${message}` },
     });
     ctx.state.lastToolError = terminal.lastToolError;
-    ctx.state.deterministicApprovalPromptSent = false;
+    // A later delivery failure does not undo an already delivered pending prompt.
   };
   const hasStructuredMedia = Boolean(
     result &&
@@ -600,7 +600,7 @@ export async function emitToolResultOutput(params: {
     if (!ctx.params.onToolResult) {
       return;
     }
-    ctx.state.deterministicApprovalPromptPending = true;
+    // Setup notices are progress, not pending prompts that replace the final answer.
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
       if (!isCurrentDeliveryGeneration()) {
@@ -618,15 +618,8 @@ export async function emitToolResultOutput(params: {
           nodeId: approvalUnavailable.nodeId,
         }),
       );
-      if (isCurrentDeliveryGeneration()) {
-        ctx.state.deterministicApprovalPromptSent = true;
-      }
     } catch (error) {
       recordApprovalPromptDeliveryFailure(error);
-    } finally {
-      if (isCurrentDeliveryGeneration()) {
-        ctx.state.deterministicApprovalPromptPending = false;
-      }
     }
     return;
   }

@@ -9,7 +9,7 @@ import {
   NODE_PLUGIN_TOOL_CALL_TIMEOUT_MS,
 } from "../infra/node-commands.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
-import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
+import { sanitizeNodeIdFragment, sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import {
   projectMcpCallToolResult,
@@ -108,19 +108,6 @@ function describeNodeToolLocation(params: {
   return `${params.description} (node: ${label})`;
 }
 
-function sanitizeToolNameFragment(value: string): string {
-  const fragment = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-  if (!fragment) {
-    return "node";
-  }
-  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
-}
-
 function isProviderSafeToolName(value: string): boolean {
   return NODE_PLUGIN_TOOL_NAME_RE.test(value);
 }
@@ -144,7 +131,7 @@ function resolveUniqueToolName(params: {
   if (params.duplicateCount === 1 && !params.existingNormalized.has(params.normalizedName)) {
     return params.baseName;
   }
-  const nodeFragment = sanitizeToolNameFragment(params.nodeId);
+  const nodeFragment = sanitizeNodeIdFragment(params.nodeId);
   for (let index = 0; index < 100; index += 1) {
     const suffix = index === 0 ? "" : `_${index + 1}`;
     const candidate = prependToolNameFragment(params.baseName, nodeFragment, suffix);

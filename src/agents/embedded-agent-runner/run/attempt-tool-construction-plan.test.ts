@@ -1,5 +1,5 @@
 // Coverage for embedded attempt tool construction and runtime allowlists.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { attachToolAllowlistIntersection } from "../../tool-policy.js";
 import {
   applyEmbeddedAttemptToolsAllow,
@@ -510,6 +510,36 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
 });
 
 describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
+  it.each([
+    { toolsAllow: undefined, expected: true },
+    { toolsAllow: ["*"], expected: true },
+    { toolsAllow: ["chrome*", "bundle-mcp"], expected: true },
+    { toolsAllow: ["chrome*", "group:plugins"], expected: true },
+    { toolsAllow: ["chrome*", "other__tool"], expected: true },
+    { toolsAllow: [], expected: false },
+    { toolsAllow: ["bash"], expected: false },
+  ])("keeps decisive allowlists metadata-free: $toolsAllow", ({ toolsAllow, expected }) => {
+    const resolveConfiguredMcpNamespaces = vi.fn(() => ["chrome__"]);
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow,
+        resolveConfiguredMcpNamespaces,
+      }),
+    ).toBe(expected);
+    expect(resolveConfiguredMcpNamespaces).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a generated bash namespace as the core exec alias", () => {
+    expect(
+      shouldCreateBundleMcpRuntimeForAttempt({
+        toolsEnabled: true,
+        toolsAllow: ["exec*"],
+        resolveConfiguredMcpNamespaces: () => ["bash__"],
+      }),
+    ).toBe(false);
+  });
+
   it("skips bundle MCP runtime when tools are disabled", () => {
     expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
     expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, disableTools: true })).toBe(

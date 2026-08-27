@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
@@ -29,7 +30,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { ReplyPayload } from "../types.js";
 import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
-  runPreflightCompactionIfNeeded as runPreflightCompactionIfNeededRaw,
+  runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
 import { setAgentRunnerMemoryTestDeps } from "./agent-runner-memory.test-support.js";
 import {
@@ -70,13 +71,13 @@ async function runMemoryFlushIfNeeded(params: MemoryFlushTestParams) {
   });
 }
 
-type PreflightCompactionTestParams = Parameters<typeof runPreflightCompactionIfNeededRaw>[0] & {
+type PreflightCompactionTestParams = Parameters<typeof runSessionCompactionIfNeededRaw>[0] & {
   modelContextTokens?: number;
 };
 
-async function runPreflightCompactionIfNeeded(params: PreflightCompactionTestParams) {
+async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParams) {
   const { modelContextTokens, ...runParams } = params;
-  return await runPreflightCompactionIfNeededRaw({
+  return await runSessionCompactionIfNeededRaw({
     ...runParams,
     cfg: withTestModelContextTokens({
       cfg: runParams.cfg,
@@ -180,6 +181,14 @@ function createReplyOperation(): TestReplyOperation {
     markDeferredMaintenanceWaitEnded: vi.fn(),
     markWaitingForGlobalLane: vi.fn(),
     markGlobalLaneWaitEnded: vi.fn(),
+  };
+}
+
+function createCompactionLifecycle(replyOperation: ReplyOperation) {
+  return {
+    abortSignal: replyOperation.abortSignal,
+    onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+    onSessionIdChanged: (sessionId: string) => replyOperation.updateSessionId(sessionId),
   };
 }
 
@@ -362,7 +371,7 @@ describe("runMemoryFlushIfNeeded", () => {
     overrides: Partial<PreflightCompactionTestParams> = {},
   ) {
     const sessionKey = overrides.sessionKey ?? "main";
-    return await runPreflightCompactionIfNeeded({
+    return await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -372,7 +381,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
       ...overrides,
     });
   }
@@ -1582,7 +1591,7 @@ describe("runMemoryFlushIfNeeded", () => {
       reason: "no real conversation messages",
     });
     await expect(
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           sessionId: "session",
@@ -1596,7 +1605,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:main",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
         onCompactionNotice,
       }),
     ).rejects.toThrow("Preflight compaction required but failed: no real conversation messages");
@@ -1628,7 +1637,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
 
     await expect(
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           sessionId: "session",
@@ -1642,7 +1651,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:main",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       }),
     ).rejects.toThrow(
       "Preflight compaction required but failed: deferred to background context-engine maintenance",
@@ -1729,7 +1738,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
       await expect(
-        runPreflightCompactionIfNeeded({
+        runSessionCompactionIfNeeded({
           cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
           followupRun: createTestFollowupRun({
             sessionId: "session",
@@ -1743,7 +1752,7 @@ describe("runMemoryFlushIfNeeded", () => {
           sessionKey: "agent:main:telegram:group:redacted",
           storePath: path.join(rootDir, "sessions.json"),
           isHeartbeat: false,
-          replyOperation: createReplyOperation(),
+          ...createCompactionLifecycle(createReplyOperation()),
         }),
       ).rejects.toThrow(`Preflight compaction required but failed: ${reason}`);
 
@@ -1782,7 +1791,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
     await expect(
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           sessionId: "session",
@@ -1796,7 +1805,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:telegram:group:redacted",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       }),
     ).rejects.toThrow(
       "Preflight compaction required but failed: thread not found: <codex-thread-id>",
@@ -1837,7 +1846,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionStore = { "agent:main:telegram:group:redacted": sessionEntry };
 
     await expect(
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           sessionId: "session",
@@ -1851,7 +1860,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "agent:main:telegram:group:redacted",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       }),
     ).rejects.toThrow("Preflight compaction required but failed: auth profile mismatch");
 
@@ -1871,7 +1880,7 @@ describe("runMemoryFlushIfNeeded", () => {
         compactionCount: 0,
       };
 
-      await runPreflightCompactionIfNeeded({
+      await runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           authProfileId: "anthropic:claude@martian.engineering",
@@ -1886,7 +1895,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionStore: { "agent:main:main": sessionEntry },
         sessionKey: "agent:main:main",
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       });
 
       const compactCall = requireCompactEmbeddedAgentSessionCall();
@@ -1895,6 +1904,189 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(compactCall.contextTokenBudget).toBe(258_000);
     },
   );
+  it.each([
+    {
+      label: "below threshold",
+      totalTokens: 897_999,
+      shouldCompact: false,
+      requestedRuntime: "openclaw",
+    },
+    {
+      label: "at threshold",
+      totalTokens: 898_000,
+      shouldCompact: true,
+      requestedRuntime: "openclaw",
+    },
+    {
+      label: "reported pressure",
+      totalTokens: 904_869,
+      shouldCompact: true,
+      requestedRuntime: "openclaw",
+    },
+    {
+      label: "reported pressure after a runtime fallback",
+      totalTokens: 904_869,
+      shouldCompact: true,
+      requestedRuntime: "codex",
+    },
+  ] as const)(
+    "applies session compaction at $label with memory flush disabled",
+    async ({ totalTokens, shouldCompact, requestedRuntime }) => {
+      // A disabled memory plugin supplies no flush plan; compaction still owns its budget.
+      registerMemoryFlushPlanResolverForTest(() => null);
+      const sessionEntry = createFlushSessionEntry({
+        totalTokens,
+        compactionCount: 0,
+        agentHarnessId: requestedRuntime,
+        agentRuntimeOverride: requestedRuntime,
+        lifecycleRevision: "owned-generation",
+      });
+      const authorize = () => true;
+      const overrides: Partial<PreflightCompactionTestParams> = {
+        cfg: {
+          agents: {
+            defaults: { compaction: { mode: "safeguard", memoryFlush: { enabled: false } } },
+          },
+          tools: { deny: ["*"] },
+          models: {
+            providers: {
+              openai: {
+                agentRuntime: { id: requestedRuntime },
+                baseUrl: "https://chatgpt.com/backend-api",
+                api: "openai-chatgpt-responses",
+                models: [
+                  {
+                    id: "gpt-5.6-luna",
+                    name: "Context budget test",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1_050_000,
+                    contextTokens: 922_000,
+                    maxTokens: 128_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        followupRun: createTestFollowupRun({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          workspaceDir: rootDir,
+          agentDir: rootDir,
+        }),
+        defaultModel: "openai/gpt-5.6-luna",
+        modelContextTokens: 922_000,
+        promptForEstimate: "",
+        authorize,
+        ...(requestedRuntime === "codex" ? { agentHarnessId: "openclaw" } : {}),
+      };
+
+      const flush = await runDefaultMemoryFlush(sessionEntry, overrides);
+      expect(flush.outcome).toBe("skipped");
+      await runDefaultPreflight(sessionEntry, overrides);
+
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(shouldCompact ? 1 : 0);
+      if (shouldCompact) {
+        expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+          agentHarnessId: "openclaw",
+          contextTokenBudget: 922_000,
+          currentTokenCount: totalTokens,
+          force: true,
+          forcePreflight: true,
+          preflightRequired: true,
+          preflightCompactionTrigger: "tokens",
+        });
+        expect(incrementCompactionCountMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            expectedSession: { sessionId: "session", lifecycleRevision: "owned-generation" },
+            authorize,
+          }),
+        );
+      }
+    },
+  );
+
+  it.each([
+    { stage: "before start", invalidation: "authorization" },
+    { stage: "before start", invalidation: "abort" },
+    { stage: "after start notice", invalidation: "authorization" },
+    { stage: "after start notice", invalidation: "abort" },
+    { stage: "after awaited compactor", invalidation: "authorization" },
+    { stage: "after awaited compactor", invalidation: "abort" },
+  ] as const)(
+    "rejects $invalidation invalidation $stage without accounting or adopting compaction",
+    async ({ stage, invalidation }) => {
+      const sessionEntry = createFlushSessionEntry();
+      const sessionStore = { main: sessionEntry };
+      const followupRun = createTestFollowupRun({ workspaceDir: rootDir });
+      const controller = new AbortController();
+      let authorized = true;
+      const invalidate = () => {
+        if (invalidation === "authorization") {
+          authorized = false;
+        } else {
+          controller.abort(new Error("caller aborted"));
+        }
+      };
+      const compactorStarted = createDeferred();
+      const releaseCompactor = createDeferred();
+      compactEmbeddedAgentSessionMock.mockImplementationOnce(async () => {
+        compactorStarted.resolve();
+        await releaseCompactor.promise;
+        return { ok: true, compacted: true, result: { tokensAfter: 42, sessionId: "successor" } };
+      });
+      const onCompactionStart = vi.fn();
+      const onSessionIdChanged = vi.fn();
+      const onCompactionNotice = vi.fn(async (phase: string) => {
+        if (stage === "after start notice" && phase === "start") {
+          invalidate();
+        }
+      });
+      if (stage === "before start") {
+        invalidate();
+      }
+      if (stage !== "after awaited compactor") {
+        releaseCompactor.resolve();
+      }
+
+      const pending = runDefaultPreflight(sessionEntry, {
+        followupRun,
+        sessionStore,
+        abortSignal: controller.signal,
+        authorize: () => authorized,
+        onCompactionStart,
+        onSessionIdChanged,
+        onCompactionNotice,
+      });
+      if (stage === "after awaited compactor") {
+        await compactorStarted.promise;
+        invalidate();
+        releaseCompactor.resolve();
+      }
+      await expect(pending).rejects.toThrow(
+        invalidation === "authorization"
+          ? "Session compaction maintenance is no longer active"
+          : "caller aborted",
+      );
+
+      expect(onCompactionStart).toHaveBeenCalledTimes(stage === "before start" ? 0 : 1);
+      if (stage === "before start") {
+        expect(onCompactionNotice).not.toHaveBeenCalled();
+      }
+      expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(
+        stage === "after awaited compactor" ? 1 : 0,
+      );
+      expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+      expect(onSessionIdChanged).not.toHaveBeenCalled();
+      expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+      expect(sessionStore.main).toBe(sessionEntry);
+      expect(followupRun.run.sessionId).toBe("session");
+    },
+  );
+
   it("preflight compacts a fresh session when the current prompt estimate pushes the next request over budget", async () => {
     registerMemoryFlushPlanResolverForTest(() =>
       createModifiedMemoryFlushPlan({ softThresholdTokens: 0, reserveTokensFloor: 10 }),
@@ -1940,7 +2132,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
 
-    await runPreflightCompactionIfNeeded({
+    await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         provider: "anthropic",
@@ -1954,7 +2146,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: { "agent:main:main": sessionEntry },
       sessionKey: "agent:main:main",
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
@@ -1994,7 +2186,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const sessionStore = { [sessionKey]: sessionEntry };
     const run = () =>
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           provider: "anthropic",
@@ -2010,7 +2202,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         storePath,
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       });
 
     await run();
@@ -2059,7 +2251,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const sessionStore = { [sessionKey]: sessionEntry };
     const run = () =>
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           provider: "anthropic",
@@ -2075,7 +2267,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         storePath,
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       });
 
     await run();
@@ -2149,7 +2341,7 @@ describe("runMemoryFlushIfNeeded", () => {
       modelContextTokens: 100,
       sessionStore,
       sessionKey: "agent:main:main",
-      replyOperation,
+      ...createCompactionLifecycle(replyOperation),
     });
 
     expect(entry?.sessionId).toBe("session-rotated");
@@ -2338,7 +2530,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const replyOperation = createReplyOperation();
 
     await expect(
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           sessionId: "session",
@@ -2351,7 +2543,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "main",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation,
+        ...createCompactionLifecycle(replyOperation),
       }),
     ).rejects.toThrow("Preflight compaction required but failed: plugin already stored this turn");
 
@@ -2387,7 +2579,7 @@ describe("runMemoryFlushIfNeeded", () => {
       agentHarnessId: "openclaw",
     };
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         models: {
           providers: {
@@ -2408,7 +2600,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(entry).toBe(sessionEntry);
@@ -2434,7 +2626,7 @@ describe("runMemoryFlushIfNeeded", () => {
       agentHarnessId: "openclaw",
     };
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         models: {
           providers: {
@@ -2455,7 +2647,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(entry).toBe(sessionEntry);
@@ -2481,7 +2673,7 @@ describe("runMemoryFlushIfNeeded", () => {
       agentRuntimeOverride: "claude-cli",
     };
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         models: {
           providers: {
@@ -2503,7 +2695,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(entry).toBe(sessionEntry);
@@ -2527,7 +2719,7 @@ describe("runMemoryFlushIfNeeded", () => {
       agentRuntimeOverride: "openclaw",
     };
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         models: {
           providers: {
@@ -2548,7 +2740,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(entry).toBe(sessionEntry);
@@ -2648,7 +2840,7 @@ describe("runMemoryFlushIfNeeded", () => {
         reason: "guard_blocked",
       });
 
-      const entry = await runPreflightCompactionIfNeeded({
+      const entry = await runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           provider: "openai",
@@ -2663,7 +2855,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         storePath,
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       });
 
       expect(entry).toBe(sessionEntry);
@@ -2691,7 +2883,7 @@ describe("runMemoryFlushIfNeeded", () => {
       agentRuntimeOverride: "openclaw",
     };
 
-    await runPreflightCompactionIfNeeded({
+    await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         provider: "openai",
@@ -2706,7 +2898,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThan(100_000);
@@ -2756,7 +2948,7 @@ describe("runMemoryFlushIfNeeded", () => {
         agentRuntimeOverride: "openclaw",
       };
 
-      await runPreflightCompactionIfNeeded({
+      await runSessionCompactionIfNeeded({
         cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
         followupRun: createTestFollowupRun({
           provider: "openai",
@@ -2771,7 +2963,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "main",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
       });
 
       expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(shouldCompact ? 1 : 0);
@@ -3056,7 +3248,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionStore = { main: sessionEntry };
     const replyOperation = createReplyOperation();
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         agents: {
           defaults: {
@@ -3078,7 +3270,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation,
+      ...createCompactionLifecycle(replyOperation),
     });
 
     expect(entry?.compactionCount).toBe(1);
@@ -3118,7 +3310,7 @@ describe("runMemoryFlushIfNeeded", () => {
       const sessionStore = { [sessionKey]: sessionEntry };
       const replyOperation = createReplyOperation();
 
-      const entry = await runPreflightCompactionIfNeeded({
+      const entry = await runSessionCompactionIfNeeded({
         cfg: {
           agents: {
             defaults: {
@@ -3139,7 +3331,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey,
         storePath,
         isHeartbeat: false,
-        replyOperation,
+        ...createCompactionLifecycle(replyOperation),
       });
 
       expect(entry?.compactionCount).toBe(1);
@@ -3197,7 +3389,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const replyOperation = createReplyOperation();
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         agents: {
           defaults: {
@@ -3218,7 +3410,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath,
       isHeartbeat: false,
-      replyOperation,
+      ...createCompactionLifecycle(replyOperation),
     });
 
     expect(entry).toBe(sessionEntry);
@@ -3288,7 +3480,7 @@ describe("runMemoryFlushIfNeeded", () => {
       isHeartbeat: false,
       replyOperation: createReplyOperation(),
     });
-    const preflightEntry = await runPreflightCompactionIfNeeded({
+    const preflightEntry = await runSessionCompactionIfNeeded({
       cfg,
       followupRun,
       defaultModel: "anthropic/claude-opus-4-6",
@@ -3298,7 +3490,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath,
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(flushResult).toEqual({ sessionEntry, outcome: "skipped" });
@@ -3359,7 +3551,7 @@ describe("runMemoryFlushIfNeeded", () => {
       promptComponentOffset: inboundPrompt.length + 2,
     });
 
-    const entry = await runPreflightCompactionIfNeeded({
+    const entry = await runSessionCompactionIfNeeded({
       cfg: {
         agents: {
           defaults: {
@@ -3378,7 +3570,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath,
       isHeartbeat: false,
-      replyOperation,
+      ...createCompactionLifecycle(replyOperation),
     });
 
     expect(entry?.compactionCount).toBe(1);
@@ -3412,7 +3604,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
 
-    await runPreflightCompactionIfNeeded({
+    await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({
         sessionId: sessionEntry.sessionId,
@@ -3425,7 +3617,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath: durableStorePath,
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     const expectedStorePath = resolveSessionStorePathForScope({
@@ -3506,7 +3698,7 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokensFresh: false,
     };
 
-    await runPreflightCompactionIfNeeded({
+    await runSessionCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
       followupRun: createTestFollowupRun({ sessionId: "session", sessionKey }),
       defaultModel: "anthropic/claude-opus-4-6",
@@ -3516,7 +3708,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey,
       storePath,
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
     });
 
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
@@ -3590,7 +3782,7 @@ describe("runMemoryFlushIfNeeded", () => {
       result: { kind: "server-endpoint", tokensBefore: 8_614, tokensAfter: 736 },
     });
 
-    await runPreflightCompactionIfNeeded({
+    await runSessionCompactionIfNeeded({
       cfg: {
         agents: {
           defaults: {
@@ -3613,7 +3805,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionKey: "main",
       storePath: path.join(rootDir, "sessions.json"),
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      ...createCompactionLifecycle(createReplyOperation()),
       onCompactionNotice,
     });
 
@@ -3643,7 +3835,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const onCompactionNotice = vi.fn();
 
     await expect(
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg: {
           agents: {
             defaults: {
@@ -3666,7 +3858,7 @@ describe("runMemoryFlushIfNeeded", () => {
         sessionKey: "main",
         storePath: path.join(rootDir, "sessions.json"),
         isHeartbeat: false,
-        replyOperation: createReplyOperation(),
+        ...createCompactionLifecycle(createReplyOperation()),
         onCompactionNotice,
       }),
     ).rejects.toThrow("count update failed");

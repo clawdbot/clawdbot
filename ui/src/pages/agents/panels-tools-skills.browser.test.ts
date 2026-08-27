@@ -564,7 +564,10 @@ describe("agents tools panel (browser)", () => {
     ]);
   });
 
-  it("opens the collapsed group and tool row from a live tool chip", async () => {
+  it.each([
+    { reduced: true, behavior: "auto" },
+    { reduced: false, behavior: "smooth" },
+  ] as const)("opens a live tool chip with $behavior scrolling", async ({ reduced, behavior }) => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -636,9 +639,16 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
+    const summary = tool.querySelector<HTMLElement>("summary");
+    if (!summary) {
+      container.remove();
+      throw new Error("expected agent tool summary");
+    }
+    const scrollIntoView = vi.fn();
+    tool.scrollIntoView = scrollIntoView;
+    const focus = vi.spyOn(summary, "focus");
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced }));
     const previousUrl = window.location.href;
-    // Shared jsdom workers can observe URL changes before finally/afterEach,
-    // so inspect the intended deep link without mutating browser history.
     const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
     try {
       chip.click();
@@ -653,7 +663,11 @@ describe("agents tools panel (browser)", () => {
       expect(requestedUrl).toBeInstanceOf(URL);
       expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
       expect(window.location.href).toBe(previousUrl);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior });
+      expect(focus).toHaveBeenCalledOnce();
     } finally {
+      vi.unstubAllGlobals();
+      focus.mockRestore();
       replaceState.mockRestore();
       container.remove();
     }

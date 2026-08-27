@@ -340,6 +340,8 @@ Forum parents do not accept Discord components. If you need components, send to 
 
 OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results route back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
 
+`components` is a Discord-specific extension to the shared message tool. OpenClaw exposes it whenever Discord is configured, including when another channel is current. Use `presentation` when the same rich message must work across channels; OpenClaw adapts portable presentation actions to each target.
+
 Supported blocks:
 
 - `text`, `section`, `separator`, `actions`, `media-gallery`, `file`
@@ -1128,7 +1130,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    Discord auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`. Set `enabled: false` to disable Discord as a native approval client explicitly.
+    Discord native exec approvals require `enabled: true` or `enabled: "auto"` and at least one resolved approver, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Leaving `enabled` unset or setting it to `false` disables native exec approval delivery. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`.
 
     For sensitive owner-only group commands such as `/diagnostics` and `/export-trajectory`, OpenClaw sends approval prompts and final results privately. It tries Discord DM first when the invoking owner has a Discord owner route; otherwise it falls back to the first available owner route from `commands.ownerAllowFrom`, such as Telegram.
 

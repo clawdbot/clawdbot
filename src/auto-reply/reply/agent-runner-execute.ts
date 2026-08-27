@@ -24,7 +24,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
-import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
+import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -237,7 +237,7 @@ export async function executePreparedReplyAgentRun(
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   try {
     activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runPreflightCompactionIfNeeded({
+      runSessionCompactionIfNeeded({
         cfg,
         followupRun,
         promptForEstimate: followupRun.prompt,
@@ -248,7 +248,9 @@ export async function executePreparedReplyAgentRun(
         runtimePolicySessionKey,
         storePath,
         isHeartbeat,
-        replyOperation,
+        abortSignal: replyOperation.abortSignal,
+        onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+        onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
         onCompactionNotice: sendDirectCompactionNotice,
       }),
     );

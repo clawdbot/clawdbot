@@ -375,6 +375,7 @@ export async function incrementCompactionCount(params: {
     compactionCount: nextCount,
     updatedAt: now,
     lastContextPressureBand: undefined,
+    ...(incrementBy > 0 ? { contextBudgetStatus: undefined } : {}),
   };
   if (compactionKind === "context-engine") {
     clearAllCliSessions(updates);

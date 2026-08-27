@@ -33,10 +33,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   const scheduleEvent = (
     evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
   ): void | Promise<void> => {
-    // Most stream events must preserve order across async formatting and flush
-    // work. A detached event may run after the chain without blocking delivery.
+    // Tool-result delivery must settle before later assistant or terminal events;
+    // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
         return handler();
@@ -59,11 +58,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
             ctx.state.pendingEventChain = null;
           }
         });
-      if (!options?.detach) {
-        ctx.state.pendingEventChain = task;
-        return task;
-      }
-      return;
+      ctx.state.pendingEventChain = task;
+      return task;
     }
 
     const task = ctx.state.pendingEventChain
@@ -76,16 +72,13 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           ctx.state.pendingEventChain = null;
         }
       });
-    if (!options?.detach) {
-      ctx.state.pendingEventChain = task;
-      return task;
-    }
+    ctx.state.pendingEventChain = task;
+    return task;
   };
 
   const scheduleAttemptEvent = (
     evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
   ): void | Promise<void> => {
     const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
     let message: AgentMessage | undefined;
@@ -107,16 +100,12 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
     }
     // Forward the scheduled task so terminal events stay awaitable even when the
     // fence drops a handler from a discarded compaction attempt.
-    return scheduleEvent(
-      evt,
-      () => {
-        if (deliveryGeneration !== ctx.getBlockReplyDeliveryGeneration()) {
-          return;
-        }
-        return handler();
-      },
-      options,
-    );
+    return scheduleEvent(evt, () => {
+      if (deliveryGeneration !== ctx.getBlockReplyDeliveryGeneration()) {
+        return;
+      }
+      return handler();
+    });
   };
 
   return (evt: AgentSessionEvent) => {
@@ -170,13 +159,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       }
       case "tool_execution_end": {
         const deliveryGeneration = ctx.getBlockReplyDeliveryGeneration();
-        void scheduleAttemptEvent(
-          evt,
-          async () => {
-            await handleToolExecutionEnd(ctx, evt as never, { deliveryGeneration });
-          },
-          { detach: true },
-        );
+        void scheduleAttemptEvent(evt, async () => {
+          await handleToolExecutionEnd(ctx, evt as never, { deliveryGeneration });
+        });
         return;
       }
       case "agent_start":

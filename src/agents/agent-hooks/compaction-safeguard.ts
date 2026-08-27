@@ -223,6 +223,7 @@ type SummaryQualityRetention = {
   auditSummary: string;
   identifiers: string[];
   latestAsk: string | null;
+  latestAskCompleted: boolean;
   requiredAskContext: string;
   identifierPolicy: "strict" | "off" | "custom";
 };
@@ -844,14 +845,25 @@ function formatRequiredAskContext(summary: string): string {
   return `${truncateUtf16Safe(source, headBudget)}${REQUIRED_ASK_CONTEXT_TRUNCATED_MARKER}${sliceUtf16Safe(source, -tailBudget)}`;
 }
 
-function extractLatestUserAsk(messages: AgentMessage[]): string | null {
+function extractLatestUserTurn(
+  messages: AgentMessage[],
+): { ask: string; completed: boolean } | null {
+  let sawTurnTail = false;
+  let completed = false;
   for (const message of messages.toReversed()) {
-    if (message.role !== "user") {
+    if (message.role === "user") {
+      const ask = extractMessageText(message);
+      if (ask) {
+        return { ask, completed };
+      }
       continue;
     }
-    const text = extractMessageText(message);
-    if (text) {
-      return text;
+    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
+      sawTurnTail = true;
+      completed =
+        message.role === "assistant" &&
+        message.stopReason === "stop" &&
+        Boolean(extractMessageText(message));
     }
   }
   return null;
@@ -1233,7 +1245,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       }
 
       const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
-      const latestUserAsk = extractLatestUserAsk(oracleMessages);
+      const latestUserTurn = extractLatestUserTurn(oracleMessages);
+      const latestUserAsk = latestUserTurn?.ask ?? null;
+      const latestUserAskCompleted =
+        preparation.splitTurnCompleted ?? latestUserTurn?.completed ?? false;
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -1244,8 +1259,19 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         messages: messagesToSummarize,
         recentTurnsPreserve,
       });
-      messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSectionLocal = buildPreservedTurnsSection(preservedRecentMessages);
+      const latestPreparedAsk = extractLatestUserTurn(messagesToSummarize)?.ask ?? null;
+      const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
+      // The producer needs the preserved completion context whenever it runs; handing over the
+      // ask alone can resurrect completed work. All-preserved windows stay model-free unless
+      // verbatim capping would hide the audited ask.
+      const includePreservedContext =
+        qualityGuardEnabled &&
+        latestPreparedAsk === latestUserAsk &&
+        Boolean(latestPreparedAsk) &&
+        (summaryTargetMessages.length > 0 ||
+          !preservedTurnsSectionLocal.text.includes(requiredAskContext));
+      messagesToSummarize = includePreservedContext ? messagesToSummarize : summaryTargetMessages;
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
@@ -1334,6 +1360,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 auditSummary: unbudgetedSummary,
                 identifiers,
                 latestAsk: latestUserAsk,
+                latestAskCompleted: latestUserAskCompleted,
                 requiredAskContext:
                   splitTurnAskContextLocal || formatRequiredAskContext(latestUserAsk ?? ""),
                 identifierPolicy,
@@ -1361,8 +1388,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const quality = auditSummaryQuality({
           summary: finalized.summary,
           structuralSummary: finalized.structuralSummary,
+          completionSummary: unbudgetedSummary,
           identifiers,
           latestAsk: latestUserAsk,
+          latestAskCompleted: latestUserAskCompleted,
           identifierPolicy,
         });
         if (quality.ok) {

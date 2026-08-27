@@ -49,24 +49,27 @@
   --chrome: rgba(8, 8, 8, 0.96);
   --chrome-strong: rgba(8, 8, 8, 0.98);
 
-  /* Text — high contrast on black */
-  --text: #e0e0e2;
+  /* Text — 11.8:1 on black: crisp without the glare a near-white (15:1+) body
+     face has on a true-black canvas; --text-strong keeps the bright step. */
+  --text: #c6c6cb;
   --text-strong: #f5f5f7;
-  --chat-text: #e0e0e2;
+  --chat-text: #c6c6cb;
   --muted: #8a8a94;
   --muted-strong: #888892;
   --muted-foreground: #8a8a94;
 
-  /* Borders — whisper-thin, barely visible */
-  --border: #1a1a1e;
-  --border-strong: #2a2a30;
-  --border-hover: #3a3a42;
-  --input: #1a1a1e;
+  /* Borders — thin, but with enough presence to structure true black */
+  --border: #202026;
+  --border-strong: #303038;
+  --border-hover: #42424c;
+  --input: #202026;
 
   --secondary: #111113;
-  --accent-2: #8b1a2b;
-  --accent-2-muted: rgba(139, 26, 43, 0.7);
-  --accent-2-subtle: rgba(139, 26, 43, 0.12);
+  /* Steel silver, not a second red: crimson stays the only warm voice, and the
+     silver reads at 10.6:1 where the old #8b1a2b maroon vanished (2.0:1). */
+  --accent-2: #b8bdc4;
+  --accent-2-muted: rgba(184, 189, 196, 0.7);
+  --accent-2-subtle: rgba(184, 189, 196, 0.1);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
@@ -74,6 +77,9 @@
   --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(255, 255, 255, 0.025);
+  /* Typography — Geist (fonts/knot.css): a sharp Swiss grotesque to match the
+     crimson-on-black identity. Fallbacks keep text painting if the face fails. */
+  --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 :root[data-theme="openknot-light"] {
@@ -132,9 +138,10 @@
 
   --secondary: #f2f2f5;
   --secondary-foreground: #3a3a42;
-  --accent-2: #7a1420;
-  --accent-2-muted: rgba(122, 20, 32, 0.75);
-  --accent-2-subtle: rgba(122, 20, 32, 0.08);
+  /* Slate steel mirrors the dark variant's silver second voice (5.9:1 on bg). */
+  --accent-2: #5a626e;
+  --accent-2-muted: rgba(90, 98, 110, 0.75);
+  --accent-2-subtle: rgba(90, 98, 110, 0.08);
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
@@ -142,4 +149,6 @@
   --overlay-shadow: var(--shadow-md);
 
   --grid-line: rgba(0, 0, 0, 0.04);
+  /* Typography — Geist (fonts/knot.css); see the dark block. */
+  --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }

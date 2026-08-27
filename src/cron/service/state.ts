@@ -3,6 +3,7 @@
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
 import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type {
@@ -57,6 +58,7 @@ export type CronEvent = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
@@ -215,6 +217,7 @@ export type CronServiceDeps = {
        */
       delivered?: boolean;
       deliveryError?: string;
+      deliverySuppressionReason?: NormalizeReplySkipReason;
       /**
        * `true` when announce/direct delivery was attempted for this run, even
        * if the final per-message ack status is uncertain.

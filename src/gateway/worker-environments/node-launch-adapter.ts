@@ -7,6 +7,11 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../../infra/node-commands.js";
 import {
+  formatNodeRunnerUpdateRequired,
+  NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+} from "../../infra/node-runner-inventory.js";
+import {
   nodeWorkerPlanHash,
   parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
@@ -35,7 +40,6 @@ const MAX_ADMISSION_ATTEMPTS = 5;
 const ADMISSION_REARM_BACKOFF = { initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0.1 };
 
 const RETRYABLE_TRANSPORT_CODES = new Set([
-  "AT_CAPACITY",
   "DISCONNECTED",
   "NOT_CONNECTED",
   "PAIRING_CHANGED",
@@ -220,7 +224,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const findNode = async (params: {
     transport: NodeWorkerSupervisorTransport;
     deviceId: string;
-    requireLaunchAvailability?: boolean;
     signal: AbortSignal;
   }): Promise<NodeWorkerSupervisorNodeProof> => {
     let nodes: readonly NodeWorkerSupervisorNodeProof[];
@@ -242,9 +245,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         "device worker node is not currently connected",
       );
     }
-    if (params.requireLaunchAvailability && node.workerHost.capacity.available === 0) {
-      throw new NodeWorkerLaunchTransportError("AT_CAPACITY", "device worker capacity is full");
-    }
     return node;
   };
 
@@ -255,7 +255,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       | typeof NODE_WORKER_SUPERVISOR_STATUS_COMMAND
       | typeof NODE_WORKER_SUPERVISOR_CANCEL_COMMAND;
     payload: unknown;
-    requireLaunchAvailability?: boolean;
     isAuthorized: () => boolean;
     deadline: OperationDeadline;
     onDispatchReady?: () => void;
@@ -294,9 +293,18 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       const node = await findNode({
         transport,
         deviceId: params.deviceId,
-        requireLaunchAvailability: params.requireLaunchAvailability,
         signal,
       });
+      if (
+        params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
+        node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION
+      ) {
+        throw new Error(
+          formatNodeRunnerUpdateRequired(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+        );
+      }
+      // A retained environment already owns its slot. The node arbitrates new physical
+      // launches atomically; its advertised free-slot count cannot reject turn reuse.
       const operation = transport.invoke({
         node,
         command: params.command,
@@ -435,7 +443,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     let dispatchReady = false;
     let pollStatus = false;
     let delayMs = pollIntervalMs;
-    let availabilityCode: string | undefined;
     const markDispatchReady = () => {
       mayHaveLaunched = true;
       if (!dispatchReady) {
@@ -459,7 +466,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? NODE_WORKER_SUPERVISOR_STATUS_COMMAND
               : NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
             payload: pollStatus ? { launchId: input.launchId } : input,
-            ...(!pollStatus ? { requireLaunchAvailability: true } : {}),
             isAuthorized: stableRequest.isDispatchAuthorized,
             deadline: attemptDeadline,
             ...(!pollStatus
@@ -538,7 +544,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
           ) {
             throw error;
           }
-          availabilityCode = error.code;
           pollStatus = false;
         }
         delayMs = await waitBeforeRetry({
@@ -548,11 +553,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       }
     } catch (error) {
       if (!dispatchReady && availabilityDeadline.signal.aborted && !deadline.signal.aborted) {
-        // Keep the latest discovery reason through the grace; a connected full
-        // node is retryable capacity, not an instruction to reconnect the device.
-        throw availabilityCode === "AT_CAPACITY"
-          ? new WorkerRunnerCapacityError()
-          : new WorkerRunnerUnavailableError();
+        throw new WorkerRunnerUnavailableError();
       }
       // The node authors this result only after its durable claim stayed absent.
       // Transport dispatch is therefore not launch ambiguity and needs no cancel.

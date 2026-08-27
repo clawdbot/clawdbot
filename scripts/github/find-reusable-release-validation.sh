@@ -329,7 +329,10 @@ for ((index = 0; index < run_count; index += 1)); do
           )
         else
           .manifestVersion == 3
-          and .workflowRefProof == "manifest-v3-protected-tag-exact-sha"
+          and (
+            .workflowRefProof == "manifest-v3-protected-tag-exact-sha"
+            or .workflowRefProof == "manifest-v3-protected-tag-tooling-lineage"
+          )
           and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
           and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
         end

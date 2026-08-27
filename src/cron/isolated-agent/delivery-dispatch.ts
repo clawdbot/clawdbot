@@ -577,6 +577,9 @@ export async function dispatchCronDelivery(
       }
       return null;
     } catch (err) {
+      await logCronDeliveryError(
+        `[cron:${params.job.id}] delivery failed (${params.deliveryBestEffort ? "bestEffort" : "required"}): ${formatErrorMessage(err)}`,
+      );
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
           status: "error",
@@ -587,9 +590,6 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
-      await logCronDeliveryError(
-        `[cron:${params.job.id}] delivery failed (bestEffort): ${formatErrorMessage(err)}`,
-      );
       deliveryError = formatErrorMessage(err);
       return null;
     }

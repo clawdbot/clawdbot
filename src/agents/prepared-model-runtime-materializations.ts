@@ -1,7 +1,6 @@
 import {
   getPreparedRuntimeAuthMaterializations,
   registerRuntimeAuthMaterializationMutationListener,
-  type RuntimeAuthMaterialization,
 } from "./auth-profiles/runtime-materializations.js";
 import { setPreparedModelRuntimeAuthMaterializations } from "./prepared-model-runtime-auth.js";
 import {
@@ -47,7 +46,6 @@ function publishPreparedRuntimeAuthMaterializations(params: {
   owners: ReadonlyMap<string, PreparedModelRuntimeOwner>;
   onInvalidated: () => void;
   onPublished: () => void;
-  read?: (agentDir?: string) => readonly RuntimeAuthMaterialization[];
 }): void {
   const event = {
     ...params.event,
@@ -65,13 +63,12 @@ function publishPreparedRuntimeAuthMaterializations(params: {
   if (affectedOwners.length === 0) {
     return;
   }
-  const read = params.read ?? getPreparedRuntimeAuthMaterializations;
   for (const { owner, snapshot } of affectedOwners) {
     // A successful route only changes this bounded secret-free fact set. Rebuilding the model
     // catalog here would pull plugin lifecycle work into the turn-completion boundary.
     setPreparedModelRuntimeAuthMaterializations(
       snapshot,
-      Object.freeze([...read(owner.input.agentDir)]),
+      Object.freeze([...getPreparedRuntimeAuthMaterializations(owner.input.agentDir)]),
     );
   }
   // Chat metadata treats published as "every configured owner is capturable".

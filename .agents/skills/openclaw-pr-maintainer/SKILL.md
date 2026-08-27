@@ -93,8 +93,8 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 - For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
 - Get the login from `gh issue view` / `gh pr view` (`author.login`), then fetch profile metadata once with `gh api users/<login> --jq '{login,name,created_at,type}'`.
 - Report opener identity as one compact line:
-  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub: 9 repos, 86 commits, 9 PRs, 3 issues, 12 reviews`
-- Always show recent activity in two lanes: OpenClaw-local PRs, issues, and commits in the last 12 months; and general public GitHub activity over the same window. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
+  `By: Jane Doe (@jane, acct 2021-04-03) | OpenClaw: 4 PRs, 2 issues, 11 commits/12mo | GitHub contributions: 86 commits, 9 PRs, 3 issues, 12 reviews/12mo`
+- Show activity in two separate lanes: repo search totals for authored PRs/issues and commits, and GitHub contribution-graph totals. State each interval; neither lane is an exhaustive activity history. For linked issue-fixing PRs, include both the PR author and issue opener when they differ.
 - Prefer the bundled helper for activity lookups:
 
 ```bash
@@ -102,11 +102,11 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 .agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh --global <login>
 ```
 
-- The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`; run the global form by default for review/triage identity summaries.
-- If the global contribution graph reports zero or looks inconsistent with visible public activity, sanity-check with `gh api users/<login>`, `gh api 'users/<login>/events/public?per_page=100'`, and recent public repo commits before calling the account inactive.
-- The helper is intentionally cache-friendly for gitcrawl-backed `gh`: it rounds repo-local windows to the UTC day, rounds global contribution windows to the UTC hour, and counts PRs/issues from one paginated issues response before fetching commits separately. Prefer reusing the helper instead of hand-rolling several `gh api` loops.
-- If the contribution graph is misleading or zero but public events/repos show activity, keep it one line, for example:
-  `By: pickaxe (@ProspectOre, acct 2019-08-24) | OpenClaw: 5 PRs, 0 issues, 5 commits/12mo | GitHub: 5 repos, 29 recent events, 100 public own-repo commits; graph=0`
+- Run `--global` by default for review/triage identity summaries. The helper prints canonical profile identity before requesting activity, then makes three single-page REST searches (`per_page=1`) for repo totals and one optional GraphQL contribution aggregate: at most five `gh` calls per resolved login, independent of activity volume. It uses `total_count`, never fetched row counts or pagination.
+- Keep bare PATH `gh` with native `--cache 1h` for profile, search, and GraphQL reads. Octopool delegates author/date-filtered searches and GraphQL, so bare `gh` alone does not guarantee fleet-cache coverage. Native caching keeps repeated lookups bounded without a custom store; do not source `plain-gh.sh`, force fresh reads, or query private cache databases.
+- Windows use completed UTC days with calendar-month subtraction clamped at month ends. Repo search uses PR/issue creation time and default-branch commit committer date. `--months` controls the repo interval; global contributions cap at 12 months because GitHub accepts at most one year. The helper prints both intervals and explicitly labels a global cap for longer requests.
+- Search totals reflect GitHub's index and may be cached or lag recent changes. Printed intervals are query bounds, not proof of live freshness. Incomplete search results, malformed/missing data, request failures, and unresolved identity are not zero. The helper labels those outcomes, continues later logins, and exits nonzero if identity or requested activity is unavailable or incomplete.
+- Contribution totals follow GitHub's contribution rules and token visibility; they may include private repositories. Do not call them public-only or infer inactivity from a zero graph. Do not automatically scan events or repositories as a fallback; report the limitation and inspect specific evidence separately only when needed.
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
 

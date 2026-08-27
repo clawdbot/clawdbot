@@ -69,8 +69,25 @@ let missing = 0;
       join(consumerRoot, "index.ts"),
       `import { buildChannelConfigSchema, DmPolicySchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/core";
+import type {
+  ChannelIngressIdentitySubjectInput,
+  IdentifierAuthentication,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+// @ts-expect-error Host admission evidence is intentionally private to core.
+import type { ChannelAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
+// @ts-expect-error Plugins cannot mint host admission evidence.
+import { prepareHostChannelContextAdmissionEvidence } from "openclaw/plugin-sdk/channel-ingress-runtime";
+// @ts-expect-error Plugins cannot register host evidence owners.
+import { registerChannelAdmissionEvidenceOwner } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
+
+const identifierAuthentication: IdentifierAuthentication = "verified";
+const subject: ChannelIngressIdentitySubjectInput = {
+  stableId: "provider-user-id",
+  authentication: { "provider-user-id": identifierAuthentication },
+};
+void subject;
 
 const runtimeStore = createPluginRuntimeStore<PluginRuntime>({
   pluginId: "package-consumer",

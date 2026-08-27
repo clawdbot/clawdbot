@@ -649,7 +649,8 @@ export function handleMessageEnd(
                   ...parseReplyDirectives(finalAssistantText),
                   text: finalTextCorrection,
                 }
-              : ctx.consumeReplyDirectives(finalAssistantText, { final: true });
+              : (consumeFinalReplyDirectives() ??
+                ctx.consumeReplyDirectives(finalAssistantText, { final: true }));
           // A correction is canonical text minus what text_end delivered, so it
           // already carries the tail splitTrailingDirective is still holding.
           // Drain that residue here or finishMessageEndDelivery releases it a

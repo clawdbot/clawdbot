@@ -187,6 +187,8 @@ providers may also include thinking configuration in their cache identity, so
 changing only the thinking level can increase latency and input-token cost even
 when the model itself stays the same.
 
+<a id="model-in-chat" />
+
 ## `/model` in chat
 
 `/model <model>` changes the current session. Use `-s` for only this session, `-a` to also update the agent's default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`. Configured-default writes require owner or admin authority.

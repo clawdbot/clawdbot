@@ -1525,6 +1525,7 @@ select.input {
   font-size: 13px;
   line-height: 1.5;
   position: relative;
+  user-select: text;
 }
 
 .callout--dismissible,

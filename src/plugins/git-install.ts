@@ -32,6 +32,7 @@ import {
   isPluginInstallCommitDeferred,
   type PluginInstallTransaction,
 } from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import {
   installPluginFromInstalledPackageDir,
   PLUGIN_INSTALL_ERROR_CODE,
@@ -294,8 +295,20 @@ async function replaceManagedGitRepo(params: {
   stagedRepoIsTargetLocal: boolean;
   persistentRepoDir: string;
   deferCommit?: boolean;
+  onBeforePublish?: (stagedRepoDir: string) => Promise<void>;
 }): Promise<{ ok: true; transaction?: PluginInstallTransaction } | { ok: false; error: string }> {
+  let artifactConsentFailure: { error: unknown } | undefined;
+  const reviewFinalArtifact = async (stagedRepoDir: string) => {
+    try {
+      await params.onBeforePublish?.(stagedRepoDir);
+      return { ok: true as const };
+    } catch (error) {
+      artifactConsentFailure = { error };
+      throw error;
+    }
+  };
   const replace = async (stagedDir: string) => {
+    await reviewFinalArtifact(stagedDir);
     await replaceDirectoryAtomic({
       stagedDir,
       targetDir: params.persistentRepoDir,
@@ -315,8 +328,13 @@ async function replaceManagedGitRepo(params: {
           copyErrorPrefix: "failed to replace managed git plugin repository",
           hasDeps: false,
           depsLogMessage: "",
+          // Deferred publication copies the clone again; review that final copy.
+          afterInstall: reviewFinalArtifact,
         }),
       );
+      if (artifactConsentFailure) {
+        throw artifactConsentFailure.error;
+      }
       const transaction = result.ok ? resolvePackageDirInstallTransaction(result) : undefined;
       return result.ok ? { ok: true, ...(transaction ? { transaction } : {}) } : result;
     }
@@ -339,6 +357,9 @@ async function replaceManagedGitRepo(params: {
     }
     return { ok: true };
   } catch (err) {
+    if (artifactConsentFailure) {
+      throw artifactConsentFailure.error;
+    }
     return {
       ok: false,
       error: `failed to replace managed git plugin repository: ${String(err)}`,
@@ -408,6 +429,7 @@ export async function installPluginFromGitSpec(
     mode?: "install" | "update";
     dryRun?: boolean;
     expectedPluginId?: string;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<GitPluginInstallResult> {
   const parsed = parseGitPluginSpec(params.spec);
@@ -552,6 +574,14 @@ export async function installPluginFromGitSpec(
         stagedRepoIsTargetLocal,
         persistentRepoDir,
         deferCommit: isPluginInstallCommitDeferred(params),
+        onBeforePublish: async (stagedArtifactDir) => {
+          await params.onBeforePluginArtifactCommit?.({
+            pluginId: result.pluginId,
+            ...(effectiveMode === "update" ? { currentArtifactDir: persistentRepoDir } : {}),
+            stagedArtifactDir,
+            mode: effectiveMode,
+          });
+        },
       });
       if (!replaceResult.ok) {
         return replaceResult;

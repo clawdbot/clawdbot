@@ -232,16 +232,28 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   options: { signal?: AbortSignal; timeoutMs?: number | null } = {},
 ): Promise<T> {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-  if (hasInProcessGatewayContext()) {
-    return await dispatchGatewayMethodInProcess<T>(method, params, {
-      forceSyntheticClient: true,
-      sessionCreation: creation,
-      syntheticScopes: scopes,
-      ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.timeoutMs !== undefined && options.timeoutMs !== null
-        ? { timeoutMs: options.timeoutMs }
-        : {}),
-    });
+  const resolveGatewayContext = callerGatewayContextResolver();
+  const boundGateway = resolveGatewayContext
+    ? bindInProcessGatewayContext(method, resolveGatewayContext)
+    : undefined;
+  if (hasInProcessGatewayContext(boundGateway?.resolve)) {
+    return await runBoundInProcessGatewayCall(
+      boundGateway,
+      async (boundResolver) =>
+        await dispatchGatewayMethodInProcess<T>(method, params, {
+          forceSyntheticClient: true,
+          sessionCreation: creation,
+          syntheticScopes: scopes,
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.timeoutMs !== undefined && options.timeoutMs !== null
+            ? { timeoutMs: options.timeoutMs }
+            : {}),
+          ...(boundResolver ? { resolveGatewayContext: boundResolver } : {}),
+        }),
+    );
+  }
+  if (boundGateway) {
+    throw new Error(`Gateway instance unavailable for ${method}`);
   }
   // The fallback is a real local Gateway request. Carry spawn policy only in
   // the signed agent-runtime identity token, never in model-authored params.

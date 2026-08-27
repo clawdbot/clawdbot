@@ -51,7 +51,6 @@ type CrabboxProfile = {
   warmImage: boolean;
 };
 
-const CRABBOX_FALLBACK_MACHINE_CLASSES = ["standard", "fast", "large", "beast"] as const;
 const MAX_CRABBOX_MACHINE_CLASS_LENGTH = 128;
 const MAX_CRABBOX_MACHINE_OPTIONS = 32;
 const CRABBOX_DESKTOP_PROVIDERS = new Set(["aws", "hetzner"]);
@@ -242,26 +241,24 @@ export function resolveCrabboxProvisionProfile(
 
 export function listCrabboxMachineOptions(
   configuredClass: string,
-  shapes: readonly CrabboxMachineShape[] | undefined,
+  shapes: readonly CrabboxMachineShape[] = [],
 ): readonly WorkerMachineOption[] {
   const seen = new Set<string>();
-  const reportedShapes = shapes?.filter((shape) => {
+  const candidates = shapes.filter((shape) => {
     if (shape.class.length > MAX_CRABBOX_MACHINE_CLASS_LENGTH || seen.has(shape.class)) {
       return false;
     }
     seen.add(shape.class);
     return true;
   });
-  const candidates: readonly CrabboxMachineShape[] = reportedShapes?.length
-    ? reportedShapes
-    : CRABBOX_FALLBACK_MACHINE_CLASSES.map((machineClass) => ({ class: machineClass }));
+  if (candidates.length === 0) {
+    return [];
+  }
   const catalogLimit = candidates
     .slice(0, MAX_CRABBOX_MACHINE_OPTIONS)
     .some((shape) => shape.class === configuredClass)
     ? MAX_CRABBOX_MACHINE_OPTIONS
     : MAX_CRABBOX_MACHINE_OPTIONS - 1;
-  // Built by assignment rather than conditional spread: oxlint's no-map-spread
-  // rejects spreading to shape objects inside a map callback.
   const options = candidates.slice(0, catalogLimit).map((shape) => {
     const id = shape.class;
     const result: {
@@ -271,10 +268,10 @@ export function listCrabboxMachineOptions(
       memoryGb?: number;
       default?: boolean;
     } = { id, label: id.replace(/^./u, (initial) => initial.toUpperCase()) };
-    if (shape?.cpu !== undefined) {
+    if (shape.cpu !== undefined) {
       result.cpu = shape.cpu;
     }
-    if (shape?.memoryGb !== undefined) {
+    if (shape.memoryGb !== undefined) {
       result.memoryGb = shape.memoryGb;
     }
     if (id === configuredClass) {
@@ -282,17 +279,14 @@ export function listCrabboxMachineOptions(
     }
     return result;
   });
-  if (options.some((option) => option.id === configuredClass)) {
-    return options;
-  }
-  return [
-    ...options,
-    {
+  if (!options.some((option) => option.id === configuredClass)) {
+    options.push({
       id: configuredClass,
       label: configuredClass,
       default: true,
-    },
-  ];
+    });
+  }
+  return options;
 }
 
 export function buildCrabboxWarmupArgs(

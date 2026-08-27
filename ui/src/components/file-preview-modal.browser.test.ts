@@ -67,7 +67,7 @@ async function mountModal(
   width: number,
   options: {
     fullscreen?: boolean;
-    kind?: "drawer" | "nav-drawer";
+    kind?: "drawer";
     modalWidth: string;
   },
 ) {
@@ -80,7 +80,6 @@ async function mountModal(
   modal.style.setProperty("--openclaw-modal-width", options.modalWidth);
   modal.classList.toggle("fullscreen", options.fullscreen === true);
   modal.classList.toggle("drawer", options.kind !== undefined);
-  modal.classList.toggle("nav-drawer", options.kind === "nav-drawer");
   const content = document.createElement("div");
   content.style.cssText = "width: 100%; height: 80px;";
   modal.append(content);
@@ -226,14 +225,5 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     });
 
     expect(dialog.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
-  });
-
-  it("preserves the navigation drawer's narrower owned width", async () => {
-    const dialog = await mountModal(390, {
-      kind: "nav-drawer",
-      modalWidth: "min(460px, 100vw)",
-    });
-
-    expect(dialog.getBoundingClientRect().width).toBeCloseTo(320, 0);
   });
 });

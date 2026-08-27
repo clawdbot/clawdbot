@@ -400,7 +400,10 @@ async function runWithModelFallbackInternal<T>(
           profileIds,
         });
         const authMode =
-          decision.reason === "billing"
+          decision.reason === "billing" ||
+          decision.reason === "auth" ||
+          decision.reason === "auth_permanent" ||
+          decision.reason === "session_expired"
             ? resolveSubscriptionAuthModeForProfiles({ store: authStore, profileIds })
             : undefined;
 

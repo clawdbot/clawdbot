@@ -193,17 +193,26 @@ Bundled plugin manifests must not request dependency staging. Large or
 optional plugin functionality should be packaged as a normal plugin and
 installed through the same npm/git/ClawHub path as third-party plugins.
 
-In source checkouts, OpenClaw treats the repository as a pnpm monorepo.
-After `pnpm install`, bundled plugins load from `extensions/<id>` so
-package-local workspace dependencies are available and edits are picked up
-directly. Source checkout development is pnpm-only; plain `npm install` at
-the repository root does not prepare bundled plugin dependencies.
+Internal bundled plugins retain their dependency declarations in their own
+manifests. Runtime dependencies that are not compiled into `dist` must also
+be declared in the root OpenClaw package's `dependencies` or
+`optionalDependencies`, because the root package ships their runtime.
+External plugins keep their runtime dependencies plugin-local.
 
-| Install shape                    | Bundled plugin location               | Dependency owner                                                     |
-| -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
-| Global npm install               | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
-| Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
-| `openclaw plugins install ...`   | Managed npm project/git/ClawHub root  | The plugin install/update flow                                       |
+In source checkouts, use `pnpm install` followed by `pnpm build`. OpenClaw
+prefers `dist/extensions`, then `dist-runtime/extensions`, and falls back to
+`extensions` when neither built tree is available. Postinstall and build
+preparation remove plugin-local `node_modules`, so bundled runtime resolution
+must not depend on those directories. Rebuild to pick up source edits when
+using a built tree. Source checkout development is pnpm-only; plain
+`npm install` at the repository root does not prepare the pnpm workspace.
+
+| Install shape                                   | Bundled plugin location                              | Dependency owner                                       |
+| ----------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------ |
+| Global npm install                              | Built runtime tree inside the package                | Root OpenClaw package for internal bundled runtime     |
+| Git checkout plus `pnpm install` + `pnpm build` | `dist/extensions`, then `dist-runtime/extensions`    | Root runtime declarations plus plugin manifests        |
+| Unbuilt source checkout                         | `extensions/<id>` fallback when no built tree exists | pnpm workspace with explicit root runtime dependencies |
+| `openclaw plugins install ...`                  | Managed npm project/git/ClawHub root                 | The plugin install/update flow                         |
 
 For the global npm row, use
 `npm install -g openclaw --allow-scripts=openclaw` on npm 12 or npm 11.16+.

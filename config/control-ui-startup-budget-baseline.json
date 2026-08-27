@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 343463,
-  "reason": "Continuation current-floor repair restores the creation-time sandbox invariant; repeated exact-source builds measured 343428–343463 B, so this baseline records the maximum observed byte rather than laundering variance.",
+  "startupJsGzipBytes": 344044,
+  "reason": "mobile drawer modal ownership and breakpoint-gated swipe loader; measured 344044 B with desktop request and modal regression coverage",
   "updatedAt": "2026-08-27"
 }

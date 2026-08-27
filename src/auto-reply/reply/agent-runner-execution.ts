@@ -692,9 +692,20 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
     const result = await executeAgentTurnOutcome(executionParams);
+    const terminalOutcome =
+      result.outcome.kind === "aborted" ||
+      (result.outcome.kind === "settled" && result.outcome.abortReason)
+        ? undefined
+        : result.outcome.kind === "rejected" || result.outcome.status === "failed"
+          ? "failed"
+          : "completed";
+    if (terminalOutcome) {
+      executionParams.opts?.onAgentRunTerminalOutcome?.(terminalOutcome);
+    }
     recordMessageToolOnlyRunOutcome(executionParams, result);
     return result;
   } catch (error) {
+    executionParams.opts?.onAgentRunTerminalOutcome?.("failed");
     recordMessageToolOnlyRunOutcome(executionParams, undefined);
     throw error;
   }

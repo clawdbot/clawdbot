@@ -44,16 +44,16 @@ type SelectionRetryParams = {
   options: { timeoutMs?: number; abandonSignal?: AbortSignal };
   run: (
     client: unknown,
-    requestOptions: { timeoutMs: number; signal?: AbortSignal },
+    requestOptions: () => { timeoutMs: number; signal?: AbortSignal },
   ) => Promise<unknown>;
   onClientChange: (client: unknown) => void;
 };
 const withLeasedCodexAppServerClientStartSelectionRetryMock = vi.fn(
   async (params: SelectionRetryParams) =>
-    await params.run(params.lease.client, {
+    await params.run(params.lease.client, () => ({
       timeoutMs: params.options.timeoutMs ?? 60_000,
       signal: params.options.abandonSignal,
-    }),
+    })),
 );
 
 function supervisionConnectionFingerprint(): string {
@@ -549,10 +549,10 @@ describe("runCodexAppServerSideQuestion", () => {
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockReset();
     withLeasedCodexAppServerClientStartSelectionRetryMock.mockImplementation(
       async (params: SelectionRetryParams) =>
-        await params.run(params.lease.client, {
+        await params.run(params.lease.client, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
-        }),
+        })),
     );
     resolveCodexProviderWebSearchSupportForClientMock.mockResolvedValue("supported");
 
@@ -982,10 +982,10 @@ describe("runCodexAppServerSideQuestion", () => {
         expect(params.lease.client).toBe(initialClient);
         params.lease.client = replacementClient;
         params.onClientChange(replacementClient);
-        return await params.run(replacementClient, {
+        return await params.run(replacementClient, () => ({
           timeoutMs: params.options.timeoutMs ?? 60_000,
           signal: params.options.abandonSignal,
-        });
+        }));
       },
     );
 

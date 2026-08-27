@@ -1494,7 +1494,7 @@ export async function performGatewaySessionReset(params: {
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
-        resetBoundaryReason: boundaryEntry ? params.reason : undefined,
+        resetBoundary: boundaryEntry ? { context: "clear", reason: params.reason } : undefined,
         storePath,
         target: {
           canonicalKey: target.canonicalKey,
