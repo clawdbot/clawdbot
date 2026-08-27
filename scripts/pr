@@ -53,10 +53,13 @@ pr_wrapper_components=(
   scripts/lib/tsx-cli-shim.mjs
   scripts/lib/local-check-runtime.mts
   scripts/tsx.mjs
+  scripts/crabbox-untrusted-bootstrap.sh
+  scripts/pr-crabbox-gate-publisher.mjs
   scripts/verify-pr-hosted-gates.mjs
   scripts/verify-pr-hosted-gates.mts
   scripts/watch-pr-ci.mjs
   scripts/watch-pr-ci.mts
+  .github/workflows/pr-crabbox-gate-publisher.yml
 )
 if common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
@@ -204,7 +207,7 @@ Usage:
   scripts/pr prepare-push <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
-  scripts/pr ci-dispatch <PR>
+  scripts/pr ci-dispatch <PR> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--auto-merge]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
@@ -420,7 +423,8 @@ main() {
     ci-dispatch)
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      ci_dispatch "$pr"
+      shift
+      ci_dispatch "$pr" "$@"
       ;;
     merge-verify)
       local pr="${1-}"

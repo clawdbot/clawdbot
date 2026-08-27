@@ -221,6 +221,7 @@ describe("resolve_pr_gates_remote_mode", () => {
     { value: undefined, expected: "local" },
     { value: "", expected: "local" },
     { value: "testbox", expected: "testbox" },
+    { value: "crabbox-aws", expected: "crabbox-aws" },
   ])("resolves OPENCLAW_PR_GATES_REMOTE=$value to $expected", ({ value, expected }) => {
     const env: NodeJS.ProcessEnv = {};
     if (value !== undefined) {
@@ -245,6 +246,55 @@ describe("resolve_pr_gates_remote_mode", () => {
     });
     expect(result.status).toBe(2);
     expect(result.stdout).toContain("conflicts with OPENCLAW_TESTBOX=1");
+  });
+
+  it("rejects the Crabbox AWS hosted-gates conflict before touching the worktree", () => {
+    const result = runGatesBash("prepare_gates 424242", {
+      env: { OPENCLAW_PR_GATES_REMOTE: "crabbox-aws", OPENCLAW_TESTBOX: "1" },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stdout).toContain("OPENCLAW_PR_GATES_REMOTE=crabbox-aws conflicts");
+  });
+});
+
+describe("remote Crabbox AWS gate contract", () => {
+  it("accepts only a successful released AWS timing stamp", () => {
+    const dir = tempDirs.make("openclaw-pr-gates-aws-stamp-");
+    const log = join(dir, "gate.log");
+    writeFileSync(
+      log,
+      [
+        '{"provider":"aws","leaseId":"cbx_bad","runId":"run_bad","exitCode":1,"runStatus":"failed","leaseStopped":true}',
+        '{"provider":"aws","leaseId":"cbx_ok","runId":"run_ok","exitCode":0,"runStatus":"succeeded","leaseStopped":true}',
+        "",
+      ].join("\n"),
+    );
+    const result = runGatesBash(
+      `read_remote_crabbox_aws_gate_stamp '${log}' | jq -r '[.runId, .leaseId] | @tsv'`,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("run_ok\tcbx_ok");
+  });
+
+  it("builds the canonical deterministic proof command", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(repoRoot, "scripts/pr-crabbox-gate-publisher.mjs"),
+        "--print-command",
+        "a".repeat(40),
+        "b".repeat(64),
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("umask 022");
+    expect(result.stdout).toContain("pnpm build");
+    expect(result.stdout).toContain("pnpm check");
+    expect(result.stdout).toContain(
+      "CI=1 OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 pnpm check:changed --base origin/main --head HEAD",
+    );
+    expect(result.stdout).not.toContain("pnpm test");
   });
 });
 

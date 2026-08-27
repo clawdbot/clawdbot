@@ -5,6 +5,9 @@ import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execGhJson, execGhRead, execPlainGh, workflowRunsApiArgs } from "../lib/plain-gh.mjs";
 
 const SHA_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const RUN_ID_PATTERN = /^run_[a-z0-9]+$/u;
+const LEASE_ID_PATTERN = /^cbx_[a-z0-9]+$/u;
 
 function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
   if (!Number.isSafeInteger(pr) || pr <= 0) {
@@ -23,8 +26,27 @@ function requirePrRecord({ pr, headRefName, headRefOid, isCrossRepository }) {
   }
 }
 
-function buildCiDispatchArgs(record) {
+function buildCiDispatchArgs(record, backend = { name: "ci" }) {
   requirePrRecord(record);
+  if (backend.name === "crabbox") {
+    return [
+      "workflow",
+      "run",
+      "pr-crabbox-gate-publisher.yml",
+      "--ref",
+      "main",
+      "-f",
+      `pr_number=${record.pr}`,
+      "-f",
+      `head_sha=${record.headRefOid}`,
+      "-f",
+      `crabbox_run_id=${backend.runId}`,
+      "-f",
+      `crabbox_lease_id=${backend.leaseId}`,
+      "-f",
+      `bootstrap_sha256=${backend.bootstrapSha256}`,
+    ];
+  }
   return [
     "workflow",
     "run",
@@ -40,10 +62,23 @@ function buildCiDispatchArgs(record) {
   ];
 }
 
-function listCiRuns(headRefOid) {
-  return execGhJson(workflowRunsApiArgs("openclaw/openclaw", headRefOid, "workflow_dispatch", 20), {
-    stdio: ["ignore", "pipe", "pipe"],
-  }).workflow_runs;
+function listCiRuns(headRefOid, backend = { name: "ci" }) {
+  const args =
+    backend.name === "crabbox"
+      ? [
+          "api",
+          "--method",
+          "GET",
+          "repos/openclaw/openclaw/actions/workflows/pr-crabbox-gate-publisher.yml/runs",
+          "-f",
+          "event=workflow_dispatch",
+          "-f",
+          "branch=main",
+          "-f",
+          "per_page=20",
+        ]
+      : workflowRunsApiArgs("openclaw/openclaw", headRefOid, "workflow_dispatch", 20);
+  return execGhJson(args, { stdio: ["ignore", "pipe", "pipe"] }).workflow_runs;
 }
 
 function readCurrentPrHeadOid(pr) {
@@ -61,6 +96,7 @@ function delay(milliseconds) {
 
 async function dispatchCiForPr(
   record,
+  backend = { name: "ci" },
   {
     pollAttempts = 10,
     pollIntervalMs = 1500,
@@ -72,23 +108,29 @@ async function dispatchCiForPr(
   } = {},
 ) {
   requirePrRecord(record);
-  const priorRunIds = new Set(listRuns(record.headRefOid).map((run) => run.id));
+  const priorRunIds = new Set(listRuns(record.headRefOid, backend).map((run) => run.id));
   const headBeforeDispatch = readHeadOid(record.pr);
   if (headBeforeDispatch !== record.headRefOid) {
     throw new Error(
       `PR #${record.pr} head changed before CI dispatch (expected ${record.headRefOid}, got ${headBeforeDispatch}).`,
     );
   }
-  runDispatch(buildCiDispatchArgs(record));
+  runDispatch(buildCiDispatchArgs(record, backend));
 
   for (let attempt = 1; attempt <= pollAttempts; attempt += 1) {
-    const run = listRuns(record.headRefOid).find(
-      (candidate) =>
-        candidate.head_sha === record.headRefOid &&
+    const run = listRuns(record.headRefOid, backend).find((candidate) => {
+      const identityMatches =
+        backend.name === "crabbox"
+          ? candidate.head_branch === "main" &&
+            candidate.display_title === `PR Crabbox gate #${record.pr} / ${backend.runId}`
+          : candidate.head_sha === record.headRefOid;
+      return (
+        identityMatches &&
         !priorRunIds.has(candidate.id) &&
         typeof candidate.html_url === "string" &&
-        candidate.html_url.length > 0,
-    );
+        candidate.html_url.length > 0
+      );
+    });
     if (run) {
       const headAtObservation = readHeadOid(record.pr);
       if (headAtObservation !== record.headRefOid) {
@@ -109,6 +151,46 @@ async function dispatchCiForPr(
     );
   }
   return undefined;
+}
+
+function parseBackendArgs(argv) {
+  const options = new Map();
+  for (let index = 0; index < argv.length; index += 2) {
+    const name = argv[index];
+    const value = argv[index + 1];
+    if (!name?.startsWith("--") || value === undefined || value.startsWith("--")) {
+      throw new Error(`Expected value for ${name ?? "backend option"}.`);
+    }
+    if (options.has(name)) {
+      throw new Error(`Duplicate option: ${name}`);
+    }
+    options.set(name, value);
+  }
+  const backendName = options.get("--backend") ?? "ci";
+  if (backendName === "ci") {
+    if (options.size > (options.has("--backend") ? 1 : 0)) {
+      throw new Error("Crabbox proof options require --backend crabbox.");
+    }
+    return { name: "ci" };
+  }
+  if (backendName !== "crabbox") {
+    throw new Error(`Unsupported CI backend: ${backendName}`);
+  }
+  const runId = options.get("--run-id") ?? "";
+  const leaseId = options.get("--lease-id") ?? "";
+  const bootstrapSha256 = options.get("--bootstrap-sha256") ?? "";
+  const expected = new Set(["--backend", "--run-id", "--lease-id", "--bootstrap-sha256"]);
+  if ([...options.keys()].some((name) => !expected.has(name))) {
+    throw new Error("Unknown Crabbox backend option.");
+  }
+  if (
+    !RUN_ID_PATTERN.test(runId) ||
+    !LEASE_ID_PATTERN.test(leaseId) ||
+    !SHA256_PATTERN.test(bootstrapSha256)
+  ) {
+    throw new Error("Crabbox backend requires valid run, lease, and bootstrap SHA-256 values.");
+  }
+  return { bootstrapSha256, leaseId, name: "crabbox", runId };
 }
 
 // Dispatch always targets the REMOTE head; unpushed local work silently gets
@@ -133,8 +215,10 @@ function warnOnLocalHeadDrift(record) {
 }
 
 async function main(argv = process.argv.slice(2)) {
-  if (argv.length !== 4 || !["true", "false"].includes(argv[3])) {
-    console.error("Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <isCrossRepository>");
+  if (argv.length < 4 || !["true", "false"].includes(argv[3])) {
+    console.error(
+      "Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <isCrossRepository> [--backend crabbox --run-id <id> --lease-id <id> --bootstrap-sha256 <hash>]",
+    );
     process.exitCode = 2;
     return;
   }
@@ -144,12 +228,13 @@ async function main(argv = process.argv.slice(2)) {
     headRefOid: argv[2],
     isCrossRepository: argv[3] === "true",
   };
+  const backend = parseBackendArgs(argv.slice(4));
   requirePrRecord(record);
   warnOnLocalHeadDrift(record);
-  const run = await dispatchCiForPr(record);
+  const run = await dispatchCiForPr(record, backend);
   if (run) {
     console.log(
-      `GitHub accepted CI dispatch for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
+      `GitHub accepted ${backend.name} dispatch for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
     );
     console.log(
       "Observed a new exact-SHA manual run after dispatch; GitHub does not expose a dispatch correlation ID, so concurrent requests cannot be distinguished.",
@@ -157,13 +242,15 @@ async function main(argv = process.argv.slice(2)) {
     console.log(`observed_run_url=${run.html_url}`);
   } else {
     console.log(
-      `Requested CI for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
+      `Requested ${backend.name} CI for PR #${record.pr} at unchanged remote head ${record.headRefOid} (${record.headRefName}).`,
     );
     console.log(
       "run_url=pending (GitHub accepted the dispatch, but Actions has not indexed it yet)",
     );
     console.log(
-      `inspect_with=gh api --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=workflow_dispatch -f head_sha=${record.headRefOid} -f per_page=20`,
+      backend.name === "crabbox"
+        ? "inspect_with=gh api --method GET repos/openclaw/openclaw/actions/workflows/pr-crabbox-gate-publisher.yml/runs -f event=workflow_dispatch -f branch=main -f per_page=20"
+        : `inspect_with=gh api --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=workflow_dispatch -f head_sha=${record.headRefOid} -f per_page=20`,
     );
   }
 }

@@ -71,9 +71,22 @@ function makeMismatchedWrapperRepo() {
   git(root, ["init", "-b", "main", canonicalPath]);
   const canonical = realpathSync(canonicalPath);
   const origin = realpathSync(originPath);
+  mkdirSync(join(canonical, ".github", "workflows"), { recursive: true });
   mkdirSync(join(canonical, "scripts", "lib"), { recursive: true });
   cpSync("scripts/pr-lib", join(canonical, "scripts", "pr-lib"), { recursive: true });
   writeFileSync(join(canonical, "scripts", "pr"), readScript("scripts/pr"));
+  cpSync(
+    ".github/workflows/pr-crabbox-gate-publisher.yml",
+    join(canonical, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
+  );
+  cpSync(
+    "scripts/crabbox-untrusted-bootstrap.sh",
+    join(canonical, "scripts", "crabbox-untrusted-bootstrap.sh"),
+  );
+  cpSync(
+    "scripts/pr-crabbox-gate-publisher.mjs",
+    join(canonical, "scripts", "pr-crabbox-gate-publisher.mjs"),
+  );
   cpSync("scripts/watch-pr-ci.mjs", join(canonical, "scripts", "watch-pr-ci.mjs"));
   cpSync("scripts/watch-pr-ci.mts", join(canonical, "scripts", "watch-pr-ci.mts"));
   cpSync(
@@ -109,7 +122,7 @@ function makeMismatchedWrapperRepo() {
   git(canonical, ["config", "commit.gpgSign", "false"]);
   git(canonical, ["config", "core.hooksPath", "/dev/null"]);
   git(canonical, ["remote", "add", "origin", origin]);
-  git(canonical, ["add", "scripts"]);
+  git(canonical, ["add", "scripts", ".github"]);
   git(canonical, ["commit", "-m", "test: canonical wrapper"]);
   git(canonical, ["push", "-u", "origin", "main"]);
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
@@ -437,9 +450,16 @@ describe("scripts/pr wrappers", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-wrapper-revision-"));
     const repo = join(dir, "repo");
     const linked = join(dir, "linked");
+    mkdirSync(join(repo, ".github", "workflows"), { recursive: true });
     mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
     mkdirSync(join(repo, "scripts", "pr-lib"), { recursive: true });
     writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+    writeFileSync(
+      join(repo, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
+      "name: canonical\n",
+    );
+    writeFileSync(join(repo, "scripts", "crabbox-untrusted-bootstrap.sh"), "# canonical\n");
+    writeFileSync(join(repo, "scripts", "pr-crabbox-gate-publisher.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "direct-run.mjs"), "// canonical\n");
@@ -458,7 +478,7 @@ describe("scripts/pr wrappers", () => {
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
     expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
     expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-    expect(git(repo, ["add", "scripts"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts", ".github"]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
 
@@ -526,9 +546,16 @@ describe("scripts/pr wrappers", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-pr-wrapper-anchor-"));
     const repo = join(dir, "repo");
     const linked = join(dir, "linked");
+    mkdirSync(join(repo, ".github", "workflows"), { recursive: true });
     mkdirSync(join(repo, "scripts", "lib"), { recursive: true });
     mkdirSync(join(repo, "scripts", "pr-lib"), { recursive: true });
     writeFileSync(join(repo, "scripts", "pr"), readScript("scripts/pr"));
+    writeFileSync(
+      join(repo, ".github", "workflows", "pr-crabbox-gate-publisher.yml"),
+      "name: canonical\n",
+    );
+    writeFileSync(join(repo, "scripts", "crabbox-untrusted-bootstrap.sh"), "# canonical\n");
+    writeFileSync(join(repo, "scripts", "pr-crabbox-gate-publisher.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.sh"), "# canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "plain-gh.mjs"), "// canonical\n");
     writeFileSync(join(repo, "scripts", "lib", "direct-run.mjs"), "// canonical\n");
@@ -547,7 +574,7 @@ describe("scripts/pr wrappers", () => {
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
     expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
     expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
-    expect(git(repo, ["add", "scripts"]).status).toBe(0);
+    expect(git(repo, ["add", "scripts", ".github"]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     // The linked worktree keeps main's wrapper; origin/main anchors trust.
     expect(git(repo, ["update-ref", "refs/remotes/origin/main", "main"]).status).toBe(0);

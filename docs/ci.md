@@ -809,6 +809,24 @@ report public networking with no Tailscale state before uploading any script.
 Owned AWS/Hetzner capacity also remains the fallback for Blacksmith outages,
 quota issues, or explicit owned-capacity testing.
 
+For an explicitly authorized admin-only PR landing fallback, set
+`OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
+The mode does not replace the default hosted gate and does not claim full-suite
+equivalence. After the exact prep head is pushed, the trusted wrapper downloads
+checksum-verified Crabbox v0.46, runs sanitized brokered AWS with `umask 022`,
+the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
+`pnpm check:changed`, then dispatches the protected-main
+`pr-crabbox-gate-publisher.yml` workflow. That workflow rereads the live PR and
+the exact active organization-admin membership object using the repo-native
+GitHub App token with `Members(read)` (the repository-scoped workflow token is
+not treated as org authority), validates the authenticated immutable broker
+run, ordered complete events, canonical command and bootstrap upload hash, and
+publishes `openclaw/ci-gate` only on the exact proven SHA. Retained broker logs
+are validated when non-empty but are optional because released Crabbox v0.46
+can report zero retained log bytes after a successful run. The local
+`.local/gates.env` provider/run/lease/URL fields are recovery metadata, not
+publication authority.
+
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id
 for later remote commands, sync the current checkout on every run, and stop it

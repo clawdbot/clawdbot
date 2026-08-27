@@ -281,6 +281,12 @@ prepare_push() {
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
 
+  if [ "${GATES_MODE:-}" = "remote_crabbox_aws_pending" ]; then
+    finalize_remote_crabbox_aws_gate "$pr" "$prep_head_sha"
+    # shellcheck disable=SC1091
+    source .local/gates.env
+  fi
+
   local contrib="${PR_AUTHOR:-}"
   if [ -z "$contrib" ]; then
     contrib=$(gh pr view "$pr" --json author --jq .author.login)
@@ -299,7 +305,7 @@ prepare_push() {
 EOF_PREP
   if [ -n "${REMOTE_GATES_LEASE_ID:-}" ]; then
     cat >> .local/prep.md <<EOF_PREP
-- Remote testbox gate stamp: ${REMOTE_GATES_LEASE_ID}${REMOTE_GATES_RUN_URL:+ (${REMOTE_GATES_RUN_URL})}.
+- Remote gate stamp: ${REMOTE_GATES_PROVIDER:-unknown} ${REMOTE_GATES_RUN_ID:+run ${REMOTE_GATES_RUN_ID}, }lease ${REMOTE_GATES_LEASE_ID}${REMOTE_GATES_RUN_URL:+ (${REMOTE_GATES_RUN_URL})}.
 EOF_PREP
   fi
 
