@@ -19,13 +19,27 @@ function resolveJsonlSocketTimeoutMs(timeoutMs: number): number {
   return resolveTimerTimeoutMs(timeoutMs, 1);
 }
 
+class JsonlSocketConnectionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JsonlSocketConnectionError";
+  }
+}
+
+class JsonlSocketTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "JsonlSocketTimeoutError";
+  }
+}
+
 async function requestJsonlSocketWithMaxLineBytes<T>(
   params: JsonlSocketRequest<T>,
   maxLineBytes: number,
-): Promise<T | null> {
+): Promise<T> {
   const { socketPath, requestLine, accept } = params;
   const timeoutMs = resolveJsonlSocketTimeoutMs(params.timeoutMs);
-  return await new Promise((resolve) => {
+  return await new Promise((resolve, reject) => {
     const client = new net.Socket();
     let settled = false;
     // Keep raw bytes until a line is complete so chunk boundaries cannot split
@@ -33,7 +47,7 @@ async function requestJsonlSocketWithMaxLineBytes<T>(
     let lineChunks: Buffer[] = [];
     let lineBytes = 0;
 
-    const finish = (value: T | null) => {
+    const finish = (value: T) => {
       if (settled) {
         return;
       }
@@ -47,9 +61,23 @@ async function requestJsonlSocketWithMaxLineBytes<T>(
       resolve(value);
     };
 
+    const finishError = (error: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearNodeTimeout(timer);
+      try {
+        client.destroy();
+      } catch {
+        // ignore
+      }
+      reject(error);
+    };
+
     const appendLineChunk = (chunk: Buffer): boolean => {
       if (lineBytes + chunk.byteLength > maxLineBytes) {
-        finish(null);
+        finishError(new JsonlSocketConnectionError(`peer line exceeded ${maxLineBytes} bytes`));
         return false;
       }
       if (chunk.byteLength > 0) {
@@ -66,11 +94,17 @@ async function requestJsonlSocketWithMaxLineBytes<T>(
       return line;
     };
 
-    const timer = setNodeTimeout(() => finish(null), timeoutMs);
+    const timer = setNodeTimeout(
+      () => finishError(new JsonlSocketTimeoutError(`jsonl socket timed out after ${timeoutMs}ms`)),
+      timeoutMs,
+    );
 
-    client.on("error", () => finish(null));
-    client.on("end", () => finish(null));
-    client.on("close", () => finish(null));
+    client.on("error", (err) =>
+      finishError(new JsonlSocketConnectionError(`jsonl socket error: ${err.message}`)),
+    );
+    client.on("close", () =>
+      finishError(new JsonlSocketConnectionError("jsonl socket closed by peer")),
+    );
     client.connect(socketPath, () => {
       client.end(`${requestLine}\n`);
     });
@@ -108,6 +142,8 @@ async function requestJsonlSocketWithMaxLineBytes<T>(
   });
 }
 
-export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Promise<T | null> {
+export { JsonlSocketConnectionError, JsonlSocketTimeoutError };
+
+export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Promise<T> {
   return await requestJsonlSocketWithMaxLineBytes(params, JSONL_SOCKET_MAX_LINE_BYTES);
 }
