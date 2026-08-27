@@ -6,12 +6,14 @@ import {
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { BuzzBus } from "./buzz-bus.js";
 import {
   BUZZ_DIFF_MESSAGE_KIND,
   formatBuzzMessageForAgent,
   type BuzzInboundMessage,
 } from "./message-event.js";
+import { recordBuzzPendingHistory, snapshotBuzzPendingHistory } from "./pending-history.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, parseBuzzTarget } from "./target.js";
 import type { ResolvedBuzzAccount } from "./types.js";
@@ -25,6 +27,7 @@ export async function handleBuzzInbound(params: {
   message: BuzzInboundMessage;
   signal: AbortSignal;
   assertCurrent: () => void;
+  historyMap: Map<string, HistoryEntry[]>;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
@@ -86,9 +89,31 @@ export async function handleBuzzInbound(params: {
   });
   // Admission awaits policy; only the transport owner can confirm membership is still current.
   params.assertCurrent();
+  const historyKey = JSON.stringify([channelId, message.threadId ?? null]);
+  const historyLimit = account.config.historyLimit ?? 0;
   if (access.ingress.admission !== "dispatch") {
+    if (access.ingress.reasonCode === "activation_skipped") {
+      await recordBuzzPendingHistory({
+        historyMap: params.historyMap,
+        key: historyKey,
+        limit: historyLimit,
+        message,
+        text: textForAgent,
+        shouldRecord: () =>
+          !signal.aborted && bus.directory.isMember(channelId, message.senderPubkey),
+      });
+    }
     return;
   }
+
+  const history = snapshotBuzzPendingHistory({
+    historyMap: params.historyMap,
+    key: historyKey,
+    limit: historyLimit,
+    channelId,
+    directory: bus.directory,
+    currentMessage: textForAgent,
+  });
 
   const senderName = bus.directory.resolveSenderName(message.senderPubkey);
   const roomName = bus.directory.resolveRoomName(channelId);
@@ -129,7 +154,7 @@ export async function handleBuzzInbound(params: {
     },
     message: {
       body,
-      bodyForAgent: textForAgent,
+      bodyForAgent: history.bodyForAgent,
       rawBody: message.text,
       commandBody: supportsTextInterpretation ? message.text : "",
     },
@@ -148,7 +173,7 @@ export async function handleBuzzInbound(params: {
     replyToId: message.threadId ?? message.id,
   };
 
-  await runtime.channel.inbound.dispatch({
+  const result = await runtime.channel.inbound.dispatch({
     cfg,
     channel: "buzz",
     accountId: account.accountId,
@@ -213,4 +238,7 @@ export async function handleBuzzInbound(params: {
       },
     },
   });
+  if (result.dispatched) {
+    history.consume();
+  }
 }

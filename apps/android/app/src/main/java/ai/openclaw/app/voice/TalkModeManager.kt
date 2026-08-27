@@ -30,8 +30,6 @@ import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
-import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
 import androidx.annotation.RequiresApi
@@ -403,11 +401,7 @@ class TalkModeManager internal constructor(
 
   private var ttsJob: Job? = null
   private val ttsJobLock = Any()
-  private val ttsLock = Any()
-  private var textToSpeech: TextToSpeech? = null
-  private var textToSpeechInit: CompletableDeferred<TextToSpeech>? = null
-
-  @Volatile private var currentUtteranceId: String? = null
+  private val systemSpeech = SystemSpeechSpeaker(context)
 
   @Volatile private var finalizeInFlight = false
   private var listenWatchdogJob: Job? = null
@@ -1071,7 +1065,7 @@ class TalkModeManager internal constructor(
       recognizer?.destroy()
       recognizer = null
     }
-    shutdownTextToSpeech()
+    systemSpeech.shutdown()
   }
 
   private suspend fun awaitRealtimeSessionId(timeoutMs: Long): String =
@@ -1107,7 +1101,6 @@ class TalkModeManager internal constructor(
 
     ensureConfigLoaded()
     cancelActivePlayback()
-    stopTextToSpeechPlayback()
     withContext(Dispatchers.Main) {
       if (activePttCaptureId == null) {
         recognizer?.cancel()
@@ -2822,7 +2815,7 @@ class TalkModeManager internal constructor(
       }
     activeJob?.cancel()
     talkAudioPlayer.stop()
-    stopTextToSpeechPlayback()
+    systemSpeech.stop()
   }
 
   private suspend fun speakWithSystemTts(
@@ -2831,88 +2824,13 @@ class TalkModeManager internal constructor(
     playbackToken: Long,
   ) {
     ensurePlaybackActive(playbackToken)
-    val engine = ensureTextToSpeech()
-    val utteranceId = UUID.randomUUID().toString()
-    val finished = CompletableDeferred<Unit>()
-    withContext(Dispatchers.Main) {
-      ensurePlaybackActive(playbackToken)
-      synchronized(ttsLock) {
-        currentUtteranceId = utteranceId
-        engine.stop()
-      }
-      val locale =
-        TalkModeRuntime
-          .validatedLanguage(directive?.language)
-          ?.let(Locale::forLanguageTag)
-          ?: Locale.getDefault()
-      val localeResult = engine.setLanguage(locale)
-      if (
-        localeResult == TextToSpeech.LANG_MISSING_DATA ||
-        localeResult == TextToSpeech.LANG_NOT_SUPPORTED
-      ) {
-        throw IllegalStateException("Language unavailable on this device")
-      }
-      engine.setSpeechRate((TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm) ?: 1.0).toFloat())
-      engine.setAudioAttributes(
-        AudioAttributes
-          .Builder()
-          .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-          .setUsage(AudioAttributes.USAGE_MEDIA)
-          .build(),
-      )
-      engine.setOnUtteranceProgressListener(
-        object : UtteranceProgressListener() {
-          override fun onStart(utteranceId: String?) = Unit
-
-          override fun onDone(utteranceId: String?) {
-            if (utteranceId == currentUtteranceId) {
-              finished.complete(Unit)
-            }
-          }
-
-          @Suppress("OVERRIDE_DEPRECATION")
-          @Deprecated("Deprecated in Java")
-          override fun onError(utteranceId: String?) {
-            if (utteranceId == currentUtteranceId) {
-              finished.completeExceptionally(IllegalStateException("TextToSpeech playback failed"))
-            }
-          }
-
-          override fun onError(
-            utteranceId: String?,
-            errorCode: Int,
-          ) {
-            if (utteranceId == currentUtteranceId) {
-              finished.completeExceptionally(IllegalStateException("TextToSpeech playback failed ($errorCode)"))
-            }
-          }
-
-          override fun onStop(
-            utteranceId: String?,
-            interrupted: Boolean,
-          ) {
-            if (utteranceId == currentUtteranceId) {
-              finished.completeExceptionally(CancellationException("assistant speech cancelled"))
-            }
-          }
-        },
-      )
-      markAudioPlaybackStarting(playbackToken)
-      val result = engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-      if (result != TextToSpeech.SUCCESS) {
-        throw IllegalStateException("TextToSpeech start failed")
-      }
-    }
-    try {
-      finished.await()
-      ensurePlaybackActive(playbackToken)
-    } finally {
-      synchronized(ttsLock) {
-        if (currentUtteranceId == utteranceId) {
-          currentUtteranceId = null
-        }
-      }
-    }
+    systemSpeech.speak(
+      text = text,
+      locale = TalkModeRuntime.validatedLanguage(directive?.language)?.let(Locale::forLanguageTag) ?: Locale.getDefault(),
+      speechRate = (TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm) ?: 1.0).toFloat(),
+      beforeSpeak = { markAudioPlaybackStarting(playbackToken) },
+    )
+    ensurePlaybackActive(playbackToken)
   }
 
   private fun markAudioPlaybackStarting(playbackToken: Long) {
@@ -3034,84 +2952,6 @@ class TalkModeManager internal constructor(
       Log.d(tag, "audio focus abandoned")
     }
     audioFocusRequest = null
-  }
-
-  private suspend fun ensureTextToSpeech(): TextToSpeech {
-    val existing = synchronized(ttsLock) { textToSpeech }
-    if (existing != null) {
-      return existing
-    }
-    val deferred: CompletableDeferred<TextToSpeech>
-    val created: Boolean
-    synchronized(ttsLock) {
-      val ready = textToSpeech
-      if (ready != null) {
-        deferred = CompletableDeferred<TextToSpeech>().also { it.complete(ready) }
-        created = false
-      } else {
-        val pending = textToSpeechInit
-        if (pending != null) {
-          deferred = pending
-          created = false
-        } else {
-          deferred = CompletableDeferred<TextToSpeech>()
-          textToSpeechInit = deferred
-          created = true
-        }
-      }
-    }
-    if (!created) {
-      return deferred.await()
-    }
-    withContext(Dispatchers.Main) {
-      synchronized(ttsLock) {
-        textToSpeech?.let {
-          textToSpeechInit = null
-          deferred.complete(it)
-          return@withContext
-        }
-      }
-      var engine: TextToSpeech? = null
-      engine =
-        TextToSpeech(context) { status ->
-          if (status == TextToSpeech.SUCCESS) {
-            val initialized =
-              engine ?: run {
-                deferred.completeExceptionally(IllegalStateException("TextToSpeech init failed"))
-                return@TextToSpeech
-              }
-            synchronized(ttsLock) {
-              textToSpeech = initialized
-              textToSpeechInit = null
-            }
-            deferred.complete(initialized)
-          } else {
-            synchronized(ttsLock) {
-              textToSpeechInit = null
-            }
-            engine?.shutdown()
-            deferred.completeExceptionally(IllegalStateException("TextToSpeech init failed ($status)"))
-          }
-        }
-    }
-    return deferred.await()
-  }
-
-  private fun stopTextToSpeechPlayback() {
-    synchronized(ttsLock) {
-      currentUtteranceId = null
-      textToSpeech?.stop()
-    }
-  }
-
-  private fun shutdownTextToSpeech() {
-    synchronized(ttsLock) {
-      currentUtteranceId = null
-      textToSpeech?.stop()
-      textToSpeech?.shutdown()
-      textToSpeech = null
-      textToSpeechInit = null
-    }
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {

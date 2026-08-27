@@ -9,36 +9,46 @@ import {
 } from "./pw-role-snapshot.js";
 
 describe("pw-role-snapshot", () => {
-  // Captured from Playwright 1.62.1's real ariaSnapshot serializer, not our formatter.
-  const namedControls = [
-    [String.raw`button "Say \"hello\""`, 'Say "hello"'],
-    [String.raw`button "C:\\Reports"`, "C:\\Reports"],
-    [`'button "Save: all"'`, "Save: all"],
-    [`'button "O''Brien: save"'`, "O'Brien: save"],
-    [`'button "Use {template}"'`, "Use {template}"],
-    [`'button "Go #home"'`, "Go #home"],
-    ['button "Snowman ☃ 😀"', "Snowman ☃ 😀"],
-    [String.raw`button "Control\u0001button"`, "Control\u0001button"],
-    [String.raw`button "Save \" [ref=e99]"`, 'Save " [ref=e99]'],
-    ["button /literal/", "/literal/"],
-    ["button /", "/"],
-    ["button /x [ref=e99]/", "/x [ref=e99]/"],
-  ] as const;
-
-  it.each(namedControls)("keeps actionable names from %s", (key, name) => {
-    const aiKey = key.endsWith("'") ? `${key.slice(0, -1)} [ref=e7]'` : `${key} [ref=e7]`;
-    for (const interactive of [false, true]) {
-      const role = finalizeRoleSnapshot(
-        buildRoleSnapshotFromAriaSnapshot(`- ${key}`, { interactive }),
-      );
-      expect(role.refs).toEqual({ e1: { role: "button", name } });
+  describe.each([false, true])("encoded names (interactive=%s)", (interactive) => {
+    it.each([
+      ['button "Save \\"draft\\""', 'Save "draft"'],
+      ['button "Open C:\\\\draft"', "Open C:\\draft"],
+      [`'button "Save: owner''s draft"'`, "Save: owner's draft"],
+      [`'button "Issue #123"'`, "Issue #123"],
+      [`'button "Save {draft}"'`, "Save {draft}"],
+      ['button "保存 🦞 résumé"', "保存 🦞 résumé"],
+      ["button /api/v1/", "/api/v1/"],
+      ["button /", "/"],
+      ["button /x [ref=e99]/", "/x [ref=e99]/"],
+      [String.raw`button "Control\u0001button"`, "Control\u0001button"],
+    ])("preserves %s through actionable refs", (key, name) => {
+      const built = buildRoleSnapshotFromAriaSnapshot(`- ${key}`, { interactive });
+      const result = finalizeRoleSnapshot(built);
+      expect(result.refs).toEqual({ e1: { role: "button", name } });
+      expect(result.stats.refs).toBe(1);
+      expect(result.snapshot).toContain(JSON.stringify(name));
+      const aiKey = key.endsWith("'") ? `${key.slice(0, -1)} [ref=f2e7]'` : `${key} [ref=f2e7]`;
       const ai = finalizeRoleSnapshot({
         ...buildRoleSnapshotFromAiSnapshot(`- ${aiKey}`, { interactive }),
         delta: { mode: "aria", previousKeys: new Set() },
       });
-      expect(ai.refs).toEqual({ e7: { role: "button", name } });
+      expect(ai.refs).toEqual({ f2e7: { role: "button", name } });
       expect(ai.newElements).toBe(1);
-    }
+    });
+
+    it("preserves native frame refs without reading refs inside names or values", () => {
+      const snapshot = [
+        `- 'button "Save: owner''s draft" [ref=f2e3]': text [ref=e99]`,
+        '- button "Save \\"draft\\" [ref=e98]" [ref=f2e4]',
+      ].join("\n");
+      const built = buildRoleSnapshotFromAiSnapshot(snapshot, { interactive });
+      const result = finalizeRoleSnapshot(built);
+      expect(result.refs).toEqual({
+        f2e3: { role: "button", name: "Save: owner's draft" },
+        f2e4: { role: "button", name: 'Save "draft" [ref=e98]' },
+      });
+      expect(result.stats.refs).toBe(2);
+    });
   });
 
   it.each([
@@ -46,10 +56,10 @@ describe("pw-role-snapshot", () => {
     '- button "Safe" value="[ref=e99]"',
     '- button "Safe" description="[ref=e99]"',
     '- button "Safe" [url=https://example.com/[ref=e99]]',
+    `- 'button "Safe"' [ref=e99]`,
   ])("does not promote page text to an AI ref: %s", (line) => {
     for (const interactive of [false, true]) {
-      const result = buildRoleSnapshotFromAiSnapshot(line, { interactive });
-      expect(result.refs).toEqual({});
+      expect(buildRoleSnapshotFromAiSnapshot(line, { interactive }).refs).toEqual({});
     }
   });
 
@@ -57,34 +67,41 @@ describe("pw-role-snapshot", () => {
     const result = finalizeRoleSnapshot(
       buildRoleSnapshotFromAiSnapshot(
         [
-          "- button /literal/ [ref=e1]: /fake/ [ref=e99]",
-          `- 'button "O''Brien: save" [ref=e2]': [ref=e99]`,
+          "- button /literal/ [ref=f1e1]: /fake/ [ref=e99]",
+          `- 'button "O''Brien: save" [ref=f2e2]': [ref=e99]`,
         ].join("\n"),
         { interactive: true },
       ),
     );
     expect(result.refs).toEqual({
-      e1: { role: "button", name: "/literal/" },
-      e2: { role: "button", name: "O'Brien: save" },
+      f1e1: { role: "button", name: "/literal/" },
+      f2e2: { role: "button", name: "O'Brien: save" },
     });
   });
 
-  it("retains a quoted AI ref after delta annotation and truncation", () => {
-    const first = `- 'button "Save: all" [ref=e1]' [new]`;
-    const marker = "[...TRUNCATED - page too large]";
+  it("keeps quoted-key delta refs after complete-line truncation", () => {
+    const first = `- 'button "Save: owner''s draft" [ref=f2e3]'`;
+    const built = buildRoleSnapshotFromAiSnapshot(
+      `${first}\n- button "${"X".repeat(100)}" [ref=f2e4]`,
+    );
     const result = finalizeRoleSnapshot({
-      ...buildRoleSnapshotFromAiSnapshot(
-        [
-          `- 'button "Save: all" [ref=e1]'`,
-          `- 'button "Hidden: ${"x".repeat(100)}" [ref=e2]'`,
-        ].join("\n"),
-      ),
+      ...built,
+      maxChars: first.length + 8 + 2 + "[...TRUNCATED - page too large]".length,
       delta: { mode: "aria", previousKeys: new Set() },
-      maxChars: first.length + 2 + marker.length,
     });
-    expect(result.snapshot).toBe(`${first}\n\n${marker}`);
-    expect(result.refs).toEqual({ e1: { role: "button", name: "Save: all" } });
+    expect(result.truncated).toBe(true);
+    expect(result.refs).toEqual({ f2e3: { role: "button", name: "Save: owner's draft" } });
     expect(result.newElements).toBe(1);
+    expect(result.snapshot).toContain(`${first} [new]`);
+  });
+
+  it("does not keep empty compact branches for ref-looking page content", () => {
+    const result = buildRoleSnapshotFromAiSnapshot(
+      '- list "Empty [ref=e99]":\n  - generic\n- button "Real" [ref=f1e1]',
+      { compact: true },
+    );
+    expect(result.snapshot).toBe('- button "Real" [ref=f1e1]');
+    expect(result.refs).toEqual({ f1e1: { role: "button", name: "Real" } });
   });
 
   it("adds refs for interactive elements", () => {
@@ -180,6 +197,27 @@ describe("pw-role-snapshot", () => {
 
     expect(result.refs).toEqual({ e1: { role: "button" } });
     expect(result.stats.refs).toBe(1);
+  });
+
+  it("finalizes MCP text without requiring JSON-encoded control characters", () => {
+    const name = "Edit\titem\b";
+    const result = finalizeRoleSnapshot({
+      snapshot: `- button "${name}" [ref=mcp-ref:session:3]`,
+      refs: { "mcp-ref:session:3": { role: "button", name } },
+    });
+    expect(result.refs).toEqual({ "mcp-ref:session:3": { role: "button", name } });
+  });
+
+  it.each(["\u2028", "\u2029"])("preserves MCP refs around Unicode separator %j", (separator) => {
+    for (const field of ["name", "value", "description"] as const) {
+      const name = field === "name" ? `Edit${separator}item` : "Edit item";
+      const suffix = field === "name" ? "" : ` ${field}="first${separator}second"`;
+      const result = finalizeRoleSnapshot({
+        snapshot: `- textbox "${name}" [ref=mcp-ref:session:3]${suffix}`,
+        refs: { "mcp-ref:session:3": { role: "textbox", name } },
+      });
+      expect(result.refs, field).toEqual({ "mcp-ref:session:3": { role: "textbox", name } });
+    }
   });
 
   it("uses a bounded marker for budgets too small for a snapshot line", () => {

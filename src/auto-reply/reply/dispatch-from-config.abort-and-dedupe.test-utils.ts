@@ -429,6 +429,13 @@ describe("dispatchReplyFromConfig", () => {
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
+    sessionStoreMocks.currentEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6-20260205",
+      modelOverrideRouteResolution: "resolved",
+      thinkingLevel: "high",
+    };
+    const onModelSelected = vi.fn();
     const ctx = buildTestCtx({
       Provider: "imessage",
       Surface: "imessage",
@@ -447,7 +454,13 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:imessage:direct:peer",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
 
     expect(mocks.tryFastApproveFromMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -458,6 +471,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "✅ Approval allow-once submitted.",
+    });
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-opus-4-6-20260205",
+      thinkLevel: "high",
     });
   });
 
@@ -515,6 +533,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-6-20260205",
+      modelOverrideRouteResolution: "resolved",
       thinkingLevel: "high",
     };
     const onModelSelected = vi.fn();
@@ -545,6 +564,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       providerOverride: "anthropic",
       modelOverride: "claude-opus-4-6-20260205",
+      modelOverrideRouteResolution: "resolved",
       thinkingLevel: "high",
     };
 

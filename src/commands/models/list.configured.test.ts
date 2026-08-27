@@ -43,6 +43,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 import { resolveConfiguredEntries } from "./list.configured.js";
 import { appendConfiguredModelRowSources } from "./list.row-sources.js";
 import type { ModelRow } from "./list.types.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -268,6 +269,7 @@ describe("configured model list rows", () => {
         cfg,
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set(),
         filter: {},
@@ -324,6 +326,7 @@ describe("configured model list rows", () => {
         authIndex: {
           evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
         },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set(),
         filter: {},
@@ -396,6 +399,7 @@ describe("configured model list rows", () => {
         cfg,
         agentDir: "/tmp/openclaw-agent",
         authIndex: { evaluateModelAuth: () => ({ availability: true, routeResolution: null }) },
+        canonicalizeProvider: createModelCatalogProviderAliasCanonicalizer({ cfg }).provider,
         configuredByKey: new Map(entries.map((entry) => [entry.key, entry])),
         discoveredKeys: new Set<string>(),
         filter: {},

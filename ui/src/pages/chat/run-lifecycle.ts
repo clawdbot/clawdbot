@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -140,6 +141,13 @@ function setChatError(state: ChatAbortRunState, error: string | null) {
 
 export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | null }) {
   return Boolean(host.chatSending || host.chatRunId);
+}
+
+export function setChatRunError(
+  state: { chatRunError?: { summary: string } | null },
+  summary: string,
+) {
+  state.chatRunError = { summary: formatUiExternalText(summary) };
 }
 
 type SessionRunHost = {

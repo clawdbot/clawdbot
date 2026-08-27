@@ -299,7 +299,6 @@ extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	10
 extensions/cua-computer/src/mcp-driver-client.ts	5
 extensions/cua-computer/src/window-actions.ts	3
-extensions/deepinfra/embedding-adapter.ts	1
 extensions/deepinfra/provider-models.ts	3
 extensions/deepinfra/video-generation-provider.ts	2
 extensions/deepseek/provider-policy-api.ts	4
@@ -641,7 +640,7 @@ extensions/lmstudio/src/models.ts	2
 extensions/lmstudio/src/stream.ts	3
 extensions/lobster/index.ts	2
 extensions/lobster/src/lobster-runner.ts	4
-extensions/lobster/src/lobster-tool.ts	2
+extensions/lobster/src/lobster-tool.ts	1
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	8
 extensions/logbook/src/config.ts	1
@@ -1266,7 +1265,6 @@ extensions/telegram/src/bot/body-helpers.ts	1
 extensions/telegram/src/bot/delivery.replies.ts	1
 extensions/telegram/src/bot/delivery.resolve-media.ts	1
 extensions/telegram/src/bot/helpers.ts	2
-extensions/telegram/src/button-types.ts	1
 extensions/telegram/src/callback-query-answer-state.ts	1
 extensions/telegram/src/channel-actions.ts	1
 extensions/telegram/src/channel.ts	1
@@ -1489,7 +1487,6 @@ packages/agent-core/src/harness/session/session.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	17
 packages/agent-core/src/harness/session/uuid.ts	1
 packages/agent-core/src/harness/utils/truncate.ts	1
-packages/agent-core/src/reasoning.ts	1
 packages/agent-core/src/turn-interruption.ts	1
 packages/ai/src/api-registry.ts	3
 packages/ai/src/env-api-keys.ts	10
@@ -2075,7 +2072,7 @@ src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
 src/agents/tool-search-catalog.ts	6
 src/agents/tool-search-directory.ts	1
-src/agents/tool-search-runtime.ts	6
+src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	3
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
@@ -2606,11 +2603,10 @@ src/commands/gateway-status/helpers.ts	11
 src/commands/message-format.ts	21
 src/commands/message.ts	4
 src/commands/models/fallbacks-shared.ts	2
-src/commands/models/list.errors.ts	1
 src/commands/models/list.model-projection.ts	1
 src/commands/models/list.persisted-catalog.ts	2
 src/commands/models/list.probe.ts	2
-src/commands/models/list.registry.ts	4
+src/commands/models/list.registry.ts	3
 src/commands/models/list.rows.ts	3
 src/commands/models/list.status-command.ts	1
 src/commands/models/shared.ts	3
@@ -3458,7 +3454,7 @@ src/plugin-sdk/facade-runtime.ts	6
 src/plugin-sdk/file-lock.ts	10
 src/plugin-sdk/inbound-reply-dispatch.ts	1
 src/plugin-sdk/lazy-value.ts	1
-src/plugin-sdk/memory-core-bundled-runtime.ts	13
+src/plugin-sdk/memory-core-bundled-runtime.ts	11
 src/plugin-sdk/memory-host-core.ts	26
 src/plugin-sdk/migration-runtime.ts	4
 src/plugin-sdk/migration.ts	8
@@ -3564,7 +3560,7 @@ src/plugins/lazy-service-module.ts	1
 src/plugins/legacy-session-surfaces.ts	3
 src/plugins/loader-channel-runtime.ts	1
 src/plugins/loader-channel-setup.ts	17
-src/plugins/loader-cli-registry.ts	4
+src/plugins/loader-cli-registry.ts	2
 src/plugins/loader-discovery.ts	1
 src/plugins/loader-load-context.ts	5
 src/plugins/loader-module-runtime.ts	13
@@ -3580,7 +3576,6 @@ src/plugins/manifest-registry.ts	2
 src/plugins/manifest-setup-normalizers.ts	5
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	7
-src/plugins/memory-embedding-providers.ts	1
 src/plugins/memory-runtime.ts	1
 src/plugins/module-export.ts	2
 src/plugins/native-module-require.ts	3
@@ -3645,7 +3640,7 @@ src/plugins/sdk-alias.ts	3
 src/plugins/services.ts	1
 src/plugins/session-catalog-history-import.ts	2
 src/plugins/setup-registry-loader-state.ts	1
-src/plugins/setup-registry.ts	13
+src/plugins/setup-registry.ts	12
 src/plugins/slots.ts	3
 src/plugins/toggle-config.ts	3
 src/plugins/tool-descriptor-cache.ts	4
@@ -4003,7 +3998,6 @@ ui/src/components/github-link-hovercard.runtime.ts	2
 ui/src/components/hub-tabs.ts	2
 ui/src/components/input-dialog.ts	1
 ui/src/components/lobster-dex.ts	2
-ui/src/components/lobster-pet.ts	1
 ui/src/components/login-gate.ts	3
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1

@@ -41,7 +41,7 @@ const AskUserToolSchema = Type.Object(
           }),
           question: Type.String({
             minLength: 1,
-            description: "Single-sentence question for the user.",
+            description: "Single-sentence question only. Put all selectable choices in options.",
           }),
           options: Type.Array(
             Type.Object(
@@ -51,9 +51,18 @@ const AskUserToolSchema = Type.Object(
               },
               { additionalProperties: false },
             ),
-            { minItems: 2, maxItems: 4 },
+            {
+              minItems: 2,
+              maxItems: 4,
+              description:
+                "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
+            },
           ),
-          multiSelect: Type.Optional(Type.Boolean()),
+          multiSelect: Type.Optional(
+            Type.Boolean({
+              description: "True only when the user may choose several options at once.",
+            }),
+          ),
         },
         { additionalProperties: false },
       ),

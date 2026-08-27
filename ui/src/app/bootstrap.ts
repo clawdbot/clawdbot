@@ -70,7 +70,12 @@ import {
   resolveApplicationStartupSettings,
 } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
-import { resolveTheme, syncThemeFontStylesheet, type ThemeMode } from "./theme.ts";
+import {
+  resolveTheme,
+  syncThemeFontStylesheet,
+  syncThemePaletteStylesheet,
+  type ThemeMode,
+} from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
@@ -108,11 +113,19 @@ function createApplicationTheme(
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = new Set<() => void>();
 
+  let presentationGeneration = 0;
   const publish = () => {
-    applyThemePresentation(settings);
-    for (const listener of listeners) {
-      listener();
-    }
+    const generation = ++presentationGeneration;
+    syncThemePaletteStylesheet(settings.theme, () => {
+      // A slower palette cannot overwrite a newer selection or a disposed app.
+      if (generation !== presentationGeneration) {
+        return;
+      }
+      applyThemePresentation(settings);
+      for (const listener of listeners) {
+        listener();
+      }
+    });
   };
 
   const detachSystemThemeListener = () => {
@@ -141,6 +154,7 @@ function createApplicationTheme(
   };
 
   syncSystemThemeListener();
+  publish();
 
   return {
     get settings() {
@@ -185,6 +199,7 @@ function createApplicationTheme(
       return () => listeners.delete(listener);
     },
     dispose() {
+      presentationGeneration += 1;
       detachSystemThemeListener();
       listeners.clear();
     },
@@ -413,7 +428,6 @@ export function bootstrapApplication(
     initialUserMessage,
   });
   const chatAttachmentHandoff = createChatAttachmentHandoff();
-  applyThemePresentation(settings);
   const router = createApplicationRouter();
   let routerStarted = false;
   // Pre-start navigations are invisible to history; retain the latest request so

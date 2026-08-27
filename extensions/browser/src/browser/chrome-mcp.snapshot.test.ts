@@ -28,6 +28,25 @@ const snapshot = {
 };
 
 describe("chrome MCP snapshot conversion", () => {
+  it.each(["value", "description"])("does not retain truncated refs from %s text", (field) => {
+    const built = buildAiSnapshotFromChromeMcpSnapshot({
+      root: {
+        id: "generic-root",
+        role: "generic",
+        [field]: "text [ref=actual]",
+        children: [{ id: "actual", role: "button", name: `Hidden ${"x".repeat(100)}` }],
+      },
+    });
+    const result = finalizeRoleSnapshot({
+      ...built,
+      maxChars: built.snapshot.split("\n")[0]!.length + 39,
+      delta: { mode: "aria", previousKeys: new Set() },
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.refs).toEqual({});
+    expect(result.newElements).toBe(0);
+  });
+
   it("flattens structured snapshots into aria-style nodes", () => {
     const result = flattenChromeMcpSnapshotToAriaResult(snapshot, 10);
     expect(result).toEqual({

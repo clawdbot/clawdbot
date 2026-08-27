@@ -4,6 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
+import { resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet-contract.ts";
+import {
+  canonicalLobsterLook,
+  createLobsterPetLook,
+  renderLobsterSvg,
+} from "./lobster-pet-look.ts";
+import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   pickLobsterEntrance,
@@ -11,14 +18,7 @@ import {
   planLobsterPasser,
   resolveLobsterLoadIdentity,
 } from "./lobster-pet-plans.ts";
-import {
-  LOBSTER_PET_PALETTES,
-  canonicalLobsterLook,
-  createLobsterPetLook,
-  renderLobsterSvg,
-  resolveLobsterPetMode,
-  resolveLobsterRunOutcome,
-} from "./lobster-pet.ts";
+import "./lobster-pet.runtime.ts";
 
 type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
 

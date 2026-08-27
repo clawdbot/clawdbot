@@ -108,7 +108,7 @@ describe("Control UI base theme tokens", () => {
 describe("Control UI theme --bg mirrors", () => {
   const RESOLVED_THEME_BG_SELECTOR = new Map<string, string>([
     ["dark", ":root"],
-    ["light", ':root[data-theme-mode="light"]'],
+    ["light", ':root:where([data-theme-mode="light"])'],
   ]);
 
   function readBlockToken(css: string, selector: string, token: string): string | undefined {
@@ -122,7 +122,17 @@ describe("Control UI theme --bg mirrors", () => {
 
   /** Every theme's canonical --bg, keyed by the resolved data-theme value. */
   function readCanonicalBackgrounds(): Map<string, string> {
-    const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
+    // Palettes other than the default now live in public/themes; the mirrors
+    // must track them there too.
+    const themesDir = path.join(stylesDir, "..", "..", "public", "themes");
+    const baseCss = [
+      fs.readFileSync(path.join(stylesDir, "base.css"), "utf8"),
+      ...fs
+        .readdirSync(themesDir)
+        .filter((entry) => entry.endsWith(".css"))
+        .toSorted()
+        .map((entry) => fs.readFileSync(path.join(themesDir, entry), "utf8")),
+    ].join("\n");
     const backgrounds = new Map<string, string>();
     for (const [resolved, selector] of RESOLVED_THEME_BG_SELECTOR) {
       const value = readBlockToken(baseCss, selector, "--bg");

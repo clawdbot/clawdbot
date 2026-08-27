@@ -18,6 +18,7 @@ import {
   bindAssembledAgentToolActionDescriptor,
   copyAgentToolMetadata,
 } from "./agent-tool-metadata.js";
+import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -220,7 +221,7 @@ describe("generic tool action decision receipts", () => {
     expect(JSON.stringify(works)).not.toMatch(/sessions_list|SECRET_GATEWAY|private\/gateway/u);
   });
 
-  it("keeps an execution failure separate from its prior generic decision", async () => {
+  it("keeps an execution failure separate from its generic decision", async () => {
     const works: ExecutionDecisionWork[] = [];
     const tool = wrapToolWithBeforeToolCallHook(
       assembledTool(
@@ -435,6 +436,22 @@ describe("generic tool action decision receipts", () => {
       decision: { reasonCode: "plugin_hook_approval_required" },
       source: { owner: "plugin-hook" },
     });
+  });
+
+  it("does not duplicate an owner-native decision created during tool execution", async () => {
+    const works: ExecutionDecisionWork[] = [];
+    const execute = vi.fn(async () => {
+      markToolDecisionRecorded();
+      return { content: [], details: { ok: true } };
+    });
+    const tool = wrapToolWithBeforeToolCallHook(
+      assembledTool("tool", "late_owner_subject", execute),
+    );
+
+    await admittedRun({ works, run: () => tool.execute("late-owner-call", {}) });
+
+    expect(execute).toHaveBeenCalledOnce();
+    expect(works).toEqual([]);
   });
 
   it("records prepareControl disposal as suppression without launching the tool", async () => {

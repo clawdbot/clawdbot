@@ -76,7 +76,6 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
 });
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,

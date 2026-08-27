@@ -193,7 +193,15 @@ it("finishes an admitted room turn after its sender is removed", async () => {
       privateKey: fixture.botPrivateKey,
       channelIds: [fixture.roomId],
       onMessage: async (message, activeBus, signal, assertCurrent) => {
-        await handleBuzzInbound({ account, cfg, bus: activeBus, message, signal, assertCurrent });
+        await handleBuzzInbound({
+          account,
+          cfg,
+          bus: activeBus,
+          message,
+          signal,
+          assertCurrent,
+          historyMap: new Map(),
+        });
         completed.resolve();
       },
       onMessageError: completed.reject,

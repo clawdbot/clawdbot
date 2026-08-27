@@ -58,18 +58,18 @@ async function openThemedChat(theme: string, mode: "dark" | "light", basePath = 
     },
   );
   const page = await context.newPage();
-  const fontRequests: string[] = [];
+  const themeRequests: string[] = [];
   page.on("response", (response) => {
     const url = response.url();
-    if (url.includes("/fonts/")) {
-      fontRequests.push(`${url.split("/").pop()} ${response.status()}`);
+    if (url.includes("/fonts/") || url.includes("/themes/")) {
+      themeRequests.push(`${url.split("/").pop()} ${response.status()}`);
     }
   });
   const gateway = await installMockGateway(page, {
     ...(basePath ? { basePath } : {}),
     methodResponses: { "config.get": themeConfigResponse(theme, mode) },
   });
-  return { fontRequests, gateway, page };
+  return { themeRequests, gateway, page };
 }
 
 async function renderAssistantProse(
@@ -100,7 +100,7 @@ suite.define(() => {
     if (captureUiProof) {
       await mkdir(proofDirectory, { recursive: true });
     }
-    const { fontRequests, gateway, page } = await openThemedChat("absolutely", "dark");
+    const { themeRequests, gateway, page } = await openThemedChat("absolutely", "dark");
     await page.goto(`${suite.server.baseUrl}chat`);
     await renderAssistantProse(gateway, page);
 
@@ -125,7 +125,7 @@ suite.define(() => {
     expect(report.bodyFontFamily).toBe("Space Grotesk");
     expect(report.chatFontFamily).toBe("Lora");
     expect(new Set(report.loaded)).toEqual(new Set(["Space Grotesk", "Lora"]));
-    expect(fontRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
+    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDirectory, "absolutely-chat-dark.png") });
@@ -151,7 +151,7 @@ suite.define(() => {
     if (captureUiProof) {
       await mkdir(proofDirectory, { recursive: true });
     }
-    const { fontRequests, gateway, page } = await openThemedChat(spec.theme, "dark");
+    const { themeRequests, gateway, page } = await openThemedChat(spec.theme, "dark");
     await page.goto(`${suite.server.baseUrl}chat`);
     await renderAssistantProse(gateway, page);
 
@@ -173,10 +173,109 @@ suite.define(() => {
     expect(report.bodyFontFamily).toBe(spec.body);
     expect(report.chatFontFamily).toBe(spec.chat);
     expect(new Set(report.loaded)).toEqual(new Set(spec.families));
-    expect(fontRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
+    expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDirectory, `${spec.theme}-chat-dark.png`) });
+    }
+  });
+
+  it.each([
+    ["knot", "openknot", "#080808", "#f9f9fb"],
+    ["dash", "dash", "#1a1210", "#f7f2ec"],
+    ["absolutely", "absolutely", "#1c1c1a", "#faf9f5"],
+    ["tide", "tide", "#10151b", "#f7f9fb"],
+    ["beacon", "beacon", "#000000", "#ffffff"],
+    ["phosphor", "phosphor", "#0a0f0a", "#f4f7f4"],
+  ])(
+    "loads %s before paint in both modes without the app bundle",
+    async (theme, resolved, dark, light) => {
+      // Bundle aborts isolate the boot document; resource timing verifies the
+      // browser actually blocks rendering, not merely that a link exists later.
+      for (const mode of ["dark", "light"] as const) {
+        const { page } = await openThemedChat(theme, mode);
+        await page.route("**/assets/**.js", (route) => route.abort());
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const report = await page.evaluate(() => ({
+          background: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+          resolvedTheme: document.documentElement.dataset.theme,
+          palette: performance
+            .getEntriesByType("resource")
+            .filter((entry) => new URL(entry.name).pathname.includes("/themes/"))
+            .map((entry) => ({
+              pathname: new URL(entry.name).pathname,
+              blocking: (entry as PerformanceResourceTiming & { renderBlockingStatus: string })
+                .renderBlockingStatus,
+            })),
+        }));
+        expect(report.resolvedTheme).toBe(mode === "dark" ? resolved : `${resolved}-light`);
+        expect(report.background).toBe(mode === "dark" ? dark : light);
+        expect(report.palette).toEqual([
+          { pathname: `/themes/${theme}.css`, blocking: "blocking" },
+        ]);
+      }
+    },
+  );
+
+  it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
+    const { page, gateway } = await openThemedChat("knot", "dark");
+    let releasePalette!: () => void;
+    const paletteGate = new Promise<void>((resolve) => {
+      releasePalette = resolve;
+    });
+    await page.route("**/themes/tide.css", async (route) => {
+      await paletteGate;
+      await route.continue();
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.evaluate(() => {
+      const root = document.documentElement;
+      new MutationObserver(() => {
+        if (root.dataset.theme === "tide") {
+          root.dataset.observedThemeBackground = getComputedStyle(root)
+            .getPropertyValue("--bg")
+            .trim();
+        }
+      }).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+    });
+    const changeTheme = async (theme: string) => {
+      await gateway.setMethodResponse("config.get", themeConfigResponse(theme, "dark"));
+      await gateway.emitGatewayEvent("config.changed", { hash: `theme-${theme}`, ts: Date.now() });
+    };
+    try {
+      const request = page.waitForRequest("**/themes/tide.css");
+      await changeTheme("tide");
+      await request;
+      expect(await page.locator("html").getAttribute("data-theme")).toBe("openknot");
+      expect(
+        await page.evaluate(() =>
+          getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+        ),
+      ).toBe("#080808");
+      await changeTheme("beacon");
+      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("beacon");
+      const response = page.waitForResponse("**/themes/tide.css");
+      releasePalette();
+      await response;
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      expect(await page.locator("html").getAttribute("data-theme")).toBe("beacon");
+      await changeTheme("tide");
+      await expect
+        .poll(() => page.locator("html").getAttribute("data-observed-theme-background"))
+        .toBe("#10151b");
+      expect(await page.locator('meta[name="theme-color"]').first().getAttribute("content")).toBe(
+        "#10151b",
+      );
+      await changeTheme("claw");
+      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
+    } finally {
+      releasePalette();
     }
   });
 
@@ -187,6 +286,29 @@ suite.define(() => {
     const basePath = "/openclaw";
     const { page } = await openThemedChat("absolutely", "dark", basePath);
     const requested: string[] = [];
+    // The preview server does not stamp Gateway HTML. Reproduce the actual
+    // document contract, rather than letting runtime repair a wrong boot URL.
+    await page.route("**/*", async (route) => {
+      if (
+        route.request().resourceType() !== "document" ||
+        !new URL(route.request().url()).pathname.startsWith(`${basePath}/`)
+      ) {
+        await route.fallback();
+        return;
+      }
+      const response = await route.fetch();
+      const html = (await response.text()).replace(
+        /<html\b/u,
+        `<html data-openclaw-control-ui-base-path="${basePath}"`,
+      );
+      await route.fulfill({ response, body: html });
+    });
+    await page.route(`**${basePath}/themes/**`, async (route) => {
+      const url = new URL(route.request().url());
+      requested.push(url.pathname);
+      url.pathname = url.pathname.slice(basePath.length);
+      await route.fulfill({ response: await route.fetch({ url: url.href }) });
+    });
     await page.route(`**${basePath}/fonts/**`, async (route) => {
       const { pathname } = new URL(route.request().url());
       requested.push(pathname);
@@ -203,6 +325,19 @@ suite.define(() => {
     );
 
     expect(linkHref).toBe(`${basePath}/fonts/absolutely.css`);
+    // The palette link is built in the first-paint script from the mount prefix
+    // the gateway stamps on <html>, so it has to follow the mount too.
+    const paletteHref = await page.evaluate(
+      () =>
+        document.getElementById("openclaw-theme-palette-absolutely")?.getAttribute("href") ?? null,
+    );
+    expect(paletteHref).toBe(`${basePath}/themes/absolutely.css`);
+    expect(requested).toContain(`${basePath}/themes/absolutely.css`);
+    expect(
+      await page.evaluate(() =>
+        getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+      ),
+    ).toBe("#1c1c1a");
     // The browser must actually fetch below the mount, not at the root.
     await expect.poll(() => requested).toContain(`${basePath}/fonts/absolutely.css`);
   });
@@ -211,7 +346,7 @@ suite.define(() => {
     if (captureUiProof) {
       await mkdir(proofDirectory, { recursive: true });
     }
-    const { fontRequests, gateway, page } = await openThemedChat("claw", "dark");
+    const { themeRequests, gateway, page } = await openThemedChat("claw", "dark");
     await page.goto(`${suite.server.baseUrl}chat`);
     await renderAssistantProse(gateway, page);
 
@@ -230,7 +365,7 @@ suite.define(() => {
     expect(report.loaded).toEqual([]);
     expect(report.bodyFontFamily).not.toBe("Space Grotesk");
     // The default path must not fetch a font asset at all.
-    expect(fontRequests).toEqual([]);
+    expect(themeRequests).toEqual([]);
 
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDirectory, "claw-chat-dark.png") });

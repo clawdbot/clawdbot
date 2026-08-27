@@ -1056,14 +1056,6 @@ kill -TERM "$$"`,
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-macos-restore-");
       const callsPath = join(tempDir, "prlctl-calls.jsonl");
       const statePath = join(tempDir, "vm-state");
-      const npmBootstrapPath = join(tempDir, "npm-bootstrap.mjs");
-      writeFileSync(
-        npmBootstrapPath,
-        `if (process.argv[1]?.endsWith("npm-cli.js") && process.argv.includes("view")) {
-  process.stdout.write("2026.1.1\\n");
-  process.exit(0);
-}`,
-      );
       writeNodeFakePrlctl(
         tempDir,
         `const fs = process.getBuiltinModule("node:fs");
@@ -1092,7 +1084,6 @@ if (commandArgs[0] === "list") {
 }`,
       );
 
-      const fakeEnv = fakePrlctlEnv(tempDir);
       const result = spawnSync(
         process.execPath,
         [
@@ -1103,8 +1094,6 @@ if (commandArgs[0] === "list") {
           "upgrade",
           "--latest-version",
           "2026.1.1",
-          "--target-package-spec",
-          "openclaw@2026.1.1",
           "--api-key-env",
           "OPENCLAW_PARALLELS_TEST_KEY",
           "--json",
@@ -1114,9 +1103,7 @@ if (commandArgs[0] === "list") {
           encoding: "utf8",
           env: {
             ...process.env,
-            ...fakeEnv,
-            "BASH_FUNC_ifconfig%%": "() { return 1; }",
-            NODE_OPTIONS: `${fakeEnv.NODE_OPTIONS} --import=${pathToFileURL(npmBootstrapPath).href}`,
+            ...fakePrlctlEnv(tempDir),
             OPENCLAW_PARALLELS_ARTIFACT_ROOT: tempDir,
             OPENCLAW_PARALLELS_TEST_KEY: "fixture",
           },
@@ -1125,6 +1112,7 @@ if (commandArgs[0] === "list") {
       );
 
       expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("macOS guest command failed with exit code 41");
       const calls = readFileSync(callsPath, "utf8")
         .trim()
         .split("\n")

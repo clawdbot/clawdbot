@@ -451,20 +451,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
     const missingChunks = missing.map((m) => m.chunk);
     const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
-    const provider = generation.provider;
     let cursor = 0;
     for (const batch of batches) {
       const inputs = buildTextEmbeddingInputs(batch);
       const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
-      if (hasStructuredInputs && !provider.embedBatchInputs) {
-        throw createMemoryEmbeddingOperationError({
-          operation: "structured-batch",
-          providerId: provider.id,
-          cause: new Error(
-            `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
-          ),
-        });
-      }
       const batchEmbeddings = hasStructuredInputs
         ? await this.embedBatchInputsWithRetry(inputs, generation)
         : await this.embedBatchWithRetry(
@@ -588,7 +578,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       generation,
       operation: "batch",
       run: async (provider, batchTexts, signal) =>
-        await provider.embedBatch(batchTexts, { signal }),
+        await provider.embedBatch(batchTexts, { signal, inputType: "document" }),
     });
   }
 
@@ -599,20 +589,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (inputs.length === 0) {
       return [];
     }
-    const provider = generation?.provider ?? this.provider;
-    const embedBatchInputs = provider?.embedBatchInputs;
-    if (!embedBatchInputs) {
-      return await this.embedBatchWithRetry(
-        inputs.map((input) => input.text),
-        generation,
-      );
-    }
     return await this.runProviderBatchWithRetry({
       items: inputs,
       generation,
       operation: "structured-batch",
-      run: async (_provider, batchInputs, signal) =>
-        await embedBatchInputs(batchInputs, { signal }),
+      run: async (provider, batchInputs, signal) =>
+        await provider.embedBatch(batchInputs, { signal, inputType: "document" }),
     });
   }
 
@@ -746,7 +728,8 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
                 timeoutMs,
                 message: `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
                 signal,
-                run: async (opSignal) => await provider.embedQuery(text, { signal: opSignal }),
+                run: async (opSignal) =>
+                  await provider.embed(text, { signal: opSignal, inputType: "query" }),
               });
             },
             signal,

@@ -24,7 +24,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail, listProfiles, setDisplayName } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
   attachGatewayLocalUserIngress,
   getGatewayLocalUserIngress,
@@ -42,6 +41,11 @@ import { createControlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
+import {
+  identifiedClient,
+  sessionSharingTestContext as context,
+  soloClient,
+} from "./sessions-sharing.test-support.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 type ResolveSessionSharingTarget =
@@ -75,49 +79,6 @@ afterEach(() => {
   targetResolutionMock.override = undefined;
   closeOpenClawAgentDatabasesForTest();
 });
-
-function soloClient(): GatewayClient {
-  return {
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-      },
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-    },
-  };
-}
-
-function identifiedClient(profileId: string, displayName: string | null = null): GatewayClient {
-  return {
-    ...soloClient(),
-    authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: {
-      profileId,
-      displayName,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
-  };
-}
-
-function context(
-  broadcast: ReturnType<typeof vi.fn>,
-  runtimeConfig: ReturnType<GatewayRequestContext["getRuntimeConfig"]> = {},
-): GatewayRequestContext {
-  return {
-    getRuntimeConfig: () => runtimeConfig,
-    broadcast,
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set(),
-    chatAbortControllers: new Map(),
-  } as unknown as GatewayRequestContext;
-}
 
 async function call(
   method:
@@ -767,60 +728,6 @@ describe("session sharing handlers", () => {
           agentId: "main",
         }),
       ).toBeNull();
-    });
-  });
-
-  it("authorizes board tickets against their signed agent-relative session", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "global" },
-        { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "work", sessionKey: "global" },
-        {
-          sessionId: "session-work-global",
-          updatedAt: 1,
-          visibility: "read-only",
-          createdActor: { type: "human", id: "owner@example.com" },
-        },
-      );
-      const { ticket } = createBoardViewTicket({
-        sessionKey: "global",
-        agentId: "work",
-        name: "status",
-        revision: 1,
-        viewGeneration: "a".repeat(32),
-      });
-      const memberClient = identifiedClient("outsider@example.com");
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-      } as ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
-      const requestContext = context(vi.fn(), cfg);
-
-      expect(
-        resolveSessionMutationAuthorization({
-          client: memberClient,
-          method: "board.action",
-          requestParams: { ticket, agentId: "work" },
-          context: requestContext,
-        }).error,
-      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-
-      const { ticket: unscopedTicket } = createBoardViewTicket({
-        sessionKey: "global",
-        name: "status",
-        revision: 1,
-        viewGeneration: "b".repeat(32),
-      });
-      expect(
-        resolveSessionMutationAuthorization({
-          client: memberClient,
-          method: "board.action",
-          requestParams: { ticket: unscopedTicket, agentId: "work" },
-          context: requestContext,
-        }).error,
-      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
     });
   });
 

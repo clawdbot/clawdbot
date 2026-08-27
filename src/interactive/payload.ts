@@ -19,6 +19,20 @@ export type MessagePresentationTone = "info" | "success" | "warning" | "danger" 
 /** Button style hint for renderers that support styled actions. */
 export type MessagePresentationButtonStyle = InteractiveButtonStyle;
 
+type QuestionPresentationAction =
+  | {
+      /** Resolve one declared choice. */
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
+      /** Switch this question to its free-text answer path. */
+      type: "question";
+      questionId: string;
+      intent: "custom-input";
+    };
+
 /** Core-owned model-picker action; channels serialize it only inside private envelopes. */
 export type ModelPickerAction = (
   | {
@@ -88,12 +102,7 @@ export type MessagePresentationAction =
       approvalKind: ChannelApprovalKind;
       decision: "allow-once" | "allow-always" | "deny";
     }
-  | {
-      /** Resolve one runtime-authored operator question choice. */
-      type: "question";
-      questionId: string;
-      optionValue: string;
-    }
+  | QuestionPresentationAction
   | {
       /** Open a normal external link. */
       type: "url";
@@ -546,15 +555,19 @@ function normalizePresentationAction(raw: unknown): MessagePresentationAction | 
     }
     const questionId = record.questionId;
     const optionValue = record.optionValue;
-    if (
-      typeof questionId !== "string" ||
-      !isWellFormedApprovalId(questionId) ||
-      typeof optionValue !== "string" ||
-      !optionValue.trim()
-    ) {
+    if (typeof questionId !== "string" || !isWellFormedApprovalId(questionId)) {
       return undefined;
     }
-    return { type: "question", questionId, optionValue };
+    const intent = record.intent;
+    if (intent === undefined) {
+      return typeof optionValue === "string" && optionValue.trim()
+        ? { type: "question", questionId, optionValue }
+        : undefined;
+    }
+    if (intent === "custom-input") {
+      return { type: "question", questionId, intent };
+    }
+    return undefined;
   }
   if (type === "url") {
     const url = normalizeOptionalString(record.url);

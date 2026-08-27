@@ -480,6 +480,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         source: r.source,
         snippet: r.snippet,
         textScore: r.textScore,
+        hasBodyMatch: r.hasBodyMatch,
         importance: r.importance,
         triggers: r.triggers,
         projectKey: r.projectKey,

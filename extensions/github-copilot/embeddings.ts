@@ -145,22 +145,29 @@ async function discoverEmbeddingModels(params: {
   }
 }
 
+function normalizeCopilotEmbeddingModel(model: string): string {
+  const normalized = model.trim();
+  const prefix = `${COPILOT_EMBEDDING_PROVIDER_ID}/`;
+  const stripped = normalized.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+  // Keep invalid selections explicit and normalization idempotent across
+  // cold memory options and direct provider creation.
+  return stripped && stripped === stripped.trim() && !stripped.startsWith(prefix)
+    ? stripped
+    : normalized;
+}
+
 function pickBestModel(available: string[], userModel?: string): string {
   if (userModel) {
-    const normalized = userModel.trim();
-    // Strip the provider prefix if users set "github-copilot/model-name".
-    const stripped = normalized.startsWith(`${COPILOT_EMBEDDING_PROVIDER_ID}/`)
-      ? normalized.slice(`${COPILOT_EMBEDDING_PROVIDER_ID}/`.length)
-      : normalized;
+    const normalized = normalizeCopilotEmbeddingModel(userModel);
     if (available.length === 0) {
       throw new Error("No embedding models available from GitHub Copilot");
     }
-    if (!available.includes(stripped)) {
+    if (!available.includes(normalized)) {
       throw new Error(
-        `GitHub Copilot embedding model "${stripped}" is not available. Available: ${available.join(", ")}`,
+        `GitHub Copilot embedding model "${normalized}" is not available. Available: ${available.join(", ")}`,
       );
     }
-    return stripped;
+    return normalized;
   }
   for (const preferred of PREFERRED_MODELS) {
     if (available.includes(preferred)) {
@@ -242,7 +249,7 @@ async function createGitHubCopilotEmbeddingProvider(
 ): Promise<{ provider: MemoryEmbeddingProvider; client: GitHubCopilotEmbeddingClient }> {
   const initialSession = await resolveGitHubCopilotEmbeddingSession(client);
 
-  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -278,11 +285,22 @@ async function createGitHubCopilotEmbeddingProvider(
     provider: {
       id: COPILOT_EMBEDDING_PROVIDER_ID,
       model: client.model,
-      embedQuery: async (text, options) => {
-        const [vector] = await embed([text], options?.signal);
+      embed: async (input, options) => {
+        const [vector] = await embedMany(
+          [typeof input === "string" ? input : input.text],
+          options?.signal,
+        );
         return vector ?? [];
       },
-      embedBatch: async (texts, options) => await embed(texts, options?.signal),
+      embedBatch: async (inputs, options) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (options?.inputType === "query") {
+          return await Promise.all(
+            texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+          );
+        }
+        return await embedMany(texts, options?.signal);
+      },
     },
     client: {
       ...client,
@@ -295,6 +313,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
   id: COPILOT_EMBEDDING_PROVIDER_ID,
   transport: "remote",
   authProviderId: COPILOT_EMBEDDING_PROVIDER_ID,
+  normalizeModel: ({ model }) => normalizeCopilotEmbeddingModel(model),
   autoSelectPriority: 15,
   allowExplicitWhenConfiguredAuto: true,
   shouldContinueAutoSelection: (err: unknown) => isCopilotSetupError(err),

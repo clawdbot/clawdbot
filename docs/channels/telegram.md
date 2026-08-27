@@ -525,6 +525,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Scopes: `off`, `dm`, `group`, `all`, `allowlist` (default). Legacy `capabilities: ["inlineButtons"]` maps to `"all"`.
 
+    `ask_user` uses these native controls for one single-select question.
+    Choices use one row each, and **Other…** opens Telegram's reply input.
+
     Message action example:
 
 ```json5

@@ -4,10 +4,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI view renders usage render overview screen content.
 import { html, nothing } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
 import {
   buildUsageCostWindows,
@@ -926,10 +926,10 @@ function renderSessionsCard(
             class="btn btn--sm btn--ghost"
             @click=${(e: MouseEvent) => {
               e.stopPropagation();
-              void copyToClipboard(formatSessionListLabel(s));
+              void handleCopyButton(e, formatSessionListLabel(s), t("usage.sessions.copy"));
             }}
           >
-            ${t("usage.sessions.copy")}
+            <span data-copy-label>${t("usage.sessions.copy")}</span>
           </button>
           <div class="session-bar-value">
             ${isTokenMode ? formatUsageTokens(value) : formatAnalysisCost(value)}

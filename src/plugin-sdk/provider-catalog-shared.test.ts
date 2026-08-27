@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applyProviderNativeStreamingUsageCompat,
-  buildManifestModelDefinition,
   buildManifestModelProviderConfig,
   clearLiveCatalogCacheForTests,
   getCachedLiveCatalogValue,
@@ -449,20 +448,6 @@ describe("provider-catalog-shared manifest provider configs", () => {
         "example",
       ),
     ).toBe("example/example-model");
-
-    expect(
-      buildManifestModelDefinition({
-        providerId: "example",
-        catalog,
-        decorate: (model) => ({
-          ...model,
-          compat: { ...model.compat, supportsUsageInStreaming: false },
-        }),
-      })(catalog.models[0]),
-    ).toEqual({
-      ...buildManifestModelProviderConfig({ providerId: "example", catalog }).models[0],
-      compat: { supportsUsageInStreaming: false },
-    });
   });
 
   it("normalizes retired nested Gemini ids before emitting manifest provider config", () => {

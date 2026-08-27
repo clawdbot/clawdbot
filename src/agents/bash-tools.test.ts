@@ -681,7 +681,7 @@ const runNotifyNoopCase = async ({ label, defaults, expectNotification }: Notify
 
   const sessionId = await startBackgroundCommand(tool, COMMAND_NOOP);
   await expect
-    .poll(() => getFinishedSession(sessionId)?.status, BACKGROUND_POLL_OPTIONS)
+    .poll(() => getFinishedSession(sessionId)?.terminalStatus, BACKGROUND_POLL_OPTIONS)
     .toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
   expectNotifyNoopEvents(events, expectNotification, sessionId, label);
@@ -812,7 +812,7 @@ describe("exec notifyOnExit", () => {
     const formatted = await drainNotifyEvents();
 
     expect(finished?.id).toBe(sessionId);
-    expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(finished?.terminalStatus).toBe(PROCESS_STATUS_COMPLETED);
     expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
     expect(queuedEvent).toBeDefined();

@@ -3102,6 +3102,53 @@ describe("state migrations", () => {
     );
   });
 
+  it("repairs shared SQLite before discarding retired commitments JSON", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    await createLegacyAuditLedger(stateDir);
+    const sourcePath = path.join(stateDir, "commitments", "commitments.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({ version: 1, commitments: [{ id: "retired" }] }),
+      "utf8",
+    );
+    const cfg = createConfig();
+
+    const runtime = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(runtime.commitments?.hasLegacy).toBe(false);
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.preview).toContain(
+      "- Commitments: discard retired commitments/commitments.json rows without import, archive, or export",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+
+    expect(result.warnings).toStrictEqual([]);
+    const schemaChange = result.changes.indexOf(
+      "Migrated shared state audit event ledger → versioned message lifecycle schema",
+    );
+    const discardChange = result.changes.indexOf(
+      "Discarded retired commitments JSON with 1 row; no data was imported, archived, or exported.",
+    );
+    expect(schemaChange).toBeGreaterThanOrEqual(0);
+    expect(discardChange).toBeGreaterThan(schemaChange);
+    await expectMissingPath(sourcePath);
+    expect(
+      openOpenClawStateDatabase({ env })
+        .db.prepare(
+          "SELECT removed_source FROM migration_sources WHERE migration_kind = 'legacy-commitments-json'",
+        )
+        .get(),
+    ).toEqual({ removed_source: 1 });
+  });
+
   it("doctor discards worktree rows that predate the provisioned-file ledger", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

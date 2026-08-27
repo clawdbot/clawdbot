@@ -52,34 +52,37 @@
           if (mode === "system") {
             mode = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
           }
-          var resolved =
-            theme === "knot"
-              ? mode === "light"
-                ? "openknot-light"
-                : "openknot"
-              : theme === "dash"
-                ? mode === "light"
-                  ? "dash-light"
-                  : "dash"
-                : theme === "absolutely"
-                  ? mode === "light"
-                    ? "absolutely-light"
-                    : "absolutely"
-                  : theme === "tide"
-                    ? mode === "light"
-                      ? "tide-light"
-                      : "tide"
-                    : theme === "beacon"
-                      ? mode === "light"
-                        ? "beacon-light"
-                        : "beacon"
-                      : theme === "phosphor"
-                        ? mode === "light"
-                          ? "phosphor-light"
-                          : "phosphor"
-                        : mode === "light"
-                          ? "light"
-                          : "dark";
+          // family -> [dark, light] resolved names. Kept in lockstep with
+          // resolveTheme() in app/theme.ts and the files in public/themes.
+          var FAMILIES = {
+            knot: ["openknot", "openknot-light"],
+            dash: ["dash", "dash-light"],
+            absolutely: ["absolutely", "absolutely-light"],
+            tide: ["tide", "tide-light"],
+            beacon: ["beacon", "beacon-light"],
+            phosphor: ["phosphor", "phosphor-light"],
+          };
+          var pair = FAMILIES[theme];
+          var resolved = pair
+            ? pair[mode === "light" ? 1 : 0]
+            : mode === "light"
+              ? "light"
+              : "dark";
+          if (pair) {
+            // Script-created links need explicit render blocking before first paint.
+            // The gateway stamps the mount prefix on <html> before this runs.
+            var base =
+              document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var palette = document.createElement("link");
+            palette.rel = "stylesheet";
+            palette.setAttribute("blocking", "render");
+            palette.id = "openclaw-theme-palette-" + theme;
+            palette.onerror = function () {
+              palette.remove();
+            };
+            palette.href = base + "/themes/" + theme + ".css";
+            document.head.appendChild(palette);
+          }
           document.documentElement.setAttribute("data-theme", resolved);
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
