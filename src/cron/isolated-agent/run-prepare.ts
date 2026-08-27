@@ -1,7 +1,6 @@
 /** Session identity and context preparation for isolated cron runs. */
 import { isDeepStrictEqual } from "node:util";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope.js";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../agents/runtime-plugins.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
@@ -9,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -45,8 +45,7 @@ import {
 import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   appendCronUnattendedRunPreamble,
-  hasConfiguredAuthProfiles,
-  loadCronAuthProfileRuntime,
+  resolveCronAuthSelection,
   loadCronExternalContentRuntime,
   loadCronModelPreflightRuntime,
   loadSessionAccessorRuntime,
@@ -168,8 +167,7 @@ export async function prepareCronRunContext(params: {
         }
       : {}),
   });
-  const agentId = modelOwner.agentId;
-  const agentDir = modelOwner.agentDir;
+  const { agentId, agentDir } = modelOwner;
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -216,6 +214,7 @@ export async function prepareCronRunContext(params: {
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
+  const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
   const cronSession = resolveCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
@@ -317,6 +316,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
       agentSessionKey,
       createdActor: input.job.createdActor,
+      sandbox,
       persistSessionEntry: persistCronSessionRow,
     });
     const withRunSession: WithRunSession = (result) => ({
@@ -363,8 +363,7 @@ export async function prepareCronRunContext(params: {
       typeof ownerAgentConfig?.model === "string" &&
       resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
         resolveAgentModelPrimaryValue(modelOwner.config.agents?.defaults?.model);
-    let provider = resolvedModelSelection.provider;
-    let model = resolvedModelSelection.model;
+    let { provider, model } = resolvedModelSelection;
     const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
     const inheritDefaultFallbacksForAgentStringModel =
       matchesDefaultFallbackAgentStringModel &&
@@ -600,33 +599,24 @@ export async function prepareCronRunContext(params: {
         throw err;
       }
       logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+      if (sandbox === "required" || cronSession.sessionEntry.sandbox === "required") {
+        throw err;
+      }
     }
     await retireRolledCronSessionMcpRuntime({
       job: input.job,
       cronSession,
     });
-    const storedAuthProfileId = cronSession.sessionEntry.authProfileOverride?.trim();
-    const hasSessionAuthProfileOverride = Boolean(storedAuthProfileId);
-    const authSelection =
-      !hasSessionAuthProfileOverride &&
-      !hasConfiguredAuthProfiles(cfgWithAgentDefaults) &&
-      !hasAnyAuthProfileStoreSource(agentDir)
-        ? undefined
-        : await (
-            await loadCronAuthProfileRuntime()
-          ).resolveSessionAuthSelection({
-            // Auth resolution may mutate session state; use the store/key persistence will write.
-            cfg: cfgWithAgentDefaults,
-            provider,
-            modelId: model,
-            harnessRuntime: effectiveAgentRuntime,
-            agentDir,
-            sessionEntry: cronSession.sessionEntry,
-            sessionStore: cronSession.store,
-            sessionKey: agentSessionKey,
-            storePath: cronSession.storePath,
-            isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-          });
+    const authSelection = await resolveCronAuthSelection({
+      cfg: cfgWithAgentDefaults,
+      provider,
+      modelId: model,
+      harnessRuntime: effectiveAgentRuntime,
+      agentDir,
+      cronSession,
+      sessionKey: agentSessionKey,
+      isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
+    });
     const authProfileId = authSelection?.profileId;
     const liveSelection: CronLiveSelection = {
       provider,
@@ -666,6 +656,7 @@ export async function prepareCronRunContext(params: {
           cronSession,
           runSessionKey,
           createdActor: input.job.createdActor,
+          sandbox,
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,

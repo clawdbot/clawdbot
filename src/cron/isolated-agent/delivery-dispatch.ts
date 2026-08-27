@@ -338,6 +338,7 @@ export async function dispatchCronDelivery(
         directCronRouteCommitted = true;
         await commitDirectCronOutboundRoute({
           cfg: params.cfgWithAgentDefaults,
+          runSessionKey: params.runSessionKey,
           delivery,
           route: directCronOutboundRoute,
         });

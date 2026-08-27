@@ -46,6 +46,13 @@ const hoisted = vi.hoisted(() => ({
   resolveContextEngineMock: vi.fn(),
   countActiveRunsForSessionMock: vi.fn(),
   listSwarmRunsForGroupMock: vi.fn(),
+  resolveSandboxRuntimeStatusMock: vi.fn<
+    (params: { sessionKey?: string }) => {
+      sandboxed: boolean;
+      sandboxRequired: boolean;
+      sandboxPrincipalId?: string;
+    }
+  >(),
   configOverride: {} as Record<string, unknown>,
 }));
 
@@ -236,7 +243,7 @@ describe("spawnSubagentDirect seam flow", () => {
       countActiveRunsForSession: hoisted.countActiveRunsForSessionMock,
       listSwarmRunsForGroup: hoisted.listSwarmRunsForGroupMock,
       resolveSubagentSpawnModelSelection: () => "openai/gpt-5.4",
-      resolveSandboxRuntimeStatus: () => ({ sandboxed: false }),
+      resolveSandboxRuntimeStatus: hoisted.resolveSandboxRuntimeStatusMock,
       sessionStorePath: "/tmp/subagent-spawn-session-store.json",
     }));
   });
@@ -271,6 +278,10 @@ describe("spawnSubagentDirect seam flow", () => {
     hoisted.resolveContextEngineMock.mockReset().mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReset().mockReturnValue(0);
     hoisted.listSwarmRunsForGroupMock.mockReset().mockReturnValue([]);
+    hoisted.resolveSandboxRuntimeStatusMock.mockReset().mockReturnValue({
+      sandboxed: false,
+      sandboxRequired: false,
+    });
     hoisted.resolveAgentConfigMock.mockImplementation(
       (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
         cfg.agents?.list?.find((agent) => agent.id === agentId),
@@ -1965,6 +1976,64 @@ describe("spawnSubagentDirect seam flow", () => {
       continuationChainTokens: 12_345,
       continuationChainId: "chain-from-parent",
     });
+  });
+
+  it.each([false, true])(
+    "inherits native child isolation only from a required parent (%s)",
+    async (required) => {
+      const parentSessionKey = "agent:main:main";
+      const actor = { type: "human", id: "profile-native-creator" } as const;
+      hoisted.loadSessionStoreMock.mockReturnValue({
+        [parentSessionKey]: {
+          sessionId: "parent-session",
+          updatedAt: 1,
+          createdActor: actor,
+          ...(required ? { sandbox: "required" } : {}),
+        },
+      });
+      hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+        sandboxed: true,
+        sandboxRequired: required && sessionKey === parentSessionKey,
+        ...(required && sessionKey === parentSessionKey ? { sandboxPrincipalId: actor.id } : {}),
+      }));
+      let persistedStore: Record<string, Record<string, unknown>> | undefined;
+      installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+        onStore: (store) => {
+          persistedStore = store;
+        },
+      });
+
+      const result = await spawnSubagentDirect(
+        { task: "continue under the parent's isolation policy" },
+        { agentSessionKey: parentSessionKey },
+      );
+
+      expect(result.status).toBe("accepted");
+      const entry = persistedStore?.[result.childSessionKey as string];
+      expect(entry).toMatchObject({
+        createdVia: "spawn",
+        createdActor: required ? actor : { type: "agent", id: "main" },
+        parentSessionKey,
+      });
+      expect(entry?.sandbox).toBe(required ? "required" : undefined);
+    },
+  );
+
+  it("rejects a required parent spawning an unsandboxed native child before side effects", async () => {
+    hoisted.resolveSandboxRuntimeStatusMock.mockImplementation(({ sessionKey }) => ({
+      sandboxed: sessionKey === "agent:main:main",
+      sandboxRequired: sessionKey === "agent:main:main",
+      ...(sessionKey === "agent:main:main" ? { sandboxPrincipalId: "profile-native-creator" } : {}),
+    }));
+    const result = await spawnSubagentDirect(
+      { task: "try an unsandboxed child" },
+      { agentSessionKey: "agent:main:main" },
+    );
+    expect(result).toMatchObject({
+      status: "forbidden",
+      error: expect.stringContaining("cannot spawn unsandboxed"),
+    });
+    expectNoChildSpawnSideEffects();
   });
 
   it("dispatches spawned agent runs in process when a gateway context is available", async () => {

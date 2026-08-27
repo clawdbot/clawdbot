@@ -127,11 +127,22 @@ workspace from becoming a writable bridge between guests. Maintainer sessions
 and other sessions without a role-required sandbox keep their configured scope
 and workspace access.
 
-The Gateway records the creator's sandbox requirement once when the session is
-created. Existing sessions are unaffected, and role changes, session sharing,
-maintainer participation, and `sessions.patch` cannot remove or replace the
-requirement. A person whose role requires sandboxing cannot start a run in an
-existing host-execution session, even when explicitly invited. Required sessions
+The Gateway records the authenticated creator and their sandbox requirement
+together before a new session first runs, including chat, Talk, recovery,
+forks, checkpoint branches, cron, outbound messages, and spawned children.
+Delegated child work inherits a required parent's original creator and sandbox
+policy, even after role changes. Recovery and branching requested by another
+person use that person's own role rather than the source session's policy.
+
+Required creation provenance is immutable. Role changes, sharing, participation,
+`sessions.patch`, whole-entry replacement, legacy imports, and canonical-key
+repair cannot remove or replace an existing required stamp. Blocked persisted
+overwrites emit a `session-sqlite` warning; inspect them with
+[`openclaw logs --follow`](/cli/logs). Existing unstamped sessions and new sessions
+whose creator does not require sandboxing retain their existing behavior.
+
+A person whose role requires sandboxing cannot start a run in an existing
+host-execution session, even when explicitly invited. Required sessions
 fail if their sandbox backend is unavailable or provisioning fails; they never
 fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
 configured host targets cannot bypass this restriction. The agent's managed

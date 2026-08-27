@@ -31,6 +31,7 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { IMAGE_ONLY_USER_MESSAGE } from "./agent-prompt.js";
+import type { ResponseResource } from "./open-responses.schema.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -3142,6 +3143,69 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(response?.output?.slice(1)).toEqual(doneFunctionCalls.map(({ item }) => item));
     expect(events.map((event) => event.data)).toContain("[DONE]");
   });
+
+  it.each([
+    { stream: false, tools: false },
+    { stream: true, tools: false },
+    { stream: false, tools: true },
+    { stream: true, tools: true },
+  ])(
+    "replays returned items into a stateless turn (stream=$stream, tools=$tools)",
+    async ({ stream, tools }) => {
+      agentCommandMock.mockClear();
+      const calls = [
+        { id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' },
+        { id: "call_2", name: "get_weather", arguments: '{"city":"Paris"}' },
+      ];
+      agentCommandMock.mockResolvedValueOnce({
+        payloads: [{ text: "Checking both cities." }],
+        ...(tools ? { meta: { stopReason: "tool_calls", pendingToolCalls: calls } } : {}),
+      } as never);
+      const user = { type: "message", role: "user", content: "Compare the weather." };
+      const firstResponse = await postResponses(enabledPort, {
+        model: "openclaw",
+        input: [user],
+        stream,
+        tools: WEATHER_TOOL,
+      });
+      expect(firstResponse.status).toBe(200);
+      const first = stream
+        ? (
+            parseSseData(
+              findSseEvent(parseSseEvents(await firstResponse.text()), "response.completed"),
+            ) as { response: ResponseResource }
+          ).response
+        : ((await firstResponse.json()) as ResponseResource);
+      const results = tools
+        ? calls.map((call, index) => ({
+            type: "function_call_output",
+            call_id: call.id,
+            output: String(20 + index),
+          }))
+        : [{ ...user, content: "Explain that answer." }];
+      agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "Compared." }] } as never);
+      const secondResponse = await postResponses(enabledPort, {
+        model: "openclaw",
+        input: [user, ...first.output, ...results],
+        tools: WEATHER_TOOL,
+      });
+      expect(secondResponse.status).toBe(200);
+      expect(firstAgentOpts(1).sessionKey).not.toBe(firstAgentOpts().sessionKey);
+      const prompt = firstAgentOpts(1).message;
+      expect(prompt).toContain("Checking both cities.");
+      if (tools) {
+        for (const call of calls) {
+          expect(prompt).toContain(
+            `tool_call id=${call.id} name=${call.name} arguments=${call.arguments}`,
+          );
+          expect(prompt).toContain(`Tool:${call.id}:`);
+        }
+      } else {
+        expect(prompt).toContain("Explain that answer.");
+      }
+      await ensureResponseConsumed(secondResponse);
+    },
+  );
 
   it("reuses the prior session when previous_response_id is provided", async () => {
     const port = enabledPort;

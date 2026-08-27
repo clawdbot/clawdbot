@@ -283,13 +283,26 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .shell--settings:not(.shell--mobile-nav) {
+  --settings-content-block-start-padding: 44px;
+  --settings-content-inline-padding: clamp(28px, 5vw, 72px);
   grid-template-columns: var(--shell-settings-nav-width) minmax(0, 1fr);
   grid-template-rows: 0 1fr;
   --shell-nav-width: var(--shell-settings-nav-width);
 }
 
 .shell--settings:not(.shell--mobile-nav) .content {
-  padding: 44px clamp(28px, 5vw, 72px) 72px;
+  padding: var(--settings-content-block-start-padding) var(--settings-content-inline-padding) 72px;
+}
+
+.shell--settings.shell--mobile-nav {
+  --settings-content-block-start-padding: 4px;
+  --settings-content-inline-padding: 4px;
+}
+
+.shell--settings .connection-action-block {
+  margin-inline: calc(0px - var(--settings-content-inline-padding));
+  border-inline: 0;
+  border-radius: 0;
 }
 
 .shell--settings:not(.shell--mobile-nav) .content--custodian {
@@ -4053,13 +4066,42 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
+.shell--settings .content:has(> .connection-action-block) {
+  padding-top: 0;
+}
+
+.shell--settings .content:has(> .connection-action-block) > openclaw-router-outlet {
+  display: block;
+  margin-top: 0;
+  padding-top: var(--settings-content-block-start-padding);
+}
+
 .connection-action-block {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--warn) 12%, transparent);
   border-radius: var(--radius-md);
-  background: var(--secondary);
-  color: var(--muted);
-  font-size: 13px;
+  background: color-mix(in srgb, var(--warn) 7%, var(--secondary));
+  color: color-mix(in srgb, var(--warn) 72%, var(--text));
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.35;
+}
+
+.connection-action-block__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.connection-action-block__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.connection-action-block__text {
+  min-width: 0;
 }
 
 .content--chat {

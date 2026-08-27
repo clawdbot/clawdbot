@@ -10,7 +10,10 @@ import {
   shouldDeferShellEnvFallback,
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
-import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-ids.js";
+// Import the metadata module directly: the gateway-startup-plugin-ids facade
+// also re-exports the startup loader and embedding providers, which config
+// reads must not drag into every CLI invocation.
+import { createConfigValidationMetadataPluginIdScope } from "../plugins/gateway-startup-plugin-metadata.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   rebasePluginMetadataSnapshotManifestRegistry,

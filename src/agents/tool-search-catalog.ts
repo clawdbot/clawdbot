@@ -334,9 +334,11 @@ export function clearToolSearchCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
 }): void {
   if (params.catalogRef) {
-    params.catalogRef.onDispose?.();
     params.catalogRef.current = undefined;
+    params.catalogRef.disposeObserver?.();
+    params.catalogRef.onDispose?.forEach((dispose) => dispose());
     delete params.catalogRef.onChange;
+    delete params.catalogRef.disposeObserver;
     delete params.catalogRef.onDispose;
   }
   if (!params.runId?.trim()) {

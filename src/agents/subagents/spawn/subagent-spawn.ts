@@ -58,7 +58,6 @@ import type {
   SpawnSubagentResult as BaseSpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
 import { isSpawnSubagentAdmissionCancelledError } from "./subagent-spawn-contract.js";
-import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
 import {
   buildSubagentExecutionSessionSpawnContext,
   withSubagentGatewayExecutionIdentity,
@@ -170,6 +169,7 @@ export async function spawnSubagentDirect(
       incognito,
       childSessionKey: resolvedChildSessionKey,
       childRuntimeSandboxed,
+      creationPolicy,
       targetAgentDir,
       modelPlan: plan,
       launchAuthorization,
@@ -187,7 +187,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
       incognito,
       requesterInternalKey,
-      requesterAgentId,
+      creationPolicy,
       completionOwnerSessionKey: ownership.completionRequesterSessionKey,
       spawnedWorkspaceDir,
       spawnedCwd,
@@ -707,14 +707,4 @@ export async function spawnSubagentDirect(
       removeQueuedSwarmRun(childRunId);
     }
   }
-}
-
-const testing = {
-  setDepsForTest(overrides?: Parameters<typeof setSubagentSpawnDepsForTest>[0]) {
-    setSubagentSpawnDepsForTest(overrides);
-  },
-};
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.subagentSpawnTestApi")] =
-    testing;
 }

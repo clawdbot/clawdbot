@@ -310,10 +310,13 @@ exec output, and patch summaries):
 - Sensitive-value redaction is always enabled.
 - `logging.redactPatterns`: list of regex strings that replaces the default set for log/transcript output. For Control UI tool payloads, custom patterns apply on top of the built-in defaults, so adding a pattern never weakens redaction of values already caught by the defaults.
 
-File logs and session transcripts stay JSONL, but matching secret values are
-masked before the line or message is written to disk. Redaction is best-effort:
+File logs use JSONL; active session transcripts live in the
+[per-agent SQLite database](/reference/database-schemas#database-layout). Matching
+secret values are masked before the line or message is persisted. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+Transcript redaction does not replace the live arguments used to execute tools.
 
 Model-visible tool-result text uses narrower assignment matching so source code
 remains intact. Registered secrets and explicit credential forms, including

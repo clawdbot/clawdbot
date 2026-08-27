@@ -3143,9 +3143,12 @@ button.chat-pr__diff {
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
-  /* Draft text and its surrounding labels share one semantic UI size. The
-     coarse-pointer floor in base.css still prevents iOS focus zoom. */
-  --chat-composer-editor-size: var(--control-ui-text-md);
+  /* The editor is a reading and writing surface, not a compact form field, so it
+     owns a 16px base instead of the shared control token, whose 14px base only
+     reaches 16px through an iOS zoom floor — text that size by accident does not
+     follow the operator's text scale until the scale passes 1.15, and it drops
+     the moment that floor moves. The max() keeps 16px as a hard floor. */
+  --chat-composer-editor-size: max(16px, calc(16px * var(--control-ui-text-scale)));
   /* One editor line. The single-line box centres a line of exactly this height,
      and the multiline editor never gets shorter than one of them. Derived, so a
      scaled-up editor keeps its leading instead of crowding its own descenders. */
