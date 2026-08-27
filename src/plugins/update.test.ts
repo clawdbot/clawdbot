@@ -217,7 +217,7 @@ function createNpmInstallConfig(params: {
   resolvedName?: string;
   resolvedSpec?: string;
   resolvedVersion?: string;
-}) {
+}): OpenClawConfig {
   return {
     plugins: {
       installs: {
