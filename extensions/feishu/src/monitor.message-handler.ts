@@ -281,8 +281,8 @@ export function createFeishuMessageReceiveHandler({
         if (!chatId || !senderId) {
           return null;
         }
-        const rootId = event.message.root_id?.trim();
-        const threadKey = rootId ? `thread:${rootId}` : "chat";
+        const threadId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+        const threadKey = threadId ? `thread:${threadId}` : "chat";
         return `feishu:${accountId}:${chatId}:${threadKey}:${senderId}`;
       },
       shouldDebounce: ({ event }) => {
