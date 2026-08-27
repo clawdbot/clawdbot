@@ -7,9 +7,15 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createManagedPluginArtifactConsentHandler } from "../plugins/capability-consent.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
-import { persistPluginInstall } from "../plugins/install-persistence.js";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+} from "../plugins/install-transaction.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
-import { installManagedPluginSource } from "../plugins/management-service.js";
+import {
+  installManagedPluginSource,
+  persistManagedSourceInstall,
+} from "../plugins/management-service.js";
 import { installPluginFromMarketplace } from "../plugins/marketplace.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
@@ -130,15 +136,17 @@ async function runPluginInstallCommandUnlocked(
         : {}),
       ...capabilityConsent,
     });
-    const result = await installPluginFromMarketplace({
-      ...safetyOverrides,
-      marketplace: preflight.marketplace,
-      mode: installMode,
-      plugin: raw,
-      extensionsDir: resolveDefaultPluginExtensionsDir(),
-      logger: createPluginInstallLogger(runtime),
-      onBeforePluginArtifactCommit: artifactConsent.onBeforePluginArtifactCommit,
-    });
+    const result = await installPluginFromMarketplace(
+      requestDeferredPluginInstall({
+        ...safetyOverrides,
+        marketplace: preflight.marketplace,
+        mode: installMode,
+        plugin: raw,
+        extensionsDir: resolveDefaultPluginExtensionsDir(),
+        logger: createPluginInstallLogger(runtime),
+        onBeforePluginArtifactCommit: artifactConsent.onBeforePluginArtifactCommit,
+      }),
+    );
     if (!result.ok) {
       if (!isClawHubBlockedCliFailure(result)) {
         runtime.error(result.error);
@@ -154,12 +162,16 @@ async function runPluginInstallCommandUnlocked(
       marketplaceSource: result.marketplaceSource,
       marketplacePlugin: result.marketplacePlugin,
     });
-    await persistPluginInstall({
+    await persistManagedSourceInstall({
       snapshot,
       pluginId: result.pluginId,
       install,
+      transaction: resolvePluginInstallTransaction(result),
       invalidateRuntimeCache,
       runtime,
+    }).catch((error: unknown) => {
+      runtime.error(formatErrorMessage(error));
+      return runtime.exit(1);
     });
     return;
   }

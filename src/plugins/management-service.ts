@@ -1277,7 +1277,7 @@ function throwInstallFailure(result: {
   });
 }
 
-async function persistManagedSourceInstall(params: {
+export async function persistManagedSourceInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: PluginInstallRecord;
