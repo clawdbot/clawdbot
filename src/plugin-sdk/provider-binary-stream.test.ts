@@ -172,12 +172,11 @@ describe("createBoundedProviderBinaryStream", () => {
         cleanup,
       };
       const bounded = createBoundedProviderBinaryStream(source, options);
-      const operations =
-        first === "cancel"
-          ? [bounded.stream.cancel(reason), bounded.release()]
-          : [bounded.release(), bounded.stream.cancel(reason)].toReversed();
+      const earlyCancel = first === "cancel" ? bounded.stream.cancel(reason) : undefined;
+      const pendingRelease = bounded.release();
+      const pendingCancel = earlyCancel ?? bounded.stream.cancel(reason);
       let settled = false;
-      const results = Promise.allSettled(operations).then((result) => {
+      const results = Promise.allSettled([pendingCancel, pendingRelease]).then((result) => {
         settled = true;
         return result;
       });
