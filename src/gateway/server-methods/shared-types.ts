@@ -12,7 +12,6 @@ import type {
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
@@ -225,7 +224,14 @@ type GatewayKernelContext = {
   loadPublishedGatewayReplyDispatchRuntime?: (params: {
     agentId: string;
     abortSignal?: AbortSignal;
-  }) => Promise<PreparedReplyDispatchRuntime | undefined>;
+  }) => Promise<
+    | {
+        config: OpenClawConfig;
+        /** Opaque host-owned generation; decoded only at the command owner boundary. */
+        pluginGeneration: object;
+      }
+    | undefined
+  >;
   readPreparedGatewayModelCatalog?: (params?: {
     agentId?: string;
     agentDir?: string;

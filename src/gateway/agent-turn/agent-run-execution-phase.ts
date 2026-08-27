@@ -54,6 +54,7 @@ import type { PreparedAgentRunDispatch } from "./agent-run-admission-phase.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
 import {
   resolveAbortedAgentStopReason,
+  asPreparedAgentCommandRuntimeContext,
   dispatchAgentRunFromGateway,
 } from "./agent-run-dispatch.js";
 import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
@@ -325,10 +326,7 @@ export function startAgentRunExecution(params: {
       dispatchAdmittedAgentRun(
         withAgentRunDispatchExecutionIdentity(
           {
-            commandRuntimeContext: {
-              config: prepared.replyDispatchRuntime.config,
-              pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
-            },
+            commandRuntimeContext: asPreparedAgentCommandRuntimeContext(replyDispatchRuntime),
             cronCreatorAuthority: prepared.cronCreatorAuthority,
             ingressOpts: {
               message,
