@@ -286,6 +286,27 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     },
   );
 
+  it.each([
+    ["a blank tool allowlist entry", [" "]],
+    ["a noncanonical shell pseudo-tool", ["shell"]],
+    ["the patch-only tool", ["apply_patch"]],
+  ])(
+    "does not treat %s as shell access",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async (_label, toolsAllow) => {
+      const params = makeParamsWithToolsAllow(toolsAllow);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("error");
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    },
+  );
+
   it(
     "keeps a structured command prompt with explicit shell access runnable",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
@@ -302,6 +323,43 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       expect(result.status).toBe("ok");
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["exec", "read"]);
+    },
+  );
+
+  it(
+    "keeps a structured command prompt with process access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["process"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["process"]);
+    },
+  );
+
+  it(
+    "keeps a structured command prompt with grouped shell access runnable",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      const params = makeParamsWithToolsAllow(["group:runtime"]);
+      (params.job as { payload: { message: string } }).payload.message = [
+        "Command to run:",
+        "- command: python3 scripts/check_mail.py",
+        "- workdir: /srv/openclaw",
+      ].join("\n");
+
+      const result = await runCronIsolatedAgentTurn(params);
+
+      expect(result.status).toBe("ok");
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+      expect(requireEmbeddedAgentCall().toolsAllow).toEqual(["group:runtime"]);
     },
   );
 

@@ -1,7 +1,5 @@
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -15,7 +13,6 @@ export type CronAgentTurnShellPromptKind = "commandPromptWithoutShellAccess" | "
 
 const COMMAND_MARKER_RE = /\bCommand to run\s*:/iu;
 const COMMAND_FIELD_RE = /^\s*-\s*(command|workdir|timeout)\s*:\s*(.*?)\s*$/iu;
-const SHELL_TOOL_NAMES = new Set(["bash", "command", "exec", "process", "shell", "sh"]);
 const SHELL_COMMAND_MESSAGE_RE =
   /\b(?:bash|command|execute|exec|process|run|shell)\b[\s\S]{0,240}\b(?:python3?|node|bun|pnpm|npm|npx|yarn|sh|bash|sudo|cd|\.\/|\/[A-Za-z0-9._/-]+)\b/iu;
 
@@ -66,10 +63,13 @@ export function hasCronShellToolAccess(toolsAllow: unknown): boolean {
   if (!Array.isArray(toolsAllow)) {
     return false;
   }
-  return toolsAllow.some((tool) => {
-    const normalized = normalizeOptionalLowercaseString(tool);
-    return normalized === "*" || (normalized ? SHELL_TOOL_NAMES.has(normalized) : false);
-  });
+  if (!toolsAllow.every((tool): tool is string => typeof tool === "string")) {
+    return false;
+  }
+  if (toolsAllow.some((tool) => tool.trim().length === 0)) {
+    return false;
+  }
+  return isRuntimeToolAllowed("exec", toolsAllow) || isRuntimeToolAllowed("process", toolsAllow);
 }
 
 /** Classifies only command-like agent turns that need cron operator attention. */

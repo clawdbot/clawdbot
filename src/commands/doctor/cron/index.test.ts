@@ -1825,7 +1825,7 @@ describe("maybeRepairLegacyCronStore", () => {
         payload: {
           kind: "agentTurn",
           message: "Execute ./scripts/check_mail.sh and report changed mailbox counts.",
-          toolsAllow: ["shell"],
+          toolsAllow: ["process"],
         },
         delivery: { mode: "announce" },
       }),
