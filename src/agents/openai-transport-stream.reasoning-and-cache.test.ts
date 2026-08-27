@@ -342,4 +342,20 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("instructions");
     expect(params.input?.[0]?.role).toBe("system");
   });
+
+  it("embeds the system prompt in input by default for Azure OpenAI, unlike native OpenAI", () => {
+    const params = buildOpenAIResponsesParams(
+      makeResponsesModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        provider: "azure-openai",
+        baseUrl: "https://example.openai.azure.com/openai/responses",
+      }),
+      emptyContext(),
+      undefined,
+    ) as { instructions?: string; input?: Array<{ role?: string }> };
+
+    expect(params).not.toHaveProperty("instructions");
+    expect(params.input?.[0]?.role).toBe("system");
+  });
 });

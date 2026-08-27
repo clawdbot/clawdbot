@@ -31,7 +31,11 @@ describe("openai transport stream", () => {
 
   it("adds explicit message item types for Responses user input items, carrying the system prompt via instructions", () => {
     const params = buildOpenAIResponsesParams(
-      createAzureResponsesModel(),
+      // Azure is not verified for instructions by default (unlike native
+      // OpenAI/xAI); this test is about message-item-type structure once
+      // instructions is in play, so opt in explicitly. `compat` types to
+      // `never` for this API variant (no recognized branch in Model<TApi>).
+      { ...createAzureResponsesModel(), compat: { supportsInstructions: true } } as never,
       {
         systemPrompt: "system",
         messages: [{ role: "user", content: "hello" }],
@@ -166,6 +170,10 @@ describe("openai transport stream", () => {
         name: "GPT-5.4",
         provider: "microsoft-foundry",
         baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
+        // Azure is not verified for instructions by default; this test is
+        // about message serialization structure once instructions is in
+        // play, so opt in explicitly.
+        compat: { supportsInstructions: true },
       }),
       {
         systemPrompt: "system",

@@ -255,8 +255,18 @@ function resolveOpenAIResponsesPayloadCapabilities(
   // opt-out carve-out below, discovered by testing the real API). Every
   // other named class defaults the same as an explicit custom/local proxy;
   // `compat.supportsInstructions: true` opts a confirmed-working route in.
+  // Deliberately narrower than usesKnownNativeOpenAIRoute (used above for
+  // reasoning/service-tier/input-status policy): that boolean also covers
+  // azure-openai, which has never been verified for `instructions`
+  // specifically -- Azure mirrors OpenAI's API closely, but "closely" isn't
+  // a contract, and this file's whole point is not assuming one without
+  // evidence.
+  const usesVerifiedNativeOpenAIRoute =
+    endpointClass === "default"
+      ? provider === "openai"
+      : endpointClass === "openai-public" || endpointClass === "openai";
   const usesVerifiedInstructionsEndpoint =
-    usesKnownNativeOpenAIRoute || endpointClass === "xai-native";
+    usesVerifiedNativeOpenAIRoute || endpointClass === "xai-native";
   const promptCacheKeySupport = readCompatPayloadBoolean(model.compat, "supportsPromptCacheKey");
   const shouldStripResponsesPromptCache =
     promptCacheKeySupport === true
