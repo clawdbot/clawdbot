@@ -1,8 +1,5 @@
 /** Row builders used by `openclaw models list` source orchestration. */
-import {
-  normalizeProviderId,
-  normalizeProviderIdForAuth,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
