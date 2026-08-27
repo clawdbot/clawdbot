@@ -31,6 +31,7 @@ import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
 import {
@@ -518,11 +519,22 @@ export function createReadToolDefinition(
             let note: string | undefined;
             let buffer: Buffer;
             try {
-              ({ absolutePath, note } = await resolveReadToolPath(ops, path, cwd));
-              if (aborted) {
+              // Share write/edit ordering through byte capture only. Decode the
+              // immutable snapshot below after releasing the path queue.
+              const snapshot = await withFileMutationQueue(resolveToCwd(path, cwd), async () => {
+                const resolved = await resolveReadToolPath(ops, path, cwd);
+                if (aborted) {
+                  return undefined;
+                }
+                return {
+                  ...resolved,
+                  buffer: await ops.readFile(resolved.absolutePath),
+                };
+              });
+              if (!snapshot) {
                 return;
               }
-              buffer = await ops.readFile(absolutePath);
+              ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {
               if (aborted) {
                 return;

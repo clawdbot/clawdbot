@@ -8,8 +8,10 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
+import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
+import { createWriteToolDefinition } from "./write.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
   vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
@@ -780,5 +782,44 @@ describe("read tool", () => {
 
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
     expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
+  });
+
+  it("waits for a queued write before reading the same new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-write-order-");
+    const filePath = path.join(tempDir, "race-target.txt");
+    const blockerStarted = Promise.withResolvers<void>();
+    const releaseBlocker = Promise.withResolvers<void>();
+    const blocker = withFileMutationQueue(filePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+    const writeResult = createWriteToolDefinition(tempDir).execute(
+      "write",
+      { path: filePath, content: "first snapshot" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const readResult = createReadToolDefinition(tempDir).execute(
+      "read",
+      { path: filePath },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const readBeforeWrite = await Promise.race([
+      readResult.then(
+        () => "settled" as const,
+        () => "settled" as const,
+      ),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 25)),
+    ]);
+
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readBeforeWrite).toBe("pending");
+    expect(textContent(result)).toBe("first snapshot");
   });
 });
