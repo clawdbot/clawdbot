@@ -279,8 +279,7 @@ export async function applySessionEntryLifecycleMutation(params: {
   let materializedRemovalPlans: MaterializedSessionStateDeletePlan[] = [];
   let removalArchiveMaterializationFailed = false;
   const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    projected = await projectSessionEntryLifecycleMutation(database, {
+    projected = await projectSessionEntryLifecycleMutation(toDatabaseOptions(resolved), {
       ...(params.allowCanonicalRepair ? { allowCanonicalRepair: true } : {}),
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       removals,
