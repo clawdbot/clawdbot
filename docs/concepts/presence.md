@@ -38,30 +38,33 @@ Presence entries are structured objects with fields like:
 - `lastActivityAt`: latest observed accepted interaction during that online period; absent until activity is observed
 - `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
 
-### Watched session references
+## Who can see presence
 
-Hello snapshots, `system-presence`, and `presence` events include only watched
-session references that the recipient can see under the current session-list
-visibility rules. Drafts, incognito sessions, and operator role restrictions
-follow those same rules. Missing or deleted sessions are omitted, including for
-admins. Keys retain their agent scope, including agent-qualified `global` and
-`unknown` references.
+The presence roster is shared with operators who have `operator.read` access;
+`operator.write` and `operator.admin` also grant read access. Readers can see other
+people's online and activity timing and reported `timeZone`, including people who
+are not watching a session. Node connections, pairing-only operators, and other
+connections without read access receive an empty presence roster in the connect
+snapshot and no `presence` events. The `system-presence` RPC requires the same
+operator read access.
 
-Session references require an operator connection with read access
-(`operator.read`, `operator.write`, or `operator.admin`). Nodes, pairing-only
-clients, and non-admin clients awaiting authenticated profile verification still
-receive the non-session presence roster in hello snapshots and events, without
-watched references. An established admin grant does not depend on profile
-verification. `system-presence` itself requires operator read access.
+Watched-session references are filtered separately for each recipient using the
+same visibility rules as `sessions.list`. Hidden or missing sessions are omitted
+entirely, without counts or placeholders. This filtering applies to connect
+snapshots, `system-presence` responses, and presence events; the person being
+viewed does not grant the recipient access to their sessions.
 
-Filtering preserves the connection and person metadata and the presence timestamp.
-When no references are visible, `watchedSessions` is omitted, just as when the
-client declares no watches; there are no hidden-session counts or markers.
+Drafts, incognito sessions, and operator role restrictions follow those list
+rules. Missing or deleted references are omitted even for admins. Keys retain
+their agent scope, including agent-qualified `global` and `unknown` references.
+Non-admin readers awaiting authenticated profile verification receive person
+metadata but no watched references; established admin grants retain admin list
+visibility. When no references are visible, `watchedSessions` is omitted.
 Message subscriptions alone do not declare viewer presence.
 
-These are coordination features within a shared agent, not isolation between
-mutually untrusted users. Everyone operating an agent shares that agent's
-capabilities. See [Multi-user trust boundary](/concepts/multi-user#trust-boundary).
+This policy does not change which IP addresses are shared between readers and
+does not isolate all Gateway metadata. Use separate Gateway trust boundaries
+when readers must not see each other's presence or other shared metadata.
 
 ## Producers (where presence comes from)
 
