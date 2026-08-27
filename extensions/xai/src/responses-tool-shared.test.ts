@@ -1,7 +1,6 @@
 // Xai tests cover responses tool shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  extractXaiWebSearchContent,
   requireXaiResponseTextAndCitations,
   requireXaiResponseTextCitationsAndInline,
 } from "./responses-tool-shared.js";
@@ -77,30 +76,33 @@ describe("xai responses tool helpers", () => {
 
   it("ignores malformed output, content, and annotation entries", () => {
     expect(
-      extractXaiWebSearchContent({
-        output: [
-          null,
-          {
-            type: "message",
-            content: [
-              null,
-              {
-                type: "output_text",
-                text: "Found it",
-                annotations: [
-                  null,
-                  { type: "url_citation", url: "https://example.com/a" },
-                  { type: "url_citation", url: "https://example.com/a" },
-                  { type: "url_citation" },
-                ],
-              },
-            ],
-          },
-        ],
-      }),
+      requireXaiResponseTextAndCitations(
+        {
+          output: [
+            null,
+            {
+              type: "message",
+              content: [
+                null,
+                {
+                  type: "output_text",
+                  text: "Found it",
+                  annotations: [
+                    null,
+                    { type: "url_citation", url: "https://example.com/a" },
+                    { type: "url_citation", url: "https://example.com/a" },
+                    { type: "url_citation" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        "xAI tool failed",
+      ),
     ).toEqual({
-      text: "Found it",
-      annotationCitations: ["https://example.com/a"],
+      content: "Found it",
+      citations: ["https://example.com/a"],
     });
   });
 
