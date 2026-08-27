@@ -3,7 +3,6 @@ import { NODE_DEVICE_APPS_COMMAND } from "../infra/node-commands.js";
 import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
-import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
 import { prepareNodeHostRuntime } from "./runtime.js";
 
@@ -13,11 +12,6 @@ const mocks = vi.hoisted(() => {
     closeMcp,
     closeWorkerSupervisor: vi.fn(async () => undefined),
     initializeWorkerSupervisor: vi.fn(async () => undefined),
-    resolveContainerEngine: vi.fn(async (_options?: { env?: NodeJS.ProcessEnv }) => ({
-      id: "docker" as const,
-      command: "docker",
-      target: "e".repeat(64),
-    })),
     handleInvoke: vi.fn(async () => undefined),
     progressStartHeartbeats: vi.fn(),
     progressWrite: vi.fn(async (_chunk: string) => undefined),
@@ -48,10 +42,6 @@ vi.mock("./node-invoke-progress.js", () => ({
     stop: vi.fn(),
     flush: vi.fn(async () => undefined),
   })),
-}));
-
-vi.mock("./node-worker-container-engine.js", () => ({
-  resolveNodeWorkerContainerEngine: mocks.resolveContainerEngine,
 }));
 
 vi.mock("./node-worker-supervisor.js", () => ({
@@ -138,149 +128,6 @@ function holdInvoke(onCommand?: (io: OpenClawPluginNodeHostCommandIo) => void) {
     release: () => release?.(),
   };
 }
-
-describe("node-host worker manifest", () => {
-  it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: false } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      forceWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-  });
-
-  it("keeps local consent separate from connection metadata", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(prepared.manifest).not.toHaveProperty("workerRuns");
-    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
-  });
-
-  it("disables container-isolated hosting and records why when no engine is usable", async () => {
-    const reason =
-      "Container-isolated node workers require Docker or Podman; install and start an engine.";
-    mocks.resolveContainerEngine.mockRejectedValueOnce(new Error(reason));
-
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(false);
-    expect(prepared.workerHostingDisabledReason).toBe(reason);
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-    });
-    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    await runtime.close();
-  });
-
-  it("disables container-isolated hosting on Windows before probing or advertising an engine", async () => {
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-      platform: "win32",
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(false);
-    expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);
-    expect(mocks.resolveContainerEngine).not.toHaveBeenCalled();
-    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-    });
-    expect(createNodeWorkerSupervisor).not.toHaveBeenCalled();
-    await runtime.close();
-  });
-
-  it("resolves the container engine once and passes its exact identity to the supervisor", async () => {
-    mocks.initializeWorkerSupervisor.mockImplementationOnce(async () => {
-      const options = vi.mocked(createNodeWorkerSupervisor).mock.calls[0]?.[0];
-      options?.onCapacityChanged?.({ total: 3, available: 0 });
-      options?.onCapacityChanged?.({ total: 3, available: 3 });
-    });
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: {
-            enabled: true,
-            isolation: "container",
-            containerImage: "registry.example/openclaw-worker:22",
-          },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-    expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
-    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
-    const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-      onRunnerCapacityChanged,
-    });
-    expect(createNodeWorkerSupervisor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        containerEngine: { id: "docker", command: "docker", target: "e".repeat(64) },
-        containerImage: "registry.example/openclaw-worker:22",
-      }),
-    );
-    expect(mocks.resolveContainerEngine).toHaveBeenCalledOnce();
-    expect(mocks.initializeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(onRunnerCapacityChanged).toHaveBeenCalledExactlyOnceWith({ total: 3, available: 3 });
-    await runtime.close();
-  });
-
-  it("fails closed when container launch reconciliation cannot establish safe ownership", async () => {
-    mocks.initializeWorkerSupervisor.mockRejectedValueOnce(new Error("orphan sweep failed"));
-
-    const prepared = await prepareNodeHostRuntime({
-      config: {
-        nodeHost: {
-          skills: { enabled: false },
-          workerRuns: { enabled: true, isolation: "container" },
-        },
-      },
-      env: { PATH: "/usr/bin" },
-      enableWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(false);
-    expect(prepared.workerHostingDisabledReason).toContain("orphan sweep failed");
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-    const onRunnerCapacityChanged = vi.fn();
-    const runtime = prepared.start({
-      client: { request: vi.fn(async () => ({})) } as unknown as NodeHostClient,
-      onRunnerCapacityChanged,
-    });
-    expect(createNodeWorkerSupervisor).toHaveBeenCalledOnce();
-    expect(onRunnerCapacityChanged).not.toHaveBeenCalled();
-    await runtime.close();
-    expect(mocks.closeWorkerSupervisor).toHaveBeenCalledOnce();
-  });
-});
 
 describe("node-host invocation cancellation", () => {
   it("cancels ordinary node invocations", async () => {

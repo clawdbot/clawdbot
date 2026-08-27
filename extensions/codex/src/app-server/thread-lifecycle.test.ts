@@ -7,7 +7,12 @@ import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
+import {
+  ensureCodexAppServerClientRuntime,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
@@ -538,7 +543,12 @@ describe("Codex delegation capability", () => {
       "tools.experimental_request_user_input.enabled": true,
       "tools.update_plan.enabled": true,
       mcp_servers: {
-        "local-example": { command: "example-mcp" },
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
       },
       web_search: "live",
     };
@@ -580,7 +590,15 @@ describe("Codex delegation capability", () => {
         expect(request.config?.[disabledFeature]).toBe(false);
       }
       expect(request.config?.web_search).toBe("disabled");
-      expect(request.config?.mcp_servers).toEqual({ "local-example": { enabled: false } });
+      expect(request.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+          enabled: false,
+        },
+      });
       expect(request.developerInstructions).toContain("`message(action=send)`");
       expect(request.developerInstructions).not.toContain("`spawn_agent`");
       expect(request.developerInstructions).not.toContain("`tool_search`");
@@ -608,7 +626,14 @@ describe("Codex delegation capability", () => {
       expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
       expect(normal.config?.["features.plugins"]).toBe(true);
       expect(normal.config?.["tools.update_plan.enabled"]).toBe(false);
-      expect(normal.config?.mcp_servers).toEqual({ "local-example": { command: "example-mcp" } });
+      expect(normal.config?.mcp_servers).toEqual({
+        "local-example": {
+          command: "example-mcp",
+          args: ["--stdio"],
+          cwd: "/repo/mcp",
+          env: { MCP_MODE: "restricted" },
+        },
+      });
       expect(normal.developerInstructions).toContain("`spawn_agent`");
     }
   });
@@ -931,7 +956,8 @@ function threadStartResult(threadId = "thread-1") {
       status: { type: "idle" },
       path: null,
       cwd: tempDir,
-      cliVersion: "0.148.0",
+      projectId: null,
+      cliVersion: "0.149.0",
       source: "unknown",
       agentNickname: null,
       agentRole: null,
@@ -1499,6 +1525,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1646,6 +1673,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.multi_agent": false,
       "features.standalone_web_search": false,
       web_search: "cached",
@@ -1776,6 +1804,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1800,6 +1829,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1860,6 +1890,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1940,6 +1971,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -1975,6 +2007,7 @@ describe("Codex app-server native code mode config", () => {
       "features.goals": false,
       "tools.update_plan.enabled": false,
       "features.apply_patch_streaming_events": true,
+      suppress_unstable_features_warning: true,
       "features.standalone_web_search": false,
       web_search: "cached",
     });
@@ -2179,6 +2212,7 @@ describe("Codex app-server turn params", () => {
         "features.goals": false,
         "tools.update_plan.enabled": false,
         "features.apply_patch_streaming_events": true,
+        suppress_unstable_features_warning: true,
         "features.standalone_web_search": false,
         web_search: "cached",
       },
@@ -2210,7 +2244,7 @@ describe("Codex app-server turn params", () => {
     });
   });
 
-  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+  it("keeps heartbeat Codex turns in normal Default collaboration mode", () => {
     const params = createAttemptParams({ provider: "codex" });
     params.modelId = "gpt-5.4-codex";
     params.thinkLevel = "medium";
@@ -2220,27 +2254,15 @@ describe("Codex app-server turn params", () => {
     expect(heartbeatCollaborationMode.mode).toBe("default");
     expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
     expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
-    );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "Heartbeat = useful proactive progress",
-    );
-    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "If `heartbeat_respond` is not already available and `tool_search` is available",
-    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toBeNull();
 
-    params.trigger = "user";
-    expect(
-      buildTurnCollaborationMode(params, {
-        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      }).settings.developer_instructions,
-    ).toContain("Turn-only workspace instructions.");
-    expect(
-      buildTurnCollaborationMode(params, {
-        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
-      }).settings.developer_instructions,
-    ).toContain("# Collaboration Mode: Default");
+    const workspaceInstructions = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+    }).settings.developer_instructions;
+    expect(workspaceInstructions).toContain("Turn-only workspace instructions.");
+    expect(workspaceInstructions).toContain("# Collaboration Mode: Default");
+    expect(workspaceInstructions).not.toContain("This is an OpenClaw heartbeat turn");
+    expect(workspaceInstructions).not.toContain("### Heartbeats");
   });
 
   it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
@@ -3347,38 +3369,62 @@ describe("Codex app-server adopted thread lifecycle", () => {
     });
   });
 
-  it("rejects an adopted thread that is active in another runner before reserving it", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createThreadLifecycleParams(sessionFile, workspaceDir);
-    const { threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
-    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/read") {
-        return {
-          thread: {
-            ...threadStartResult(threadId).thread,
-            status: { type: "active" },
-          },
-        };
+  it.each([
+    { status: "active", canAcceptDirectInput: true, error: "active in another runner" },
+    { status: "idle", canAcceptDirectInput: false, error: "controlled by its parent" },
+  ])(
+    "preserves retained adopted ownership when native preflight rejects: $status",
+    async ({ status, canAcceptDirectInput, error }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createThreadLifecycleParams(sessionFile, workspaceDir);
+      const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
+      const harness = createFakeCodexAppServerClient(async (method: string) => {
+        if (method === "thread/read") {
+          return {
+            thread: {
+              ...threadStartResult(threadId).thread,
+              status: { type: status },
+              canAcceptDirectInput,
+            },
+          };
+        }
+        if (method === "thread/unsubscribe") {
+          return { status: "unsubscribed" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      ensureCodexAppServerClientRuntime(harness.client, { agentDir: workspaceDir });
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "patch",
+        threadId,
+        patch: { clientId: harness.client.getInstanceId() },
+      });
+      const release = vi.fn();
+      await retainCodexAppServerLiveThread(harness.client, threadId, release);
+      const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
+      const before = await testCodexAppServerBindingStore.read(identity);
+      try {
+        await expect(
+          startOrResumeThread({
+            client: harness.client,
+            reserveResumeThread,
+            params,
+            cwd: workspaceDir,
+            dynamicTools: [],
+            appServer: createThreadLifecycleAppServerOptions(),
+          }),
+        ).rejects.toThrow(error);
+
+        expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
+        expect(release).not.toHaveBeenCalled();
+        expect(await testCodexAppServerBindingStore.read(identity)).toEqual(before);
+        expect(reserveResumeThread).not.toHaveBeenCalled();
+      } finally {
+        harness.close();
       }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        reserveResumeThread,
-        params,
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createThreadLifecycleAppServerOptions(),
-      }),
-    ).rejects.toThrow("active in another runner");
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
-    expect(reserveResumeThread).not.toHaveBeenCalled();
-  });
+    },
+  );
 });
 
 describe("Codex app-server supervised branch lifecycle", () => {
@@ -3670,7 +3716,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         project_doc_max_bytes: 0,
         mcp_servers: {
           inherited: { enabled: false },
-          "request-only": { enabled: false },
+          "request-only": { command: "request-mcp", enabled: false },
         },
       });
     }

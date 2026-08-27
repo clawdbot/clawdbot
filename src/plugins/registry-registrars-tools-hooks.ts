@@ -17,6 +17,10 @@ import {
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import {
+  resolveConversationAccessAllowed,
+  resolvePromptInjectionAllowed,
+} from "./hook-policy-decisions.js";
+import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
   type PluginTypedHookPolicy,
@@ -394,7 +398,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(hookName)) {
+    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
@@ -403,9 +407,11 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (isConversationHookName(hookName)) {
-      const explicitConversationAccess = policy?.allowConversationAccess;
-      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+    if (
+      isConversationHookName(hookName) &&
+      !resolveConversationAccessAllowed(record.origin, policy)
+    ) {
+      if (record.origin !== "bundled") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
@@ -416,15 +422,13 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
         return;
       }
-      if (record.origin === "bundled" && explicitConversationAccess === false) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
-        });
-        return;
-      }
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+      });
+      return;
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     const eligibleTriggers =

@@ -354,6 +354,59 @@ describe("resolveSandboxedMediaSource", () => {
     },
   );
 
+  it.each([
+    {
+      name: "OpenShell absolute path",
+      containerWorkdir: "/sandbox",
+      media: "/sandbox/media/pic.png",
+    },
+    {
+      name: "OpenShell file URL",
+      containerWorkdir: "/sandbox",
+      media: "file:///sandbox/media/pic.png",
+    },
+    {
+      name: "custom backend workdir with trailing slash",
+      containerWorkdir: "/remote/agent/",
+      media: "/remote/agent/media/pic.png",
+    },
+    {
+      name: "custom backend file URL",
+      containerWorkdir: "/remote/agent",
+      media: "FILE:/remote/agent/media/pic.png",
+    },
+  ])(
+    "maps $name through the authoritative backend workdir",
+    async ({ containerWorkdir, media }) => {
+      await withSandboxRoot(async (sandboxDir) => {
+        await expect(
+          resolveSandboxedMediaSource({
+            media,
+            sandboxRoot: sandboxDir,
+            containerWorkdir,
+          }),
+        ).resolves.toBe(path.join(sandboxDir, "media", "pic.png"));
+      });
+    },
+  );
+
+  it.each([
+    "/sandbox-other/secret.png",
+    "/workspace/secret.png",
+    "/sandbox/../secret.png",
+    "file:///sandbox-other/secret.png",
+  ])("rejects %s outside the authoritative backend workdir", async (media) => {
+    await withSandboxRoot(async (sandboxDir) => {
+      await expect(
+        resolveSandboxedMediaSource({
+          media,
+          sandboxRoot: sandboxDir,
+          containerWorkdir: "/sandbox",
+        }),
+      ).rejects.toThrow(/sandbox/i);
+    });
+  });
+
   it("preserves remote mxc:// media sources", async () => {
     await withSandboxRoot(async (sandboxDir) => {
       const result = await resolveSandboxedMediaSource({

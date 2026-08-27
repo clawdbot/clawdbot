@@ -284,11 +284,6 @@ describeLive("gateway live (cli backend)", () => {
 
       clearRuntimeConfigSnapshot();
       applyCliBackendLiveEnv(preservedEnv);
-      if (CLI_CACHE_PROBE) {
-        // Cache proof crosses the production prepared-runtime and MCP dispatch boundary.
-        // Minimal Gateway mode intentionally omits that publication and cannot prove this path.
-        setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
-      }
 
       const token = `test-${randomUUID()}`;
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
@@ -750,7 +745,9 @@ describeLive("gateway live (cli backend)", () => {
               sessionId?: string;
             }>("chat.history", { sessionKey });
             const cliSessionId = resolveImportedClaudeCliSessionId(nativeHistory.messages ?? []);
-            expect(JSON.stringify(nativeHistory.messages ?? [])).toContain(memoryToken);
+            // Hook-only runtime context belongs to the provider session, not the operator-visible
+            // transcript. The resumed reply below proves that the live provider retained it.
+            expect(JSON.stringify(nativeHistory.messages ?? [])).not.toContain(memoryToken);
             expect(cliSessionId).toBeTruthy();
             const continuitySessionId = nativeHistory.sessionId;
             expect(continuitySessionId).toBeTruthy();

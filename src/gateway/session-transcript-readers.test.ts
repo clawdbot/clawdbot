@@ -741,18 +741,24 @@ describe("session transcript reader facade", () => {
     }
     const prepareSpy = vi.spyOn(DatabaseSync.prototype, "prepare");
     try {
-      expect(sessionAccessor.readSessionTranscriptTitleProbeBatch(scopes)).toHaveLength(30);
-      const titleSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
-        sql.toLowerCase().includes("pragma user_version"),
-      );
-      expect(titleSchemaReads).toHaveLength(1);
+      for (const readBatch of [
+        sessionAccessor.readSessionTranscriptTitleProbeBatch,
+        sessionAccessor.readSessionTranscriptWatermarkBatch,
+      ]) {
+        prepareSpy.mockClear();
+        expect(readBatch(scopes.slice(0, 1))).toHaveLength(1);
+        const singleSessionSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
+          sql.toLowerCase().includes("pragma user_version"),
+        ).length;
 
-      prepareSpy.mockClear();
-      expect(sessionAccessor.readSessionTranscriptWatermarkBatch(scopes)).toHaveLength(30);
-      const watermarkSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
-        sql.toLowerCase().includes("pragma user_version"),
-      );
-      expect(watermarkSchemaReads).toHaveLength(1);
+        prepareSpy.mockClear();
+        expect(readBatch(scopes)).toHaveLength(scopes.length);
+        const batchSchemaReads = prepareSpy.mock.calls.filter(([sql]) =>
+          sql.toLowerCase().includes("pragma user_version"),
+        ).length;
+        expect(batchSchemaReads).toBe(singleSessionSchemaReads);
+        expect(batchSchemaReads).toBeGreaterThan(0);
+      }
     } finally {
       prepareSpy.mockRestore();
     }

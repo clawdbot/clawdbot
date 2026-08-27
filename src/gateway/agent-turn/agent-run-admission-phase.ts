@@ -306,10 +306,15 @@ export async function prepareAgentRunDispatch(params: {
       claimAgentRunContext(
         params.runId,
         params.suppressVisibleSessionEffects
-          ? { isControlUiVisible: false, lifecycleGeneration: params.lifecycleGeneration }
+          ? {
+              isControlUiVisible: false,
+              lifecycleGeneration: params.lifecycleGeneration,
+              mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
+            }
           : {
               sessionKey: params.resolvedSessionKey,
               lifecycleGeneration: params.lifecycleGeneration,
+              mainSessionRestartRecovery: params.isRestartRecoveryResumeRun ? true : undefined,
             },
       );
     }

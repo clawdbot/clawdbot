@@ -250,7 +250,7 @@ export const zh_TW = {
       directAccessTitle: "直接遠端存取",
       enterUrlManually: "手動輸入 URL",
       foundGateways: "找到 {count} 個 Gateway",
-      fingerprintMissing: "未公布（連線不會固定指紋）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "這個 Gateway 密碼存在哪裡？",
       gatewayTokenStoredMessage: "這個 Gateway 權杖存在哪裡？",
       insecureRemoteUrl:
@@ -1084,7 +1084,9 @@ export const zh_TW = {
       dashboardWhenReady: "準備好後執行：{command}",
       daemonRuntime: "Gateway 服務執行環境",
       daemonRuntimeNode: "Node（建議）",
-      daemonRuntimeNodeHint: "OpenClaw 狀態使用 node:sqlite，因此必須使用 Node；Bun 無法執行閘道。",
+      daemonRuntimeNodeHint: "託管服務的主要與建議執行環境。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更新版本，並使用符合 WAL 重設安全要求的 node:sqlite。",
       editBootstrap: "之後可編輯 BOOTSTRAP.md 來修改 agent 的自我介紹方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次終端機聊天會傳送："醒醒，我的朋友！"',
@@ -1102,8 +1104,6 @@ export const zh_TW = {
       gatewayServiceRestarted: "Gateway 服務已重新啟動。",
       gatewayServiceRestarting: "正在重新啟動 Gateway 服務...",
       gatewayServiceRestartScheduled: "Gateway 服務重新啟動已排程。",
-      gatewayServiceUninstalled: "Gateway 服務已解除安裝。",
-      gatewayServiceUninstalling: "正在解除安裝 Gateway 服務...",
       gatewayTokenGenerate: "產生權杖：{command}",
       gatewayTokenShared: "Gateway 權杖：Gateway 和 Control UI 的共享認證。",
       gatewayTokenStored:

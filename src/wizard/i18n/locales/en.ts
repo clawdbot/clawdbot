@@ -252,7 +252,7 @@ export const en = {
       directAccessTitle: "Direct remote",
       enterUrlManually: "Enter URL manually",
       foundGateways: "Found {count} gateway(s)",
-      fingerprintMissing: "not advertised (connection will not be pinned)",
+      fingerprintMissing: "not advertised",
       gatewayPasswordStoredMessage: "Where is this gateway password stored?",
       gatewayTokenStoredMessage: "Where is this gateway token stored?",
       insecureRemoteUrl:
@@ -1120,8 +1120,9 @@ export const en = {
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
       daemonRuntimeNode: "Node (recommended)",
-      daemonRuntimeNodeHint:
-        "Required because OpenClaw state uses node:sqlite; Bun cannot run the Gateway.",
+      daemonRuntimeNodeHint: "Primary and recommended runtime for managed services.",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "Requires Bun 1.4 or newer with WAL-reset-safe node:sqlite.",
       editBootstrap: "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
       bootstrapHatchMessage: "Wake up, my friend!",
       firstTerminalChat: 'The first Terminal chat run will send: "Wake up, my friend!"',
@@ -1139,8 +1140,6 @@ export const en = {
       gatewayServiceRestarted: "Gateway service restarted.",
       gatewayServiceRestarting: "Restarting Gateway service...",
       gatewayServiceRestartScheduled: "Gateway service restart scheduled.",
-      gatewayServiceUninstalled: "Gateway service uninstalled.",
-      gatewayServiceUninstalling: "Uninstalling Gateway service...",
       gatewayTokenGenerate: "Generate token: {command}",
       gatewayTokenShared: "Gateway token: shared auth for the Gateway + Control UI.",
       gatewayTokenStored:

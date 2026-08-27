@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import YAML from "yaml";
 import type { CommandOptions } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -162,6 +161,73 @@ describe("managed npm root", () => {
     );
   });
 
+  it.each([
+    { installedState: "missing package manifest", expectedMissing: true },
+    { installedState: "invalid package manifest", expectedMissing: true },
+    { installedState: "missing native executable", expectedMissing: true },
+    {
+      installedState: "non-executable native executable",
+      expectedMissing: process.platform !== "win32",
+    },
+    { installedState: "installed native executable", expectedMissing: false },
+  ])(
+    "validates current-platform package contents: $installedState",
+    async ({ installedState, expectedMissing }) => {
+      const npmRoot = await makeTempRoot();
+      const platformPackage = "@vendor/tool-platform";
+      const canonicalPackage = "@vendor/tool";
+      const packagePath = path.join(npmRoot, "node_modules", ...platformPackage.split("/"));
+      await fs.mkdir(packagePath, { recursive: true });
+      await fs.writeFile(
+        path.join(npmRoot, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "": {},
+            [`node_modules/${canonicalPackage}`]: {
+              bin: { tool: "bin/tool.js" },
+            },
+            [`node_modules/${platformPackage}`]: {
+              name: canonicalPackage,
+              optional: true,
+              os: [process.platform],
+              cpu: [process.arch],
+            },
+          },
+        }),
+      );
+
+      if (installedState === "invalid package manifest") {
+        await fs.writeFile(path.join(packagePath, "package.json"), "{", "utf8");
+      } else if (installedState !== "missing package manifest") {
+        await fs.writeFile(
+          path.join(packagePath, "package.json"),
+          JSON.stringify({ name: canonicalPackage, version: "1.0.0-platform", files: ["vendor"] }),
+        );
+        const nativeBinDir = path.join(packagePath, "vendor", "current-platform", "bin");
+        await fs.mkdir(nativeBinDir, { recursive: true });
+        await fs.writeFile(path.join(nativeBinDir, "tool-helper"), "helper", "utf8");
+        if (
+          installedState === "installed native executable" ||
+          installedState === "non-executable native executable"
+        ) {
+          const executableName = process.platform === "win32" ? "tool.exe" : "tool";
+          await fs.writeFile(path.join(nativeBinDir, executableName), "native executable", {
+            encoding: "utf8",
+            mode: installedState === "installed native executable" ? 0o755 : 0o644,
+          });
+        }
+      }
+
+      await expect(
+        listMissingRequiredPlatformPackages({
+          npmRoot,
+          requiredPackageNames: [platformPackage],
+        }),
+      ).resolves.toEqual(expectedMissing ? [{ name: platformPackage, packagePath }] : []);
+    },
+  );
+
   it("keeps existing plugin dependencies when adding another managed plugin", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
@@ -269,7 +335,7 @@ describe("managed npm root", () => {
       npmRoot,
       packageName: "@openclaw/feishu",
       dependencySpec: "2026.5.4",
-      overrideOmissions: { npmAliases: true },
+      omitNpmAliasOverrides: true,
       managedOverrides: {
         axios: "1.18.0",
         "node-domexception": "npm:@nolyfill/domexception@1.0.28",
@@ -530,19 +596,6 @@ describe("managed npm root", () => {
     });
   });
 
-  it("reads workspace pnpm overrides for managed plugin installs", async () => {
-    const workspace = YAML.parse(
-      await fs.readFile(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
-    ) as { overrides?: Record<string, unknown> };
-    const expectedOverrides = workspace.overrides ?? {};
-
-    expect(expectedOverrides).toMatchObject({
-      axios: "1.19.0",
-      "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-    });
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
-  });
-
   it("resolves workspace pnpm overrides from packaged dist chunks", async () => {
     const packageRoot = await makeTempRoot();
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
@@ -571,7 +624,7 @@ describe("managed npm root", () => {
     });
   });
 
-  it("resolves npm override dependency references from the host package manifest", async () => {
+  it("normalizes workspace overrides before managed npm use", async () => {
     const packageRoot = await makeTempRoot();
     await fs.writeFile(
       path.join(packageRoot, "package.json"),
@@ -594,8 +647,15 @@ describe("managed npm root", () => {
       path.join(packageRoot, "pnpm-workspace.yaml"),
       [
         "overrides:",
+        '  "parent@1>child": 2.0.0',
+        '  "parent>@scope/child": 2.0.0',
+        '  "@scope/parent@1>@scope/child": 2.0.0',
+        '  "range-target@>1": 2.0.0',
         '  managed-runtime: "$managed-runtime"',
         "  nested:",
+        '    "parent>child": 2.0.0',
+        '    "range-target@>=1": 2.0.0',
+        '    ".": 1.0.0',
         '    optional-runtime: "$optional-runtime"',
         '    alias: "$node-domexception"',
         "  axios: 1.18.0",
@@ -605,8 +665,11 @@ describe("managed npm root", () => {
     );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
+      "range-target@>1": "2.0.0",
       "managed-runtime": "3.1024.0",
       nested: {
+        "range-target@>=1": "2.0.0",
+        ".": "1.0.0",
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",
       },

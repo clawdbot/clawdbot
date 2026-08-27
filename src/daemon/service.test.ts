@@ -139,7 +139,9 @@ describe("resolveGatewayService", () => {
 
 describe("readGatewayServiceState", () => {
   it("tracks installed, loaded, and running separately", async () => {
+    const hasInstalledDefinition = vi.fn(async () => false);
     const service = createService({
+      hasInstalledDefinition,
       isLoaded: vi.fn(async () => true),
       readCommand: vi.fn(async () => ({
         programArguments: ["openclaw", "gateway", "run"],
@@ -156,6 +158,29 @@ describe("readGatewayServiceState", () => {
     expect(state.loadState).toEqual({ status: "loaded" });
     expect(state.running).toBe(true);
     expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(hasInstalledDefinition).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "system-scoped OpenClaw service", definition: true, installed: true },
+    { name: "missing OpenClaw service definition", definition: false, installed: false },
+    { name: "failed service definition inspection", failure: true, installed: false },
+  ])("preserves installed ownership for a $name without command details", async (scenario) => {
+    const hasInstalledDefinition = vi.fn(async () => {
+      if (scenario.failure) {
+        throw new Error("service definition inspection failed");
+      }
+      return scenario.definition ?? false;
+    });
+    const service = createService({ hasInstalledDefinition });
+    const env = { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" };
+
+    const state = await readGatewayServiceState(service, { env, timeoutMs: 100 });
+
+    expect(state.installed).toBe(scenario.installed);
+    expect(state.command).toBeNull();
+    expect(state.env).toBe(env);
+    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env, timeoutMs: 100 });
   });
 
   it("keeps the caller-selected service identity when merging persisted env", async () => {

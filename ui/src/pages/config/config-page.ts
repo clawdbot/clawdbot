@@ -12,14 +12,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
-import { isBrowserPanelAvailable } from "../../app/app-shell-chrome.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import {
   resetServerUiPref,
   resolveServerUiPrefState,
@@ -51,10 +50,11 @@ import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.t
 import { formatUiError } from "../../lib/format-error.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { loadModels } from "../../lib/model-catalog-store.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { loadModels } from "../chat/models.ts";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
@@ -72,6 +72,7 @@ import {
   type ConfigPageId,
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
+import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
 import { renderMcp } from "./mcp.ts";
 import { renderMemoryPage } from "./memory-page.ts";
 import { narrowMemorySchema } from "./memory-schema.ts";
@@ -600,7 +601,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     if (!target) {
       return;
     }
-    target.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
     this.pendingRouteTargetId = null;
   }
 
@@ -871,7 +872,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       "theme",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync("theme"),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
     );
   }
 
@@ -881,7 +885,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       "themeMode",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync("themeMode"),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
     );
   }
 
@@ -891,7 +898,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       "accent",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync("accent"),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
     );
   }
 
@@ -915,9 +925,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
-  private serverUiPrefsCanSync(): boolean | null {
+  private serverUiPrefsCanSync(key?: "theme" | "themeMode" | "accent"): boolean | null {
     const runtimeConfig = this.context.runtimeConfig;
-    return runtimeConfig.state.connected ? runtimeConfig.canPatch !== false : null;
+    if (!runtimeConfig.state.connected) {
+      return null;
+    }
+    const gateway = this.context.gateway.snapshot;
+    return key && gateway?.selfUser
+      ? hasOperatorWriteAccess(gateway.hello?.auth ?? null)
+      : runtimeConfig.canPatch !== false;
   }
 
   private resetLocale() {
@@ -938,7 +954,6 @@ export class ConfigPage extends OpenClawLightDomElement {
   ) {
     switch (key) {
       case "theme":
-        this.customThemeImportOwner.recordActivation(null);
         this.settings = resetServerUiPref(
           "theme",
           this.currentThemePref(),
@@ -981,13 +996,16 @@ export class ConfigPage extends OpenClawLightDomElement {
     theme: ThemeName,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
-    this.customThemeImportOwner.recordActivation(theme);
+    const preference = this.currentThemePref();
+    const reset = preference.overridden && theme === preference.resetValue;
+    this.customThemeImportOwner.recordActivation(reset ? null : theme);
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
       currentTheme,
       nextTheme: resolveTheme(theme, this.settings.themeMode),
       context,
-      applyTheme: () => this.applySettings({ theme }),
+      applyTheme: () =>
+        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({ theme }),
     });
   }
 
@@ -995,12 +1013,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     mode: ThemeMode,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
+    const preference = this.currentThemeModePref();
+    const reset = preference.overridden && mode === preference.resetValue;
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
       currentTheme,
       nextTheme: resolveTheme(this.settings.theme, mode),
       context,
-      applyTheme: () => this.applySettings({ themeMode: mode }),
+      applyTheme: () =>
+        reset
+          ? this.resetSyncedAppearancePref("themeMode")
+          : this.applySettings({ themeMode: mode }),
     });
   }
 
@@ -1248,11 +1271,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onLocaleChange: (locale) => this.setLocale(locale),
       resetLocale: () => this.resetLocale(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
-      resetTheme: () => this.resetSyncedAppearancePref("theme"),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
-      resetThemeMode: () => this.resetSyncedAppearancePref("themeMode"),
-      setAccent: (accent) => this.applySettings({ accent }),
-      resetAccent: () => this.resetSyncedAppearancePref("accent"),
+      setAccent: (accent) =>
+        accent === undefined
+          ? this.resetSyncedAppearancePref("accent")
+          : this.applySettings({ accent }),
       hasCustomTheme: Boolean(this.settings.customTheme),
       customThemeLabel: this.settings.customTheme?.label ?? null,
       customThemeSourceUrl: this.settings.customTheme?.sourceUrl ?? null,
@@ -1267,8 +1290,11 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.customThemeImportOwner.open(),
       textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: this.settings.textScale !== undefined,
-      setTextScale: (value) => this.setSetting("textScale", normalizeTextScale(value)),
-      resetTextScale: () => this.setSetting("textScale", undefined),
+      setTextScale: (value) =>
+        this.setSetting(
+          "textScale",
+          value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
+        ),
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
       setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),

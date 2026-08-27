@@ -7,7 +7,10 @@ import { installPluginFromClawHub, type ClawHubRiskAcknowledgementRequest } from
 import { installPluginFromGitSpec } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
-import { PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
+import {
+  PLUGIN_INSTALL_ERROR_CODE,
+  type PluginInstallArtifactConsentHandler,
+} from "./install-types.js";
 import { installPluginFromNpmSpec } from "./install.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
 import { shouldFallbackClawHubBridgeToNpm } from "./update-config.js";
@@ -233,8 +236,44 @@ type PluginUpdateAttemptState = {
 };
 
 type PluginUpdateAttemptResult =
-  | { kind: "exception"; message: string }
+  | { kind: "exception"; message: string; error: unknown }
   | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
+
+function isPluginUpdateUnchanged(
+  params: Parameters<typeof buildPluginUpdateVersionOutcome>[0],
+): boolean {
+  const { record, result, currentVersion, nextVersion } = params;
+  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
+  return record.gitCommit && nextCommit
+    ? record.gitCommit === nextCommit
+    : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
+}
+
+export function buildPluginUpdateVersionOutcome(params: {
+  pluginId: string;
+  record: UpdatablePluginInstallRecord;
+  result: PluginUpdateSuccess;
+  currentVersion?: string;
+  nextVersion?: string;
+  channelFallbackSuffix: string;
+  channelFallback?: PluginUpdateChannelFallback;
+}): PluginUpdateOutcome {
+  const currentLabel = params.currentVersion ?? "unknown";
+  const unchanged = isPluginUpdateUnchanged(params);
+  const verb = isPackageVersionDowngrade(params.currentVersion, params.nextVersion)
+    ? "Downgraded"
+    : "Updated";
+  return {
+    pluginId: params.pluginId,
+    status: unchanged ? "unchanged" : "updated",
+    currentVersion: params.currentVersion,
+    nextVersion: params.nextVersion,
+    message: unchanged
+      ? `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
+      : `${verb} ${params.pluginId}: ${currentLabel} -> ${params.nextVersion ?? "unknown"}.${params.channelFallbackSuffix}`,
+    ...(params.channelFallback ? { channelFallback: params.channelFallback } : {}),
+  };
+}
 
 export async function buildDryRunPluginUpdateOutcome(params: {
   pluginId: string;
@@ -268,16 +307,7 @@ export async function buildDryRunPluginUpdateOutcome(params: {
       : undefined);
   const nextVersion = resolvedProbeVersion ?? "unknown";
   const currentLabel = params.currentVersion ?? "unknown";
-  const gitProbe =
-    params.record.source === "git" && "git" in params.result ? params.result.git : undefined;
-  const unchanged =
-    params.record.source === "git" && params.record.gitCommit && gitProbe?.commit
-      ? params.record.gitCommit === gitProbe.commit
-      : Boolean(
-          params.currentVersion &&
-          resolvedProbeVersion &&
-          params.currentVersion === resolvedProbeVersion,
-        );
+  const unchanged = isPluginUpdateUnchanged({ ...params, nextVersion: resolvedProbeVersion });
   const newerExactPinnedDefaultLine =
     unchanged &&
     params.record.source === "npm" &&
@@ -335,6 +365,7 @@ export async function runPluginUpdateAttempt(params: {
   timeoutMs?: number;
   dangerouslyForceUnsafeInstall?: boolean;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
   npmSpecs?: PluginUpdateSpecPlan;
   clawhubSpecs?: PluginUpdateSpecPlan;
@@ -369,6 +400,7 @@ export async function runPluginUpdateAttempt(params: {
               ...dryRunOption,
               dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
+              onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
               trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
               expectedPluginId: params.pluginId,
               expectedReplacementPluginId: params.expectedReplacementPluginId,
@@ -394,6 +426,7 @@ export async function runPluginUpdateAttempt(params: {
                 ...dryRunOption,
                 dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                 onInstallPolicyWarning: params.onInstallPolicyWarning,
+                onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                 expectedPluginId: params.pluginId,
                 ...params.clawHubRiskAcknowledgementOptions,
                 logger: params.logger,
@@ -410,6 +443,7 @@ export async function runPluginUpdateAttempt(params: {
                   ...dryRunOption,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
+                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
                   logger: params.logger,
                 }),
@@ -425,6 +459,7 @@ export async function runPluginUpdateAttempt(params: {
                   ...dryRunOption,
                   dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
+                  onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
                   expectedPluginId: params.pluginId,
                   logger: params.logger,
                 }),
@@ -433,6 +468,7 @@ export async function runPluginUpdateAttempt(params: {
     return {
       kind: "exception",
       message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
+      error,
     };
   }
 
@@ -483,6 +519,7 @@ export async function runPluginUpdateAttempt(params: {
         ...dryRunOption,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         expectedPluginId: params.pluginId,
         expectedReplacementPluginId: params.expectedReplacementPluginId,
@@ -523,6 +560,7 @@ export async function runPluginUpdateAttempt(params: {
         ...dryRunOption,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         expectedPluginId: params.pluginId,
         ...params.clawHubRiskAcknowledgementOptions,
         logger: params.logger,
@@ -563,6 +601,7 @@ export async function runPluginUpdateAttempt(params: {
         ...dryRunOption,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
         trustedSourceLinkedOfficialInstall: true,
         expectedPluginId: params.pluginId,
         expectedReplacementPluginId: params.expectedReplacementPluginId,

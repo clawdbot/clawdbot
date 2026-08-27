@@ -284,6 +284,21 @@ function groupAdmission(conversationId: string): TestAdmissionOverride {
 }
 
 describe("prepared WhatsApp inbound boundary", () => {
+  it("projects from-me messages as the operator's own sender identity", async () => {
+    const prepared = await prepareWhatsAppInboundContext({
+      combinedBody: "hello from me",
+      msg: makeMsg({ platform: { fromMe: true } }),
+      route: makeRoute(),
+      sender: { id: "+15550001111", name: "Operator" },
+    });
+
+    expect(prepared.inbound.sender.isSelf).toBe(true);
+    expect(prepared.ctxPayload).toMatchObject({
+      SenderId: "+15550001111",
+      SenderIsSelf: true,
+    });
+  });
+
   it("separates portable facts from WhatsApp transport callbacks", async () => {
     const msg = makeMsg({
       event: { id: "current-1", timestamp: 1_710_000_000 },

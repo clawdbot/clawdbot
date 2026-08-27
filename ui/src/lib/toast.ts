@@ -26,8 +26,12 @@ const DEFAULT_TOAST_DURATION_MS = 6_000;
 const TOAST_EXIT_FALLBACK_MS = 450;
 
 function activeModalToastLayer() {
-  return [...(document.openClawModalToastLayers ?? [])].findLast(
-    (candidate) => candidate.isConnected,
+  return [...(document.openClawModalLayers ?? [])].findLast((candidate) => candidate.isConnected);
+}
+
+function restingToastLayer() {
+  return (
+    document.querySelector(".shell-nav[aria-modal='true']") ?? document.querySelector(".shell")
   );
 }
 
@@ -53,7 +57,7 @@ class OpenClawToastHost extends OpenClawLightDomContentsElement {
   }
 
   override disconnectedCallback() {
-    const target = activeModalToastLayer() ?? document.querySelector(".shell");
+    const target = activeModalToastLayer() ?? restingToastLayer();
     if (!this.isConnected && this.parentElement?.localName === "openclaw-modal-dialog" && target) {
       target.append(this);
     } else {
@@ -210,7 +214,7 @@ export function showToast(options: ToastOptions): boolean {
       }
       modal.removeEventListener("wa-after-hide", handoff);
       queueMicrotask(() =>
-        (activeModalToastLayer() ?? document.querySelector(".shell"))?.moveBefore(host, null),
+        (activeModalToastLayer() ?? restingToastLayer())?.moveBefore(host, null),
       );
     };
     modal.addEventListener("wa-after-hide", handoff);

@@ -147,6 +147,7 @@ export function makeDispatchTestContext(
     });
   }
   return {
+    getSessionEventSubscriberConnIds: () => new Set(),
     getRuntimeConfig: () => ({
       cloudWorkers: {
         profiles: {

@@ -36,10 +36,13 @@ import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./w
 export const CODEX_RING_ZERO_BASE_INSTRUCTIONS = "";
 
 // Stream structured patch snapshots so large generated edits keep the turn active.
+// OpenClaw opts into these under-development features deliberately, so silence
+// Codex's chat warning that tells operators to edit the managed codex-home config.
 const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
   "features.apply_patch_streaming_events": true,
+  suppress_unstable_features_warning: true,
 };
 
 const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -70,7 +73,7 @@ const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
   "features.multi_agent_v2": false,
 };
 
-// Exact Codex 0.148 registry features that can expose a model-visible tool or
+// Exact Codex 0.149 registry features that can expose a model-visible tool or
 // host capability. One list owns both the thread deny patch and requirement pin rejection.
 const CODEX_RING_ZERO_RESTRICTED_FEATURES = new Set([
   "apps",
@@ -441,12 +444,8 @@ export function buildCodexRuntimeThreadConfigForRun(
     ...(options.restrictedToolSurfaceInheritedMcpServerNames ?? []),
     ...(isJsonObject(configMcpServers) ? Object.keys(configMcpServers) : []),
   ];
-  // Per-thread configs deep-merge; drop server launch details before the
-  // final disabled-server patch so a delivery turn cannot retain MCP access.
-  const restrictedRunConfig =
-    restrictedToolSurface && isJsonObject(configMcpServers)
-      ? { ...config, mcp_servers: {} }
-      : config;
+  // Codex validates each transport before it applies `enabled`. Preserve the
+  // transport here; the deny patch below disables it and attestation proves it stayed inactive.
   const webSearchConfig = resolveCodexWebSearchPlan({
     config: params.config,
     disableTools: params.disableTools,
@@ -455,7 +454,7 @@ export function buildCodexRuntimeThreadConfigForRun(
     webSearchAllowed: options.webSearchAllowed,
   }).threadConfig;
   const baseConfig = buildCodexRuntimeThreadConfig(
-    mergeCodexThreadConfigs(restrictedRunConfig, webSearchConfig),
+    mergeCodexThreadConfigs(config, webSearchConfig),
     options,
   );
   const runtimeConfig =

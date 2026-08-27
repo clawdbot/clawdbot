@@ -4,10 +4,13 @@ import {
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { setPluginToolMeta } from "../plugins/tools.js";
+import type { CodeModeSkill } from "./code-mode-skills.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
+  fakeTool,
   pluginToolWithExecute,
   resetCodeModeTestState,
 } from "./code-mode.test-support.js";
@@ -49,8 +52,14 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
   };
 }
 
-async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAgentTool[] }) {
-  const { config, catalogRef, tools } = createCodeModeHarness();
+async function runCodeModeAgent(params: {
+  programs: string[];
+  hiddenTools: AnyAgentTool[];
+  codeModeSkills?: CodeModeSkill[];
+}) {
+  const { config, catalogRef, tools } = createCodeModeHarness({
+    codeModeSkills: params.codeModeSkills,
+  });
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
@@ -58,6 +67,7 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
     sessionKey: "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
+    codeModeSkills: params.codeModeSkills,
   });
   const providerContexts: Context[] = [];
   let reconciliationCandidates = 0;
@@ -101,6 +111,64 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
 describe("Code Mode agent-loop error recovery", () => {
   afterEach(() => resetCodeModeTestState());
 
+  it.each([
+    {
+      name: "catalog.search",
+      discovery: '(await catalog.search("complete_task")).map((tool) => tool.toolName)',
+      value: ["complete_task"],
+    },
+    {
+      name: "handle.describe",
+      discovery: "(await complete_task.describe()).name",
+      value: "complete_task",
+    },
+    {
+      name: "skills.list",
+      discovery: "(await skills.list()).map((skill) => skill.name)",
+      value: ["demo"],
+    },
+    { name: "skills.read", discovery: 'await skills.read("demo")', value: "Demo instructions" },
+  ])(
+    "continues ordinary recovery after $name metadata and a guest error",
+    async ({ discovery, value }) => {
+      const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
+        jsonResult({ completed: true }),
+      );
+      const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+        hiddenTools: [complete],
+        codeModeSkills: [
+          {
+            name: "demo",
+            description: "Demo skill",
+            location: "/skills/demo/SKILL.md",
+            source: { filePath: "/skills/demo/SKILL.md", readContent: "Demo instructions" },
+          },
+        ],
+        programs: [`json(${discovery}); return missingFn();`, "return await complete_task({});"],
+      });
+
+      const failure = expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        isError: true,
+        details: expect.objectContaining({
+          status: "failed",
+          error: expect.stringContaining("ReferenceError: missingFn is not defined"),
+          output: [{ type: "json", value }],
+          telemetry: expect.objectContaining({ callCount: 0 }),
+        }),
+      });
+      expect(agent.state.messages).toContainEqual(failure);
+      expect(providerContexts).toHaveLength(3);
+      expect(complete.execute).toHaveBeenCalledOnce();
+      expect(reconciliationCandidates).toBe(0);
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "recovered" }],
+      });
+    },
+  );
+
   it("returns a trusted no-start tool failure to the model for ordinary recovery", async () => {
     const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
       jsonResult({ unexpected: true }),
@@ -138,6 +206,93 @@ describe("Code Mode agent-loop error recovery", () => {
       role: "assistant",
       content: [{ type: "text", text: "recovered" }],
     });
+  });
+
+  it("returns a schema-invalid nested call for ordinary recovery before execution", async () => {
+    const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
+      jsonResult({ unexpected: true }),
+    );
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [terminal, recover],
+      programs: [
+        "return await terminal({ value: 42 });",
+        'return await recover_task({ value: "continue" });',
+      ],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(providerContexts[1]?.messages).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        isError: true,
+        details: expect.objectContaining({
+          status: "failed",
+          failurePhase: "bridge",
+          bridgeDispatchStarted: true,
+          error: expect.stringContaining("value"),
+        }),
+      }),
+    );
+    expect(terminal.execute).not.toHaveBeenCalled();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "recovered" }],
+    });
+  });
+
+  it("returns an exact replay-safe post-dispatch failure for ordinary recovery", async () => {
+    const readOnly = fakeTool("sessions_history", "Read session history");
+    readOnly.execute = vi.fn(async () => {
+      throw new ToolInputError("read constraint rejected after dispatch");
+    }) as AnyAgentTool["execute"];
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [readOnly, recover],
+      programs: ["return await sessions_history({});", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(3);
+    expect(readOnly.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).toHaveBeenCalledOnce();
+    expect(reconciliationCandidates).toBe(0);
+  });
+
+  it("keeps replay-safe side-effecting plugin failures in restricted reconciliation", async () => {
+    const appliedChanges: string[] = [];
+    const mutation = pluginToolWithExecute("plugin_mutation", "Mutate plugin state", async () => {
+      appliedChanges.push("plugin state changed");
+      throw new ToolInputError("plugin rejected input after mutation");
+    });
+    setPluginToolMeta(mutation, {
+      pluginId: "side-effecting-replay-safe-test",
+      optional: false,
+      replaySafe: true,
+      sideEffecting: true,
+    });
+    const recover = pluginToolWithExecute("recover_task", "Recover the task", async () =>
+      jsonResult({ recovered: true }),
+    );
+
+    const { providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+      hiddenTools: [mutation, recover],
+      programs: ["return await plugin_mutation({});", "return await recover_task({});"],
+    });
+
+    expect(providerContexts).toHaveLength(1);
+    expect(mutation.execute).toHaveBeenCalledOnce();
+    expect(recover.execute).not.toHaveBeenCalled();
+    expect(reconciliationCandidates).toBe(1);
+    expect(appliedChanges).toEqual(["plugin state changed"]);
   });
 
   it("lets the model correct successive JavaScript syntax and runtime errors", async () => {
@@ -194,11 +349,11 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(reconciliationCandidates).toBe(1);
   });
 
-  it("routes a partially applied mutation to restricted reconciliation without replay", async () => {
+  it("routes a partially applied mutation with an input error to restricted reconciliation", async () => {
     const appliedChanges: string[] = [];
     const applyPatch = pluginToolWithExecute("apply_patch", "Apply a patch", async () => {
       appliedChanges.push("first hunk applied");
-      throw new Error("second hunk is ambiguous");
+      throw new ToolInputError("second hunk input is ambiguous after applying the first");
     });
     const write = pluginToolWithExecute("write", "Repeat a mutation", async () =>
       jsonResult({ repeated: true }),

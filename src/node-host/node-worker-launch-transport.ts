@@ -2,7 +2,7 @@ import { isGatewayLoopbackHost } from "../../packages/gateway-client/src/websock
 import { createChildAdapter } from "../process/supervisor/adapters/child.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { parseNodeWorkerConnectionFailureMessage } from "../worker/node-supervisor-protocol.js";
-import { formatWorkerConnectionFailure } from "../worker/worker-connection-contract.js";
+import type { WorkerProcessInput } from "../worker/worker-process-protocol.js";
 import {
   buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
@@ -58,7 +58,7 @@ export async function prepareNodeWorkerLaunchTransport(
     return {
       kind: "started",
       adapter: await createChildAdapter({
-        argv: [process.execPath, entry, "--internal-worker-ipc"],
+        argv: [process.execPath, entry, "--internal-worker-ipc", "--internal-worker-session"],
         env: options.workerEnv,
         exactEnv: true,
         ownedWorker: true,
@@ -68,17 +68,14 @@ export async function prepareNodeWorkerLaunchTransport(
             return;
           }
           options.connectionFailure.errorText = diagnostic.cause
-            ? formatWorkerConnectionFailure(
-                options.descriptor.connectionEndpoint,
-                sanitizeNodeWorkerDiagnostic(
-                  diagnostic.cause,
-                  "node worker gateway connection failed",
-                  options.scrubber.scrub,
-                ),
+            ? sanitizeNodeWorkerDiagnostic(
+                diagnostic.cause,
+                "node worker gateway connection failed",
+                options.scrubber.scrub,
               )
             : undefined;
         },
-        input: JSON.stringify(options.descriptor),
+        stdinMode: "pipe-open",
       }),
     };
   }
@@ -136,27 +133,43 @@ export async function prepareNodeWorkerLaunchTransport(
   }
 }
 
-/** Plain stdio workers cannot run until their journaled descriptor reaches EOF. */
+/** Both transports admit turns only after the physical owner has been journaled. */
 export async function startNodeWorkerLaunchTransport(params: {
   adapter: NodeWorkerChildAdapter;
   descriptor: WorkerLaunchDescriptor;
   container?: NodeWorkerContainerIdentity;
+  isCurrent: () => boolean;
 }): Promise<void> {
+  if (!params.isCurrent()) {
+    throw new Error("node worker admission closed before startup");
+  }
   if (!params.container) {
     await params.adapter.openStartGate?.();
-    return;
   }
-  const stdin = params.adapter.stdin;
+  if (!params.isCurrent()) {
+    throw new Error("node worker admission closed before descriptor dispatch");
+  }
+  await sendNodeWorkerInput(params.adapter, {
+    type: "turn",
+    turnId: params.descriptor.assignment.turnId,
+    descriptor: params.descriptor,
+  });
+}
+
+export async function sendNodeWorkerInput(
+  adapter: NodeWorkerChildAdapter,
+  message: WorkerProcessInput,
+): Promise<void> {
+  const stdin = adapter.stdin;
   if (!stdin) {
-    throw new Error("node worker container launch did not provide a writable stdin pipe");
+    throw new Error("node worker did not provide a writable stdin pipe");
   }
   await new Promise<void>((resolve, reject) => {
-    stdin.write(JSON.stringify(params.descriptor), (error) => {
+    stdin.write(`${JSON.stringify(message)}\n`, (error) => {
       if (error) {
         reject(error);
         return;
       }
-      stdin.end();
       resolve();
     });
   });

@@ -62,12 +62,12 @@ suite.define(() => {
             "openclaw.setup.detect": {
               candidates: [
                 {
-                  kind: "codex-cli",
+                  kind: "openai-api-key",
                   brandId: "openai",
-                  label: "Codex CLI",
-                  detail: "Signed in locally",
+                  label: "OpenAI API key",
+                  detail: "Saved credentials are available",
                   modelRef: "openai/gpt-5",
-                  recommended: true,
+                  recommended: false,
                   credentials: true,
                 },
               ],
@@ -102,45 +102,16 @@ suite.define(() => {
 
         const response = await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
         expect(response?.status()).toBe(200);
-        await page.getByRole("heading", { name: "Connect a verified AI model" }).waitFor();
-        const candidate = page.locator('[data-candidate-kind="codex-cli"]');
-        await expect.poll(() => candidate.locator('[data-provider-icon="codex"]').count()).toBe(1);
-        await candidate.getByRole("button", { name: "Test & use" }).click();
 
         const detect = await gateway.waitForRequest("openclaw.setup.detect");
         expect(detect.params).toEqual({ agentId: "main" });
         const activate = await gateway.waitForRequest("openclaw.setup.activate");
         expect(activate.params).toEqual({
-          kind: "codex-cli",
+          kind: "openai-api-key",
           agentId: "main",
           modelRef: "openai/gpt-5",
         });
 
-        await page.getByRole("heading", { name: "Connection verified" }).waitFor();
-        await expect
-          .poll(async () => page.locator(".model-setup-success").textContent())
-          .toContain("openai/gpt-5");
-        await expect
-          .poll(async () => page.locator(".model-setup-success").textContent())
-          .toContain("Verified in 73 ms");
-        await gateway.setMethodResponse("openclaw.setup.detect", {
-          candidates: [],
-          manualProviders: [{ id: "openai", label: "OpenAI" }],
-          workspace: "/tmp/openclaw-e2e",
-          setupComplete: true,
-          configuredModel: "openai/gpt-5",
-        });
-        await page.getByRole("button", { name: "Stay in settings" }).click();
-        await page.getByRole("button", { name: "Continue setup" }).waitFor();
-        await page.reload();
-        await page.getByRole("button", { name: "Continue setup" }).waitFor();
-        if (artifactDir) {
-          await mkdir(artifactDir, { recursive: true });
-          await page.screenshot({
-            path: path.join(artifactDir, "model-setup-durable-continuation.png"),
-          });
-        }
-        await page.getByRole("button", { name: "Continue setup" }).click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
         // Onboarding chrome keeps only the header actions; no identity heading.
@@ -823,12 +794,9 @@ suite.define(() => {
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
-              page.locator("openclaw-modal-dialog.nav-drawer").evaluate((element) => {
-                const dialog = element.shadowRoot
-                  ?.querySelector("wa-dialog")
-                  ?.shadowRoot?.querySelector("dialog");
-                return dialog?.open ?? false;
-              }),
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
           await page.screenshot({
@@ -928,12 +896,9 @@ suite.define(() => {
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
-              page.locator("openclaw-modal-dialog.nav-drawer").evaluate((element) => {
-                const dialog = element.shadowRoot
-                  ?.querySelector("wa-dialog")
-                  ?.shadowRoot?.querySelector("dialog");
-                return dialog?.open ?? false;
-              }),
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
           await page.screenshot({

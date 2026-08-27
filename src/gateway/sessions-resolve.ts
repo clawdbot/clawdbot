@@ -6,6 +6,7 @@ import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
+  type SessionsResolveCandidate,
   type SessionsResolveParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -32,10 +33,8 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils.js";
 
-type SessionsResolveCandidate = { key: string; agentId: string; displayName?: string };
-
 export type SessionsResolveResult =
-  | { ok: true; key: string; agentId: string }
+  | ({ ok: true } & SessionsResolveCandidate)
   | { ok: true; missing: true }
   | { ok: true; ambiguous: true; candidates: SessionsResolveCandidate[] }
   | { ok: false; error: ErrorShape };
@@ -161,6 +160,7 @@ function findVisibleShortIdMatches(params: {
           "short-id session agent",
         ),
         ...(row.displayName ? { displayName: row.displayName } : {}),
+        ...(row.boardFace ? { boardFace: row.boardFace } : {}),
       },
     ];
   });
@@ -383,7 +383,7 @@ export async function resolveSessionKeyFromResolveParams(params: {
       return { ok: true, ambiguous: true, candidates: narrowed.slice(0, 10) };
     }
     const selected = expectDefined(narrowed[0], "short session match at 0");
-    return { ok: true, key: selected.key, agentId: selected.agentId };
+    return { ok: true, ...selected };
   }
 
   const parsedLabel = parseSessionLabel(p.label);

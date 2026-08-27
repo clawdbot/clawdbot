@@ -424,6 +424,7 @@ describe("pw-tools-core aria snapshot storage", () => {
       nodes: [
         { ref: "ax1", role: "Button", name: "OK", backendDOMNodeId: 42, depth: 0 },
         { ref: "ax2", role: "Button", name: "OK", backendDOMNodeId: 84, depth: 0 },
+        { ref: "ax3", role: "Button", name: "", backendDOMNodeId: 126, depth: 0 },
       ],
     });
 
@@ -432,8 +433,9 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       refs: {
-        ax1: { role: "button", name: "OK" },
+        ax1: { role: "button", name: "OK", nth: 0 },
         ax2: { role: "button", name: "OK", nth: 1 },
+        ax3: { role: "button", name: "" },
       },
       mode: "role",
     });

@@ -311,11 +311,15 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
   if (!targets) {
     return;
   }
-  const { mode, previewResults, appliedSummaries } = await runSessionsCleanup({
-    cfg,
-    opts,
-    targets,
-  });
+  const cleanupParams = { cfg, opts, targets };
+  let cleanupResult;
+  if (opts.dryRun) {
+    cleanupResult = await runSessionsCleanup(cleanupParams);
+  } else {
+    const { runLocalSessionsCleanup } = await import("./sessions-cleanup.runtime.js");
+    cleanupResult = await runLocalSessionsCleanup(cleanupParams, runtime);
+  }
+  const { mode, previewResults, appliedSummaries } = cleanupResult;
 
   if (opts.dryRun) {
     if (opts.json) {

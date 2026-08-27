@@ -56,6 +56,7 @@ import {
   requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
+import { runCliRecovery } from "./cli-runner/cli-run-recovery.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
 import {
   resolveCliNoOutputTimeoutMs,
@@ -65,6 +66,7 @@ import { prepareCliRunContext } from "./cli-runner/prepare.js";
 import { hashCliReseedPrompt } from "./cli-runner/reseed-envelope.js";
 import * as sessionHistoryModule from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
+import { FailoverError } from "./failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "./harness/hook-history.js";
 
@@ -242,7 +244,6 @@ function buildPreparedContext(params: PreparedContextOverrides = {}): PreparedCl
     },
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     claudeSkillsPluginArgs: [],
     ...(params?.openClawHistoryPrompt
       ? { openClawHistoryPrompt: params.openClawHistoryPrompt }
@@ -2092,6 +2093,130 @@ describe("runCliAgent reliability", () => {
     expect(clearBeforeRetry).not.toHaveBeenCalled();
   });
 
+  it("does not start a fresh CLI attempt when format recovery retains the binding", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      makeManagedRun({
+        stdout: [
+          JSON.stringify({
+            type: "assistant",
+            message: {
+              model: "<synthetic>",
+              content: [{ type: "text", text: "No response requested." }],
+            },
+          }),
+          JSON.stringify({ type: "result", subtype: "success", result: "" }),
+        ].join("\n"),
+      }),
+    );
+    const clearBeforeRetry = vi.fn(async () => false);
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier context" }],
+    });
+
+    try {
+      const context = makeClaudePreparedContext({
+        sessionKey: "agent:main:subagent:retained-format",
+        runId: "run-retained-format",
+        cliSessionId: "retained-cli-session",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      });
+      context.preparedBackend.backend = {
+        ...context.preparedBackend.backend,
+        freshSessionRecovery: "invalidated-only",
+        output: "jsonl",
+        input: "stdin",
+        jsonlDialect: "claude-stream-json",
+      };
+      context.backendResolved.config = context.preparedBackend.backend;
+
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile,
+            workspaceDir: dir,
+            onBeforeFreshCliSessionRetry: clearBeforeRetry,
+          },
+        }),
+      ).rejects.toMatchObject({ reason: "format", code: "cli_synthetic_no_response" });
+
+      expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+      expect(clearBeforeRetry).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["format", "cli_synthetic_no_response"],
+    ["timeout", "cli_no_output_timeout"],
+  ] as const)(
+    "keeps undefined Gemini recovery policy compatible after %s failover",
+    async (reason, code) => {
+      const context = buildPreparedContext({
+        provider: "google-gemini-cli",
+        sessionKey: `agent:main:gemini-${reason}`,
+        cliSessionId: "gemini-resumed-session",
+        openClawHistoryPrompt: CLI_RESEED_PROMPT,
+      });
+      context.preparedBackend.backend = {
+        command: "gemini",
+        args: ["--prompt", "{prompt}"],
+        resumeArgs: ["--resume", "{sessionId}", "--prompt", "{prompt}"],
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
+        input: "arg",
+        sessionMode: "existing",
+      };
+      context.backendResolved.config = context.preparedBackend.backend;
+      expect(context.preparedBackend.backend.freshSessionRecovery).toBeUndefined();
+
+      const executeAttempt = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new FailoverError(`Gemini ${reason} failure`, {
+            reason,
+            code,
+            provider: "google-gemini-cli",
+            model: "gemini-3.1-pro-preview",
+          }),
+        )
+        .mockResolvedValueOnce({ sessionId: `gemini-fresh-${reason}` });
+      const clearBeforeRetry = vi.fn(async () => true);
+
+      const result = await runCliRecovery({
+        context: {
+          ...context,
+          params: {
+            ...context.params,
+            onBeforeFreshCliSessionRetry: clearBeforeRetry,
+          },
+        },
+        executeAttempt,
+        finishAttempt: async (attempt: { sessionId: string }) =>
+          ({
+            payloads: [{ text: "Gemini recovered" }],
+            meta: { cliSessionId: attempt.sessionId },
+          }) as never,
+        finishDeliveredFailure: async () => undefined,
+        onTerminalFailure: async () => {},
+      });
+
+      expect(executeAttempt).toHaveBeenCalledTimes(2);
+      expect(executeAttempt.mock.calls[0]?.[0]).toBe("gemini-resumed-session");
+      expect(executeAttempt.mock.calls[1]?.[0]).toBeUndefined();
+      expect(clearBeforeRetry).toHaveBeenCalledWith({
+        provider: "google-gemini-cli",
+        reason,
+        sessionId: "gemini-resumed-session",
+      });
+      expect(requireRecord(result.meta, "result meta").cliSessionId).toBe(`gemini-fresh-${reason}`);
+    },
+  );
+
   it.each(["timeout", "unknown", "context_overflow", "format"] as const)(
     "retries a fresh CLI session after recoverable %s failover without a failed agent_end",
     async (reason) => {
@@ -2320,12 +2445,8 @@ describe("runCliAgent reliability", () => {
   it("returns the assembled CLI prompt in meta for raw trace consumers", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(makeManagedRun({ stdout: "hello from cli" }));
 
-    const result = await runPreparedCliAgent({
-      ...buildPreparedContext(),
-      bootstrapPromptWarningLines: ["Warning: prompt budget low."],
-    });
+    const result = await runPreparedCliAgent(buildPreparedContext());
 
-    expect(result.meta.finalPromptText).toContain("Warning: prompt budget low.");
     expect(result.meta.finalPromptText).toContain("hi");
     expect(result.meta.finalAssistantRawText).toBe("hello from cli");
     const executionTrace = requireRecord(result.meta.executionTrace, "execution trace");
@@ -4050,6 +4171,7 @@ describe("runCliAgent reliability", () => {
       openClawHistoryPrompt:
         "Continue this conversation using the OpenClaw transcript below.\n\nUser: recovered history\n\n<next_user_message>\nhi\n</next_user_message>",
     });
+    context.preparedBackend.backend.freshSessionRecovery = "invalidated-only";
     const clearBeforeRetry = vi.fn(async () => true);
 
     try {
@@ -4239,7 +4361,6 @@ describe("runCliAgent reliability", () => {
       expect(context.systemPrompt).toBe("");
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPluginArgs).toEqual([]);
-      expect(context.bootstrapPromptWarningLines).toEqual([]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -4270,7 +4391,7 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 
   it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
+      backend: { command: "agent-cli" },
       timeoutMs: 600_000,
       useResume: true,
       trigger: "cron",
@@ -4280,7 +4401,7 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 
   it("lets explicit embedded run timeouts lift the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
+      backend: { command: "agent-cli" },
       timeoutMs: 600_000,
       runTimeoutOverrideMs: 600_000,
       useResume: true,
@@ -4291,12 +4412,29 @@ describe("resolveCliNoOutputTimeoutMs", () => {
 
   it("keeps inherited user resume timeouts on the default resume no-output ceiling", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
-      backend: { command: "codex" },
+      backend: { command: "agent-cli" },
       timeoutMs: 600_000,
       useResume: true,
       trigger: "user",
     });
     expect(timeoutMs).toBe(180_000);
+  });
+
+  it("preserves explicit backend watchdog tuning for resumed cron runs", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: {
+        command: "agent-cli",
+        reliability: {
+          watchdog: {
+            resume: { noOutputTimeoutRatio: 0.2, minMs: 1_000, maxMs: 120_000 },
+          },
+        },
+      },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "cron",
+    });
+    expect(timeoutMs).toBe(120_000);
   });
 });
 

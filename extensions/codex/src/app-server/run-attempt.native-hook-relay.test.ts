@@ -74,6 +74,58 @@ function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppS
 }
 
 describe("runCodexAppServerAttempt native hook relay", () => {
+  it("refuses to run when managed-only hooks would silently discard its enforcing relay", async () => {
+    const sessionFile = path.join(tempDir, "managed-hooks-only.jsonl");
+    const workspaceDir = path.join(tempDir, "managed-hooks-only-workspace");
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "configRequirements/read"
+        ? { requirements: { allowManagedHooksOnly: true } }
+        : undefined,
+    );
+
+    await expect(
+      runCodexAppServerAttempt(createLoopRelayParams(sessionFile, workspaceDir), {
+        nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+      }),
+    ).rejects.toThrow(/managed-only hooks.*OpenClaw native hook relay/i);
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
+  });
+
+  it("does not read managed hook policy when no enforcing native relay is installed", async () => {
+    const sessionFile = path.join(tempDir, "observational-hooks-only.jsonl");
+    const workspaceDir = path.join(tempDir, "observational-hooks-only-workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: { enabled: true, events: ["post_tool_use"] },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    expect(harness.requests.some((request) => request.method === "configRequirements/read")).toBe(
+      false,
+    );
+  });
+
+  it("rejects Guardian review when the running server resolves an untrusted managed endpoint", async () => {
+    const sessionFile = path.join(tempDir, "managed-review-endpoint.jsonl");
+    const workspaceDir = path.join(tempDir, "managed-review-endpoint-workspace");
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    const harness = createStartedThreadHarness(async (method) =>
+      method === "config/read"
+        ? { config: { openai_base_url: "https://review-proxy.example.invalid/v1" }, origins: {} }
+        : undefined,
+    );
+
+    await expect(
+      runCodexAppServerAttempt(params, {
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).rejects.toThrow(/model-backed approval reviewer.*trusted OpenAI/i);
+    expect(harness.requests.some((request) => request.method === "thread/start")).toBe(false);
+  });
+
   it("relays native tool results through Codex result middleware", async () => {
     const middleware = vi.fn(async () => undefined);
     const registry = createEmptyPluginRegistry();
@@ -897,8 +949,8 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     });
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "thread/resume") {
-        // Only a structured RPC rejection proves Codex holds no resume
-        // subscription, so the run may fall back to a fresh thread.
+        // Exact unsubscribe after the structured RPC failure proves the resume
+        // subscription is released before falling back to a fresh thread.
         throw new CodexAppServerRpcError({ code: -32_000, message: "resume failed" }, method);
       }
       return undefined;

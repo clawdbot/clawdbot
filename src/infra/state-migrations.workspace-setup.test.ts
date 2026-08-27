@@ -3,11 +3,11 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
   readWorkspaceStateSnapshot,
-  resolveWorkspaceStateIdentity,
 } from "../agents/workspace-state-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -105,7 +105,7 @@ describe("legacy workspace Doctor migration", () => {
     });
     expect(
       db
-        .prepare("SELECT attested_at_ms FROM workspace_attestations WHERE workspace_key = ?")
+        .prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toEqual({ attested_at_ms: mtime.getTime() });
     expect(
@@ -265,7 +265,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(
       db
         .prepare(
-          "SELECT workspace_key, attested_at_ms FROM workspace_attestations ORDER BY workspace_key",
+          "SELECT workspace_key, attested_at_ms FROM workspace_setup_state ORDER BY workspace_key",
         )
         .all(),
     ).toEqual(
@@ -330,7 +330,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(fs.existsSync(attestationPath)).toBe(true);
     expect(fs.existsSync(`${attestationPath}.doctor-importing`)).toBe(false);
     const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_attestations").get()).toEqual({
+    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_setup_state").get()).toEqual({
       count: 0,
     });
     expect(db.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
@@ -688,7 +688,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(fs.existsSync(`${externalSource}.doctor-importing`)).toBe(false);
     expect(
       openOpenClawStateDatabase({ env: context.env })
-        .db.prepare("SELECT workspace_key FROM workspace_attestations WHERE workspace_key = ?")
+        .db.prepare("SELECT workspace_key FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toBeUndefined();
   });
@@ -907,7 +907,7 @@ describe("legacy workspace Doctor migration", () => {
     expect(fs.existsSync(claimPath)).toBe(true);
     expect(
       openOpenClawStateDatabase({ env: context.env })
-        .db.prepare("SELECT attested_at_ms FROM workspace_attestations WHERE workspace_key = ?")
+        .db.prepare("SELECT attested_at_ms FROM workspace_setup_state WHERE workspace_key = ?")
         .get(identity.workspaceKey),
     ).toEqual({ attested_at_ms: originalMtime.getTime() });
   });

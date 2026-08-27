@@ -1307,6 +1307,7 @@ jobs:
       package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
+      prepublish_plugin_registry_json: ${{ needs.prepare_release_package.outputs.prepublish_plugin_registry_json }}
       suite_profile: custom
       docker_lanes: release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
@@ -2131,6 +2132,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: matrix
       run_matrix: true
       fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
     secrets:
@@ -2149,6 +2151,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: buzz
       run_buzz: true
       buzz_scenario: channel-canary,channel-mention-gating
     secrets:

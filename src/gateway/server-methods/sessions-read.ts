@@ -1,4 +1,5 @@
 // Read-only session queries.
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -306,6 +307,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                 modelCatalog: modelCatalogByAgent,
                 opts: p,
                 ...(p.involvingMe === true && identityId ? { involvingActorId: identityId } : {}),
+                ...(p.ownerFirst === true && identityId ? { ownerFirstActorId: identityId } : {}),
               }),
             {
               config: cfg,
@@ -536,21 +538,16 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
     }
   },
-  "sessions.preview": ({ params, respond, context, client }) => {
+  "sessions.preview": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
       return;
     }
-    const p = params;
-    const keys = (Array.isArray(p.keys) ? p.keys : [])
+    const keys = (Array.isArray(params.keys) ? params.keys : [])
       .map((key) => normalizeOptionalString(key ?? ""))
       .filter((key): key is string => Boolean(key))
       .slice(0, 64);
-    const limit =
-      typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.max(1, p.limit) : 12;
-    const maxChars =
-      typeof p.maxChars === "number" && Number.isFinite(p.maxChars)
-        ? Math.max(20, p.maxChars)
-        : 240;
+    const limit = params.limit ?? 12;
+    const maxChars = params.maxChars ?? 240;
 
     if (keys.length === 0) {
       respond(true, { ts: Date.now(), previews: [] } satisfies SessionsPreviewResult, undefined);
@@ -565,6 +562,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const previews: SessionsPreviewEntry[] = [];
 
     for (const key of keys) {
+      if (previews.length > 0) {
+        await yieldToEventLoop();
+      }
       const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
@@ -667,7 +667,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       respond(true, { ok: false, candidates: resolved.candidates }, undefined);
       return;
     }
-    respond(true, { ok: true, key: resolved.key, agentId: resolved.agentId }, undefined);
+    respond(true, resolved, undefined);
   },
   "sessions.get": async ({ params, respond, context }) => {
     const p = params as {
@@ -721,3 +721,5 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     respond(true, { messages }, undefined);
   },
 };
+
+export const sessionsListHandler = sessionReadHandlers["sessions.list"]!;

@@ -1,4 +1,5 @@
 // Model list forward-compat tests cover list command behavior with future catalog shapes.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
@@ -221,7 +222,6 @@ function modelRegistryOptions(index = 0): Record<string, unknown> {
 
 let modelsListCommand: typeof import("./list.list-command.js").modelsListCommand;
 let listRowsModule: typeof import("./list.rows.js");
-let listRegistryModule: typeof import("./list.registry.js");
 
 function installModelsListCommandForwardCompatMocks() {
   const suppressOpenAiSpark = ({
@@ -236,18 +236,14 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("../../agents/model-suppression.js", () => ({
     shouldSuppressBuiltInModelCore: suppressOpenAiSpark,
-    shouldSuppressBuiltInModelFromManifest: suppressOpenAiSpark,
-    createManifestBuiltInModelSuppressor: vi.fn(
-      () => (model: { provider?: string | null; id?: string | null }) => suppressOpenAiSpark(model),
-    ),
   }));
 
   vi.doMock("./load-config.js", () => ({
     loadModelsConfigWithSource: mocks.loadModelsConfigWithSource,
   }));
 
-  vi.doMock("./list.configured.js", () => ({
-    resolveConfiguredEntries: mocks.resolveConfiguredEntries,
+  vi.doMock("../../agents/configured-model-entries.js", () => ({
+    resolveConfiguredModelEntries: mocks.resolveConfiguredEntries,
   }));
 
   vi.doMock("./shared.js", async (importOriginal) => ({
@@ -265,10 +261,10 @@ function installModelsListCommandForwardCompatMocks() {
     printAvailablePromotionsSection: mocks.printAvailablePromotionsSection,
   }));
 
-  vi.doMock("./list.registry-load.js", () => ({
-    loadListModelRegistry: async (
+  vi.doMock("./list.registry.js", () => ({
+    loadModelRegistry: async (
       cfg: unknown,
-      opts?: { providerFilter?: string; normalizeModels?: boolean; loadAvailability?: boolean },
+      opts?: { providerFilter?: string; normalizeModels?: boolean },
     ): Promise<{
       models: Array<{ provider: string; id: string }>;
       availableKeys?: Set<string>;
@@ -369,8 +365,6 @@ function installModelsListCommandForwardCompatMocks() {
 beforeAll(async () => {
   installModelsListCommandForwardCompatMocks();
   listRowsModule = await import("./list.rows.js");
-  listRegistryModule = await import("./list.registry.js");
-  vi.spyOn(listRegistryModule, "loadModelRegistry").mockImplementation(mocks.loadModelRegistry);
   ({ modelsListCommand } = await import("./list.list-command.js"));
 });
 
@@ -387,6 +381,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
       }),
     },
     availableKeys: loaded.availableKeys,
+    canonicalizeProvider: normalizeProviderId,
     configuredByKey: new Map(),
     discoveredKeys: new Set(
       loaded.models.map(
@@ -428,7 +423,9 @@ describe("modelsListCommand forward-compat", () => {
     expect(mocks.resolveModelsTargetAgent).toHaveBeenCalledWith(mocks.resolvedConfig, "research", {
       kind: "read",
     });
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-agent-research", {
+      inheritedAuthDir: expect.any(String),
+    });
   });
 
   it("rejects unknown provider filters before loading the model registry", async () => {
@@ -1624,6 +1621,7 @@ describe("modelsListCommand forward-compat", () => {
             evaluateModelAuth: () => ({ availability: false, routeResolution: null }),
           },
           availableKeys: new Set(["openai/gpt-5.4"]),
+          canonicalizeProvider: normalizeProviderId,
           configuredByKey: new Map(),
           discoveredKeys: new Set(),
           filter: {},

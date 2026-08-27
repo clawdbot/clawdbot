@@ -28,7 +28,7 @@ import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -344,12 +344,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
-      if (upstreamLink && action !== "fork") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR),
-        );
+      const archived = current.entry.archivedAt !== undefined;
+      if ((archived || upstreamLink) && action !== "fork") {
+        const message = archived
+          ? `${action === "switch" ? "Branch switch" : "Rewind"} is unavailable for archived sessions.`
+          : EXTERNAL_CONVERSATION_ERROR;
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
         return;
       }
       const placementError = resolveSessionWorkerPlacementMutationError({
@@ -435,6 +435,7 @@ async function mutateSessionAtMessage(
       }
       let result: MessageCutMutationResult;
       try {
+        const creation = resolveOperatorSessionCreation(client);
         result = await (action === "fork"
           ? forkSessionAtMessage(
               {
@@ -444,7 +445,12 @@ async function mutateSessionAtMessage(
                 sessionStoreKey: current.sessionStoreKey,
                 storePath: current.storePath,
                 targetKey,
-                creation: resolveOperatorSessionCreation(client),
+                creation: {
+                  ...creation,
+                  ...(resolveCreatorSandbox(cfg, creation) === "required"
+                    ? { sandbox: "required" }
+                    : {}),
+                },
               },
               expectedState,
             )

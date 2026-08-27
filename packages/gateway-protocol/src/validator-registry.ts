@@ -22,6 +22,7 @@ export const validateWorkerConnectRequestFrame = compile(S.WorkerConnectRequestF
 export const validateWorkerHeartbeatParams = compile(S.WorkerHeartbeatParamsSchema);
 export const validateWorkerSessionsSpawnParams = compile(S.WorkerSessionsSpawnParamsSchema);
 export const validateWorkerSessionsSendParams = compile(S.WorkerSessionsSendParamsSchema);
+export const validateWorkerPortalParams = compile(S.WorkerPortalParamsSchema);
 
 function checkWorkerProtocolJson(data: unknown): ValidationError | undefined {
   const stack: Array<{ depth: number; value: unknown }> = [{ depth: 0, value: data }];
@@ -441,7 +442,9 @@ export const validateQuestionGetParams = compile(S.QuestionGetParamsSchema);
 export const validateQuestionListParams = compile(S.QuestionListParamsSchema);
 export const validatePluginApprovalRequestParams = compile(S.PluginApprovalRequestParamsSchema);
 export const validatePluginApprovalResolveParams = compile(S.PluginApprovalResolveParamsSchema);
+export const validateCapabilityConsentErrorDetails = compile(S.CapabilityConsentErrorDetailsSchema);
 export const validatePluginsListParams = compile(S.PluginsListParamsSchema);
+export const validatePluginsInspectParams = compile(S.PluginsInspectParamsSchema);
 export const validatePluginsRefreshParams = compile(S.PluginsRefreshParamsSchema);
 export const validatePluginsSearchParams = compile(S.PluginsSearchParamsSchema);
 export const validatePluginsInstallParams = compile(S.PluginsInstallParamsSchema);

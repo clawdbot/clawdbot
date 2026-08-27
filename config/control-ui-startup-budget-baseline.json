@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345049,
-  "reason": "streamed-markdown highlighting changes (#127749, #127754) consumed the ratchet",
-  "updatedAt": "2026-08-22"
+  "startupJsGzipBytes": 344044,
+  "reason": "mobile drawer modal ownership and breakpoint-gated swipe loader; measured 344044 B with desktop request and modal regression coverage",
+  "updatedAt": "2026-08-27"
 }

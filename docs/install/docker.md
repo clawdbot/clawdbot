@@ -440,7 +440,7 @@ Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw`, `OPE
 That mounted config directory holds:
 
 - `openclaw.json` for behavior config
-- `agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `state/openclaw.sqlite` for shared provider auth and `agents/<agentId>/agent/openclaw-agent.sqlite` for agent-local OAuth/API-key profiles
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
 The auth-profile secret directory stores the local encryption key for OAuth-backed auth profile token material. Keep it with your Docker host state, but separate from `OPENCLAW_CONFIG_DIR`.
@@ -583,7 +583,7 @@ Sandbox scope can be per-agent (default), per-session, or shared; each scope get
 For full configuration, images, security notes, and multi-agent profiles:
 
 - [Sandboxing](/gateway/sandboxing) -- complete sandbox reference
-- [OpenShell](/gateway/openshell) -- interactive shell access to sandbox containers
+- [OpenShell](/gateway/openshell) -- OpenShell-managed local or remote sandbox backend
 - [Multi-Agent Sandbox and Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides
 
 ### Quick enable

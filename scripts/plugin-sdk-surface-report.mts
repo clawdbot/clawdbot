@@ -312,7 +312,16 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: conversation-binding inspection result and runtime inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      4340,
+      // +2: embedded foreground prompt context builder and its public context type.
+      // +1: typed owner-declared approval-scope contract for plugin-authored approvals.
+      // -5: approval display sanitizers moved to a non-public leaf module
+      //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
+      // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
+      // +2: exact-session deletion parameters and synchronous companion mutation contract.
+      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      // +1: identifier authentication input type for external channel plugins.
+      // +1: shared channel-account logout config cleanup.
+      4347,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -404,7 +413,13 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: read-only authoritative conversation-binding inspector.
       // +2: restore shipped channel setup helpers until stable packages migrate.
       // +1: canonical untrusted audio-transcript formatter for channel plugins.
-      2581,
+      // +1: embedded foreground prompt context builder.
+      // -4: approval display sanitizers moved to a non-public leaf module
+      //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
+      // +2: bounded ask_user owner-order map builder and option resolver.
+      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      // +1: shared channel-account logout config cleanup.
+      2583,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

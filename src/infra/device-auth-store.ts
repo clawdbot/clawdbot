@@ -34,36 +34,6 @@ type DeviceAuthRow = {
 // outcomes to keep reconnects free of freshness polling; Doctor invalidates
 // the entry after its exclusive legacy import removes the retired file.
 const legacyPresenceCache = new Map<string, boolean>();
-const ensuredOriginDatabases = new WeakSet<DatabaseSync>();
-const ORIGIN_DEVICE_AUTH_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS gateway_origin_device_tokens (
-  gateway_scope TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  role TEXT NOT NULL,
-  token TEXT NOT NULL,
-  scopes_json TEXT NOT NULL,
-  updated_at_ms INTEGER NOT NULL,
-  PRIMARY KEY (gateway_scope, device_id, role)
-) STRICT;
-`;
-
-function ensureOriginDeviceAuthSchema(env?: NodeJS.ProcessEnv): void {
-  assertNoLegacyDeviceAuth(env);
-  const options = env ? { env } : {};
-  const database = openOpenClawStateDatabase(options);
-  if (ensuredOriginDatabases.has(database.db)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      // sqlite-allow-raw -- Feature-local additive schema DDL; token rows use Kysely.
-      db.exec(ORIGIN_DEVICE_AUTH_SCHEMA_SQL);
-    },
-    options,
-    { operationLabel: "device-auth.origin.schema.ensure" },
-  );
-  ensuredOriginDatabases.add(database.db);
-}
 
 function assertNoLegacyDeviceAuth(env: NodeJS.ProcessEnv | undefined): void {
   const stateDir = resolveStateDir(env);
@@ -284,7 +254,7 @@ export function loadOriginDeviceToken(params: {
   role: string;
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry | null {
-  ensureOriginDeviceAuthSchema(params.env);
+  assertNoLegacyDeviceAuth(params.env);
   const { db } = openOpenClawStateDatabase({ env: params.env });
   return readOriginDeviceTokenFromDatabase(db, params);
 }
@@ -317,7 +287,7 @@ export function storeOriginDeviceToken(params: {
   env?: NodeJS.ProcessEnv;
   expectedToken?: string;
 }): DeviceAuthEntry | null {
-  ensureOriginDeviceAuthSchema(params.env);
+  assertNoLegacyDeviceAuth(params.env);
   const entry = createDeviceAuthEntry(params);
   let stored = false;
   runOpenClawStateWriteTransaction(
@@ -374,7 +344,7 @@ export function clearOriginDeviceToken(params: {
   env?: NodeJS.ProcessEnv;
   expectedToken?: string;
 }): boolean {
-  ensureOriginDeviceAuthSchema(params.env);
+  assertNoLegacyDeviceAuth(params.env);
   let cleared = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {

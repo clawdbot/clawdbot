@@ -1,4 +1,4 @@
-// Qa Lab plugin module implements Crabline local-provider transport behavior.
+// Qa Lab plugin module implements Crabline channel-driver transport behavior against local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -22,7 +22,7 @@ import {
   resolveCrablineStateConversation,
   resolveTelegramQaSenderId,
 } from "./crabline-provider-targets.js";
-import { discardIgnoredResponseBody } from "./ignored-response-body.js";
+import { readQaJsonResponse } from "./ignored-response-body.js";
 import {
   QaStateBackedTransportAdapter,
   waitForQaTransportAccountReady,
@@ -43,8 +43,6 @@ import type {
   QaBusMessage,
   QaBusOutboundMessageInput,
 } from "./runtime-api.js";
-
-const CRABLINE_TRANSPORT_ID = "crabline";
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
@@ -179,32 +177,23 @@ async function postCrablineInbound(params: {
     policy: { allowPrivateNetwork: true },
     auditContext: `qa-lab-crabline-${params.adapter.channel}-inbound`,
   });
-  try {
-    if (!response.ok) {
-      await discardIgnoredResponseBody(response);
-      throw new Error(
-        `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
-      );
-    }
-    const result: unknown = await response.json();
-    if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
-      return readStringValue(result.event.event_id);
-    }
-    if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
-      return readStringValue(result.message.ts);
-    }
-    if (
-      params.adapter.channel === "telegram" &&
-      isRecord(result) &&
-      isRecord(result.update) &&
-      isRecord(result.update.message)
-    ) {
-      return normalizeStringifiedOptionalString(result.update.message.message_id);
-    }
-    return undefined;
-  } finally {
-    await release();
+  const label = `Crabline ${params.adapter.channel} inbound injection failed`;
+  const result = await readQaJsonResponse<unknown>(response, release, label);
+  if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
+    return readStringValue(result.event.event_id);
   }
+  if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
+    return readStringValue(result.message.ts);
+  }
+  if (
+    params.adapter.channel === "telegram" &&
+    isRecord(result) &&
+    isRecord(result.update) &&
+    isRecord(result.update.message)
+  ) {
+    return normalizeStringifiedOptionalString(result.update.message.message_id);
+  }
+  return undefined;
 }
 
 function createCrablineState(params: {
@@ -317,7 +306,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     state: QaCrablineTransportState;
   }) {
     super({
-      id: CRABLINE_TRANSPORT_ID,
+      id: "crabline",
       label: `crabline local ${params.selection.channel}`,
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
@@ -404,7 +393,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
+    throw new Error(`Crabline channel-driver transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
@@ -435,7 +424,7 @@ export async function createQaCrablineTransportAdapter(params: {
     params.outputDir,
     "artifacts",
     "crabline",
-    `${params.selection.channel}-fake-provider.jsonl`,
+    `${params.selection.channel}-provider-server.jsonl`,
   );
   await fs.mkdir(path.dirname(recorderPath), { recursive: true });
   let observeEvent = (_event: unknown) => {};

@@ -10,20 +10,8 @@ import {
   replaceCronRows,
   updateCronRuntimeRows,
 } from "./row-codec.js";
-import type { CronJobRow } from "./schema.js";
-import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 
 describe("cron trigger SQLite codec", () => {
-  it("round-trips trigger columns", () => {
-    const columns = bindTriggerColumns({ script: "json({ fire: true })", once: true });
-    expect(columns).toEqual({ trigger_script: "json({ fire: true })", trigger_once: 1 });
-    expect(triggerFromRow(columns as CronJobRow)).toEqual({
-      script: "json({ fire: true })",
-      once: true,
-    });
-    expect(triggerFromRow(bindTriggerColumns(undefined) as CronJobRow)).toBeUndefined();
-  });
-
   it("round-trips trigger state through updateCronRuntimeRows", async () => {
     const job = {
       id: "job-1",

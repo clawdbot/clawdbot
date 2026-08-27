@@ -514,7 +514,14 @@ export function loadBundleManifest(params: {
   };
 }
 
-export function detectBundleManifestFormat(rootDir: string): PluginBundleFormat | null {
+export function detectBundleManifestFormat(
+  rootDir: string,
+  hasPackageExtensions = false,
+): PluginBundleFormat | null {
+  // Explicit package entrypoints own native manifests; bundles only precede native fallback.
+  if (hasPackageExtensions && pluginScanExistsSync(path.join(rootDir, PLUGIN_MANIFEST_FILENAME))) {
+    return null;
+  }
   if (pluginScanExistsSync(path.join(rootDir, CODEX_BUNDLE_MANIFEST_RELATIVE_PATH))) {
     return "codex";
   }

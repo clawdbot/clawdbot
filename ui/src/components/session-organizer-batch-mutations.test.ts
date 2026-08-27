@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -28,6 +29,7 @@ import {
   deleteSession,
   deleteSessionGroup,
   deleteSessionsBatch,
+  patchSession,
   stopCloudWorker,
 } from "./session-organizer-operations.runtime.ts";
 
@@ -45,6 +47,7 @@ function sessionRow(index: number): SidebarRecentSession {
 function createHarness(
   params: {
     methods?: string[] | null;
+    capabilities?: string[];
     scopes?: string[];
     current?: boolean;
     staleAfterRequest?: number;
@@ -93,10 +96,16 @@ function createHarness(
       features:
         params.methods === null
           ? {}
-          : { methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS] },
+          : {
+              methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS],
+              capabilities: params.capabilities ?? [
+                GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
+              ],
+            },
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
+  const patch = vi.fn(async (key: string) => ({ ok: true, key }));
   const refreshReplacement = vi.fn(async () => undefined);
   const refreshTheme = vi.fn();
   const deleteMany = vi.fn(
@@ -113,6 +122,7 @@ function createHarness(
     context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
     gateway: { snapshot },
     sessions: {
+      patch,
       refreshReplacement,
       delete: deleteOne,
       deleteMany,
@@ -140,6 +150,7 @@ function createHarness(
     deleteOne,
     groupsDelete,
     host,
+    patch,
     pruneSidebarSessionEntry,
     publishSessionMutationError,
     refreshReplacement,
@@ -162,6 +173,21 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it("binds Mark as read to the current session identity", async () => {
+    const row = sessionRow(0);
+    const harness = createHarness();
+
+    await expect(patchSession(harness.host, row, { unread: false }, harness.scope)).resolves.toBe(
+      "completed",
+    );
+
+    expect(harness.patch).toHaveBeenCalledWith(
+      row.key,
+      { unread: false },
+      { agentId: "main", expectedSessionId: row.sessionId },
+    );
+  });
+
   it("preflights every lifecycle identity before dispatching the first chunk", async () => {
     const harness = createHarness();
     const rows = Array.from({ length: 101 }, (_, index) => sessionRow(index));
@@ -220,6 +246,41 @@ describe("patchSessionRows", () => {
       rows[100]!.key,
     ]);
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+  });
+
+  it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
+    "preserves captured identities for metadata patch %j",
+    async (patch) => {
+      const rows = [sessionRow(0), sessionRow(1)];
+      const harness = createHarness();
+
+      await patchSessionRows(harness.host, rows, patch, harness.scope);
+
+      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+        targets: rows.map((row) => ({
+          key: row.key,
+          agentId: "main",
+          expectedSessionId: row.sessionId,
+        })),
+        patch,
+      });
+    },
+  );
+
+  it("keeps batch read identity independent of the unread acknowledgement capability", async () => {
+    const rows = [sessionRow(0), sessionRow(1)];
+    const harness = createHarness({ capabilities: [] });
+
+    await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
+
+    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+      targets: rows.map((row) => ({
+        key: row.key,
+        agentId: "main",
+        expectedSessionId: row.sessionId,
+      })),
+      patch: { unread: false },
+    });
   });
 
   it("sends no requests or refresh when the mutation scope is already stale", async () => {

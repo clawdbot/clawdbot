@@ -105,6 +105,26 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
+  it("includes selected capability overrides in the atomic create request", () => {
+    const toolOverrides = {
+      mcpServers: { github: false },
+      skills: { release: false },
+      webSearch: false,
+    };
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "use these capabilities",
+        toolOverrides,
+        worktree: false,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "use these capabilities",
+      toolOverrides,
+    });
+  });
+
   it("does not combine a catalog target with a draft model override", () => {
     expect(
       buildDraftSessionCreateParams({

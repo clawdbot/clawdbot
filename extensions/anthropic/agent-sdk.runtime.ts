@@ -5,7 +5,6 @@ import type {
   Options as ClaudeAgentSdkOptions,
   PermissionResult as ClaudeAgentSdkPermissionResult,
   Query as ClaudeAgentSdkQuery,
-  SDKUserMessage as ClaudeAgentSdkUserMessage,
   SpawnOptions as ClaudeAgentSdkSpawnOptions,
   SpawnedProcess as ClaudeAgentSdkSpawnedProcess,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -17,6 +16,11 @@ import type {
 } from "openclaw/plugin-sdk/cli-backend";
 import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createClaudeAgentSdkUserMessage,
+  splitClaudeToolNames,
+} from "./agent-sdk-runtime-helpers.js";
+import { createClaudeAgentSdkUserInputAuthorizer } from "./agent-sdk-user-input.js";
 
 const CLAUDE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] satisfies NonNullable<
   ClaudeAgentSdkOptions["effort"]
@@ -75,6 +79,7 @@ type ClaudeAgentSdkSecretInput = {
 type ClaudeAgentSdkTurn = {
   context: CliBackendExecuteContext;
   controller: AbortController;
+  userInput: ReturnType<typeof createClaudeAgentSdkUserInputAuthorizer>;
 };
 
 type ClaudeAgentSdkLiveTurn = ClaudeAgentSdkTurn & {
@@ -98,13 +103,6 @@ type ClaudeAgentSdkSession = {
 };
 
 const claudeAgentSdkSessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeAgentSdkSession>();
-
-function splitClaudeToolNames(value: string): string[] {
-  return value
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean);
-}
 
 function spawnClaudeAgentSdkProcess(
   options: ClaudeAgentSdkSpawnOptions,
@@ -178,12 +176,19 @@ async function authorizeClaudeAgentSdkTool(params: {
     return { behavior: "deny", message: "The OpenClaw run is no longer active." };
   }
   try {
-    const decision = await turn.context.requestToolPermission({
-      toolName: params.toolName,
-      toolInput: params.input,
-      ...(params.toolUseId ? { toolCallId: params.toolUseId } : {}),
-      abortSignal: params.signal,
-    });
+    const decision =
+      params.toolName === "AskUserQuestion"
+        ? await turn.userInput.authorize({
+            input: params.input,
+            signal: params.signal,
+            ...(params.toolUseId ? { toolUseId: params.toolUseId } : {}),
+          })
+        : await turn.context.requestToolPermission({
+            toolName: params.toolName,
+            toolInput: params.input,
+            ...(params.toolUseId ? { toolCallId: params.toolUseId } : {}),
+            abortSignal: params.signal,
+          });
     if (params.currentTurn() !== turn || params.signal.aborted || turn.controller.signal.aborted) {
       return { behavior: "deny", message: "The OpenClaw run is no longer active." };
     }
@@ -445,18 +450,6 @@ function resolveClaudeAgentSdkOptions(
   return options;
 }
 
-function createClaudeAgentSdkUserMessage(
-  context: CliBackendExecuteContext,
-): ClaudeAgentSdkUserMessage {
-  return {
-    type: "user",
-    message: { role: "user", content: context.prompt },
-    parent_tool_use_id: null,
-    uuid: randomUUID(),
-    ...(context.sessionId ? { session_id: context.sessionId } : {}),
-  };
-}
-
 function closeClaudeAgentSdkSession(
   session: ClaudeAgentSdkSession,
   _reason: CliBackendLiveSessionCloseReason,
@@ -608,6 +601,7 @@ async function* executeClaudeAgentSdkLiveTurn(
   const turn: ClaudeAgentSdkLiveTurn = {
     context,
     controller: new AbortController(),
+    userInput: createClaudeAgentSdkUserInputAuthorizer(context),
     events: new PassThrough({ objectMode: true }),
     sawTerminalResult: false,
   };
@@ -659,7 +653,6 @@ async function* executeClaudeAgentSdkLiveTurn(
   }
 }
 
-/** Execute Claude Code through Anthropic's maintained SDK transport and private auth boundary. */
 export async function* executeClaudeAgentSdk(
   context: CliBackendExecuteContext,
   secretInput?: ClaudeAgentSdkSecretInput,
@@ -674,6 +667,7 @@ export async function* executeClaudeAgentSdk(
   let activeTurn: ClaudeAgentSdkTurn | undefined = {
     context,
     controller,
+    userInput: createClaudeAgentSdkUserInputAuthorizer(context),
   };
   let sawTerminalResult = false;
   const abort = () => controller.abort();

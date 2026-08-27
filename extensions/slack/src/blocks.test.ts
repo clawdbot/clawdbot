@@ -158,7 +158,7 @@ describe("buildSlackBlocksFallbackText", () => {
   });
 
   it("renders rich text and context without hidden metadata", () => {
-    const richText = renderSlackBlockFallbackText({
+    const richTextBlock = {
       type: "rich_text",
       block_id: "private-block-id",
       elements: [
@@ -185,12 +185,17 @@ describe("buildSlackBlocksFallbackText", () => {
                   url: "https://example.com/private-target",
                   text: "Second",
                 },
+                { type: "text", text: " for " },
+                { type: "usergroup", usergroup_id: "S123" },
+                { type: "text", text: " " },
+                { type: "broadcast", range: "here" },
               ],
             },
           ],
         },
       ],
-    });
+    };
+    const richText = renderSlackBlockFallbackText(richTextBlock);
     const context = renderSlackBlockFallbackText({
       type: "context",
       elements: [
@@ -200,7 +205,13 @@ describe("buildSlackBlocksFallbackText", () => {
     });
 
     expect(richText).toBe(
-      "Ask &lt;@U123&gt; &lt;!channel&gt; in &lt;#C123&gt; :wave:\nFirst\nSecond",
+      "Ask &lt;@U123&gt; &lt;!channel&gt; in &lt;#C123&gt; :wave:\nFirst\nSecond for &lt;!subteam^S123&gt; &lt;!here&gt;",
+    );
+    expect(renderSlackBlockFallbackText(richTextBlock, { nativeDataFormat: "plain" })).toBe(
+      richText,
+    );
+    expect(renderSlackBlockFallbackText(richTextBlock, { nativeReferenceFormat: "plain" })).toBe(
+      "Ask <@U123> &lt;!channel&gt; in <#C123> :wave:\nFirst\nSecond for <!subteam^S123> <!here>",
     );
     expect(richText).not.toContain("private-block-id");
     expect(richText).not.toContain("private-target");

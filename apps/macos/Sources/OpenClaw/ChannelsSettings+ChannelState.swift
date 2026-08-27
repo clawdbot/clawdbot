@@ -423,23 +423,19 @@ extension ChannelsSettings {
     func channelDetails(_ channel: ChannelItem) -> String? {
         switch channel.id {
         case "whatsapp":
-            return self.whatsAppDetails
+            self.whatsAppDetails
         case "telegram":
-            return self.telegramDetails
+            self.telegramDetails
         case "discord":
-            return self.discordDetails
+            self.discordDetails
         case "googlechat":
-            return self.googlechatDetails
+            self.googlechatDetails
         case "signal":
-            return self.signalDetails
+            self.signalDetails
         case "imessage":
-            return self.imessageDetails
+            self.imessageDetails
         default:
-            let status = self.channelStatusDictionary(channel.id)
-            if let err = status?["lastError"]?.stringValue, !err.isEmpty {
-                return "Error: \(err)"
-            }
-            return nil
+            self.channelError(channel).map { "Error: \($0)" }
         }
     }
 
@@ -487,35 +483,18 @@ extension ChannelsSettings {
     }
 
     func channelHasError(_ channel: ChannelItem) -> Bool {
-        switch channel.id {
-        case "whatsapp":
-            guard let status = self.channelStatus("whatsapp", as: ChannelsStatusSnapshot.WhatsAppStatus.self)
-            else { return false }
-            return status.lastError?.isEmpty == false || status.lastDisconnect?.loggedOut == true
-        case "telegram":
-            guard let status = self.channelStatus("telegram", as: ChannelsStatusSnapshot.TelegramStatus.self)
-            else { return false }
-            return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case "discord":
-            guard let status = self.channelStatus("discord", as: ChannelsStatusSnapshot.DiscordStatus.self)
-            else { return false }
-            return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case "googlechat":
-            guard let status = self.channelStatus("googlechat", as: ChannelsStatusSnapshot.GoogleChatStatus.self)
-            else { return false }
-            return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case "signal":
-            guard let status = self.channelStatus("signal", as: ChannelsStatusSnapshot.SignalStatus.self)
-            else { return false }
-            return status.lastError?.isEmpty == false || status.probe?.ok == false
-        case "imessage":
-            guard let status = self.channelStatus("imessage", as: ChannelsStatusSnapshot.IMessageStatus.self)
-            else { return false }
-            return status.lastError?.isEmpty == false || status.probe?.ok == false
-        default:
-            let status = self.channelStatusDictionary(channel.id)
-            return status?["lastError"]?.stringValue?.isEmpty == false
-        }
+        let status = self.channelStatusDictionary(channel.id)
+        if self.channelError(channel) != nil { return true }
+        if status?["probe"]?.dictionaryValue?["ok"]?.boolValue == false { return true }
+        return channel.id == "whatsapp" &&
+            status?["lastDisconnect"]?.dictionaryValue?["loggedOut"]?.boolValue == true
+    }
+
+    private func channelError(_ channel: ChannelItem) -> String? {
+        let statusError = self.channelStatusDictionary(channel.id)?["lastError"]?.stringValue
+        if let statusError, !statusError.isEmpty { return statusError }
+        return self.store.snapshot?.channelAccounts[channel.id]?
+            .first(where: { $0.lastError?.isEmpty == false })?.lastError
     }
 
     private func resolveChannelTitle(_ id: String) -> String {

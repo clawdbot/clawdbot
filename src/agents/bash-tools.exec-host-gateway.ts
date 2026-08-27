@@ -5,14 +5,21 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  buildCronExecOperationBinding,
+  consumeCronStandingGrant,
+  validateCronStandingGrant,
+} from "../gateway/operator-approval-standing-grants.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import { lookupCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type AllowAlwaysPersistenceDecision,
   commitExecAuthorizationLocked,
   commandRequiresSecurityAuditSuppressionApproval,
+  countObsoleteGeneratedExecApprovals,
   createExecApprovalPolicySnapshot,
   type ExecAsk,
   type ExecApprovalUsageAuthorization,
@@ -44,6 +51,12 @@ import {
   revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
+import {
+  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+  type ApprovedCwdSnapshot,
+  captureApprovedCwdSnapshotSync,
+  revalidateApprovedCwdSnapshot,
+} from "../infra/system-run-cwd-binding.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
@@ -392,9 +405,19 @@ function buildGatewayExecApprovalFollowupSummary(params: {
 function shouldAwaitGatewayApprovalInline(params: {
   turnSourceChannel?: string;
   approvalFollowupMode?: "agent" | "direct";
+  trigger?: string;
 }): boolean {
   if (params.approvalFollowupMode !== undefined) {
     return false;
+  }
+  // Scheduled runs cannot recover from an "approval-pending" handoff: the
+  // isolated session ends and authority-close cancels the parked approval
+  // seconds later. Wait inline so a connected approval client gets the full
+  // approval window; allow-always there mints the standing grant and this
+  // occurrence executes. Cron jobs are single-flight, so waiting cannot
+  // stack runs.
+  if (params.trigger === "cron") {
+    return true;
   }
   // Native chat approval clients (Telegram /approve, Discord buttons,
   // etc.) resolve the approval back into the same session, so the agent can
@@ -428,23 +451,41 @@ function buildGatewayExecApprovalDeniedToolResult(params: {
   };
 }
 
+async function resolveGatewayExecApprovalDrift(params: {
+  binding?: SystemRunMutableFileBinding;
+  cwdSnapshot?: ApprovedCwdSnapshot;
+  cwd: string;
+}): Promise<string | undefined> {
+  if (params.binding) {
+    const current = await revalidateSystemRunMutableFileBinding({
+      binding: params.binding,
+      cwd: params.cwd,
+    });
+    if (!current.ok) {
+      return current.message;
+    }
+  }
+  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
+    return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
+  }
+  return undefined;
+}
+
 /** Rechecks a gateway approval binding at the caller's final spawn boundary. */
 async function revalidateGatewayExecApprovalBinding(params: {
-  binding: SystemRunMutableFileBinding;
+  binding?: SystemRunMutableFileBinding;
+  cwdSnapshot?: ApprovedCwdSnapshot;
   command: string;
   cwd: string;
 }): Promise<AgentToolResult<ExecToolDetails> | undefined> {
-  const current = await revalidateSystemRunMutableFileBinding({
-    binding: params.binding,
-    cwd: params.cwd,
-  });
-  return current.ok
-    ? undefined
-    : buildGatewayExecApprovalDeniedToolResult({
-        deniedReason: current.message,
+  const deniedReason = await resolveGatewayExecApprovalDrift(params);
+  return deniedReason
+    ? buildGatewayExecApprovalDeniedToolResult({
+        deniedReason,
         command: params.command,
         cwd: params.cwd,
-      });
+      })
+    : undefined;
 }
 
 async function resolveGatewayExecApprovalFollowupText(params: {
@@ -480,6 +521,20 @@ export async function processGatewayAllowlist(
     ask: params.ask,
     host: "gateway",
   });
+  const cwdAuthorizationBound = hostSecurity === "allowlist" || hostAsk !== "off";
+  const capturedCwd = cwdAuthorizationBound
+    ? captureApprovedCwdSnapshotSync(params.workdir)
+    : undefined;
+  if (capturedCwd && !capturedCwd.ok) {
+    return {
+      deniedResult: buildGatewayExecApprovalDeniedToolResult({
+        deniedReason: capturedCwd.message,
+        command: params.command,
+        cwd: params.workdir,
+      }),
+    };
+  }
+  const approvedCwdSnapshot = capturedCwd?.snapshot;
   const evaluationPolicySnapshot = createExecApprovalPolicySnapshot({
     file: approvals.file,
     agentId: params.agentId,
@@ -499,6 +554,12 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  const obsoleteGeneratedApprovalCount = countObsoleteGeneratedExecApprovals(approvals.file);
+  if (hostSecurity === "allowlist" && !allowlistSatisfied && obsoleteGeneratedApprovalCount > 0) {
+    params.warnings.push(
+      `${obsoleteGeneratedApprovalCount} older generated exec ${obsoleteGeneratedApprovalCount === 1 ? "approval is" : "approvals are"} inactive because they are not tied to a working directory. Run "openclaw doctor --fix", then rerun the workflow and choose "Always allow here".`,
+    );
+  }
   const durableApprovalSatisfied = hasDurableExecApproval({
     analysisOk,
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
@@ -776,6 +837,89 @@ export async function processGatewayAllowlist(
     mutableFileBinding = prepared.binding;
   }
   const mutableFileApprovalRequiresOneShot = (mutableFileBinding?.operands.length ?? 0) > 0;
+  // Cron standing grants: a prior allow-always for this exact job + operation
+  // minted a scoped SQLite grant instead of a JSON allowlist digest. Consult it
+  // before prompting; any validation failure falls through to the normal prompt
+  // path (fail closed to prompting, never to silent execution or denial).
+  // Special approval classes (inline eval, heredoc, audit suppression) and
+  // mutable operands keep prompting — mirroring one-shot durable-trust guards.
+  const cronExecutionSource =
+    params.runId && params.agentId ? lookupCronRunExecSource(params.runId) : undefined;
+  const cronStandingGrantEligible =
+    policyRequiresAsk &&
+    // Mirror durable-approval semantics: ask "always" and security "deny"
+    // always keep their prompt/deny behavior regardless of standing trust.
+    hostAsk !== "always" &&
+    hostSecurity !== "deny" &&
+    cronExecutionSource !== undefined &&
+    cronExecutionSource.agentId === params.agentId &&
+    !mutableFileApprovalRequiresOneShot &&
+    !requiresInlineEvalApproval &&
+    !requiresHeredocApproval &&
+    !requiresSecurityAuditSuppressionApproval;
+  if (cronStandingGrantEligible) {
+    const grantLookup = {
+      agentId: cronExecutionSource.agentId,
+      cronJobId: cronExecutionSource.jobId,
+      jobConfigRevision: cronExecutionSource.jobConfigRevision,
+      operationBinding: buildCronExecOperationBinding({
+        command: params.command,
+        cwd: params.workdir,
+        env: params.requestedEnv,
+      }),
+    };
+    let grantCheck: ReturnType<typeof validateCronStandingGrant> | undefined;
+    try {
+      grantCheck = validateCronStandingGrant(grantLookup);
+    } catch {
+      grantCheck = undefined;
+    }
+    if (grantCheck?.outcome === "consumed") {
+      const emitGrantEvent = (approved: boolean, reason: string) =>
+        emitGatewayExecApprovalSecurityEvent({
+          action: approved ? "exec.approval.approved" : "exec.approval.denied",
+          outcome: approved ? "success" : "denied",
+          severity: "medium",
+          agentId: params.agentId,
+          reason,
+          hostSecurity,
+          hostAsk,
+          host: "gateway",
+          segmentCount: allowlistEval.segments.length,
+          trigger: params.trigger,
+          decision: "standing-grant",
+        });
+      return {
+        execCommandOverride: enforcedCommand,
+        // Durable authority is recorded only at the final effect: awaited
+        // pre-spawn work (script preflight) can outlive a revocation or job
+        // edit, so the grant is re-verified and consumed right before the
+        // process spawns and any failure denies instead of executing.
+        revalidateBeforeExecution: async () => {
+          let grantUse: ReturnType<typeof consumeCronStandingGrant> | undefined;
+          try {
+            grantUse = consumeCronStandingGrant(grantLookup);
+          } catch {
+            grantUse = undefined;
+          }
+          if (grantUse?.outcome === "consumed") {
+            emitGrantEvent(
+              true,
+              `standing-grant grant=${grantUse.grant.grantId} approval=${grantUse.grant.mintedByApprovalId}`,
+            );
+            return undefined;
+          }
+          const invalidReason = grantUse?.outcome ?? "grant-store-unavailable";
+          emitGrantEvent(false, `standing-grant-invalidated ${invalidReason}`);
+          return buildGatewayExecApprovalDeniedToolResult({
+            deniedReason: `standing grant no longer valid (${invalidReason}); the next occurrence will prompt for approval again`,
+            command: params.command,
+            cwd: params.workdir,
+          });
+        },
+      };
+    }
+  }
   const requiresAsk =
     policyRequiresAsk || (durableApprovalRequiresBinding && mutableFileApprovalRequiresOneShot);
   // Mutable operands and unenforceable patterns cannot authorize later cwd/env bindings.
@@ -816,10 +960,11 @@ export async function processGatewayAllowlist(
     }
     const approvalMutableFileBinding = mutableFileBinding;
     const revalidateBeforeExecution =
-      approvalMutableFileBinding.operands.length > 0
+      approvedCwdSnapshot || approvalMutableFileBinding.operands.length > 0
         ? () =>
             revalidateGatewayExecApprovalBinding({
               binding: approvalMutableFileBinding,
+              cwdSnapshot: approvedCwdSnapshot,
               command: params.command,
               cwd: params.workdir,
             })
@@ -915,6 +1060,7 @@ export async function processGatewayAllowlist(
       ) {
         const deniedResult = await revalidateGatewayExecApprovalBinding({
           binding: approvalMutableFileBinding,
+          cwdSnapshot: approvedCwdSnapshot,
           command: params.command,
           cwd: params.workdir,
         });
@@ -1051,15 +1197,16 @@ export async function processGatewayAllowlist(
         );
       }
 
-      const currentBinding = await revalidateSystemRunMutableFileBinding({
+      const deniedReason = await resolveGatewayExecApprovalDrift({
         binding: approvalMutableFileBinding,
+        cwdSnapshot: approvedCwdSnapshot,
         cwd: params.workdir,
       });
-      if (!currentBinding.ok) {
+      if (deniedReason) {
         return {
           deniedResult: buildGatewayExecApprovalDeniedToolResult({
             approvalId,
-            deniedReason: currentBinding.message,
+            deniedReason,
             command: params.command,
             cwd: params.workdir,
           }),
@@ -1164,12 +1311,13 @@ export async function processGatewayAllowlist(
       }
 
       if (!deniedReason && approvedByAsk) {
-        const currentBinding = await revalidateSystemRunMutableFileBinding({
+        const bindingDenied = await resolveGatewayExecApprovalDrift({
           binding: approvalMutableFileBinding,
+          cwdSnapshot: approvedCwdSnapshot,
           cwd: params.workdir,
         });
-        if (!currentBinding.ok) {
-          deniedReason = currentBinding.message;
+        if (bindingDenied) {
+          deniedReason = bindingDenied;
         }
       }
 
@@ -1191,8 +1339,12 @@ export async function processGatewayAllowlist(
         requestFailed: false,
         authorizationSource:
           decision === null ? ("ask-fallback" as const) : ("explicit-approval" as const),
+        // Cron contexts mint a scoped standing grant in the durable resolution
+        // transaction instead of writing an unbounded JSON allowlist digest.
         allowAlwaysDecision:
-          decision === "allow-always" ? approvalAllowAlwaysPersistence : undefined,
+          decision === "allow-always" && !cronExecutionSource
+            ? approvalAllowAlwaysPersistence
+            : undefined,
         execCommandOverride:
           decision === null && fallbackSecurity === "allowlist"
             ? fallbackEnforcedCommand
@@ -1351,21 +1503,20 @@ export async function processGatewayAllowlist(
             return { status: "run-aborted" as const };
           }
 
-          const currentBinding = await revalidateSystemRunMutableFileBinding({
+          const bindingDenied = await resolveGatewayExecApprovalDrift({
             binding: approvalMutableFileBinding,
+            cwdSnapshot: approvedCwdSnapshot,
             cwd: params.workdir,
           });
-          if (!currentBinding.ok) {
+          if (bindingDenied) {
             return {
               status: "operand-drift" as const,
-              message: currentBinding.message,
+              message: bindingDenied,
             };
           }
-          if (params.signal?.aborted) {
-            return { status: "run-aborted" as const };
-          }
-
           let run: Awaited<ReturnType<typeof runExecProcess>>;
+          let finalBindingDenied: string | undefined;
+          const finalBindingDeniedError = new Error("gateway approval changed before spawn");
           try {
             gatewayInvocationStarted = true;
             run = await runExecProcess({
@@ -1385,8 +1536,26 @@ export async function processGatewayAllowlist(
               scopeKey: params.scopeKey,
               sessionKey: params.notifySessionKey ?? params.sessionKey,
               timeoutSec: effectiveTimeout,
+              startupSignal: params.signal,
+              beforeSpawn: async () => {
+                finalBindingDenied = await resolveGatewayExecApprovalDrift({
+                  binding: approvalMutableFileBinding,
+                  cwdSnapshot: approvedCwdSnapshot,
+                  cwd: params.workdir,
+                });
+                if (finalBindingDenied) {
+                  throw finalBindingDeniedError;
+                }
+                return undefined;
+              },
             });
-          } catch {
+          } catch (error) {
+            if (params.signal?.aborted) {
+              return { status: "run-aborted" as const };
+            }
+            if (error === finalBindingDeniedError && finalBindingDenied) {
+              return { status: "operand-drift" as const, message: finalBindingDenied };
+            }
             return { status: "spawn-failed" as const };
           }
 
@@ -1500,6 +1669,18 @@ export async function processGatewayAllowlist(
     ),
   });
 
-  return { execCommandOverride: enforcedCommand };
+  return {
+    execCommandOverride: enforcedCommand,
+    ...(approvedCwdSnapshot
+      ? {
+          revalidateBeforeExecution: () =>
+            revalidateGatewayExecApprovalBinding({
+              cwdSnapshot: approvedCwdSnapshot,
+              command: params.command,
+              cwd: params.workdir,
+            }),
+        }
+      : {}),
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

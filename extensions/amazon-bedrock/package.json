@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1111.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1111.0",
+    "@aws-sdk/client-bedrock": "3.1114.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1114.0",
     "@aws-sdk/credential-provider-node": "3.972.80",
     "@smithy/node-http-handler": "4.11.2",
     "@smithy/shared-ini-file-loader": "4.7.2",

@@ -4,9 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import {
-  CHAT_RUN_STATUS_TOAST_DURATION_MS,
   handleAbortChat,
   hasAbortableSessionRun,
   hasDirectSessionRun,
@@ -17,6 +17,8 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+
+const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
 
 type ReconcileHost = Parameters<typeof reconcileChatRunFromCurrentSessionRow>[0];
 type TestRow = {
@@ -91,6 +93,23 @@ describe("handleAbortChat", () => {
       key: "agent:main",
       clearQueued: true,
     });
+  });
+
+  it("routes recovered embedded Stop through sessions.abort with its run id", async () => {
+    const request = vi.fn(async () => ({ status: "aborted" }));
+    const host = makeAbortHost({
+      client: createTestGatewayClient(request),
+      chatRunId: "run-embedded-recovered",
+      chatRunSessionAbortable: true,
+    });
+
+    await handleAbortChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.abort", {
+      key: "agent:main",
+      runId: "run-embedded-recovered",
+    });
+    expect(request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
   });
 
   it("shows reconnect guidance when an offline session run has no browser run identity", async () => {
@@ -702,7 +721,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       ]),
       sessions: {
         reconcileRunTerminal,
-        setModelOverride: vi.fn(),
       },
     });
 
@@ -737,7 +755,6 @@ describe("reconcileChatRunFromCurrentSessionRow stale-active suppression (#87875
       sessionsResult: null,
       sessions: {
         reconcileRunTerminal,
-        setModelOverride: vi.fn(),
       },
     });
 

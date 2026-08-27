@@ -9,7 +9,6 @@ import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   SESSION_ICON_GLYPH_IDS,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -38,9 +37,10 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createAgentToAgentPolicy,
-  resolveEffectiveSessionToolsVisibility,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
   resolveSessionToolAccess,
+  runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -302,15 +302,17 @@ async function resolvePatchTarget(
       targetAgentId: agentId,
       targetSessionKey: resolved.key,
       requesterOwned: resolved.requesterOwned === true,
-      visibility: resolveEffectiveSessionToolsVisibility({
-        cfg: context.cfg,
-        sandboxed: opts.sandboxed === true,
-      }),
-      a2aPolicy: createAgentToAgentPolicy(context.cfg),
+      visibility: context.sessionVisibility,
+      a2aPolicy: context.a2aPolicy,
       callGateway,
     });
     if (!access.allowed) {
-      throw new ToolAuthorizationError(access.error);
+      throw new ToolAuthorizationError(
+        formatSessionToolAccessDenial(access, {
+          action: "status",
+          targetSessionKey: resolved.displayKey,
+        }),
+      );
     }
   }
   return {
@@ -341,7 +343,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (action === "reset" || action === "delete") {
         const rawKey = readToolStringParam(params, "sessionKey", { required: true });
         const { agentId, isRequesterSession, key } = await resolvePatchTarget(
-          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          opts,
           rawKey,
           gatewayRequest,
         );
@@ -350,9 +352,24 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
         if (action === "reset") {
-          return jsonResult(
-            await callGateway("sessions.reset", { key, ...agentScope, reason: "reset" }),
-          );
+          const result = await runSessionToolActionWithConflictReceipt({
+            operation: "reset",
+            targetAgentId: agentId,
+            targetSessionKey: key,
+            run: async () =>
+              await callGateway("sessions.reset", {
+                key,
+                ...agentScope,
+                reason: "reset",
+              }),
+          });
+          recordSessionToolActionFact({
+            operation: "reset",
+            fact: "committed",
+            targetAgentId: agentId,
+            targetSessionKey: key,
+          });
+          return jsonResult(result);
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
@@ -362,13 +379,19 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (!expectedSessionId) {
           throw new ToolInputError("Session lifecycle action requires a durable session identity");
         }
-        const archived = await callGateway<{
-          entry?: { sessionId?: string; lifecycleRevision?: string };
-        }>("sessions.patch", {
-          key,
-          ...agentScope,
-          expectedSessionId,
-          archived: true,
+        const archived = await runSessionToolActionWithConflictReceipt({
+          operation: "delete",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          run: async () =>
+            await callGateway<{
+              entry?: { sessionId?: string; lifecycleRevision?: string };
+            }>("sessions.patch", {
+              key,
+              ...agentScope,
+              expectedSessionId,
+              archived: true,
+            }),
         });
         const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
         if (!archivedSessionId) {
@@ -377,16 +400,29 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         const expectedLifecycleRevision = normalizeOptionalString(
           archived.entry?.lifecycleRevision,
         );
-        return jsonResult(
-          await callGateway("sessions.delete", {
-            key,
-            ...agentScope,
-            archivedOnly: true,
-            expectedSessionId: archivedSessionId,
-            ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-            deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
-          }),
-        );
+        const result = await runSessionToolActionWithConflictReceipt({
+          operation: "delete",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          run: async () =>
+            await callGateway<{ deleted?: boolean }>("sessions.delete", {
+              key,
+              ...agentScope,
+              archivedOnly: true,
+              expectedSessionId: archivedSessionId,
+              ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+              deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
+            }),
+        });
+        recordSessionToolActionFact({
+          operation: "delete",
+          // Archive is part of this composite action and already committed.
+          // A delete miss therefore cannot make the whole operation a no-op.
+          fact: "committed",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+        });
+        return jsonResult(result);
       }
       if (action === "group_list") {
         return jsonResult(await callGateway("sessions.groups.list", {}));
@@ -400,7 +436,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
           throw new ToolInputError("assign_owner requires ownerType and ownerId");
         }
         const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
-          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          opts,
           normalizeOptionalString(readToolStringParam(params, "sessionKey")),
           gatewayRequest,
         );
@@ -449,7 +485,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
 
       const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
-        { ...opts, config: opts.config ?? getRuntimeConfig() },
+        opts,
         normalizeOptionalString(readToolStringParam(params, "sessionKey")),
         gatewayRequest,
       );
@@ -635,6 +671,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
               });
 
+            recordSessionToolActionFact({
+              operation: "archive",
+              fact: "scheduled",
+              targetAgentId: agentId,
+              targetSessionKey: key,
+            });
+
             return jsonResult(
               withBoundedSessionsResolved(
                 {
@@ -649,7 +692,20 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
       }
 
-      const result = await callSessionPatch({ ...patch, ...agentScope });
+      const operation =
+        archived === true ? "archive" : archived === false ? "restore" : ("patch" as const);
+      const result = await runSessionToolActionWithConflictReceipt({
+        operation,
+        targetAgentId: agentId,
+        targetSessionKey: key,
+        run: async () => await callSessionPatch({ ...patch, ...agentScope }),
+      });
+      recordSessionToolActionFact({
+        operation,
+        fact: "committed",
+        targetAgentId: agentId,
+        targetSessionKey: key,
+      });
       return jsonResult(
         withBoundedSessionsResolved(
           {

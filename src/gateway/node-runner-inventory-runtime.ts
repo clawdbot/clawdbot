@@ -110,7 +110,9 @@ export function sameNodeWorkerHostDeclaration(
         left.capacity.available === right.capacity.available &&
         left.bundlePrewarm === right.bundlePrewarm &&
         left.bundleRetention === right.bundleRetention &&
-        left.bundleStatus === right.bundleStatus))
+        left.bundleStatus === right.bundleStatus &&
+        left.portalStream === right.portalStream &&
+        left.environmentSession === right.environmentSession))
   );
 }
 

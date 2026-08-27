@@ -8,6 +8,7 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { resolveNodeInvokeRuntimeAuthorityError } from "./server-methods/nodes.invoke-authority.js";
@@ -156,6 +157,113 @@ describe("typed in-process agent authorization", () => {
       connect: { scopes: ["operator.read"] },
       internal: { syntheticClient: true },
     });
+  });
+
+  it("does not fall back to ambient scope when an explicit Gateway binding is retired", async () => {
+    const ambient = createContext();
+    ambient.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.list",
+          scope: "operator.read",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ respond }: GatewayRequestHandlerOptions) => {
+            respond(true, { sessions: [] });
+          },
+        },
+      ]);
+
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        context: ambient,
+        isWebchatConnect: () => false,
+      },
+      async () =>
+        await expect(
+          dispatchGatewayMethodInProcess(
+            "sessions.list",
+            {},
+            {
+              forceSyntheticClient: true,
+              resolveGatewayContext: () => undefined,
+              syntheticScopes: ["operator.read"],
+            },
+          ),
+        ).rejects.toThrow("instance binding"),
+    );
+  });
+
+  it("carries an explicit Gateway binding into the session mutation commit guard", async () => {
+    const admitted = createContext();
+    const replacement = createContext();
+    let current = admitted;
+    let committed = false;
+    const setupStarted = createDeferredCore();
+    const releaseSetup = createDeferredCore();
+    admitted.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.create",
+          scope: "operator.write",
+          owner: { kind: "core", area: "sessions" },
+          handler: async ({
+            respond,
+            sessionMutationCommitGuard,
+          }: GatewayRequestHandlerOptions) => {
+            setupStarted.resolve();
+            await releaseSetup.promise;
+            sessionMutationCommitGuard?.();
+            committed = true;
+            respond(true, { key: "agent:main:dashboard:child" });
+          },
+        },
+      ]);
+
+    const dispatch = dispatchGatewayMethodInProcess(
+      "sessions.create",
+      { agentId: "main" },
+      {
+        forceSyntheticClient: true,
+        resolveGatewayContext: () => current,
+        syntheticScopes: ["operator.write"],
+      },
+    );
+    await setupStarted.promise;
+    current = replacement;
+    releaseSetup.resolve();
+
+    await expect(dispatch).rejects.toThrow("current gateway instance binding");
+    expect(committed).toBe(false);
+  });
+
+  it("composes caller authority into the session mutation commit guard", async () => {
+    const admitted = createContext();
+    const assertCallerCurrent = vi.fn();
+    admitted.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "sessions.create",
+          scope: "operator.write",
+          owner: { kind: "core", area: "sessions" },
+          handler: ({ respond, sessionMutationCommitGuard }: GatewayRequestHandlerOptions) => {
+            sessionMutationCommitGuard?.();
+            respond(true, { key: "agent:main:dashboard:child" });
+          },
+        },
+      ]);
+
+    await dispatchGatewayMethodInProcess(
+      "sessions.create",
+      { agentId: "main" },
+      {
+        forceSyntheticClient: true,
+        resolveGatewayContext: () => admitted,
+        sessionMutationCommitGuard: assertCallerCurrent,
+        syntheticScopes: ["operator.write"],
+      },
+    );
+
+    expect(assertCallerCurrent).toHaveBeenCalledOnce();
   });
 
   it("preserves the scoped operator identity across synthetic model-initiated session creation", async () => {

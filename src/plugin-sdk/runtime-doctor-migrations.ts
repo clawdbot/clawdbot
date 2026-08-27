@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
@@ -324,7 +325,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   const readSource = async (filePath: string): Promise<TSource | null> => {
     try {
       return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-    } catch {
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
       return null;
     }
   };
@@ -365,8 +369,8 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
         maxEntries: params.maxEntries,
         ...(params.overflowPolicy ? { overflowPolicy: params.overflowPolicy } : {}),
       });
+      const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
       if (params.capacityPrecheck) {
-        const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
         const missingKeys = new Set(
           rows.map((row) => row.key).filter((key) => !existingKeys.has(key)),
         );
@@ -381,6 +385,17 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
         if (await store.registerIfAbsent(row.key, row.value)) {
           imported++;
         }
+      }
+      // Successful inserts can evict earlier rows. Verify source and existing keys
+      // before reporting completion or removing the source from future doctor runs.
+      const retainedKeys = new Set((await store.entries()).map((entry) => entry.key));
+      const expectedKeys = new Set([...existingKeys, ...rows.map((row) => row.key)]);
+      const missing = [...expectedKeys].filter((key) => !retainedKeys.has(key)).length;
+      if (missing > 0) {
+        warnings.push(
+          `Incomplete ${params.label} migration: plugin state failed to retain every required entry (${missing} missing); left legacy source in place`,
+        );
+        return { changes, warnings };
       }
       const change = description.change({
         imported,

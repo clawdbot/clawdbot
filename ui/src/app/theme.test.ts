@@ -1,13 +1,25 @@
 // @vitest-environment node
 // Control UI tests cover theme behavior.
 import { describe, expect, it, vi } from "vitest";
-import { parseThemeSelection, resolveTheme } from "./theme.ts";
+import { parseThemeSelection, resolveTheme, type ThemeName } from "./theme.ts";
 
 describe("resolveTheme", () => {
-  it("resolves named theme families when mode is provided", () => {
-    expect(resolveTheme("knot", "dark")).toBe("openknot");
-    expect(resolveTheme("dash", "light")).toBe("dash-light");
-  });
+  it.each([
+    ["claw", "dark", "light"],
+    ["knot", "openknot", "openknot-light"],
+    ["dash", "dash", "dash-light"],
+    ["absolutely", "absolutely", "absolutely-light"],
+    ["tide", "tide", "tide-light"],
+    ["beacon", "beacon", "beacon-light"],
+    ["phosphor", "phosphor", "phosphor-light"],
+    ["custom", "custom", "custom-light"],
+  ] satisfies [ThemeName, string, string][])(
+    "resolves %s in both explicit modes",
+    (theme, dark, light) => {
+      expect(resolveTheme(theme, "dark")).toBe(dark);
+      expect(resolveTheme(theme, "light")).toBe(light);
+    },
+  );
 
   it("uses system preference when mode is system", () => {
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));

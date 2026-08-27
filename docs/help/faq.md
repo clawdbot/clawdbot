@@ -142,8 +142,12 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - **Cron jobs**: isolated jobs can set a `model` override per job.
     - **Agents**: route tasks to separate agents with different default models, thinking levels, and stream params.
-    - **Configured default + current session**: A direct owner/admin `/model <model>` changes the session and requests a best-effort configured-default update. If the agent has no explicit primary model, the target is the shared `agents.defaults.model` fallback.
-    - **Current session only**: `/model <model> -s` (or `--session`) changes only this session and leaves configured defaults unchanged.
+    - **Current session only**: `/model <model> -s` (or `--session`) leaves configured defaults unchanged.
+    - **Agent default + current session**: Owner/admin `/model <model> -a` (or `--agent`) updates the selected agent.
+    - **Global default + current session**: Owner/admin `/model <model> -g` (or `--global`) updates `agents.defaults.model`.
+
+    Bare `/model <model>` keeps owner/admin configured-default persistence unless
+    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
     Example - same model, different per-agent settings:
 
@@ -458,16 +462,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Path                                                               | Purpose                                                            |
     | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                                 | Main config (JSON5)                                                 |
-    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth import (copied into auth profiles on first use)        |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json`     | Auth profiles (OAuth, API keys, optional `keyRef`/`tokenRef`)        |
+    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth migration source for `openclaw doctor --fix`           |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`                         | Shared SQLite state, including shared auth profiles                 |
     | `$OPENCLAW_STATE_DIR/secrets.json`                                  | Optional file-backed secret payload for `file` SecretRef providers   |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy compatibility file (static `api_key` entries scrubbed)        |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy auth migration source for `openclaw doctor --fix`             |
     | `$OPENCLAW_STATE_DIR/credentials/`                                  | Provider state (for example `whatsapp/<accountId>/creds.json`)      |
     | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + legacy/archive session artifacts)        |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including session rows and transcripts      |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including local auth profiles, sessions, and transcripts |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Legacy session migration sources and archive/support artifacts      |
 
     Legacy single-agent path `~/.openclaw/agent/*` is migrated by `openclaw doctor`.
+
+    Legacy `auth-profiles.json` files are imported by `openclaw doctor --fix`;
+    new logins write SQLite. Agent-local profiles override the shared read-through
+    base. Older installs keep that shared store in the main agent's database until
+    doctor relocates it; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability).
 
     Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate, configured via `agents.defaults.workspace` (default: `~/.openclaw/workspace`).
 
@@ -608,7 +617,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Grok | No (xAI OAuth or key) | `XAI_API_KEY` |
     | Kimi | No | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
     | MiniMax Search | No | `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY` |
-    | Ollama Web Search | Yes (needs `ollama signin`) | - |
+    | Ollama Web Search | Local: yes (needs `ollama signin`); hosted: no | Hosted: `OLLAMA_API_KEY` |
     | Perplexity | No | `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` |
     | SearXNG | Yes (self-hosted) | `SEARXNG_BASE_URL` |
     | Tavily | No | `TAVILY_API_KEY` |
@@ -1567,7 +1576,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title='What is the default model for Anthropic with an API key?'>
-    Credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). `No credentials found for profile "anthropic:default"` means the Gateway could not find Anthropic credentials in the expected `auth-profiles.json` for the running agent.
+    Credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). `No credentials found for profile "anthropic:default"` means the Gateway could not find Anthropic credentials in the SQLite auth stores available to the running agent.
   </Accordion>
 </AccordionGroup>
 

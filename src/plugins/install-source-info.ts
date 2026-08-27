@@ -1,8 +1,13 @@
 /** Describes package-authored plugin install source metadata and pinning warnings. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  type ParsedRegistryNpmSpec,
+} from "../infra/npm-registry-spec.js";
 import type { PluginPackageInstall } from "./manifest.js";
+import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
 /** Warning emitted while describing plugin package install source metadata. */
 type PluginInstallSourceWarning =
@@ -72,10 +77,6 @@ function resolveNpmPinState(params: {
   return params.hasIntegrity ? "floating-with-integrity" : "floating-without-integrity";
 }
 
-function resolveDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
-  return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
-}
-
 function normalizeExpectedPackageName(value: string | null | undefined): string | undefined {
   const expected = normalizeOptionalString(value);
   if (!expected) {
@@ -92,7 +93,7 @@ export function describePluginInstallSource(
   const clawhubSpec = normalizeOptionalString(install.clawhubSpec);
   const npmSpec = normalizeOptionalString(install.npmSpec);
   const localPath = normalizeOptionalString(install.localPath);
-  const defaultChoice = resolveDefaultChoice(install.defaultChoice);
+  const defaultChoice = normalizePluginInstallDefaultChoice(install.defaultChoice);
   const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
   const expectedPackageName = normalizeExpectedPackageName(options?.expectedPackageName);
   const warnings: PluginInstallSourceWarning[] = [];
@@ -106,14 +107,15 @@ export function describePluginInstallSource(
   if (clawhubSpec) {
     const parsed = parseClawHubPluginSpec(clawhubSpec);
     if (parsed) {
-      if (!parsed.version) {
+      const exactVersion = parsed.version ? isExactSemverVersion(parsed.version) : false;
+      if (!exactVersion) {
         warnings.push("clawhub-spec-floating");
       }
       clawhub = {
         spec: clawhubSpec,
         packageName: parsed.name,
         ...(parsed.version ? { version: parsed.version } : {}),
-        exactVersion: Boolean(parsed.version),
+        exactVersion,
       };
     } else {
       warnings.push("invalid-clawhub-spec");

@@ -27,6 +27,7 @@ import type { TurnRecap } from "../chat-progress.ts";
 import {
   isPendingSendMessage,
   persistedMessageEntryId,
+  readPendingSendFailure,
   type AssistantMessageExpansionState,
 } from "../chat-thread.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
@@ -85,9 +86,9 @@ type RenderMessageGroupOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   onRequestUpdate?: () => void;
-  onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
   onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onAssistantAttachmentLoaded?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userId?: string | null;
@@ -99,6 +100,7 @@ type RenderMessageGroupOptions = {
   showAssistantAvatar?: boolean;
   resourceBasePath?: string;
   localMediaPreviewRoots?: readonly string[];
+  connectionEpoch?: number;
   assistantAttachmentAuthToken?: string | null;
   resolveArtifactDownload?: ArtifactDownloadResolver;
   canvasPluginSurfaceUrl?: string | null;
@@ -107,6 +109,7 @@ type RenderMessageGroupOptions = {
   fetchLinkFavicon?: LinkFaviconFetcher;
   contextWindow?: number | null;
   onReply?: (target: MessageReplyTarget) => void;
+  onRetryQueuedMessage?: (id: string) => void;
   resolveReplyPreview?: (replyToId: string) => ReplyPreview | undefined;
   onResolveReply?: (replyToId: string) => void;
   onOpenReply?: (replyToId: string) => void;
@@ -176,12 +179,13 @@ function buildGroupedMessageRenderOptions(
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
-    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     resourceBasePath: opts.resourceBasePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
+    connectionEpoch: opts.connectionEpoch,
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     resolveArtifactDownload: opts.resolveArtifactDownload,
     embedSandboxMode: opts.embedSandboxMode,
@@ -522,6 +526,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   // messages keep the accent skin.
   const senderHue =
     normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
+  const sendFailure = readPendingSendFailure(group.messages.at(-1)?.message);
   const replyToLabel =
     normalizedRole === "assistant" ? formatSenderLabel(group.replyToSender) : null;
   const replyToTitle = replyToLabel ? t("chat.messages.replyingTo", { name: replyToLabel }) : null;
@@ -597,7 +602,7 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         : html`<div
             class="chat-group-footer ${persistUserIdentity
               ? "chat-group-footer--persistent-identity"
-              : ""}"
+              : ""}${sendFailure ? " chat-group-footer--send-failure" : ""}"
           >
             <div class="chat-group-footer__meta">
               ${isPeerGroup ? nothing : userFooterActions}
@@ -610,6 +615,29 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 isPeerGroup ? personActivityLink(group.sender?.id, opts.personActivity) : null,
                 "chat-sender-name",
               )}
+              ${sendFailure
+                ? html`<span
+                    class="chat-send-status"
+                    title=${sendFailure.error ?? nothing}
+                    data-send-state="failed"
+                  >
+                    <span aria-hidden="true">·</span>
+                    <span>${t("chat.queue.notSent")}</span>
+                    ${opts.onRetryQueuedMessage
+                      ? html`
+                          <span aria-hidden="true">·</span>
+                          <button
+                            class="chat-send-status__retry"
+                            type="button"
+                            aria-label=${t("chat.queue.retryQueuedMessage")}
+                            @click=${() => opts.onRetryQueuedMessage?.(sendFailure.id)}
+                          >
+                            ${t("chat.queue.retry")}
+                          </button>
+                        `
+                      : nothing}
+                  </span>`
+                : nothing}
               ${renderMessageMeta(group.timestamp, meta)}
             </div>
             ${isPeerGroup

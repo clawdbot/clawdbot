@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
+import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
   TEXT_SCALE_STOPS,
   UI_APPEARANCE_DEFAULTS,
@@ -10,14 +11,15 @@ import type { ThemeName } from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import {
   renderDocsLink,
-  renderSettingsDefaultState,
+  renderSettingsDefaultDescription,
   renderSettingsRow,
   renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import {
   renderChatPreferencesSection,
   renderLanguageSection,
@@ -58,6 +60,26 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     id: "dash",
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
+  },
+  {
+    id: "absolutely",
+    labelKey: "configView.themes.absolutely.label",
+    descriptionKey: "configView.themes.absolutely.description",
+  },
+  {
+    id: "tide",
+    labelKey: "configView.themes.tide.label",
+    descriptionKey: "configView.themes.tide.description",
+  },
+  {
+    id: "beacon",
+    labelKey: "configView.themes.beacon.label",
+    descriptionKey: "configView.themes.beacon.description",
+  },
+  {
+    id: "phosphor",
+    labelKey: "configView.themes.phosphor.label",
+    descriptionKey: "configView.themes.phosphor.description",
   },
 ];
 
@@ -112,7 +134,7 @@ function focusCustomThemeImportInput() {
       return;
     }
     if (typeof input.scrollIntoView === "function") {
-      input.scrollIntoView({ block: "center", behavior: "smooth" });
+      input.scrollIntoView({ block: "center", behavior: resolveScrollBehavior() });
     }
     input.focus();
     input.select();
@@ -148,39 +170,30 @@ export function renderAppearanceSection(
         : t("configView.appearance.importHint"),
     },
   ];
-  const themeDefaultState = renderSettingsDefaultState({
-    value:
-      themeOptions.find((option) => option.id === props.themeResetValue)?.label ??
-      t("configView.themes.claw.label"),
-    overridden: props.themeOverridden,
-    onReset: props.resetTheme,
-  });
-  const themeModeDefaultState = renderSettingsDefaultState({
-    value:
-      props.themeModeResetValue === "light"
-        ? t("common.light")
-        : props.themeModeResetValue === "dark"
-          ? t("common.dark")
-          : t("common.system"),
-    overridden: props.themeModeOverridden,
-    onReset: props.resetThemeMode,
-  });
-  const accentDefaultState = renderSettingsDefaultState({
-    value: t("configView.appearance.accents.default"),
-    overridden: props.accentOverridden,
-    onReset: props.resetAccent,
-  });
+  const themeDefault =
+    themeOptions.find((option) => option.id === props.themeResetValue)?.label ??
+    t("configView.themes.claw.label");
+  const themeModeDefault =
+    props.themeModeResetValue === "light"
+      ? t("common.light")
+      : props.themeModeResetValue === "dark"
+        ? t("common.dark")
+        : t("common.system");
   const themeProvenance = serverUiPrefProvenanceHint(props.themeProvenance);
   const themeModeProvenance = serverUiPrefProvenanceHint(props.themeModeProvenance);
   const accentProvenance = serverUiPrefProvenanceHint(props.accentProvenance);
   const customAccentSelected = Boolean(
     props.accent && !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
   );
-  const textScaleDefaultState = renderSettingsDefaultState({
-    value: `${UI_APPEARANCE_DEFAULTS.textScale}%`,
-    overridden: props.textScaleOverridden,
-    onReset: props.resetTextScale,
-  });
+  const selectedAccentPreset = ACCENT_PRESETS.find((preset) => preset.hex === props.accent);
+  const accentSelectionStatus =
+    props.accent == null
+      ? t("configView.appearance.usingInheritedAccent")
+      : t("configView.appearance.usingAccent", {
+          value: selectedAccentPreset
+            ? t(selectedAccentPreset.labelKey)
+            : t("configView.appearance.customAccent"),
+        });
   return html`
     <div class="settings-page">
       <p class="settings-page__intro">
@@ -191,10 +204,10 @@ export function renderAppearanceSection(
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
-          <div class="settings-section__actions">${themeDefaultState.action}</div>
         </div>
         <p class="settings-section__desc">
-          ${t("configView.appearance.chooseTheme")} ${themeDefaultState.description}
+          ${t("configView.appearance.chooseTheme")}
+          ${renderSettingsDefaultDescription(themeDefault, props.themeOverridden)}
           ${themeProvenance}
         </p>
         <div class="settings-group">
@@ -216,7 +229,10 @@ export function renderAppearanceSection(
                         props.onOpenCustomThemeImport?.();
                         return;
                       }
-                      if (opt.id !== props.theme) {
+                      if (
+                        opt.id !== props.theme ||
+                        (opt.id === props.themeResetValue && props.themeOverridden)
+                      ) {
                         const context: ThemeTransitionContext = {
                           element: (e.currentTarget as HTMLElement) ?? undefined,
                         };
@@ -226,11 +242,6 @@ export function renderAppearanceSection(
                   >
                     ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
-                    ${opt.id === props.theme
-                      ? html`<span class="settings-theme-card__check" aria-hidden="true"
-                          >${icons.check}</span
-                        >`
-                      : nothing}
                   </button>
                 `,
               )}
@@ -238,21 +249,27 @@ export function renderAppearanceSection(
           </div>
           ${renderSettingsRow({
             title: t("common.colorMode"),
-            description: html`${themeModeDefaultState.description} ${themeModeProvenance}`,
-            stacked: true,
-            control: html`
-              ${themeModeDefaultState.action}
-              ${renderSettingsSegmented({
-                value: props.themeMode,
-                options: [
-                  { value: "system", label: t("common.system") },
-                  { value: "light", label: t("common.light") },
-                  { value: "dark", label: t("common.dark") },
-                ],
-                ariaLabel: t("common.colorMode"),
-                onChange: (mode, element) => props.setThemeMode(mode, { element }),
-              })}
-            `,
+            description: html`${renderSettingsDefaultDescription(
+              themeModeDefault,
+              props.themeModeOverridden,
+            )}
+            ${themeModeProvenance}`,
+            stackedOnNarrow: true,
+            control: renderSettingsSegmented({
+              value: props.themeMode,
+              options: [
+                { value: "system", label: t("common.system") },
+                { value: "light", label: t("common.light") },
+                { value: "dark", label: t("common.dark") },
+              ],
+              ariaLabel: t("common.colorMode"),
+              onChange: (mode, element) => props.setThemeMode(mode, { element }),
+              onReselect: (mode, element) => {
+                if (props.themeModeOverridden && mode === props.themeModeResetValue) {
+                  props.setThemeMode(mode, { element });
+                }
+              },
+            }),
           })}
           <div class="settings-row settings-row--stacked">
             ${showCustomThemeImport
@@ -337,12 +354,8 @@ export function renderAppearanceSection(
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.accent} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
-          <div class="settings-section__actions">${accentDefaultState.action}</div>
         </div>
-        <p class="settings-section__desc">
-          ${t("configView.appearance.accentHint")} ${accentDefaultState.description}
-          ${accentProvenance}
-        </p>
+        <p class="settings-section__desc">${t("configView.appearance.accentHint")}</p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-accent-swatches">
@@ -368,8 +381,7 @@ export function renderAppearanceSection(
                     aria-label=${label}
                     aria-pressed=${String(selected)}
                     title=${label}
-                    @click=${() =>
-                      preset.hex === undefined ? props.resetAccent() : props.setAccent(preset.hex)}
+                    @click=${() => props.setAccent(preset.hex)}
                   >
                     ${selected
                       ? html`<span class="settings-accent-swatch__check" aria-hidden="true"
@@ -379,30 +391,51 @@ export function renderAppearanceSection(
                   </button>
                 `;
               })}
-              <input
-                type="color"
+              <span
                 class="settings-accent-swatch settings-accent-swatch--custom ${customAccentSelected
                   ? "settings-accent-swatch--active"
                   : ""}"
-                data-accent-custom
-                aria-label=${t("configView.appearance.customAccent")}
-                title=${t("configView.appearance.customAccent")}
-                .value=${props.accent ?? ACCENT_PRESETS[1].hex}
-                @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
-                  props.setAccent(event.currentTarget.value)}
-              />
+                style=${styleMap({
+                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
+                  "--settings-accent-swatch-ink": controlUiAccentInk(
+                    props.accent ?? ACCENT_PRESETS[1].hex,
+                  ),
+                })}
+              >
+                <input
+                  type="color"
+                  class="settings-accent-swatch__input"
+                  data-accent-custom
+                  aria-label=${t("configView.appearance.customAccent")}
+                  aria-describedby="settings-accent-status"
+                  title=${t("configView.appearance.customAccent")}
+                  .value=${props.accent ?? ACCENT_PRESETS[1].hex}
+                  @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
+                    props.setAccent(event.currentTarget.value)}
+                />
+                <span class="settings-accent-swatch__picker" aria-hidden="true"
+                  >${icons.pipette}</span
+                >
+              </span>
             </div>
           </div>
         </div>
+        <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
+          <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
+          <span class="settings-accent-status__scope">${accentProvenance}</span>
+        </p>
       </section>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.textSize")}</h2>
-          <div class="settings-section__actions">${textScaleDefaultState.action}</div>
         </div>
         <p class="settings-section__desc">
-          ${textScaleDefaultState.description} ${t("quickSettings.personal.browserOnly")}
+          ${renderSettingsDefaultDescription(
+            `${UI_APPEARANCE_DEFAULTS.textScale}%`,
+            props.textScaleOverridden,
+          )}
+          ${t("quickSettings.personal.browserOnly")}
         </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">

@@ -658,17 +658,18 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         archived: Bool?,
         unread: Bool?) async throws
     {
-        let target = self.sessionTarget(for: key)
-        let request = OpenClawChatGatewayRequests.patchSession(
-            sessionKey: target.sessionKey,
-            agentID: target.agentID,
-            expectedSessionID: expectedSessionID,
-            label: label,
-            category: category,
-            pinned: pinned,
-            archived: archived,
-            unread: unread)
-        _ = try await self.connection.request(request)
+        if let routeLease = await self.acquireSessionMutationRouteLease() {
+            try await routeLease.patchSession(
+                key: key,
+                expectedSessionID: expectedSessionID,
+                label: label,
+                category: category,
+                pinned: pinned,
+                archived: archived,
+                unread: unread)
+            return
+        }
+        throw OpenClawChatTransportSendError.notDispatched
     }
 
     func deleteSession(key: String) async throws {
@@ -869,20 +870,17 @@ private struct MacChatSurface: View {
     @AppStorage(OpenClawChatWindowShell.assistantToolActivityDefaultsKey, store: AppDefaults.standard)
     private var showsToolActivity = WebChatTracePreferences.displayOptions().contains(.toolActivity)
 
-    private let userAccent: Color?
     private let usesPrimaryAppRuntime: Bool
     private let speech: OpenClawChatSpeechController
     private let voiceNoteRecorder: OpenClawVoiceNoteRecorder
 
     init(
         viewModel: OpenClawChatViewModel,
-        userAccent: Color?,
         usesPrimaryAppRuntime: Bool,
         speech: OpenClawChatSpeechController,
         voiceNoteRecorder: OpenClawVoiceNoteRecorder)
     {
         _viewModel = State(initialValue: viewModel)
-        self.userAccent = userAccent
         self.usesPrimaryAppRuntime = usesPrimaryAppRuntime
         self.speech = speech
         self.voiceNoteRecorder = voiceNoteRecorder
@@ -891,7 +889,7 @@ private struct MacChatSurface: View {
     var body: some View {
         OpenClawChatWindowShell(
             viewModel: self.viewModel,
-            userAccent: self.userAccent,
+            userAccent: ColorHexSupport.color(fromHex: self.appState.effectiveAccentHex),
             displayOptions: self.displayOptions,
             emptyAssistantIntro: Self.emptyAssistantIntro,
             emptyAssistantPrompts: Self.emptyAssistantPrompts,
@@ -1164,12 +1162,10 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
                 }
             }
         }
-        let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         // Full window: native split-view shell with sessions sidebar and
         // toolbar pickers bridged into the NSToolbar.
         let hosting = NSHostingController(rootView: MacChatSurface(
             viewModel: vm,
-            userAccent: accent,
             usesPrimaryAppRuntime: usesPrimaryAppRuntime,
             speech: speech,
             voiceNoteRecorder: voiceNoteRecorder))
@@ -1301,10 +1297,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             let frame = WindowPlacement.centeredFrame(size: WebChatSwiftUILayout.windowSize)
             window.setFrame(frame, display: false)
         }
-    }
-
-    private static func color(fromHex raw: String?) -> Color? {
-        ColorHexSupport.color(fromHex: raw)
     }
 
     #if DEBUG

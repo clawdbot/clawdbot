@@ -26,7 +26,6 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
-  CLOUD_WORKER_MACHINE_CLASSES,
   cloudWorkerProfileStatus,
   createCloudWorkerDraft,
   readCloudWorkerProfiles,
@@ -41,9 +40,7 @@ type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
 
 function formControlValue(event: Event): string {
   const target = event.currentTarget;
-  return target instanceof HTMLInputElement ||
-    target instanceof HTMLSelectElement ||
-    target instanceof HTMLTextAreaElement
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
     ? target.value
     : "";
 }
@@ -163,6 +160,10 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     if (!this.canManage()) {
       return;
     }
+    if (profile.providerId !== "crabbox") {
+      this.context.navigate("advanced", { search: "?section=cloudWorkers" });
+      return;
+    }
     this.editor = { kind: "edit", profileId: profile.id };
     this.draft = createCloudWorkerDraft(profile);
     this.formError = null;
@@ -242,22 +243,35 @@ class CloudWorkersPage extends OpenClawLightDomElement {
   }
 
   private async deleteProfile(profile: ConfiguredCloudWorkerProfile) {
-    const scope = this.gateway.capture();
+    const gateway = this.context.gateway;
+    const client = gateway.snapshot.client;
+    const gatewayUrl = gateway.connection.gatewayUrl;
     const runtimeConfig = this.context.runtimeConfig;
     if (
-      !scope ||
       !this.canManage() ||
       !(await showConfirmDialog({
         title: t("cloudWorkersPage.deleteTitle"),
         message: t("cloudWorkersPage.deleteConfirm", { profile: profile.id }),
         confirmLabel: t("common.delete"),
         danger: true,
-      })) ||
-      !this.gateway.isCurrent(scope)
+      }))
     ) {
       return;
     }
+    const scope = this.gateway.capture();
+    if (
+      !scope ||
+      scope.client !== client ||
+      this.context.gateway !== gateway ||
+      gateway.connection.gatewayUrl !== gatewayUrl ||
+      this.context.runtimeConfig !== runtimeConfig ||
+      !this.canManage()
+    ) {
+      this.formError = t("cloudWorkersPage.errors.deleteFailed");
+      return;
+    }
     this.busyProfileId = profile.id;
+    this.formError = null;
     this.notice = null;
     const isCurrent = () =>
       this.gateway.isCurrent(scope) && this.context.runtimeConfig === runtimeConfig;
@@ -358,7 +372,6 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     const busy = this.busyProfileId !== null;
     const canSave = this.canManage();
     const editing = this.editor.kind === "edit";
-    const classMode = this.draft.customClass ? "custom" : this.draft.machineClass;
     return renderSettingsSection(
       {
         title: editing ? t("cloudWorkersPage.editProfile") : t("cloudWorkersPage.addProfile"),
@@ -397,41 +410,15 @@ class CloudWorkersPage extends OpenClawLightDomElement {
         renderSettingsRow({
           title: t("cloudWorkersPage.fields.machineClass"),
           description: t("cloudWorkersPage.fields.machineClassHelp"),
-          stacked: this.draft.customClass,
-          control: html`
-            <select
-              class="settings-select"
-              aria-label=${t("cloudWorkersPage.fields.machineClass")}
-              .value=${classMode}
-              ?disabled=${busy}
-              @change=${(event: Event) => {
-                const value = formControlValue(event);
-                this.patchDraft(
-                  value === "custom"
-                    ? { customClass: true, machineClass: "" }
-                    : { customClass: false, machineClass: value },
-                );
-              }}
-            >
-              ${CLOUD_WORKER_MACHINE_CLASSES.map(
-                (value) => html`<option value=${value}>${value}</option>`,
-              )}
-              <option value="custom">${t("cloudWorkersPage.customClass")}</option>
-            </select>
-            ${this.draft.customClass
-              ? html`<input
-                  class="settings-input mono"
-                  aria-label=${t("cloudWorkersPage.fields.customClass")}
-                  placeholder=${t("cloudWorkersPage.fields.customClassPlaceholder")}
-                  autocomplete="off"
-                  spellcheck="false"
-                  .value=${this.draft.machineClass}
-                  ?disabled=${busy}
-                  @input=${(event: Event) =>
-                    this.patchDraft({ machineClass: formControlValue(event) })}
-                />`
-              : nothing}
-          `,
+          control: html`<input
+            class="settings-input mono"
+            aria-label=${t("cloudWorkersPage.fields.machineClass")}
+            autocomplete="off"
+            spellcheck="false"
+            .value=${this.draft.machineClass}
+            ?disabled=${busy}
+            @input=${(event: Event) => this.patchDraft({ machineClass: formControlValue(event) })}
+          />`,
         }),
         renderSettingsRow({
           title: t("cloudWorkersPage.fields.ttl"),
@@ -548,6 +535,9 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           ? html`<div class="callout warning" role="status">
               ${t("cloudWorkersPage.catalogFailed", { error: this.catalogError })}
             </div>`
+          : nothing}
+        ${this.formError && !this.editor
+          ? html`<div class="callout warning" role="alert">${this.formError}</div>`
           : nothing}
         ${this.notice
           ? html`<div class="callout warning" role="status">${this.notice}</div>`

@@ -20,6 +20,7 @@ import {
 } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
+  commitCurrentChatHistorySnapshot,
   loadChatHistory,
   loadOlderChatHistoryPage,
   resolveChatHistoryPagination,
@@ -104,7 +105,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       this.clearHistoryObserver();
       return;
     }
-    const root = this.querySelector<HTMLElement>(".chat-thread");
+    const root = this.transcript.scrollElement;
     const sentinel = root?.querySelector<HTMLElement>(".chat-history-sentinel") ?? null;
     if (!root || !sentinel) {
       this.clearHistoryObserver();
@@ -254,7 +255,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
 
   protected async showEarlierMessages(): Promise<void> {
     const state = this.state;
-    const root = this.querySelector<HTMLElement>(".chat-thread");
+    const root = this.transcript.scrollElement;
     if (!state || !root) {
       return;
     }
@@ -355,6 +356,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           : nextPagination;
         state.chatHistoryPagination = appliedPagination;
         state.lastError = null;
+        commitCurrentChatHistorySnapshot(state);
         scheduleChatScroll(state, false);
         prepended = grew || !exhausted;
       }
@@ -363,8 +365,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         state.lastError = formatUiError(error);
         // Loading-row removal can emit a layout scroll. Align the tracker so it
         // cannot masquerade as renewed user intent and consume the manual retry.
-        this.transcriptScrollTop =
-          this.querySelector<HTMLElement>(".chat-thread")?.scrollTop ?? null;
+        this.transcriptScrollTop = this.transcript.scrollElement?.scrollTop ?? null;
       }
     } finally {
       if (generation === this.olderLoadGeneration) {
@@ -486,16 +487,20 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   }
 
   protected async forkFromMessage(entryId: string): Promise<void> {
-    const state = this.state;
-    if (!state) {
+    const scope = this.captureConnectionScope();
+    if (!scope) {
       return;
     }
+    const state = scope.state;
     const sourceKey = state.sessionKey;
     const agentParams = scopedAgentParamsForSession(state, sourceKey);
     try {
       const result = await state.sessions.forkAtMessage(sourceKey, entryId, agentParams);
       const editorText = result.editorText ?? "";
-      if (this.state !== state || !visibleSessionMatches(state, sourceKey, agentParams.agentId)) {
+      if (
+        !this.isConnectionScopeCurrent(scope) ||
+        !visibleSessionMatches(state, sourceKey, agentParams.agentId)
+      ) {
         return;
       }
       if (this.onPaneSessionChange?.(this.paneId, result.sessionKey) === false) {
@@ -510,6 +515,12 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         draft: editorText,
       });
     } catch (error) {
+      if (
+        !this.isConnectionScopeCurrent(scope) ||
+        !visibleSessionMatches(state, sourceKey, agentParams.agentId)
+      ) {
+        return;
+      }
       state.lastError = formatUiError(error);
       state.chatError = state.lastError;
       state.requestUpdate?.();

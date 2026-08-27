@@ -1,5 +1,4 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { GPT5_HEARTBEAT_PROMPT_OVERLAY as CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -189,9 +188,6 @@ function buildTurnScopedCollaborationInstructions(
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (params.trigger === "heartbeat") {
-    return joinPresentSections(buildHeartbeatCollaborationInstructions(), contextInstructions);
-  }
   if (contextInstructions?.trim()) {
     return joinPresentSections(buildDefaultCollaborationInstructions(), contextInstructions);
   }
@@ -223,14 +219,6 @@ function buildCronCollaborationInstructions(): string {
     "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
     "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
-  ].join("\n\n");
-}
-
-function buildHeartbeatCollaborationInstructions(): string {
-  return [
-    "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake; ordinary chat turns should stay in Codex Default mode.",
-    "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
-    CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
 }
 

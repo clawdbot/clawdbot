@@ -6,6 +6,8 @@ import type {
  * Shared types for preparing and executing CLI-backed agent runs.
  */
 import type {
+  BlockReplyContext,
+  PartialReplyPayload,
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
@@ -24,6 +26,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
+import type { ExecMode } from "../../infra/exec-approvals.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -47,6 +50,7 @@ import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { CliSessionReuseResult } from "../cli-session.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { FailoverReason } from "../embedded-agent-helpers.js";
+import type { BlockReplyPayload } from "../embedded-agent-payloads.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
@@ -57,6 +61,7 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../harness/context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "../harness/context-engine-turn-attempt.js";
+import type { ModelFallbackAttemptProvenance } from "../model-fallback.types.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SessionManager } from "../sessions/index.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
@@ -140,6 +145,8 @@ export type RunCliAgentParams = {
   contextWindow?: string;
   provider: string;
   model?: string;
+  /** Outer model-fallback owner facts for this admitted attempt. */
+  modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   thinkLevel?: ThinkLevel;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
@@ -237,7 +244,7 @@ export type RunCliAgentParams = {
   /** Parent session provenance used to validate inherited group policy. */
   spawnedBy?: string | null;
   /** Effective turn-local exec policy resolved before entering the CLI runtime. */
-  execOverrides?: ExecPolicyOverrides;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   /** Effective elevated-exec defaults resolved before entering the CLI runtime. */
   bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
@@ -257,6 +264,8 @@ export type RunCliAgentParams = {
   };
   disableTools?: boolean;
   abortSignal?: AbortSignal;
+  onPartialReply?: (payload: PartialReplyPayload) => boolean | void | Promise<boolean | void>;
+  onBlockReply?: (payload: BlockReplyPayload, context?: BlockReplyContext) => void | Promise<void>;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
@@ -356,9 +365,7 @@ export type PreparedCliRunContext = {
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   claudeSkillsPluginArgs: string[];
-  bootstrapPromptWarningLines: string[];
   openClawHistoryPrompt?: string;
-  heartbeatPrompt?: string;
   authEpoch?: string;
   /** Strict owner fingerprint captured for live inference verification only. */
   authBindingFingerprint?: string;

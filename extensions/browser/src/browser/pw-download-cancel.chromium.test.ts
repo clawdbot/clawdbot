@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
@@ -42,10 +43,117 @@ describe.runIf(runChromiumProof)("managed Chromium download cancellation", () =>
   const cleanup: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
+    const errors: unknown[] = [];
     for (const dispose of cleanup.splice(0).toReversed()) {
-      await dispose();
+      await dispose().catch((error: unknown) => errors.push(error));
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "Chromium download fixture cleanup failed");
     }
   });
+
+  it.each(["caller abort", "invalid output directory"])(
+    "cancels a streaming download after %s without publishing output",
+    async (failure) => {
+      const rootDir = tempDirs.make("openclaw-download-stream-cancel-");
+      cleanup.push(async () => await fs.rm(rootDir, { recursive: true, force: true }));
+      let closeDownloadResponse: (() => void) | undefined;
+      let responseClosed = false;
+      const downloadServer = createServer((request, response) => {
+        if (request.url === "/stream.bin") {
+          response.writeHead(200, {
+            "content-disposition": 'attachment; filename="stream.bin"',
+            "content-type": "application/octet-stream",
+          });
+          response.write("partially downloaded bytes");
+          response.once("close", () => {
+            responseClosed = true;
+          });
+          closeDownloadResponse = () => response.destroy();
+          return;
+        }
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end('<a id="download" href="/stream.bin" download>Download</a>');
+      });
+      const downloadPort = await listen(downloadServer);
+      cleanup.push(async () => {
+        closeDownloadResponse?.();
+        await closeServer(downloadServer);
+      });
+
+      const cdpPort = await getFreePort();
+      const context = await getPlaywrightCore().chromium.launchPersistentContext(
+        path.join(rootDir, "profile"),
+        {
+          headless: true,
+          executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+          args: [`--remote-debugging-port=${cdpPort}`],
+        },
+      );
+      cleanup.push(async () => await context.close());
+      const page = context.pages()[0] ?? (await context.newPage());
+      await page.goto(`http://127.0.0.1:${downloadPort}/`);
+      const cdpUrl = `http://127.0.0.1:${cdpPort}`;
+      const targetId = await readTargetId(page);
+      cleanup.push(async () => await closePlaywrightBrowserConnection({ cdpUrl }));
+      cleanup.push(async () => closeDownloadResponse?.());
+
+      const controlledPage = await getPageForTargetId({ cdpUrl, targetId });
+      const saveStarted = createDeferred<void>();
+      let cancellationCount = 0;
+      controlledPage.once("download", (download) => {
+        const saveAs = download.saveAs.bind(download);
+        const cancel = download.cancel.bind(download);
+        download.saveAs = async (outputPath) => {
+          saveStarted.resolve();
+          await saveAs(outputPath);
+        };
+        download.cancel = async () => {
+          cancellationCount += 1;
+          await cancel();
+        };
+      });
+
+      const outputRoot = path.join(rootDir, "downloads");
+      if (failure === "invalid output directory") {
+        await fs.writeFile(outputRoot, "not a directory");
+      }
+      const outputPath = path.join(outputRoot, "cancelled.bin");
+      const controller = new AbortController();
+      const reason = new Error("streaming download aborted");
+      const capture = waitForDownloadViaPlaywright({
+        cdpUrl,
+        targetId,
+        path: outputPath,
+        rootDir: outputRoot,
+        timeoutMs: 5_000,
+        signal: controller.signal,
+      });
+      const outcome = capture.then(
+        () => "resolved" as const,
+        (error: unknown) => error,
+      );
+      await expect.poll(() => ensurePageState(controlledPage).downloadWaiterDepth).toBe(1);
+      await page.locator("#download").click();
+      if (failure === "caller abort") {
+        await Promise.race([saveStarted.promise, capture]);
+        controller.abort(reason);
+        await expect(outcome).resolves.toBe(reason);
+        await expect.poll(async () => await fs.readdir(outputRoot)).toEqual([]);
+        await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(outcome).resolves.toMatchObject({
+          message: "Invalid path: must stay within output directory",
+        });
+        await expect(fs.readFile(outputRoot, "utf8")).resolves.toBe("not a directory");
+      }
+
+      expect.soft(cancellationCount).toBe(1);
+      await expect.poll(() => responseClosed).toBe(true);
+      expect(ensurePageState(controlledPage).downloadWaiterDepth).toBe(0);
+    },
+    20_000,
+  );
 
   it("does not let a cancelled waiter capture and write a later download", async () => {
     const rootDir = tempDirs.make("openclaw-download-cancel-");

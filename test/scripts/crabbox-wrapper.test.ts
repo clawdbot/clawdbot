@@ -2575,7 +2575,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(output.args).toContain("--shell");
     expect(result.stderr).toContain("Node/Corepack/pnpm/Bun");
     expect(remoteCommand).toContain("openclaw_crabbox_bootstrap_macos_js");
-    expect(remoteCommand).toContain("bun_version=1.3.14");
+    expect(remoteCommand).toContain("bun_version=1.4.0");
     expect(remoteCommand).toContain('bun_root="$tool_root/bun-v${bun_version}"');
     expect(remoteCommand).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
@@ -2871,7 +2871,7 @@ describe("scripts/crabbox-wrapper", () => {
   it("bootstraps Bun for AWS macOS script-stdin bun shebangs", () => {
     const script = ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n");
     const { output } = runSuccessfulMacosScript(script);
-    expect(output.scriptContent).toContain("bun_version=1.3.14");
+    expect(output.scriptContent).toContain("bun_version=1.4.0");
     expect(output.scriptContent).toContain(
       'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
     );

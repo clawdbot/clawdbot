@@ -16,12 +16,6 @@ export function isPlaceTopologyEvent(event: string): boolean {
   return PLACE_TOPOLOGY_EVENTS.has(event);
 }
 
-export function readPresenceEntries(value: unknown): PresenceEntry[] | null {
-  const presence =
-    value && typeof value === "object" ? (value as { presence?: unknown }).presence : null;
-  return Array.isArray(presence) ? (presence as PresenceEntry[]) : null;
-}
-
 export function presenceStateSignature(entries: PresenceEntry[]): string {
   const states = new Map<string, "connected" | "offline">();
   for (const entry of entries) {
@@ -63,6 +57,9 @@ export function closeSessionMenus(root: ParentNode) {
 }
 
 export function handleSessionPickerEvent(root: ParentNode, event: Event) {
+  if (document.querySelector(".shell-nav[aria-modal='true']")) {
+    return;
+  }
   const pickers = root.querySelectorAll<HTMLDetailsElement>(".chat-controls__inline-select[open]");
   if (pickers.length === 0) {
     return;

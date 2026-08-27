@@ -219,7 +219,6 @@ vi.mock("../config/sessions/startup-migration.js", () => ({
 
 vi.mock("../gateway/chat-display-projection.js", () => ({
   projectChatDisplayMessages: (messages: unknown[]) => messages,
-  projectRecentChatDisplayMessages: (messages: unknown[]) => messages,
   resolveEffectiveChatHistoryMaxChars: () => 100_000,
 }));
 
@@ -3314,6 +3313,90 @@ describe("EmbeddedTuiBackend", () => {
     expect(finalContent).toHaveLength(1);
     expect(finalContent[0]?.type).toBe("text");
     expect(finalContent[0]?.text).toBe("fallback answer");
+  });
+
+  it.each([
+    { failureCount: 1, streamedText: "recovered answer", finalText: "recovered answer" },
+    { failureCount: 2, streamedText: "recovered answer", finalText: "recovered answer" },
+    { failureCount: 1, streamedText: "outdated draft", finalText: "authoritative final answer" },
+    { failureCount: 1, streamedText: undefined, finalText: "authoritative unstreamed answer" },
+  ])(
+    "replaces $failureCount expired attempt failures with authoritative result '$finalText'",
+    async ({ failureCount, streamedText, finalText }) => {
+      const pending = deferred<EmbeddedAgentResult>();
+      agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+      const backend = new EmbeddedTuiBackend();
+      const events = captureBackendEvents(backend);
+      const runId = `run-local-expired-retry-${failureCount}`;
+
+      backend.start();
+      await sendMainChat(backend, "recover after a slow retry", runId);
+      for (let attempt = 0; attempt < failureCount; attempt += 1) {
+        registeredListener?.({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", error: `retryable provider failure ${attempt + 1}` },
+        });
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
+
+      expect(
+        events
+          .filter((entry) => entry.event === "chat")
+          .map((entry) => (entry.payload as { state?: string }).state),
+      ).toContain("error");
+
+      if (streamedText) {
+        registeredListener?.({
+          runId,
+          stream: "assistant",
+          data: { text: streamedText, delta: streamedText },
+        });
+      }
+      registeredListener?.({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", stopReason: "stop" },
+      });
+      pending.resolve({ payloads: [{ text: finalText }], meta: {} });
+      await flushMicrotasks();
+
+      const terminalEvents = events
+        .filter((entry) => entry.event === "chat")
+        .map((entry) => entry.payload as { state?: string; message?: { content?: unknown } })
+        .filter((payload) => payload.state === "error" || payload.state === "final");
+      expect(terminalEvents.map((payload) => payload.state)).toEqual(["error", "final"]);
+      expect(terminalEvents.at(-1)).toMatchObject({
+        message: { content: [{ text: finalText }] },
+      });
+    },
+  );
+
+  it("finalizes exhausted fallback failures without waiting for retry grace", async () => {
+    const pending = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    const backend = new EmbeddedTuiBackend();
+    const events = captureBackendEvents(backend);
+    const runId = "run-local-exhausted-fallback";
+
+    backend.start();
+    await sendMainChat(backend, "fail after all fallbacks", runId);
+    registeredListener?.({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "All fallback candidates failed",
+        fallbackExhaustedFailure: true,
+      },
+    });
+    expect(events.at(-1)).toMatchObject({
+      event: "chat",
+      payload: { state: "error", errorMessage: "All fallback candidates failed" },
+    });
+
+    pending.reject(new Error("All fallback candidates failed"));
+    await flushMicrotasks();
   });
 
   it("emits side-result events for local /btw runs", async () => {

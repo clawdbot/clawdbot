@@ -2,8 +2,8 @@ import { hostname as readHostName } from "node:os";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
-  CodexAppServerApprovalPolicy,
   CodexAppServerApprovalsReviewer,
+  CodexAppServerManagedApprovalPolicy,
   CodexAppServerRuntimeOptions,
   CodexAppServerSandboxMode,
   CodexPluginConfig,
@@ -36,7 +36,7 @@ export const CODEX_SESSION_PERMISSION_EXEC_MODES = {
 } satisfies Record<SessionPermissionMode, OpenClawExecMode>;
 
 type CodexSessionPermissionTuple = {
-  approvalPolicy: CodexAppServerApprovalPolicy;
+  approvalPolicy: CodexAppServerManagedApprovalPolicy;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
   sandbox: CodexAppServerSandboxMode;
 };
@@ -74,7 +74,7 @@ function requirementsAllowTuple(
   tuple: CodexSessionPermissionTuple,
   allowed: {
     sandboxes: Set<CodexAppServerSandboxMode> | undefined;
-    approvalPolicies: Set<CodexAppServerApprovalPolicy> | undefined;
+    approvalPolicies: Set<CodexAppServerManagedApprovalPolicy> | undefined;
     reviewers: Set<CodexAppServerApprovalsReviewer> | undefined;
   },
 ): boolean {
@@ -89,13 +89,18 @@ function requirementsAllowTuple(
 function tightenTupleForExecMode(
   tuple: CodexSessionPermissionTuple,
   execMode: OpenClawExecMode | undefined,
+  requiresPerCommandApproval: boolean,
 ): CodexSessionPermissionTuple {
   switch (execMode) {
     case "deny":
     case "allowlist":
       return { sandbox: "read-only", approvalPolicy: "on-request", approvalsReviewer: "user" };
     case "ask":
-      return { ...tuple, approvalPolicy: "on-request", approvalsReviewer: "user" };
+      return {
+        ...tuple,
+        approvalPolicy: requiresPerCommandApproval ? "untrusted" : "on-request",
+        approvalsReviewer: "user",
+      };
     case "auto":
     case "full":
     case undefined:
@@ -125,17 +130,43 @@ function clampSessionPermissionTuple(params: {
   if (requirementsAllowTuple(params.requested, allowed)) {
     return params.requested;
   }
+  if (
+    params.requested.approvalPolicy === "untrusted" &&
+    allowed.approvalPolicies?.has("untrusted") === false
+  ) {
+    throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");
+  }
 
   const userReviewRequired =
     params.mode === "read-only" ||
     params.mode === "guarded" ||
     (params.mode === "workspace" && !params.canUseAutoReview);
-  return {
-    sandbox: selectGuardianSandbox(allowed.sandboxes),
-    approvalPolicy: selectGuardianApprovalPolicy(
-      allowed.approvalPolicies,
-      userReviewRequired ? "ask" : "auto",
+  const sandboxAuthority = {
+    "read-only": 0,
+    "workspace-write": 1,
+    "danger-full-access": 2,
+  } satisfies Record<CodexAppServerSandboxMode, number>;
+  const allowedSandboxes = new Set(
+    (["read-only", "workspace-write", "danger-full-access"] as const).filter(
+      (sandbox) =>
+        sandboxAuthority[sandbox] <= sandboxAuthority[params.requested.sandbox] &&
+        (allowed.sandboxes === undefined || allowed.sandboxes.has(sandbox)),
     ),
+  );
+  if (allowedSandboxes.size === 0) {
+    throw new Error(
+      `Codex session permission mode=${params.mode} cannot satisfy managed sandbox requirements without widening access`,
+    );
+  }
+  return {
+    sandbox: selectGuardianSandbox(allowedSandboxes),
+    approvalPolicy:
+      params.requested.approvalPolicy === "untrusted"
+        ? "untrusted"
+        : selectGuardianApprovalPolicy(
+            allowed.approvalPolicies,
+            userReviewRequired ? "ask" : "auto",
+          ),
     approvalsReviewer: userReviewRequired
       ? selectUserApprovalsReviewer(allowed.reviewers)
       : selectGuardianApprovalsReviewer(allowed.reviewers, "auto"),
@@ -147,6 +178,7 @@ export function applyCodexSessionPermissionPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
   permissionMode?: SessionPermissionMode;
   sessionRoot?: string;
+  defaultRoot: string;
   pluginConfig: CodexPluginConfig;
   canUseAutoReview: boolean;
   requirementsToml?: string;
@@ -157,10 +189,7 @@ export function applyCodexSessionPermissionPolicy(params: {
   if (!params.permissionMode) {
     return params.appServer;
   }
-  const sessionRoot = params.sessionRoot?.trim();
-  if (!sessionRoot) {
-    throw new Error("Codex session permission mode requires a recorded session root");
-  }
+  const sessionRoot = params.sessionRoot?.trim() || params.defaultRoot;
   if (params.policyLocked) {
     return { ...params.appServer, sessionRoot };
   }
@@ -168,6 +197,7 @@ export function applyCodexSessionPermissionPolicy(params: {
   const requested = tightenTupleForExecMode(
     tupleForMode(params.permissionMode, params.canUseAutoReview),
     params.execMode,
+    params.appServer.approvalPolicy === "untrusted",
   );
   const tuple =
     params.appServer.start.transport === "stdio"
@@ -200,14 +230,12 @@ export function resolveCodexEffectiveSessionPermissionPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
   permissionMode?: SessionPermissionMode;
   sessionRoot?: string;
+  defaultRoot: string;
 }): CodexEffectiveSessionPermissionPolicy | undefined {
   if (!params.permissionMode) {
     return undefined;
   }
-  const root = params.sessionRoot?.trim();
-  if (!root) {
-    throw new Error("Codex session permission mode requires a recorded session root");
-  }
+  const root = params.sessionRoot?.trim() || params.defaultRoot;
   const { sandbox, approvalPolicy, approvalsReviewer } = params.appServer;
   const fullAccess =
     params.permissionMode === "full" &&
@@ -233,16 +261,14 @@ export function resolveCodexEffectiveSessionPermissionPolicy(params: {
 export function resolveCodexSessionPermissionCwd(params: {
   permissionMode?: SessionPermissionMode;
   sessionRoot?: string;
+  defaultRoot: string;
   requestedCwd?: string;
   fallbackCwd: string;
 }): string {
   if (!params.permissionMode) {
     return params.requestedCwd ?? params.fallbackCwd;
   }
-  const sessionRoot = params.sessionRoot?.trim();
-  if (!sessionRoot) {
-    throw new Error("Codex session permission mode requires a recorded session root");
-  }
+  const sessionRoot = params.sessionRoot?.trim() || params.defaultRoot;
   const requestedCwd = params.requestedCwd?.trim();
   return requestedCwd && isPathInside(sessionRoot, requestedCwd) ? requestedCwd : sessionRoot;
 }

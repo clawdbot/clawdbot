@@ -45,6 +45,7 @@ import {
   buildPluginDependencyStatus,
   projectPluginDependencyHealth,
 } from "./status-dependencies-core.js";
+import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -190,6 +191,8 @@ type PluginReportParams = {
   config?: OpenClawConfig;
   effectiveOnly?: boolean;
   onlyPluginIds?: readonly string[];
+  /** Capture full registrations without starting channel runtime sidecars. */
+  runtimeInspection?: boolean;
   workspaceDir?: string;
   /** Use an explicit env when plugin roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
@@ -275,6 +278,7 @@ function buildPluginReport(
               loadModules,
               cache: false,
               onlyPluginIds,
+              toolDiscovery: params?.runtimeInspection,
             }),
           ),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },
@@ -309,7 +313,16 @@ function buildPluginReport(
     workspaceDir,
     workspaceScope: workspace.workspaceScope,
     ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(registry.diagnostics, workspace),
+    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+      [
+        ...registry.diagnostics,
+        ...collectPluginCapabilityConsentDiagnostics({
+          index: metadataSnapshot.index,
+          manifests: manifestByPluginId,
+        }),
+      ],
+      workspace,
+    ),
     plugins: registry.plugins.map((plugin) =>
       Object.assign({}, plugin, {
         imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
@@ -363,7 +376,9 @@ export function buildPluginInspectReport(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
-  const plugin = report.plugins.find((entry) => entry.id === params.id || entry.name === params.id);
+  const plugin =
+    report.plugins.find((entry) => entry.id === params.id) ??
+    report.plugins.find((entry) => entry.name === params.id);
   if (!plugin) {
     return null;
   }

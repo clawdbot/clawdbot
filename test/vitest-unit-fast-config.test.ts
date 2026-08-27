@@ -176,7 +176,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain(
       "src/agents/agent-tools.deferred-followup-guidance.test.ts",
     );
-    expect(testConfig.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
@@ -237,6 +236,14 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("keeps obvious stateful files out of the unit-fast lane", () => {
+    for (const file of [
+      "src/agents/agent-command.compaction-rotation.test.ts",
+      "src/agents/agent-command.embedded-maintenance.test.ts",
+    ]) {
+      expect(isUnitFastTestFile(file), file).toBe(false);
+      expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
+      expect(resolveUnitFastIsolatedTestIncludePattern(file), file).toBeNull();
+    }
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/openai-transport-stream.base.test.ts")).toBe(false);
     expect(
@@ -312,6 +319,7 @@ describe("unit-fast vitest lane", () => {
       "src/acp/translator.error-kind.test.ts",
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
+      "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
       "src/agents/tools/computer-tool.context.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
       "src/agents/tools/computer-tool.v2.test.ts",

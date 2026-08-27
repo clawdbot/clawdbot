@@ -116,6 +116,8 @@ type AttemptControl = {
 
 export async function dispatchEmbeddedRunAttempt(input: {
   params: InternalRunParams;
+  /** Run-owned start timestamp captured before admission; projected on recovery. */
+  runStartedAtMs: number;
   runtime: AttemptRuntime;
   transcriptOwnership: AttemptTranscriptOwnership;
   control: AttemptControl;
@@ -269,6 +271,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   });
   const attemptParams: EmbeddedRunAttemptParams = {
     admittedRunContext: params.admittedRunContext,
+    startedAtMs: input.runStartedAtMs,
     contextEngineAgentId: runtime.contextEngineAgentId,
     ...(control.pluginHarnessOwnsTransport ? { sandbox: pluginSandbox } : {}),
     operation: "attempt",
@@ -283,6 +286,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     messageProvider: params.messageProvider,
     clientCaps: params.clientCaps,
     toolBindings: params.toolBindings,
+    // Preserve the Gateway's tri-state capability; undefined hides both GitHub tools.
+    githubPublicationAvailable: params.githubPublicationAvailable,
     chatType: params.chatType,
     agentAccountId: params.agentAccountId,
     messageTo: params.messageTo,
@@ -482,6 +487,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     scheduledRuntimeAuthority: params.scheduledRuntimeAuthority,
     scheduledRuntimeAuthorityRecoveryRequired: params.scheduledRuntimeAuthorityRecoveryRequired,
     toolsAllow: params.toolsAllow,
+    toolExecutionAllow: params.toolExecutionAllow,
+    sessionPersistence: params.sessionPersistence,
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,

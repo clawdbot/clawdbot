@@ -149,12 +149,6 @@ export type OpenClawConfig = {
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
-    assistant?: {
-      /** Assistant display name for UI surfaces. */
-      name?: string;
-      /** Assistant avatar (emoji, short text, or image URL/data URI). */
-      avatar?: string;
-    };
     /**
      * Operator display preferences. Canonical config home so agents can
      * change them through the approval gate and clients stay in sync; the
@@ -162,7 +156,7 @@ export type OpenClawConfig = {
      */
     prefs?: {
       /** Control UI theme. */
-      theme?: "claw" | "knot" | "dash" | "custom";
+      theme?: "claw" | "knot" | "dash" | "absolutely" | "tide" | "beacon" | "phosphor" | "custom";
       /** Light/dark preference. */
       themeMode?: "light" | "dark" | "system";
       /** User-selected Control UI accent color (#RRGGBB). */

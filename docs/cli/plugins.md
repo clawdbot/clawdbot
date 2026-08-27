@@ -172,11 +172,13 @@ remains a supported fallback and direct-install path. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
 [plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
-Beta-channel installs and updates prefer the npm `beta` dist-tag when available,
-falling back to `latest`. On the extended-stable channel, official npm plugins
-with bare/default or `latest` intent resolve to the exact installed core
-version. Exact pins and explicit non-`latest` tags, third-party packages, and
-non-npm sources are not rewritten.
+Fresh beta-channel installs of official plugins require the npm `beta` dist-tag
+and stop if that release is missing; pass an explicit version to choose another
+release. Doctor, onboarding, and plugin-update recovery paths can fall back to
+the recorded or default selector with a visible warning. On the extended-stable
+channel, official npm plugins with bare/default or `latest` intent resolve to
+the exact installed core version. Exact pins and explicit non-`latest` tags,
+third-party packages, and non-npm sources are not rewritten.
 </Note>
 
 <AccordionGroup>
@@ -212,7 +214,7 @@ non-npm sources are not rewritten.
   <Accordion title="Hook packs and npm specs">
     `plugins install` is also the install surface for hook packs that expose `openclaw.hooks` in `package.json`. Use `openclaw hooks` for filtered hook visibility and per-hook enablement, not package installation.
 
-    Npm specs are **registry-only** (package name plus optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run in one managed npm project per plugin with `--ignore-scripts` for safety, even when your shell has global npm install settings. Managed plugin npm projects inherit OpenClaw's package-level npm `overrides`, so host security pins apply to hoisted plugin dependencies too.
+    Npm specs are **registry-only** (package name plus optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run in one managed npm project per plugin with `--ignore-scripts` for safety, even when your shell has global npm install settings. Managed plugin npm projects inherit the npm-compatible parts of OpenClaw's dependency overrides. pnpm parent-child selectors are skipped; npm aliases remain unless the installed npm version rejects them.
 
     Use `npm:<package>` to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover unless they match an official plugin id.
 
@@ -406,9 +408,9 @@ For runtime hook debugging:
 
 ### Plugin index
 
-Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `installed_plugin_index` row stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
+Plugin install metadata is machine-managed state, not user config. Installs and updates write it to the shared SQLite state database under the active OpenClaw state directory. The `config_machine_state` value keyed by `plugins.installedIndex` stores durable `installRecords` metadata, including records for broken or missing plugin manifests, plus a manifest-derived cold registry cache used by `openclaw plugins update`, uninstall, diagnostics, and the cold plugin registry.
 
-`plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite installed-plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
+`plugins.installs` is a retired authored-config surface. Runtime and update commands read only the SQLite machine-state plugin index. Run `openclaw doctor --fix` to import legacy config records into the index and remove the retired key before normal runtime use.
 
 ## Uninstall
 

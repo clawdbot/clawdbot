@@ -1,7 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { ConfigIoContext } from "./io.context.js";
-import { materializeConfigForLoad } from "./io.context.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
 import { maybeRecoverSuspiciousConfigReadSync } from "./io.observe-recovery.js";
 import {
@@ -22,6 +21,7 @@ import {
   warnOnConfigMiskeys,
 } from "./io.warnings.js";
 import { migrateLegacyContextBudgetConfig, migratePersistedImplicitMainRoster } from "./legacy.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -40,12 +40,7 @@ export function loadConfigFromContext(
       // same runtime defaults an empty {} config gets, or out-of-box behavior
       // (compaction safeguard, session/cron defaults) silently diverges.
       return context.finalizeLoadedRuntimeConfig(
-        materializeConfigForLoad(
-          context,
-          coerceConfig(migratePersistedImplicitMainRoster({}).config),
-          {},
-          undefined,
-        ),
+        materializeRuntimeConfig(coerceConfig(migratePersistedImplicitMainRoster({}).config)),
       );
     }
     const raw = deps.fs.readFileSync(configPath, "utf-8");
@@ -151,12 +146,9 @@ export function loadConfigFromContext(
         return loadConfigFromContext(context, { skipSuspiciousRecovery: true });
       }
     }
-    const cfg = materializeConfigForLoad(
-      context,
-      validated.config,
-      effectiveConfigRaw,
-      pluginMetadata.getManifestRegistry(),
-    );
+    const cfg = materializeRuntimeConfig(validated.config, {
+      manifestRegistry: pluginMetadata.getManifestRegistry(),
+    });
     context.observeLoadConfigSnapshot(
       createConfigFileSnapshot({
         path: configPath,

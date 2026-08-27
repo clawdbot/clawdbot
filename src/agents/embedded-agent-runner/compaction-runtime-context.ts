@@ -12,10 +12,11 @@ import {
 } from "../bash-process-references.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
-  resolveModelRefFromString,
+  listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
@@ -186,22 +187,21 @@ export function resolveEmbeddedCompactionTarget(params: {
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
+    allowManifestNormalization: false,
   });
   if (inferredLiteralProvider) {
     return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasResolution = resolveModelRefFromString({
-    cfg: config,
-    raw: override,
-    defaultProvider,
-    aliasIndex: buildModelAliasIndex({
-      cfg: config,
-      defaultProvider,
-    }),
-  });
-  if (aliasResolution?.alias) {
-    return assembleTarget(aliasResolution.ref.provider, aliasResolution.ref.model);
+  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  // Unrelated aliases must not cold-load provider runtime for a literal override.
+  const alias = listModelAliasCandidates(config).some(
+    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+  )
+    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
+    : undefined;
+  if (alias) {
+    return assembleTarget(alias.ref.provider, alias.ref.model);
   }
   return assembleTarget(provider, override);
 }
@@ -352,6 +352,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     agentDir: params.agentDir,
     config: params.config,
     toolOverrides: params.toolOverrides,
+    toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,

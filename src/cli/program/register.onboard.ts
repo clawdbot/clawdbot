@@ -48,20 +48,20 @@ const MODERN_ONBOARD_OPTION_KEYS = new Set([
 function validateRecommendationParentOptions(
   command: Command,
   runtime: RuntimeEnv,
-  allowJson = false,
+  json = false,
 ): boolean {
   const unsupported = listExplicitOptionFlagsExcept(
     command,
-    allowJson ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
+    json ? RECOMMENDATION_READ_PARENT_OPTIONS : NO_RECOMMENDATION_PARENT_OPTIONS,
   );
   if (unsupported.length === 0) {
     return true;
   }
-  runtime.error(
+  return rejectOnboardingOption(
+    { json },
+    runtime,
     `This recommendations command does not support parent option(s): ${unsupported.join(", ")}.`,
   );
-  runtime.exit(1);
-  return false;
 }
 
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({ includeSkip: true });
@@ -179,7 +179,7 @@ export function registerOnboardRuntimeOptions(
     .option("--install-daemon", "Install gateway service")
     .option("--no-install-daemon", "Skip gateway service install")
     .option("--skip-daemon", "Skip gateway service install")
-    .option("--daemon-runtime <runtime>", "Daemon runtime: node")
+    .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun (default: node)")
     .option("--skip-channels", "Skip channel setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-bootstrap", "Skip creating default agent workspace files")
@@ -320,17 +320,13 @@ export function registerOnboardCommand(program: Command): void {
     .action(async (opts, recommendationsCommand: Command) => {
       const { defaultRuntime } = await import("../../runtime.js");
       await runCommandWithRuntime(defaultRuntime, async () => {
-        if (!validateRecommendationParentOptions(command, defaultRuntime, true)) {
+        const json = Boolean(opts.json || recommendationsCommand.parent?.opts().json);
+        if (!validateRecommendationParentOptions(command, defaultRuntime, json)) {
           return;
         }
         const { onboardRecommendationsCommand } =
           await import("../../commands/onboard-recommendations.js");
-        onboardRecommendationsCommand(
-          {
-            json: Boolean(opts.json || recommendationsCommand.parent?.opts().json),
-          },
-          defaultRuntime,
-        );
+        onboardRecommendationsCommand({ json }, defaultRuntime);
       });
     });
 

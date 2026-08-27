@@ -22,6 +22,7 @@ export type GatewayWsTestSocket = EventEmitter & {
   send: ReturnType<typeof vi.fn>;
   ping?: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
+  terminate: ReturnType<typeof vi.fn>;
 };
 
 export function createGatewayWsTestLogger() {
@@ -50,6 +51,9 @@ export function createGatewayWsTestRequestContext(
     unsubscribeAllSessionEvents: vi.fn(),
     nodeRegistry: overrides.nodeRegistry ?? { unregister: vi.fn() },
     nodeUnsubscribeAll: vi.fn(),
+    broadcast: vi.fn(),
+    incrementPresenceVersion: vi.fn(() => 1),
+    getHealthVersion: vi.fn(() => 1),
   };
 }
 
@@ -79,6 +83,7 @@ export function createGatewayWsTestSocket(
         socket.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
       }
     }),
+    terminate: vi.fn(),
   });
   return socket;
 }

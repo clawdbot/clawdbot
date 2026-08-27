@@ -53,6 +53,7 @@ const { assembleChatDelta, chatMessageText, chatMessageWidgets, resolveInlineWid
 function createFakeElement(tagName = "div") {
   const classes = new Set();
   const children: any[] = [];
+  const styles = new Map<string, string>();
   return {
     tagName: tagName.toUpperCase(),
     children,
@@ -71,7 +72,17 @@ function createFakeElement(tagName = "div") {
         return enabled;
       },
     },
-    style: { setProperty() {} },
+    style: {
+      setProperty(name: string, value: string) {
+        styles.set(name, value);
+      },
+      removeProperty(name: string) {
+        styles.delete(name);
+      },
+      getPropertyValue(name: string) {
+        return styles.get(name) ?? "";
+      },
+    },
     value: "",
     textContent: "",
     hidden: false,
@@ -176,6 +187,7 @@ function createQuickChatHarness(): Record<string, any> {
   };
   const document = {
     body: createFakeElement(),
+    documentElement: createFakeElement("html"),
     createElement: (tagName: string) => createFakeElement(tagName),
     createTextNode: (text: string) => ({ textContent: text }),
     querySelector(selector: string) {
@@ -214,6 +226,7 @@ this.harness = {
   },
   advanceTime(ms) { advanceTime(ms); },
   emitGatewayState(payload) { setGatewayState(payload); },
+  accent() { return document.documentElement.style.getPropertyValue("--accent"); },
   setMessage(value) { elements.input.value = value; },
   pendingCount() { return pendingChatEvents.length; },
   activeRunId() { return activeReply?.runId ?? null; },
@@ -249,6 +262,20 @@ test("visibility operations share one monotonic sequence", () => {
   assert.equal(harness.nextVisibilityOperation(), 1);
   assert.equal(harness.nextVisibilityOperation(), 2);
   assert.equal(harness.nextVisibilityOperation(), 3);
+});
+
+test("gateway state updates and clears the Quick Chat user accent", () => {
+  const harness = createQuickChatHarness();
+  harness.setGatewayUp();
+
+  harness.emitGatewayState({ state: "up", accent: "#45b6fe" });
+  assert.equal(harness.accent(), "#45b6fe");
+
+  harness.emitGatewayState({ state: "up", accent: "#52c99a" });
+  assert.equal(harness.accent(), "#52c99a");
+
+  harness.emitGatewayState({ state: "up" });
+  assert.equal(harness.accent(), "");
 });
 
 test("widget child webviews inherit no Quick Chat Tauri capability", () => {

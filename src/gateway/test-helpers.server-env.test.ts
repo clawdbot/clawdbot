@@ -1,8 +1,15 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { createGatewayConfigModuleMock } from "./test-helpers.config-runtime.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { installGatewayTestHooks, withGatewayServer } from "./test-helpers.server.js";
+import { testState } from "./test-helpers.runtime-state.js";
+import {
+  installGatewayTestHooks,
+  withGatewayServer,
+  writeSessionStore,
+} from "./test-helpers.server.js";
 
 const envBeforeSuite = {
   PATH: process.env.PATH,
@@ -27,6 +34,46 @@ describe("Gateway test environment lifecycle", () => {
       OPENCLAW_PATH_BOOTSTRAPPED: process.env.OPENCLAW_PATH_BOOTSTRAPPED,
     }).toEqual(envBeforeSuite);
   });
+
+  it.each(["session store", "config mock"])(
+    "keeps config readable while the %s fixture publishes an update",
+    async (fixture) => {
+      const actual =
+        await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+      const { writeConfigFile } = createGatewayConfigModuleMock(actual);
+      await writeConfigFile({ session: { reset: { idleMinutes: 30 } } });
+      const configPath = process.env.OPENCLAW_CONFIG_PATH!;
+      const readIdleMinutes = () =>
+        actual.loadConfig({ pin: false, skipPluginValidation: true, skipShellEnvFallback: true })
+          .session?.reset?.idleMinutes;
+      expect(readIdleMinutes()).toBe(30);
+      const writeFile = fs.writeFile.bind(fs);
+      const writeSpy = vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
+        // Schedule the background reader after open: a direct path write has
+        // already truncated the live config; a staged descriptor has not.
+        const handle = file === configPath ? await fs.open(file, "w") : undefined;
+        try {
+          expect([30, 60]).toContain(readIdleMinutes());
+          await writeFile(handle ?? file, data, options);
+        } finally {
+          await handle?.close();
+        }
+      });
+
+      try {
+        if (fixture === "session store") {
+          testState.sessionStorePath = path.join(path.dirname(configPath), "sessions.json");
+          testState.sessionConfig = { reset: { idleMinutes: 60 } };
+          await writeSessionStore({ entries: {} });
+        } else {
+          await writeConfigFile({ session: { reset: { idleMinutes: 60 } } });
+        }
+        expect(readIdleMinutes()).toBe(60);
+      } finally {
+        writeSpy.mockRestore();
+      }
+    },
+  );
 
   it("restores startup-owned environment when a direct E2E server closes", async () => {
     const stateDir = process.env.OPENCLAW_STATE_DIR;

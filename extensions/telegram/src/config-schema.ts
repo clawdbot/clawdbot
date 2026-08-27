@@ -173,6 +173,7 @@ const TelegramAccountSchemaBase = z
       defaultTo: z.union([z.string(), z.number()]).optional(),
       streaming: TelegramPreviewStreamingConfigSchema.optional(),
     }),
+    joinIntro: z.boolean().optional(),
     execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),

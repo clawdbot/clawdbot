@@ -14,7 +14,7 @@ final class DeviceStatusService: DeviceStatusServicing {
         let battery = Self.batteryStatus(device: UIDevice.current)
         let thermal = self.thermalStatus()
         let storage = self.storageStatus()
-        let network = await self.networkStatus.currentStatus()
+        let network = try await self.networkStatus.currentStatus()
         let uptime = ProcessInfo.processInfo.systemUptime
 
         return OpenClawDeviceStatusPayload(

@@ -90,7 +90,7 @@ export function formatEnvelopeForText(value: unknown): string {
 
 export function providerSummaryText(value: unknown): string {
   const providers = value as Array<Record<string, unknown>>;
-  return providers.map((entry) => JSON.stringify(entry)).join("\n");
+  return providers.map((entry) => JSON.stringify(entry)).join("\n") || "No results found.";
 }
 
 function hasOwnKeys(value: unknown): boolean {

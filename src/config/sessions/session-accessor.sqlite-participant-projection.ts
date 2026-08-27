@@ -17,6 +17,7 @@ import type { SessionEntry } from "./types.js";
 
 export type SessionParticipantRecord = {
   actor: SessionCreatedActor & { id: string };
+  contributionCount: number;
   firstPromptedAt: number;
   lastPromptedAt: number;
   source?: SessionParticipantSource;
@@ -45,6 +46,7 @@ function projectParticipantRow(row: {
   actor_id: string;
   actor_source?: string | null;
   actor_type: string;
+  contribution_count?: number | null;
   first_prompted_at: number;
   last_prompted_at: number;
 }): SessionParticipantRecord | null {
@@ -53,6 +55,7 @@ function projectParticipantRow(row: {
   }
   return {
     actor: { type: row.actor_type, id: row.actor_id },
+    contributionCount: row.contribution_count ?? 1,
     firstPromptedAt: row.first_prompted_at,
     lastPromptedAt: row.last_prompted_at,
     ...(row.actor_source === "profile" ||
@@ -70,6 +73,11 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   // Lazy-ensured column: pre-feature databases lack actor_source, so select it
   // only when present; projection treats the absent field as unknown/legacy.
   const hasActorSource = tableHasColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source");
+  const hasContributionCount = tableHasColumn(
+    database,
+    SESSION_PARTICIPANTS_TABLE,
+    "contribution_count",
+  );
   let query = getSessionKysely(database)
     .selectFrom("session_participants")
     .select([
@@ -77,6 +85,7 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
       "actor_type",
       "actor_id",
       ...(hasActorSource ? (["actor_source"] as const) : []),
+      ...(hasContributionCount ? (["contribution_count"] as const) : []),
       "first_prompted_at",
       "last_prompted_at",
     ]);

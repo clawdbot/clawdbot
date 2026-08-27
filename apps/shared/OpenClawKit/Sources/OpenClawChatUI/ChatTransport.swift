@@ -364,6 +364,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public typealias PatchSession = @Sendable (
         _ key: String,
         _ expectedSessionID: String?,
+        _ expectedMarkedUnreadAt: Double??,
         _ label: String??,
         _ category: String??,
         _ pinned: Bool?,
@@ -385,6 +386,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
     public func patchSession(
         key: String,
         expectedSessionID: String? = nil,
+        expectedMarkedUnreadAt: Double?? = nil,
         label: String??,
         category: String??,
         pinned: Bool?,
@@ -394,6 +396,7 @@ public struct OpenClawChatSessionMutationRouteLease: Sendable {
         try await self.patchSessionImpl(
             key,
             expectedSessionID,
+            expectedMarkedUnreadAt,
             label,
             category,
             pinned,
@@ -914,7 +917,7 @@ extension OpenClawChatTransport {
     public func acquireSessionMutationRouteLease() async -> OpenClawChatSessionMutationRouteLease? {
         let transport = self
         return OpenClawChatSessionMutationRouteLease(
-            patchSession: { key, expectedSessionID, label, category, pinned, archived, unread in
+            patchSession: { key, expectedSessionID, _, label, category, pinned, archived, unread in
                 try await transport.patchSession(
                     key: key,
                     expectedSessionID: expectedSessionID,

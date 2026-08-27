@@ -1,4 +1,4 @@
-import { getHealthCheck, type HealthCheck, type HealthFinding } from "openclaw/plugin-sdk/health";
+import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as nonEmptyString,
@@ -10,6 +10,7 @@ export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profi
 
 type CrabboxDoctorRegistrationHost = {
   readonly openclawRoot: string;
+  readonly getHealthCheck: (id: string) => HealthCheck | undefined;
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
@@ -111,7 +112,8 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
 export function registerCrabboxWorkerProviderDoctorChecks(
   host: CrabboxDoctorRegistrationHost,
 ): void {
-  if (getHealthCheck(CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID)) {
+  // Lookup and registration must use the same host registry across artifact loaders.
+  if (host.getHealthCheck(CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID)) {
     return;
   }
   host.registerHealthCheck(createCrabboxCloudWorkerProfileCheck(host.openclawRoot));

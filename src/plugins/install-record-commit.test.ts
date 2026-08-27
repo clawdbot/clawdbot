@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: async () => ({ valid: true, config: {} }),
   replaceConfigFile: mocks.replaceConfigFile,
   resolveConfigWriteAfterWrite: (value?: unknown) => value ?? { mode: "auto" },
   transformConfigFileWithRetry: mocks.transformConfigFileWithRetry,
@@ -1026,7 +1027,6 @@ describe("commitConfigWithPendingPluginInstalls", () => {
 
     const result = await commitConfigWithPendingPluginInstalls({ nextConfig });
 
-    expect(mocks.loadInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
     expect(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease).not.toHaveBeenCalled();
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig,

@@ -250,7 +250,7 @@ export const zh_CN = {
       directAccessTitle: "直接远程访问",
       enterUrlManually: "手动输入 URL",
       foundGateways: "找到 {count} 个 Gateway",
-      fingerprintMissing: "未公布（连接不会固定指纹）",
+      fingerprintMissing: "未公布",
       gatewayPasswordStoredMessage: "这个 Gateway 密码存在哪里？",
       gatewayTokenStoredMessage: "这个 Gateway 令牌存在哪里？",
       insecureRemoteUrl:
@@ -1083,7 +1083,9 @@ export const zh_CN = {
       dashboardWhenReady: "准备好后运行：{command}",
       daemonRuntime: "Gateway 服务运行时",
       daemonRuntimeNode: "Node（推荐）",
-      daemonRuntimeNodeHint: "OpenClaw 状态使用 node:sqlite，因此必须使用 Node；Bun 无法运行网关。",
+      daemonRuntimeNodeHint: "托管服务的首选和推荐运行时。",
+      daemonRuntimeBun: "Bun 1.4+",
+      daemonRuntimeBunHint: "需要 Bun 1.4 或更高版本，并使用符合 WAL 重置安全要求的 node:sqlite。",
       editBootstrap: "之后可编辑 BOOTSTRAP.md 来修改 agent 的自我介绍方式。",
       bootstrapHatchMessage: "醒醒，我的朋友！",
       firstTerminalChat: '第一次终端聊天会发送："醒醒，我的朋友！"',
@@ -1101,8 +1103,6 @@ export const zh_CN = {
       gatewayServiceRestarted: "Gateway 服务已重启。",
       gatewayServiceRestarting: "正在重启 Gateway 服务...",
       gatewayServiceRestartScheduled: "Gateway 服务重启已排队。",
-      gatewayServiceUninstalled: "Gateway 服务已卸载。",
-      gatewayServiceUninstalling: "正在卸载 Gateway 服务...",
       gatewayTokenGenerate: "生成令牌：{command}",
       gatewayTokenShared: "Gateway 令牌：Gateway 和 Control UI 的共享认证。",
       gatewayTokenStored:

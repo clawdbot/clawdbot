@@ -1,5 +1,6 @@
 /** Stable cron run-history wire shape and legacy JSONL migration input. */
 import type { FailoverReason } from "../agents/failover/signal.js";
+import type { NormalizeReplySkipReason } from "../auto-reply/reply/normalize-reply.js";
 import type {
   CronCompletionStatus,
   CronDeliveryStatus,
@@ -24,6 +25,7 @@ export type CronRunLogEntry = {
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
   failureNotificationDelivery?: CronFailureNotificationDelivery;
   delivery?: CronDeliveryTrace;
   sessionId?: string;

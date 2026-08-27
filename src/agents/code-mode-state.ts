@@ -22,8 +22,7 @@ import { ToolInputError } from "./tools/common.js";
 
 export type CodeModeBridgeDispatchState = {
   started: boolean;
-  trackedDispatches: number;
-  repairProvenance: "clean" | "eligible" | "invalid";
+  potentiallyMutatingDispatches: number;
 };
 
 export type PendingBridgeState = PendingBridgeRequest & {
@@ -66,12 +65,12 @@ let nextPendingBridgeSettlementSequence = 0;
 let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
 export function createCodeModeBridgeDispatchState(): CodeModeBridgeDispatchState {
-  return { started: false, trackedDispatches: 0, repairProvenance: "clean" };
+  return { started: false, potentiallyMutatingDispatches: 0 };
 }
 
-/** Read the monotonic host-only repair classification for one Code Mode run. */
+/** Read the host-only side-effect classification for one Code Mode run. */
 export function isCodeModeBridgeRepairEligible(state: CodeModeBridgeDispatchState): boolean {
-  return state.repairProvenance === "eligible";
+  return state.started && state.potentiallyMutatingDispatches === 0;
 }
 
 // One unreferenced timer owns parked snapshots even when no later exec or wait
@@ -249,7 +248,7 @@ export function snapshotState(params: {
   catalogProjection: CodeModeCatalogProjection;
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
-  deadlineMs: number;
+  remainingMs: number;
   deliveredOutputCount?: number;
   reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
@@ -290,29 +289,40 @@ export function pendingBridgeRequestsReplaySafe(
   runtime: ToolSearchRuntime,
   catalogProjection: CodeModeCatalogProjection,
 ): boolean {
-  return pending.every((request) => {
-    if (
-      request.method === "search" ||
-      request.method === "describe" ||
-      request.method === "yield" ||
-      request.method === "agentSpawn" ||
-      request.method === "agentWait" ||
-      request.method === "skillsList" ||
-      request.method === "skillsRead" ||
-      request.method === "sleep"
-    ) {
-      return true;
-    }
-    if (request.method !== "callValue") {
-      return false;
-    }
-    const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
-    if (typeof callableName !== "string") {
-      return false;
-    }
-    const binding = catalogProjection.byCallableName.get(callableName);
-    return binding ? runtime.isReplaySafeExactId(binding.id) : false;
-  });
+  return pending.every((request) =>
+    isPendingBridgeRequestReplaySafe(request, runtime, catalogProjection),
+  );
+}
+
+function isPendingBridgeRequestReplaySafe(
+  request: PendingBridgeRequest,
+  runtime: ToolSearchRuntime,
+  catalogProjection: CodeModeCatalogProjection,
+): boolean {
+  if (
+    request.method === "search" ||
+    request.method === "describe" ||
+    request.method === "yield" ||
+    request.method === "agentSpawn" ||
+    request.method === "agentWait" ||
+    request.method === "skillsList" ||
+    request.method === "skillsRead" ||
+    request.method === "sleep"
+  ) {
+    return true;
+  }
+  if (request.method === "nodes") {
+    return request.args[0] === "list" || request.args[0] === "get";
+  }
+  if (request.method !== "callValue") {
+    return false;
+  }
+  const callableName = Array.isArray(request.args) ? request.args[0] : undefined;
+  if (typeof callableName !== "string") {
+    return false;
+  }
+  const binding = catalogProjection.byCallableName.get(callableName);
+  return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
 function enforceSnapshotStateLimits(params: {
@@ -334,7 +344,7 @@ export function createPendingBridgeStates(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   parentToolCallId: string;
   codeModeRunId: string;
-  deadlineMs: number;
+  remainingMs: number;
   activeRunId?: string;
   ctx: ToolSearchToolContext;
   signal?: AbortSignal;
@@ -353,11 +363,15 @@ export function createPendingBridgeStates(params: {
     const target = params.catalogProjection.byCallableName.get(String(request.args[0]));
     const yieldRunSignal = target?.name === "sessions_yield" ? params.ctx.abortSignal : undefined;
     const tracksDispatch = request.method !== "sleep";
+    // Discovery is read-only; replay-safe actions such as agentSpawn may still mutate.
+    const recoverySafe =
+      ["search", "describe", "skillsList", "skillsRead"].includes(request.method) ||
+      (["nodes", "callValue"].includes(request.method) &&
+        isPendingBridgeRequestReplaySafe(request, params.runtime, params.catalogProjection));
     if (tracksDispatch) {
       params.bridgeDispatch.started = true;
-      params.bridgeDispatch.trackedDispatches += 1;
-      if (params.bridgeDispatch.trackedDispatches > 1) {
-        params.bridgeDispatch.repairProvenance = "invalid";
+      if (!recoverySafe) {
+        params.bridgeDispatch.potentiallyMutatingDispatches += 1;
       }
     }
     const bridgeCall = runBridgeRequest({
@@ -367,7 +381,7 @@ export function createPendingBridgeStates(params: {
       parentToolCallId: params.parentToolCallId,
       codeModeRunId: params.codeModeRunId,
       maxOutputBytes: params.config.maxOutputBytes,
-      remainingMs: Math.max(1, params.deadlineMs - Date.now()),
+      remainingMs: Math.max(1, params.remainingMs),
       ctx: params.ctx,
       request,
       signal,
@@ -384,11 +398,11 @@ export function createPendingBridgeStates(params: {
       ...request,
       promise: completion.then((settled) => {
         const trustedNoStart = tracksDispatch && consumeTrustedToolNoStartError(settled);
-        if (tracksDispatch && params.bridgeDispatch.repairProvenance !== "invalid") {
-          params.bridgeDispatch.repairProvenance =
-            params.bridgeDispatch.trackedDispatches === 1 && trustedNoStart
-              ? "eligible"
-              : "invalid";
+        if (trustedNoStart && !recoverySafe) {
+          params.bridgeDispatch.potentiallyMutatingDispatches = Math.max(
+            0,
+            params.bridgeDispatch.potentiallyMutatingDispatches - 1,
+          );
         }
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;

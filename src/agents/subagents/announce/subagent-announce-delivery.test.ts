@@ -5,6 +5,7 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { callGateway as runtimeCallGateway } from "../../../gateway/call.js";
 import { authorizeGatewaySessionCreation } from "../../../gateway/operator-role-policy.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import type { dispatchGatewayMethodInProcess as runtimeDispatchGatewayMethodInProcess } from "../../../gateway/server-plugins.js";
 import {
   OutboundDeliveryError,
@@ -1340,8 +1341,15 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       expectRecordFields(result, {
         delivered: fallsBack,
         path: fallsBack ? "direct" : "none",
+        ...(fallsBack ? {} : { reason: "steer_dropped" }),
         phases: [
-          { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+          {
+            phase: "steer-primary",
+            delivered: false,
+            path: "none",
+            error: undefined,
+            ...(fallsBack ? {} : { reason: "steer_dropped" }),
+          },
           ...(fallsBack
             ? [{ phase: "direct-primary", delivered: true, path: "direct", error: undefined }]
             : []),
@@ -1989,6 +1997,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const { cfg, dispatchGatewayMethodInProcess } = createRoleRestrictedInProcessGatewayMock({
       runId: "descendant-wake-run",
     });
+    const resolveGatewayContext: GatewayContextResolver = () => undefined;
     const replaceSubagentRunAfterSteer = vi.fn(async () => true);
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
@@ -2004,6 +2013,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       isChildSessionEffectsAllowed: () => true,
       hasUsableSessionEntry: (entry): entry is Record<string, unknown> =>
         typeof entry === "object" && entry !== null,
+      resolveGatewayContext,
       deps: {
         callGateway: createGatewayMock(),
         dispatchGatewayMethodInProcess,
@@ -2013,6 +2023,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expect(woke).toBe(true);
+    expect(mockCallArg(dispatchGatewayMethodInProcess, 0, 2)).toMatchObject({
+      resolveGatewayContext,
+    });
     expect(replaceSubagentRunAfterSteer).toHaveBeenCalledWith(
       expect.objectContaining({
         previousRunId: "nested-parent-run",
@@ -2578,6 +2591,50 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       error: "UNAVAILABLE: gateway lost final output",
     });
     expect(callGateway).toHaveBeenCalledTimes(4);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible_reply_missing when completion direct delivery fails and fallback steering drops", async () => {
+    const callGateway = createPayloadGatewayMock();
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(false);
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        status: "error",
+        statusLabel: "failed: all models failed",
+        result: "(no output)",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+      reason: "visible_reply_missing",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        },
+        {
+          phase: "steer-fallback",
+          delivered: false,
+          path: "none",
+          reason: "steer_dropped",
+          error: undefined,
+        },
+      ],
+    });
+    expect(result.terminal).toBeUndefined();
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -4373,7 +4430,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
     });
-    expect(agentParams.sourceReplyDeliveryMode).toBeUndefined();
+    expect(agentParams.sourceReplyDeliveryMode).toBe(requireVisibleReply ? "automatic" : undefined);
   });
 
   it.each([

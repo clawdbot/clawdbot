@@ -111,12 +111,12 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
   ownerNumbers?: string[];
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -160,7 +160,6 @@ export function buildCliAgentSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
-    heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
@@ -175,6 +174,7 @@ export function buildCliAgentSystemPrompt(params: {
     userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 

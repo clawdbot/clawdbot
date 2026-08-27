@@ -2,19 +2,12 @@ import { sql } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  resolveSqliteTranscriptReadScope,
-  toDatabaseOptions,
-  type SessionSqliteTargetResolutionCache,
-} from "./session-accessor.sqlite-scope.js";
+import { readSqliteTranscriptStoreBatches } from "./session-accessor.sqlite-scope.js";
 
 type TitleProbeDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -34,9 +27,8 @@ export type SessionTranscriptTitleProbe = {
 };
 
 const SESSION_TITLE_PROBE_MESSAGES = 20;
-const SESSION_TITLE_PROBE_QUERY_CHUNK_SIZE = 400;
 
-function getTitleProbeKysely(database: OpenClawAgentDatabase) {
+function getTitleProbeKysely(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<TitleProbeDatabase>(database.db);
 }
 
@@ -57,7 +49,7 @@ function sqliteTranscriptBoundaryEventType() {
 }
 
 function readTitleProbeChunk(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
   sessionIds: readonly string[],
 ): Map<string, SessionTranscriptTitleProbe> {
   const db = getTitleProbeKysely(database);
@@ -174,37 +166,5 @@ function readTitleProbeChunk(
 export function readSessionTranscriptTitleProbeBatch(
   scopes: readonly SessionTranscriptReadScope[],
 ): Array<SessionTranscriptTitleProbe | undefined> {
-  const results: Array<SessionTranscriptTitleProbe | undefined> = Array.from({
-    length: scopes.length,
-  });
-  const groups = new Map<
-    string,
-    { database: OpenClawAgentDatabase; items: Array<{ index: number; sessionId: string }> }
-  >();
-  const targetCache: SessionSqliteTargetResolutionCache = new Map();
-  for (const [index, scope] of scopes.entries()) {
-    const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const group = groups.get(database.path) ?? { database, items: [] };
-    group.items.push({ index, sessionId: resolved.sessionId });
-    groups.set(database.path, group);
-  }
-  for (const group of groups.values()) {
-    const sessionIds = [...new Set(group.items.map((item) => item.sessionId))];
-    const probes = new Map<string, SessionTranscriptTitleProbe>();
-    for (
-      let offset = 0;
-      offset < sessionIds.length;
-      offset += SESSION_TITLE_PROBE_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = sessionIds.slice(offset, offset + SESSION_TITLE_PROBE_QUERY_CHUNK_SIZE);
-      for (const [sessionId, probe] of readTitleProbeChunk(group.database, chunk)) {
-        probes.set(sessionId, probe);
-      }
-    }
-    for (const item of group.items) {
-      results[item.index] = probes.get(item.sessionId);
-    }
-  }
-  return results;
+  return readSqliteTranscriptStoreBatches(scopes, readTitleProbeChunk);
 }

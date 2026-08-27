@@ -42,27 +42,6 @@ struct GatewayCostUsageDay: Codable {
         self.totals.missingCostEntries
     }
 
-    init(
-        date: String,
-        input: Int,
-        output: Int,
-        cacheRead: Int,
-        cacheWrite: Int,
-        totalTokens: Int,
-        totalCost: Double,
-        missingCostEntries: Int)
-    {
-        self.date = date
-        self.totals = GatewayCostUsageTotals(
-            input: input,
-            output: output,
-            cacheRead: cacheRead,
-            cacheWrite: cacheWrite,
-            totalTokens: totalTokens,
-            totalCost: totalCost,
-            missingCostEntries: missingCostEntries)
-    }
-
     private enum CodingKeys: String, CodingKey {
         case date
         case input

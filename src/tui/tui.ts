@@ -293,7 +293,7 @@ export function resolveInitialTuiAgentId(params: {
       tryResolveLegacyCompatibilityAgentId(params.cfg) ??
       resolveDefaultAgentId(params.cfg, {
         surface: "TUI startup",
-        hint: "Pass an agent-scoped --session key.",
+        hint: `Pass an agent-scoped --session key (e.g., '${formatCliCommand("openclaw tui --session agent:agentname:main")}').`,
       }),
   );
 }
@@ -1858,7 +1858,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       scheduleDynamicSlashCommandsRefresh();
       if (!state.autoMessageSent && autoMessage) {
         state.autoMessageSent = true;
-        await sendMessage(autoMessage);
+        await sendMessage(autoMessage, opts.initialMessageTimeoutMs);
         if (!ownsConnection()) {
           return;
         }

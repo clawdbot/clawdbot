@@ -39,6 +39,11 @@ import { markWhatsAppVisibleDeliveryError } from "../util.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
 import {
+  projectPreparedChannelInbound,
+  resolveWhatsAppInboundReplyPolicy,
+  type PreparedChannelInbound,
+} from "./prepared-inbound.js";
+import {
   createChannelMessageReplyPipeline,
   getAgentScopedMediaLocalRoots,
   jidToE164,
@@ -55,12 +60,7 @@ import {
   type LoadConfigFn,
   type ReplyPayload,
   type resolveAgentRoute,
-} from "./inbound-dispatch.runtime.js";
-import {
-  projectPreparedChannelInbound,
-  resolveWhatsAppInboundReplyPolicy,
-  type PreparedChannelInbound,
-} from "./prepared-inbound.js";
+} from "./runtime-api.js";
 
 type ReplyLifecycleKind = "tool" | "block" | "final";
 type ChannelReplyOnModelSelected = NonNullable<
@@ -476,6 +476,7 @@ export async function prepareWhatsAppInboundContext(params: {
     sender: {
       id: params.sender.id ?? params.sender.e164,
       name: params.sender.name,
+      isSelf: params.msg.platform.fromMe === true,
     },
     conversation: {
       kind: conversationKind,

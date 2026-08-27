@@ -1,5 +1,8 @@
 // Captures plugin registrations for controlled registry assembly.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   AgentToolResultMiddleware,
@@ -9,7 +12,7 @@ import {
   agentToolResultMiddlewareRegistrationCoversTool,
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
-import { buildPluginApi } from "./api-builder.js";
+import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
@@ -134,6 +137,7 @@ export function createCapturedPluginRegistration(params?: {
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
   const pluginSource = params?.source ?? "captured-plugin-registration";
+  const registrationMode = params?.registrationMode ?? "full";
   const noopLogger = {
     info() {},
     warn() {},
@@ -177,9 +181,12 @@ export function createCapturedPluginRegistration(params?: {
       id: pluginId,
       name: pluginName,
       source: pluginSource,
-      registrationMode: params?.registrationMode ?? "full",
+      registrationMode,
       config: params?.config ?? ({} as OpenClawConfig),
-      runtime: createPluginRuntime(),
+      runtime:
+        registrationMode === "cli-metadata" || registrationMode === "setup-only"
+          ? createUnavailableRuntime(registrationMode, pluginId)
+          : createPluginRuntime(),
       logger: noopLogger,
       resolvePath: (input) => input,
       handlers: {
@@ -202,7 +209,7 @@ export function createCapturedPluginRegistration(params?: {
               return normalized;
             })
             .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = normalizeStringEntries([
+          const commands = normalizeUniqueStringEntries([
             ...(opts?.commands ?? []),
             ...descriptors.map((descriptor) => descriptor.name),
           ]);

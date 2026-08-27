@@ -1,7 +1,9 @@
 /** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveLegacyInheritedAuthDir } from "../../agents/legacy-inherited-auth-dir.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
@@ -12,7 +14,6 @@ import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-el
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createModelListAuthIndex } from "./list.auth-index.js";
-import { resolveConfiguredEntries } from "./list.configured.js";
 import { formatErrorWithStack } from "./list.errors.js";
 import { ensureFlagCompatibility } from "./list.options.js";
 import { printModelTable } from "./list.table.js";
@@ -24,26 +25,18 @@ import { resolveModelsTargetAgent } from "./shared.js";
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
 type PromotionsModule = typeof import("./list.promotions.js");
-type RegistryLoadModule = typeof import("./list.registry-load.js");
+type RegistryModule = typeof import("./list.registry.js");
 type RowSourcesModule = typeof import("./list.row-sources.js");
 
 const promotionsModuleLoader = createLazyImportLoader<PromotionsModule>(
   () => import("./list.promotions.js"),
 );
-const registryLoadModuleLoader = createLazyImportLoader<RegistryLoadModule>(
-  () => import("./list.registry-load.js"),
+const registryModuleLoader = createLazyImportLoader<RegistryModule>(
+  () => import("./list.registry.js"),
 );
 const rowSourcesModuleLoader = createLazyImportLoader<RowSourcesModule>(
   () => import("./list.row-sources.js"),
 );
-
-function loadRegistryLoadModule(): Promise<RegistryLoadModule> {
-  return registryLoadModuleLoader.load();
-}
-
-function loadRowSourcesModule(): Promise<RowSourcesModule> {
-  return rowSourcesModuleLoader.load();
-}
 
 /** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
@@ -104,7 +97,12 @@ export async function modelsListCommand(
   const providerFilter = parsedProviderFilter
     ? providerAliasCanonicalizer.provider(parsedProviderFilter)
     : undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot, agentId);
+  const { entries } = resolveConfiguredModelEntries({
+    cfg,
+    agentId,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+    canonicalizeRef: providerAliasCanonicalizer.ref,
+  });
   if (providerFilter) {
     const knownProviderIds = new Set(
       [
@@ -119,7 +117,10 @@ export async function modelsListCommand(
       throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
   }
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(cfg);
+  const authStore = inheritedAuthDir
+    ? loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir })
+    : loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
@@ -164,30 +165,23 @@ export async function modelsListCommand(
   // account discovery remains explicit because it imports full provider runtimes.
   const providerManifestFallbackProviderIds =
     !providerFilter && !opts.all ? authIndex.providerDiscoveryProviderIds : undefined;
-  const loadRegistryState = async (optsLocal?: {
-    normalizeModels?: boolean;
-    loadAvailability?: boolean;
-  }) => {
-    const { loadListModelRegistry } = await loadRegistryLoadModule();
-    const loaded = await loadListModelRegistry(cfg, {
-      agentId,
-      agentDir,
-      providerFilter,
-      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: optsLocal?.loadAvailability,
-      workspaceDir,
-    });
-    modelRegistry = loaded.registry;
-    registryModels = loaded.models;
-    discoveredKeys = loaded.discoveredKeys;
-    availableKeys = loaded.availableKeys;
-    availabilityErrorMessage = loaded.availabilityErrorMessage;
-  };
   try {
     if (includePreparedCatalog) {
-      await loadRegistryState();
+      const { loadModelRegistry } = await registryModuleLoader.load();
+      const loaded = await loadModelRegistry(cfg, {
+        agentId,
+        agentDir,
+        providerFilter,
+        normalizeModels: Boolean(providerFilter),
+        workspaceDir,
+      });
+      modelRegistry = loaded.registry;
+      registryModels = loaded.models;
+      discoveredKeys = loaded.discoveredKeys;
+      availableKeys = loaded.availableKeys;
+      availabilityErrorMessage = loaded.availabilityErrorMessage;
     } else if (!opts.all && opts.local) {
-      const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
+      const { loadConfiguredListModelRegistry } = await registryModuleLoader.load();
       const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
         agentId,
         agentDir,
@@ -211,12 +205,13 @@ export async function modelsListCommand(
   const promotionsRefreshPromise = promotionsModulePromise
     ?.then((promotionsModule) => promotionsModule.startPromotionsFeedRefresh())
     .catch(() => undefined);
-  const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
+  const rowContext = {
     cfg,
     agentId,
     agentDir,
-    inheritedAuthDir: agentDir,
+    ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
     authIndex,
+    canonicalizeProvider: providerAliasCanonicalizer.provider,
     providerDiscoveryProviderIds,
     providerRuntimeDiscoveryProviderIds,
     providerManifestFallbackProviderIds,
@@ -227,28 +222,27 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
-    skipRuntimeModelSuppression,
     metadataSnapshot,
     workspaceDir,
-  });
+  };
   const rows: ModelRow[] = [];
 
   if (includePreparedCatalog) {
-    const { appendAllModelRowSources } = await loadRowSourcesModule();
+    const { appendAllModelRowSources } = await rowSourcesModuleLoader.load();
     await appendAllModelRowSources({
       rows,
       entries,
-      context: buildRowContext(false),
+      context: rowContext,
       modelRegistry,
       registryModels,
     });
   } else {
-    const { appendConfiguredModelRowSources } = await loadRowSourcesModule();
+    const { appendConfiguredModelRowSources } = await rowSourcesModuleLoader.load();
     await appendConfiguredModelRowSources({
       rows,
       entries,
       modelRegistry,
-      context: buildRowContext(!modelRegistry),
+      context: rowContext,
     });
   }
 

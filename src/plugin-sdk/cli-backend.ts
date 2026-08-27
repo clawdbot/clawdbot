@@ -27,6 +27,10 @@ export type {
   CliBackendToolPermissionRequest,
   CliBackendToolPermissionResult,
   CliBackendThinkingLevel,
+  CliBackendUserInputOption,
+  CliBackendUserInputQuestion,
+  CliBackendUserInputRequest,
+  CliBackendUserInputResult,
 } from "../plugins/cli-backend.types.js";
 export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 export { CliBackendAuthProfilePreparationError } from "../plugins/cli-backend-errors.js";

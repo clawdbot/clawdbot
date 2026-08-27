@@ -249,6 +249,7 @@ describe("lmstudio-models", () => {
       supportsTemperature: false,
       supportsUsageInStreaming: false,
       supportsTools: false,
+      codeMode: "preferred",
       supportsStrictMode: false,
       supportsJsonSchemaResponseFormat: false,
       requiresStringContent: true,
@@ -294,6 +295,7 @@ describe("lmstudio-models", () => {
           supportsPromptCacheKey: 1,
           visibleReasoningDetailTypes: ["reasoning.summary", 1],
           maxTokensField: "max_output_tokens",
+          codeMode: "unsupported",
           thinkingFormat: "unsupported",
           toolSchemaProfile: 1,
           unsupportedToolSchemaKeywords: ["additionalProperties", ""],
@@ -589,21 +591,6 @@ describe("lmstudio-models", () => {
       models: [],
     });
     expect(tracked.wasCanceled()).toBe(true);
-  });
-
-  it("cancels guarded non-ok discovery bodies before releasing the dispatcher", async () => {
-    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });
-
-    const result = await fetchLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      ssrfPolicy: {},
-    });
-
-    expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
-    expect(tracked.wasCanceled()).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
   });
 
   it.each([

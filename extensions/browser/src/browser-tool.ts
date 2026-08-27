@@ -364,6 +364,7 @@ export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -835,6 +836,7 @@ export function createBrowserTool(opts?: {
                 cfg: screenshotCfg,
                 filePath: screenshotPath,
                 agentDir: opts?.agentDir,
+                agentId: opts?.agentId,
                 workspaceDir: opts?.workspaceDir,
                 activeModel: opts?.activeModel,
                 mediaScope: opts?.mediaScope,

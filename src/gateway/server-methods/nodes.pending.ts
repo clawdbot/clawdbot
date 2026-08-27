@@ -20,9 +20,10 @@ import {
   type PendingNodeAction,
 } from "../node-runtime-state.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { respondPairingChanged } from "./nodes.shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function resolveAllowedPendingNodeActions(params: {
   nodeId: string;
@@ -100,12 +101,7 @@ export function toPendingParamsJSON(params: unknown): string | undefined {
 
 export const nodePendingActionHandlers: GatewayRequestHandlers = {
   "node.pending.pull": async ({ params, respond, client, context }) => {
-    if (!validateNodeListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.pull",
-        validator: validateNodeListParams,
-      });
+    if (!assertValidParams(params, validateNodeListParams, "node.pending.pull", respond)) {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
@@ -152,12 +148,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pending.ack": async ({ params, respond, client, context }) => {
-    if (!validateNodePendingAckParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pending.ack",
-        validator: validateNodePendingAckParams,
-      });
+    if (!assertValidParams(params, validateNodePendingAckParams, "node.pending.ack", respond)) {
       return;
     }
     const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;

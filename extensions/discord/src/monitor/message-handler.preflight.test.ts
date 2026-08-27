@@ -645,6 +645,7 @@ describe("preflightDiscordMessage", () => {
       {
         path: "/tmp/openclaw-discord-test/photo.png",
         contentType: "image/png",
+        fileName: "photo.png",
       },
     ]);
   });
@@ -1197,6 +1198,7 @@ describe("preflightDiscordMessage", () => {
           id: "pk-member-1",
           name: "Echo",
           tag: "Echo",
+          isPluralKit: true,
         },
       }),
     );

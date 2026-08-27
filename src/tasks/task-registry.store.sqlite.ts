@@ -1,7 +1,21 @@
 // Persists task registry records and events through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
+import {
+  executionOwnerBindingFromAdmission,
+  type ExecutionOwnerBindingResult,
+} from "../audit/execution-owner-binding.js";
+import {
+  bindExecutionOwnerLifecycleMetadata,
+  deleteExecutionOwnerLifecycleMetadata,
+  pruneOrphanedExecutionOwnerLifecycleMetadata,
+} from "../audit/execution-owner-lifecycle-binding-store.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -13,6 +27,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { parseDeliveryContextJson, parseSqliteJsonValue } from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
@@ -329,6 +344,7 @@ function deleteTaskRowsWithDeliveryState(db: DatabaseSync, taskId: string): void
     kysely.deleteFrom("task_delivery_state").where("task_id", "=", taskId),
   );
   executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "=", taskId));
+  deleteExecutionOwnerLifecycleMetadata({ db, ownerKind: "task", ownerIds: [taskId] });
 }
 
 function openTaskRegistryDatabase(): TaskRegistryDatabase {
@@ -435,6 +451,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     if (taskIds.length === 0) {
       executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
       executeSqliteQuerySync(db, kysely.deleteFrom("task_runs"));
+      pruneOrphanedExecutionOwnerLifecycleMetadata(db, "task");
       return;
     }
     pruneRowsNotInSnapshot({
@@ -462,6 +479,7 @@ export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapsho
     for (const state of snapshot.deliveryStates.values()) {
       replaceTaskDeliveryStateRow(db, bindTaskDeliveryState(state));
     }
+    pruneOrphanedExecutionOwnerLifecycleMetadata(db, "task");
   });
 }
 
@@ -469,6 +487,42 @@ export function upsertTaskRegistryRecordToSqlite(task: TaskRecord) {
   withWriteTransaction((database) => {
     upsertTaskRunRowInDatabase(database, bindTaskRecord(task));
   });
+}
+
+/** Binds only the exact task row selected before admission; runId is never a join key. */
+export function bindTaskRunExecution(params: {
+  admitted: AdmittedRunContext;
+  taskId: string;
+  options?: OpenClawStateDatabaseOptions;
+}): ExecutionOwnerBindingResult {
+  const binding = executionOwnerBindingFromAdmission(params.admitted);
+  if (!binding) {
+    return "disabled";
+  }
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getTaskRegistryKysely(db);
+      const current = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("task_runs")
+          .select(["task_id", "status", "ended_at"])
+          .where("task_id", "=", params.taskId),
+      );
+      const status = current ? parseTaskStatus(current.status) : undefined;
+      if (!current || (status !== "queued" && status !== "running") || current.ended_at !== null) {
+        return "missing";
+      }
+      return bindExecutionOwnerLifecycleMetadata({
+        db,
+        ownerKind: "task",
+        ownerId: current.task_id,
+        binding,
+      });
+    },
+    params.options,
+    { operationLabel: "task.run.execution-binding" },
+  );
 }
 
 export function upsertTaskWithDeliveryStateToSqlite(params: {

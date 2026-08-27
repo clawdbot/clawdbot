@@ -106,7 +106,8 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
   return Boolean(
     item &&
     readString(item, "type") === "agentMessage" &&
-    readString(item, "phase") !== "commentary",
+    readString(item, "phase") !== "commentary" &&
+    readString(item, "delivery") !== "async",
   );
 }
 
@@ -132,7 +133,7 @@ export function isAssistantCommentaryCompletionNotification(
   return Boolean(
     item &&
     readString(item, "type") === "agentMessage" &&
-    readString(item, "phase") === "commentary",
+    (readString(item, "phase") === "commentary" || readString(item, "delivery") === "async"),
   );
 }
 

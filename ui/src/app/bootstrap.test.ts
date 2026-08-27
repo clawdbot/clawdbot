@@ -973,11 +973,13 @@ describe("normalizeInitialApplicationLocation", () => {
     try {
       expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
       expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#48d6c2");
+      expect(runtime.context.theme.settings.accent).toBe("#48d6c2");
 
       saveSettings({ ...loadSettings(), accent: "#f4b740" });
       runtime.context.theme.refresh();
 
       expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#f4b740");
+      expect(runtime.context.theme.settings.accent).toBe("#f4b740");
     } finally {
       saveSettings(previousSettings);
       runtime.context.theme.refresh();
@@ -1010,6 +1012,73 @@ describe("normalizeInitialApplicationLocation", () => {
       lightMeta.remove();
       darkMeta.remove();
       saveSettings(previousSettings);
+    }
+  });
+
+  it("refreshes chat browser chrome on route and breakpoint changes", () => {
+    const previousSettings = loadSettings();
+    const listeners = new Set<() => void>();
+    let mobile = false;
+    const removeEventListener = vi.fn((_: string, listener: () => void) => {
+      listeners.delete(listener);
+    });
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn((query: string) => ({
+        matches: query.startsWith("(max-width: 768px)") ? mobile : false,
+        addEventListener: (_: string, listener: () => void) => listeners.add(listener),
+        removeEventListener,
+      })),
+    );
+    const style = document.createElement("style");
+    style.textContent = ':root[data-theme="light"] { --bg: #123456; --bg-content: #abcdef; }';
+    const meta = document.createElement("meta");
+    meta.name = "theme-color";
+    document.head.append(style, meta);
+    saveSettings({ ...previousSettings, theme: "claw", themeMode: "light" });
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+    try {
+      expect(meta.content).toBe("#123456");
+      expect(
+        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
+      ).toBe("#123456");
+
+      document.body.innerHTML = '<div class="shell--chat"></div>';
+      mobile = true;
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(meta.content).toBe("#abcdef");
+      expect(
+        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background"),
+      ).toBe("#abcdef");
+
+      document.body.replaceChildren();
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(meta.content).toBe("#123456");
+
+      document.body.innerHTML = '<div class="shell--chat"></div>';
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(meta.content).toBe("#abcdef");
+
+      mobile = false;
+      for (const listener of listeners) {
+        listener();
+      }
+      expect(meta.content).toBe("#123456");
+    } finally {
+      runtime.stop();
+      document.body.replaceChildren();
+      expect(removeEventListener).toHaveBeenCalled();
+      style.remove();
+      meta.remove();
+      saveSettings(previousSettings);
+      vi.unstubAllGlobals();
     }
   });
 });

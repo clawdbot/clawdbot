@@ -36,6 +36,10 @@ type CoreGatewayMethodSpecRow = readonly [
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
+  // talk.config projects the caller's profile accent; without this gate a
+  // client asking during the post-hello GitHub identity sync window would get
+  // the gateway-wide accent instead. Profile-less clients pass through.
+  "talk.config",
   "ui.command",
   "users.linkEmail",
   "users.setAvatar",
@@ -258,7 +262,7 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["secrets.resolve", null, "operator.admin", "<=2026.7"],
   ["voicewake.routing.get", "voicewake-routing", "operator.read", "<=2026.7"],
   ["sessions.list", "sessions-read", "operator.read", "<=2026.7", { startup: true }],
-  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
+  ["sessions.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7", { startup: true }],
   ["sessions.messages.subscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.messages.unsubscribe", "sessions-subscriptions", "operator.read", "<=2026.7"],
   ["sessions.viewers.set", "sessions-subscriptions", "operator.read", "2026.7"],
@@ -629,6 +633,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
     { controlPlaneWrite: true },
   ],
   ["diagnostics.lanes", "diagnostics", "operator.read", "2026.8"],
+  // Evidence-aware member projection is additive so legacy method indices and
+  // its required `addedBy` response contract remain unchanged.
+  ["session.members.listEvidence", "sessions-sharing", "operator.read", "2026.8"],
+  ["plugins.inspect", "plugins", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

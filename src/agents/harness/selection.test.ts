@@ -230,6 +230,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
@@ -1642,6 +1643,30 @@ describe("runAgentHarnessAttempt", () => {
 });
 
 describe("selectAgentHarness", () => {
+  it("rejects a harness replaced during its support probe", () => {
+    const replacement: AgentHarness = {
+      id: "codex",
+      label: "Replacement",
+      supports: () => ({ supported: true }),
+      runAttempt: async () => createAttemptResult("replacement"),
+    };
+    registerAgentHarness({
+      ...replacement,
+      supports: () => {
+        registerAgentHarness(replacement);
+        return { supported: true };
+      },
+    });
+
+    expect(() =>
+      selectAgentHarness({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        agentHarnessRuntimeOverride: "codex",
+      }),
+    ).toThrow("changed during owner resolution");
+  });
+
   it("does not select Codex from a non-OpenAI model name", () => {
     registerSuccessfulCodexHarness();
 
@@ -2139,49 +2164,180 @@ describe("selectAgentHarness", () => {
     },
   );
 
-  it("keeps native model run controls compatible with Codex", () => {
-    expect(
-      buildAgentHarnessSupportContext({
-        provider: "openai",
-        modelId: "gpt-5.6-sol",
-        modelProvider: {
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          requestTransportOverrides: "none",
+  it.each([
+    ["Platform", "openai-responses", "https://api.openai.com/v1"],
+    ["ChatGPT", "openai-chatgpt-responses", "https://chatgpt.com/backend-api/codex"],
+  ] as const)(
+    "keeps authored reasoning metadata and native controls on %s Codex",
+    (_label, api, baseUrl) => {
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  name: "Sol",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8192,
+                  api,
+                  baseUrl,
+                  compat: {
+                    supportsReasoningEffort: true,
+                    supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+                  },
+                },
+              ],
+            },
+          },
         },
-        requestedRuntime: "codex",
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-5.6-sol": {
-                  params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": {
+                params: { thinking: "xhigh", fastMode: true, fastAutoOnSeconds: 30 },
+              },
+            },
+          },
+        },
+      };
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.modelProvider?.requestTransportOverrides === "present"
+            ? { supported: false, fallbackRuntime: "openclaw" }
+            : { supported: true },
+        runAttempt: async () => createAttemptResult("codex"),
+      });
+      for (const runtime of [undefined, "codex", "openclaw"]) {
+        expect(
+          selectAgentHarness({
+            provider: "openai",
+            modelId: "gpt-5.6-sol",
+            config,
+            agentHarnessRuntimeOverride: runtime,
+          }).id,
+        ).toBe(runtime ?? "codex");
+      }
+      expect(
+        buildAgentHarnessSupportContext({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          requestedRuntime: "codex",
+          config,
+        }).modelProvider,
+      ).toMatchObject({
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      });
+    },
+  );
+
+  it.each([
+    ["model request params", {}, {}, { responsesServerCompaction: true }],
+    ["provider headers", { headers: { "x-route": "required" } }, {}, {}],
+    ["provider params", { params: { store: false } }, {}, {}],
+    ["provider timeout", { timeoutSeconds: 90 }, {}, {}],
+    ["model headers", {}, { headers: { "x-route": "required" } }, {}],
+    ["model params", {}, { params: { store: false } }, {}],
+    ["store compatibility", {}, { compat: { supportsStore: false } }, {}],
+    [
+      "mixed compatibility",
+      {},
+      {
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["high"],
+          supportsStore: false,
+        },
+      },
+      {},
+    ],
+  ])(
+    "uses a harness-declared fallback preserving %s",
+    (_label, providerPatch, modelPatch, params) => {
+      const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? {
+              supported: false as const,
+              reason: "authored request params are unsupported",
+              fallbackRuntime: "openclaw" as const,
+            }
+          : { supported: true as const },
+      );
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports,
+        runAttempt: vi.fn(async () => createAttemptResult("codex")),
+      });
+
+      expect(
+        selectAgentHarness({
+          provider: "openai",
+          modelId: "gpt-5.6-sol",
+          modelProvider: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            requestTransportOverrides: "none",
+            runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+          },
+          config: {
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  ...providerPatch,
+                  models: [
+                    {
+                      id: "gpt-5.6-sol",
+                      name: "Sol",
+                      reasoning: true,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      maxTokens: 8192,
+                      ...modelPatch,
+                    },
+                  ],
+                },
+              },
+            },
+            agents: {
+              defaults: {
+                models: {
+                  "openai/gpt-5.6-sol": {
+                    params,
+                    agentRuntime: { id: "codex" },
+                  },
                 },
               },
             },
           },
-        } as OpenClawConfig,
-      }).modelProvider,
-    ).toMatchObject({
-      requestTransportOverrides: "none",
-      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-    });
-  });
+        }).id,
+      ).toBe("openclaw");
+      expect(supports).toHaveBeenCalledWith(
+        expect.objectContaining({
+          modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
+        }),
+      );
+    },
+  );
 
-  it("uses a harness-declared OpenClaw fallback for explicit request params", () => {
-    const supports = vi.fn((ctx: Parameters<AgentHarness["supports"]>[0]) =>
-      ctx.modelProvider?.requestTransportOverrides === "present"
-        ? {
-            supported: false as const,
-            reason: "authored request params are unsupported",
-            fallbackRuntime: "openclaw" as const,
-          }
-        : { supported: true as const },
-    );
+  it("keeps a private-QA forced runtime despite a plugin-declared fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
     registerAgentHarness({
       id: "codex",
       label: "Codex",
-      supports,
+      supports: () => ({
+        supported: false,
+        reason: "authored request params are unsupported",
+        fallbackRuntime: "openclaw",
+      }),
       runAttempt: vi.fn(async () => createAttemptResult("codex")),
     });
 
@@ -2191,29 +2347,12 @@ describe("selectAgentHarness", () => {
         modelId: "gpt-5.6-sol",
         modelProvider: {
           api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          requestTransportOverrides: "none",
-          runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-        },
-        config: {
-          agents: {
-            defaults: {
-              models: {
-                "openai/gpt-5.6-sol": {
-                  params: { responsesServerCompaction: true },
-                  agentRuntime: { id: "codex" },
-                },
-              },
-            },
-          },
+          baseUrl: "http://127.0.0.1:43123/v1",
+          requestTransportOverrides: "present",
+          runtimePolicy: { compatibleIds: ["openclaw"] },
         },
       }).id,
-    ).toBe("openclaw");
-    expect(supports).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelProvider: expect.objectContaining({ requestTransportOverrides: "present" }),
-      }),
-    );
+    ).toBe("codex");
   });
 
   it("keeps request-scoped transport overrides on the implicit OpenClaw runtime", () => {
@@ -2546,6 +2685,31 @@ describe("selectAgentHarness", () => {
         ...pin,
       }).id,
     ).toBe("openclaw");
+  });
+
+  it("keeps private-QA forced Codex across prepared routes that declare fallback", () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_QA_FORCE_RUNTIME", "codex");
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: (ctx) =>
+        ctx.modelProvider?.requestTransportOverrides === "present"
+          ? { supported: false, fallbackRuntime: "openclaw" }
+          : { supported: true },
+      runAttempt: vi.fn(async () => createAttemptResult("codex")),
+    });
+
+    expect(
+      selectAgentHarnessForPreparedModelProviders({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        modelProviders: [
+          { requestTransportOverrides: "none" },
+          { requestTransportOverrides: "present" },
+        ],
+      }).id,
+    ).toBe("codex");
   });
 
   it.each([

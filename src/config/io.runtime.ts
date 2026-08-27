@@ -44,6 +44,11 @@ import {
   type RuntimeConfigSnapshotRefreshOptions,
   type RuntimeConfigWritePreparedCandidate,
 } from "./runtime-snapshot.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  copyRuntimeConfigWriteApplication,
+  getRuntimeConfigWriteApplication,
+} from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export function clearConfigCache(): void {
@@ -75,7 +80,12 @@ export function registerConfigWriteListener(
     const preparedCandidate = unregisterOwner
       ? event.preparedCandidatesByOwner?.get(unregisterOwner.ownerId)
       : undefined;
-    listener({ ...baseEvent, ...(preparedCandidate ? { preparedCandidate } : {}) });
+    listener(
+      copyRuntimeConfigWriteApplication(event, {
+        ...baseEvent,
+        ...(preparedCandidate ? { preparedCandidate } : {}),
+      }),
+    );
   });
   return () => {
     unregisterListener();
@@ -161,6 +171,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     | "measure"
     | "observe"
     | "recoverSuspicious"
+    | "skipPluginValidation"
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
@@ -168,6 +179,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
     ...(options?.lowerPrecedenceEnv ? { lowerPrecedenceEnv: options.lowerPrecedenceEnv } : {}),
+    ...(options?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
   }).readConfigFileSnapshotWithPluginMetadata({
     allowCurrentPluginMetadata: options?.allowCurrentPluginMetadata,
     recoverSuspicious: options?.recoverSuspicious === true,
@@ -439,17 +451,20 @@ async function finalizeCommittedConfigWrite(params: {
       ]),
     );
     notifyRuntimeConfigWriteListeners(
-      createRuntimeConfigWriteNotification({
-        configPath: io.configPath,
-        sourceConfig: canonicalSourceConfig,
-        runtimeConfig: notificationRuntimeConfig,
-        persistedHash: writeResult.persistedHash,
-        afterWrite: options.afterWrite,
-        runtimeRefresh: options.runtimeRefresh,
-        ...(notificationPreparedCandidates.size > 0
-          ? { preparedCandidatesByOwner: notificationPreparedCandidates }
-          : {}),
-      }),
+      attachRuntimeConfigWriteApplication(
+        createRuntimeConfigWriteNotification({
+          configPath: io.configPath,
+          sourceConfig: canonicalSourceConfig,
+          runtimeConfig: notificationRuntimeConfig,
+          persistedHash: writeResult.persistedHash,
+          afterWrite: options.afterWrite,
+          runtimeRefresh: options.runtimeRefresh,
+          ...(notificationPreparedCandidates.size > 0
+            ? { preparedCandidatesByOwner: notificationPreparedCandidates }
+            : {}),
+        }),
+        getRuntimeConfigWriteApplication(options),
+      ),
     );
   };
 

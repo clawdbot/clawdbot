@@ -79,6 +79,12 @@ reconcile dependencies before the remote wrapper starts.
 
 ## Core commands
 
+Maintained JavaScript tooling wrappers and root package commands use tsx's
+in-process transform cache. They skip its shared disk cache before the loader
+starts, and child tooling inherits that policy. This does not relocate or clean
+temporary directories, Node or Vitest caches, or other global caches. Raw external
+`tsx` and `node --import tsx` invocations outside these launchers are unchanged.
+
 Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary; Vitest's own duration line stays the per-shard detail.
 
 | Command                                           | What it does                                                                                                                                                                                                                                                                                                                                          |
@@ -168,14 +174,14 @@ Other behavior: the runner preflights Docker by default, cleans stale OpenClaw E
 
 ### Sandbox compatibility lanes
 
-| Command                                      | Verifies                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, custom image build, managed sandbox lifecycle, SSH execution, remote filesystem bridge, seeded workspace, and deny/allow network policies. |
-| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                |
-| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.               |
-| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                        |
-| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                 |
-| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.               |
+| Command                                      | Verifies                                                                                                                                                                                                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm test:e2e:openshell`                    | Real OpenShell gateway, isolated control-plane workspace, custom image, remote and mirrored filesystems, eight-way mixed exec/file stress, exact host/remote inventories, failure recovery, SSH cleanup, protected host metadata, and deny/allow network policies. |
+| `pnpm test:docker:package-install`           | Packed OpenClaw npm artifact installation into a clean global prefix, then CLI version and help startup from the installed package.                                                                                                                                |
+| `pnpm test:docker:openai-web-search-minimal` | Mocked TLS endpoint with a private test CA, isolated Gateway startup, and web-search request handling through the configured certificate trust path.                                                                                                               |
+| `pnpm test:docker:browser-cdp-snapshot`      | Chromium startup, raw CDP connectivity, isolated Gateway browser commands, doctor output, and accessibility snapshot roles.                                                                                                                                        |
+| `pnpm test:docker:kitchen-sink-rpc`          | Installed plugin commands and catalog tools, read-only Gateway RPC traversal, authentication boundaries, channel lifecycle, and resource ceilings.                                                                                                                 |
+| `pnpm test:docker:kitchen-sink-plugin`       | Packaged and registry plugin install flows, plugin execution, expected unsupported-version failures, ClawHub fallback, and npm-to-ClawHub migration.                                                                                                               |
 
 ## Local PR gate
 

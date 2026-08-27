@@ -13,6 +13,11 @@ on:
         description: Exact resolved SHA expected from the trusted caller
         required: true
         type: string
+      lock_scope:
+        description: Concurrency scope for a trusted single-lane reusable call
+        required: false
+        default: all
+        type: string
       run_mock_parity:
         description: Run the mock parity lane
         required: false
@@ -118,7 +123,9 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: qa-lab-all-lanes-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
+  # Trusted reusable callers name their single-lane scope explicitly. Manual
+  # and scheduled aggregate runs retain the shared all-lanes lock.
+  group: qa-lab-${{ inputs.lock_scope || 'all' }}-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
   cancel-in-progress: false
   queue: max
 
@@ -438,6 +445,10 @@ jobs:
     if: inputs.expected_sha == '' || inputs.run_matrix
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 90
+    concurrency:
+      group: qa-live-matrix-${{ needs.validate_selected_ref.outputs.selected_revision }}
+      cancel-in-progress: false
+      queue: max
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
@@ -503,6 +514,7 @@ jobs:
     concurrency:
       group: qa-live-buzz-shared
       cancel-in-progress: false
+      queue: max
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref

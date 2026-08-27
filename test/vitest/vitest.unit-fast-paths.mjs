@@ -166,11 +166,20 @@ const broadUnitFastCandidateGlobs = [
 ];
 const ownerRoutedUnitTestPatterns = [
   ...cliProcessTestFiles,
+  // Command compaction tests need the scoped runtime registry even when their
+  // mocks live in a shared helper.
+  "src/agents/agent-command.compaction-rotation.test.ts",
+  "src/agents/agent-command.embedded-maintenance.test.ts",
   "src/agents/embedded-agent-runner/run.incomplete-turn.*.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
+  "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
 ];
 const broadUnitFastCandidateSkipGlobs = [
   "**/*.e2e.test.ts",
@@ -253,7 +262,7 @@ const disqualifyingPatterns = [
 ];
 
 const statefulTestHelperImportPattern =
-  /\bfrom\s+["']([^"']*(?:test-support|\.harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
+  /\bfrom\s+["']([^"']*(?:test-support|\.harness|prepared-model-runtime\.test-harness|message-action-runner\.test-helpers|computer-tool\.test-helpers)(?:\.js|\.ts)?)["']/gu;
 const statefulTestHelperByKey = new Map();
 
 function importsStatefulTestHelper(cwd, file, source) {

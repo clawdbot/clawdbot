@@ -22,6 +22,8 @@ type SettingsRowProps = {
   control?: SettingsRowControl;
   /** Full-width control below the text (textareas, segmented sets that wrap). */
   stacked?: boolean;
+  /** Full-width control below the text through the narrow-layout breakpoint. */
+  stackedOnNarrow?: boolean;
 };
 
 export type SettingsSectionProps = {
@@ -94,7 +96,11 @@ export function renderSettingsGroup(rows: unknown, options: { danger?: boolean }
 }
 
 export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
-  const className = props.stacked ? "settings-row settings-row--stacked" : "settings-row";
+  const className = props.stacked
+    ? "settings-row settings-row--stacked"
+    : props.stackedOnNarrow
+      ? "settings-row settings-row--stacked-on-narrow"
+      : "settings-row";
   return html`
     <div class=${className}>
       <div class="settings-row__text">
@@ -112,7 +118,7 @@ export function renderSettingsRow(props: SettingsRowProps): TemplateResult {
 
 /** Clickable drill-in row with a trailing chevron. */
 export function renderSettingsNavRow(
-  props: Omit<SettingsRowProps, "stacked"> & { onClick: () => void },
+  props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
 ): TemplateResult {
   return html`
     <button type="button" class="settings-row settings-row--nav" @click=${props.onClick}>
@@ -224,6 +230,10 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
+  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+}
+
 export function renderSettingsDefaultState(props: {
   value: string;
   overridden: boolean;
@@ -234,10 +244,7 @@ export function renderSettingsDefaultState(props: {
   action: TemplateResult | typeof nothing;
 } {
   return {
-    description: html`${t(
-      props.overridden ? "configForm.defaultValue" : "configForm.usingDefault",
-      { value: props.value },
-    )}`,
+    description: renderSettingsDefaultDescription(props.value, props.overridden),
     action: props.overridden
       ? html`
           <button
@@ -263,6 +270,8 @@ export function renderSettingsSegmented<T extends string>(props: {
   options: ReadonlyArray<{ value: T; label: unknown; title?: string; testId?: string }>;
   /** The selected radio is passed so callers can anchor visual transitions. */
   onChange: (value: T, element: HTMLElement) => void;
+  /** Optional activation for an already-selected value, such as clearing an explicit default. */
+  onReselect?: (value: T, element: HTMLElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
   className?: string;
@@ -299,6 +308,11 @@ export function renderSettingsSegmented<T extends string>(props: {
             .checked=${live(option.value === props.value)}
             title=${option.title ?? nothing}
             data-test-id=${option.testId ?? nothing}
+            @click=${(event: Event) => {
+              if (option.value === props.value && event.currentTarget instanceof HTMLElement) {
+                props.onReselect?.(option.value, event.currentTarget);
+              }
+            }}
           >
             ${option.label}
           </wa-radio>

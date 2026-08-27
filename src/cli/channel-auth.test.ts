@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPluginCatalogEntry: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn(),
   resolveChannelDefaultAccountId: vi.fn(),
-  getChannelPlugin: vi.fn(),
+  getLoadedChannelPlugin: vi.fn(),
   listChannelPlugins: vi.fn(),
   normalizeChannelId: vi.fn(),
   loadConfig: vi.fn(),
@@ -41,7 +41,7 @@ vi.mock("../channels/plugins/helpers.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", () => ({
-  getChannelPlugin: mocks.getChannelPlugin,
+  getLoadedChannelPlugin: mocks.getLoadedChannelPlugin,
   listChannelPlugins: mocks.listChannelPlugins,
   normalizeChannelId: mocks.normalizeChannelId,
 }));
@@ -136,7 +136,7 @@ describe("channel-auth", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.normalizeChannelId.mockReturnValue("whatsapp");
-    mocks.getChannelPlugin.mockReturnValue(plugin);
+    mocks.getLoadedChannelPlugin.mockReturnValue(plugin);
     mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {} } });
@@ -399,7 +399,7 @@ describe("channel-auth", () => {
     mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, zalouser: {} } });
     mocks.listChannelPlugins.mockReturnValue([plugin, zaloPlugin]);
     mocks.normalizeChannelId.mockImplementation((value) => value);
-    mocks.getChannelPlugin.mockImplementation((value) =>
+    mocks.getLoadedChannelPlugin.mockImplementation((value) =>
       value === "whatsapp"
         ? plugin
         : value === "zalouser"
@@ -441,7 +441,7 @@ describe("channel-auth", () => {
   });
 
   it("throws when channel does not support login", async () => {
-    mocks.getChannelPlugin.mockReturnValueOnce({
+    mocks.getLoadedChannelPlugin.mockReturnValueOnce({
       auth: {},
       gateway: { logoutAccount: mocks.logoutAccount },
       config: { resolveAccount: mocks.resolveAccount },
@@ -467,7 +467,7 @@ describe("channel-auth", () => {
         npmSpec: "@openclaw/whatsapp",
       },
     };
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.getLoadedChannelPlugin.mockReturnValueOnce(undefined);
     mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([catalogEntry]);
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel
       .mockReturnValueOnce({
@@ -519,7 +519,7 @@ describe("channel-auth", () => {
         npmSpec: "@openclaw/whatsapp",
       },
     };
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.getLoadedChannelPlugin.mockReturnValueOnce(undefined);
     mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([catalogEntry]);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValueOnce({
       cfg: {
@@ -571,7 +571,7 @@ describe("channel-auth", () => {
 
   it("resolves explicit channel login through the catalog when registry normalize misses", async () => {
     mocks.normalizeChannelId.mockReturnValueOnce(undefined).mockReturnValue("whatsapp");
-    mocks.getChannelPlugin.mockReturnValueOnce(undefined);
+    mocks.getLoadedChannelPlugin.mockReturnValueOnce(undefined);
     mocks.listChannelPluginCatalogEntries.mockReturnValueOnce([
       {
         id: "whatsapp",
@@ -647,7 +647,7 @@ describe("channel-auth", () => {
   });
 
   it("throws when channel does not support logout", async () => {
-    mocks.getChannelPlugin.mockReturnValueOnce({
+    mocks.getLoadedChannelPlugin.mockReturnValueOnce({
       auth: { login: mocks.login },
       gateway: {},
       config: { resolveAccount: mocks.resolveAccount },
