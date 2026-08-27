@@ -1932,7 +1932,7 @@ async function verifyCodexNativeSubagentBridgeProbe(params: {
   if (parentControlledChild) {
     // Native task IDs record the child thread at creation; model output is not
     // authoritative enough to select the thread for this ownership probe.
-    const childThreadId = deliveredTask?.sourceId?.match(/^codex-thread:(.+)$/)?.[1];
+    const childThreadId = waveTwoTask.sourceId?.match(/^codex-thread:(.+)$/)?.[1];
     expect(childThreadId).toBeTypeOf("string");
     const sessionId = await readCodexHarnessSessionId(params);
     const readBinding = () => {
