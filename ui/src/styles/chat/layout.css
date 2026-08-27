@@ -7118,6 +7118,10 @@ button.chat-pr__diff {
     gap: 6px;
   }
 
+  .chat .agent-chat__composer-shell {
+    margin-bottom: calc(14px + var(--safe-area-bottom, 0px));
+  }
+
   .session-suggestions {
     width: calc(100% - 8px);
   }
@@ -7138,6 +7142,10 @@ button.chat-pr__diff {
     width: calc(100% - 2 * var(--chat-mobile-edge-inset, 4px));
     margin-right: var(--chat-mobile-edge-inset, 4px);
     margin-left: var(--chat-mobile-edge-inset, 4px);
+  }
+
+  .chat .agent-chat__composer-shell {
+    margin-bottom: 14px;
   }
 }
 
