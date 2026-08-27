@@ -274,12 +274,15 @@ suite.define(() => {
         const navRect = document.querySelector(".shell-nav")?.getBoundingClientRect();
         const mainRect = document.querySelector("#control-ui-main")?.getBoundingClientRect();
         return {
+          noticeTop: noticeRect?.top,
           noticeLeft: noticeRect?.left,
           noticeRight: noticeRect?.right,
+          mainTop: mainRect?.top,
           navRight: navRect?.right,
           mainRight: mainRect?.right,
         };
       });
+      expect(bounds.noticeTop).toBe(bounds.mainTop);
       expect(bounds.noticeLeft).toBe(bounds.navRight);
       expect(bounds.noticeRight).toBe(bounds.mainRight);
       await mkdir(RECOVERY_ARTIFACT_DIR, { recursive: true });

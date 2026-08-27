@@ -4064,6 +4064,10 @@ wa-dropdown.sidebar-identity-menu::part(menu) {
   margin-top: 20px;
 }
 
+.shell--settings .content:has(> .connection-action-block) {
+  padding-top: 0;
+}
+
 .connection-action-block {
   display: flex;
   align-items: center;
