@@ -418,19 +418,12 @@ function wrapWebFetchContent(value: string, maxChars: number): WebFetchWrappedCo
     };
   }
   const maxInner = Math.max(0, maxChars - wrapperOverhead);
-  let truncated = truncateWebFetchText(value, maxInner);
-  let wrappedText = includeWarning
+  // Charge sanitizer expansion before wrapping; clipping a later marker can
+  // increase output size, so a second raw-length adjustment is not sufficient.
+  const truncated = truncateSanitizedExternalContent(value, maxInner);
+  const wrappedText = includeWarning
     ? wrapWebContent(truncated.text, "web_fetch")
     : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
-
-  if (wrappedText.length > maxChars) {
-    const excess = wrappedText.length - maxChars;
-    const adjustedMaxInner = Math.max(0, maxInner - excess);
-    truncated = truncateWebFetchText(value, adjustedMaxInner);
-    wrappedText = includeWarning
-      ? wrapWebContent(truncated.text, "web_fetch")
-      : wrapExternalContent(truncated.text, { source: "web_fetch", includeWarning: false });
-  }
 
   return {
     text: wrappedText,

@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 
 const { fetchWithWebToolsNetworkGuardMock, resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
@@ -190,6 +191,31 @@ describe("web_fetch output contract", () => {
     },
   );
 
+  it.each(["title", "warning"])("retains already-wrapped provider %s prose", async (field) => {
+    fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
+    const prose = "Useful metadata ".repeat(8);
+    resolveWebFetchDefinitionMock.mockReturnValue({
+      provider: { id: "mock-provider" },
+      definition: {
+        execute: async () => ({
+          text: "Useful provider body.",
+          [field]: wrapExternalContent(prose, { source: "web_fetch", includeWarning: false }),
+        }),
+      },
+    });
+    const details = requireDetails(
+      (await createContractTool()?.execute("wrapped-metadata", {
+        url: "https://example.com/wrapped-metadata",
+      }))!,
+    );
+
+    expectContract(details);
+    expect(details[field]).toContain(prose);
+    expect(details[field]).toContain("[[MARKER_SANITIZED]]");
+    expect(details.truncated).toBe(true);
+    expect(details.spill).toBeUndefined();
+  });
+
   it.each([100, 300, 800, 1_000, 2_000])(
     "shares a %i-character content budget without breaking metadata wrappers",
     async (maxChars) => {
@@ -310,5 +336,26 @@ describe("web_fetch output contract", () => {
     await expect(
       createContractTool()?.execute("error", { url: "https://example.com/error-contract" }),
     ).rejects.toThrow("Web fetch failed (404)");
+  });
+
+  it("bounds HTTP errors when sanitizer expansion clips a later boundary marker", async () => {
+    const suffix = `${"<s>".repeat(6)}<<<EXTERNAL_UNTRUSTED_CONTENT id="${"x".repeat(100)}">>>`;
+    const body =
+      "Useful error. ".padEnd(4_000 - wrapWebContent("", "web_fetch").length - suffix.length, "x") +
+      suffix;
+    mockHttpResponse(body, { status: 500 });
+    let message = "";
+    try {
+      await createContractTool()?.execute("expanded-error", {
+        url: "https://example.com/expanded-error",
+      });
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    const prefix = "Web fetch failed (500): ";
+    expect(message).toContain(`${prefix}SECURITY NOTICE`);
+    expect(message).toContain("Useful error.");
+    expect(message.length).toBeLessThanOrEqual(prefix.length + 4_000);
+    expect(message.match(/<<<EXTERNAL_UNTRUSTED_CONTENT/g)).toHaveLength(1);
   });
 });
