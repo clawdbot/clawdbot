@@ -14,6 +14,7 @@ import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 type TransportDropScenario = {
   errorMessage?: string;
   content?: AssistantMessage["content"];
+  diagnostics?: AssistantMessage["diagnostics"];
   activeCount?: number;
   transportDropContinuations?: number;
 };
@@ -29,6 +30,15 @@ async function recoverAfterTransportDrop(scenario: TransportDropScenario = {}) {
   const erroredAssistant = buildEmbeddedRunnerAssistant({
     stopReason: "error",
     errorMessage: scenario.errorMessage ?? "WebSocket error",
+    diagnostics:
+      scenario.diagnostics ??
+      ([
+        {
+          type: "provider_transport_failure",
+          error: { message: "WebSocket error" },
+          details: { phase: "after_message_stream_start" },
+        },
+      ] as never),
     content: scenario.content ?? [{ type: "thinking", thinking: "checking the results" }],
     usage: createMockUsage(0, 0),
   });
@@ -136,6 +146,10 @@ describe("recoverEmbeddedRunAttempt", () => {
   it.each<[string, TransportDropScenario]>([
     ["the exec batch is still running", { activeCount: 1 }],
     ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
+    [
+      "the failure is retryable but not a transport drop",
+      { errorMessage: "429 rate limit exceeded; retry after 2 seconds", diagnostics: [] },
+    ],
     [
       "the errored turn already carried visible text",
       { content: [{ type: "text", text: "Partial" }] },

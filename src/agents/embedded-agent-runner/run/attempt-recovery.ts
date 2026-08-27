@@ -39,7 +39,12 @@ const MAX_TRANSPORT_DROP_CONTINUATIONS = 2;
 
 /** Errored assistant turn with transient transport evidence and no visible output. */
 function isSilentTransportDropAssistant(assistant: AssistantMessage | undefined): boolean {
-  if (!assistant || assistant.stopReason !== "error" || !isRetryableAssistantError(assistant)) {
+  if (
+    !assistant ||
+    assistant.stopReason !== "error" ||
+    !isRetryableAssistantError(assistant) ||
+    !assistant.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+  ) {
     return false;
   }
   const content = Array.isArray(assistant.content) ? assistant.content : [];

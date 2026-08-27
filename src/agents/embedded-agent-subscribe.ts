@@ -70,7 +70,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   let lastAssistantUsage: ReturnType<typeof normalizeUsage>;
   let compactionCount = 0;
   let currentAttemptAssistant: AssistantMessage | undefined;
-
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
@@ -283,7 +282,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       total: usageTotals.total || derivedTotal || undefined,
     };
   };
-  const getLastAssistantUsage = () => (lastAssistantUsage ? { ...lastAssistantUsage } : undefined);
+  const getLastAssistantUsage = () => normalizeUsage(lastAssistantUsage ?? state.retryUsage);
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -451,9 +450,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.deterministicApprovalPromptSent = false;
     state.lastDeliveredBlockReplyText = undefined;
     state.toolExecutionSinceLastBlockReply = false;
-    // A retry is a new model attempt. A silent retry must not inherit the
-    // completed assistant or pre-compaction context snapshot.
+    // Keep prior usage only until the retry records its own call; later
+    // post-call failures must retain that newer call.
     currentAttemptAssistant = undefined;
+    state.retryUsage = lastAssistantUsage ?? state.retryUsage;
     lastAssistantUsage = undefined;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
