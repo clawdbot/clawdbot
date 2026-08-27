@@ -252,7 +252,7 @@ describe("normalizeBrowserUrlDraft", () => {
   });
 
   it.each(["close", "suppress"] as const)(
-    "ends an active annotation gesture when the panel is %sed",
+    "ends an active annotation gesture on panel %s",
     async (transition) => {
       localStorage.setItem(
         "openclaw.browser.panel.v1",
