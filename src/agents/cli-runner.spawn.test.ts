@@ -5,6 +5,19 @@ import path from "node:path";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { materializeSecretInputMock } = vi.hoisted(() => ({
+  materializeSecretInputMock: vi.fn(async (params: { value: unknown }) => {
+    if (typeof params.value === "string") {
+      return params.value;
+    }
+    return "resolved-notion-token";
+  }),
+}));
+
+vi.mock("../secrets/resolve-secret-input-string.js", () => ({
+  materializeSecretInput: materializeSecretInputMock,
+}));
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -74,6 +87,7 @@ vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  materializeSecretInputMock.mockClear();
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
   resetDiagnosticRunActivityForTest();
