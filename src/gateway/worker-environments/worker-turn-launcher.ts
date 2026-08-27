@@ -303,6 +303,7 @@ async function executeWorkerTurn(params: {
     plan,
     turnClaim: params.turnClaim,
     timeoutMs: turn.timeoutMs,
+    credentialExpiresAtMs: credential.expiresAtMs,
     signal: turn.abortSignal
       ? AbortSignal.any([turn.abortSignal, handoffAbort.signal])
       : handoffAbort.signal,

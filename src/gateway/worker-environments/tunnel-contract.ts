@@ -104,6 +104,9 @@ export type WorkerTurnLaunchRequest = {
   plan: WorkerLaunchPlan;
   turnClaim: WorkerSessionTurnClaim;
   timeoutMs?: number;
+  // Expiry of the minted admission credential; launch adapters cap admission
+  // re-arms so no advertised retry can outlive it.
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 };

@@ -33,6 +33,7 @@ import {
   isRetryableWorkerCloseReason,
 } from "./worker-connection-admission.js";
 import {
+  WORKER_ADMISSION_DEADLINE_MS,
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,
@@ -61,7 +62,6 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 };
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
-const DEFAULT_ADMISSION_DEADLINE_MS = 120_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 const WORKER_SESSION_SPAWN_TIMEOUT_MS = 15 * 60_000;
 const WORKER_SESSION_SEND_TIMEOUT_SLACK_MS = 60_000;
@@ -97,7 +97,7 @@ export class WorkerConnection {
     );
     this.admissionDeadlineMs = resolvePositiveTimeout(
       options.admissionDeadlineMs,
-      DEFAULT_ADMISSION_DEADLINE_MS,
+      WORKER_ADMISSION_DEADLINE_MS,
     );
     this.requestTimeoutMs = resolvePositiveTimeout(
       options.requestTimeoutMs,

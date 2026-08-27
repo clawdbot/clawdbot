@@ -175,6 +175,77 @@ describe("node worker launch adapter", () => {
     expect(launches[1]).toEqual(retried);
   });
 
+  it("stops re-arming once the next attempt would outlive the admission credential", async () => {
+    const nowMs = 1_700_000_000_000;
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      const input = request.params as NodeWorkerLaunchInput;
+      return wire({
+        ...receipt(input, "completed"),
+        state: "completed",
+        resultJson: JSON.stringify({
+          status: "not-started",
+          reason: "admission-deadline",
+          errorText: "gateway unreachable",
+        }),
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      now: () => nowMs,
+      sleep: async () => {},
+    });
+    // First re-arm backoff is at most 1_100ms and fits; the second needs at
+    // least 2_000ms and would start inside the final admission window.
+    const result = await adapter.launch({
+      ...launchRequest(),
+      credentialExpiresAtMs: nowMs + 120_000 + 1_500,
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(JSON.parse((result as { resultJson: string }).resultJson)).toMatchObject({
+      reason: "admission-deadline",
+    });
+  });
+
+  it("admits a final re-arm that fits inside the credential lifetime", async () => {
+    const nowMs = 1_700_000_000_000;
+    const launches: NodeWorkerLaunchInput[] = [];
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      const input = request.params as NodeWorkerLaunchInput;
+      launches.push(input);
+      return wire({
+        ...receipt(input, "completed"),
+        state: "completed",
+        resultJson: JSON.stringify(
+          launches.length === 1
+            ? {
+                status: "not-started",
+                reason: "admission-deadline",
+                errorText: "gateway unreachable",
+              }
+            : { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 },
+        ),
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      now: () => nowMs,
+      sleep: async () => {},
+    });
+    await expect(
+      adapter.launch({
+        ...launchRequest(),
+        credentialExpiresAtMs: nowMs + 10 * 60_000,
+      }),
+    ).resolves.toMatchObject({
+      resultJson: JSON.stringify({
+        status: "completed",
+        transcriptLeafId: "leaf-1",
+        transcriptNextSeq: 2,
+      }),
+    });
+    expect(launches).toHaveLength(2);
+  });
+
   it("bounds admission re-arms to five journaled attempts", async () => {
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       const input = request.params as NodeWorkerLaunchInput;

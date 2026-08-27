@@ -76,6 +76,10 @@ export class WorkerAdmissionError extends Error {
   }
 }
 
+// One worker admission window; the launch adapter also uses it to cap re-arms
+// within the minted credential's lifetime.
+export const WORKER_ADMISSION_DEADLINE_MS = 120_000;
+
 export class WorkerAdmissionDeadlineExceededError extends Error {
   constructor(diagnosis: string) {
     super(diagnosis);

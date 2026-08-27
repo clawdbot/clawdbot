@@ -73,6 +73,7 @@ type NodeWorkerLaunch = (request: {
   isDispatchAuthorized: () => boolean;
   isCancellationAuthorized: () => boolean;
   timeoutMs: number;
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 }) => Promise<Exclude<NodeWorkerSupervisorReceipt, { state: "pending" | "running" }>>;
@@ -516,6 +517,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           isDispatchAuthorized,
           isCancellationAuthorized: () => hasDurableBinding(entry as NodeTunnelEntry),
           timeoutMs: request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+          ...(request.credentialExpiresAtMs === undefined
+            ? {}
+            : { credentialExpiresAtMs: request.credentialExpiresAtMs }),
           onDispatchReady: request.onDispatchReady,
           signal: request.signal
             ? AbortSignal.any([entry.abortController.signal, request.signal])

@@ -14,7 +14,10 @@ import {
   type NodeWorkerSupervisorIdentity,
   type NodeWorkerSupervisorReceipt,
 } from "../../worker/node-supervisor-protocol.js";
-import { parseWorkerAdmissionDeadlineResult } from "../../worker/worker-connection-contract.js";
+import {
+  parseWorkerAdmissionDeadlineResult,
+  WORKER_ADMISSION_DEADLINE_MS,
+} from "../../worker/worker-connection-contract.js";
 import type {
   NodeWorkerSupervisorNodeProof,
   NodeWorkerSupervisorTransport,
@@ -53,6 +56,7 @@ type DeviceWorkerLaunchRequest = {
   isDispatchAuthorized: () => boolean;
   isCancellationAuthorized: () => boolean;
   timeoutMs: number;
+  credentialExpiresAtMs?: number;
   signal?: AbortSignal;
   onDispatchReady?: () => void;
 };
@@ -477,12 +481,24 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                 validated.state === "completed"
                   ? parseWorkerAdmissionDeadlineResult(JSON.parse(validated.resultJson))
                   : undefined;
-              if (admissionFailure && admissionAttempts < MAX_ADMISSION_ATTEMPTS) {
+              const rearmDelayMs = computeBackoff(ADMISSION_REARM_BACKOFF, admissionAttempts);
+              // Re-arm only while the retried child still gets a full admission
+              // window on the originally minted credential; a later start is
+              // guaranteed to be rejected as credential-expired.
+              const rearmAdmitsWithinCredential =
+                stableRequest.credentialExpiresAtMs === undefined ||
+                now() + rearmDelayMs + WORKER_ADMISSION_DEADLINE_MS <=
+                  stableRequest.credentialExpiresAtMs;
+              if (
+                admissionFailure &&
+                admissionAttempts < MAX_ADMISSION_ATTEMPTS &&
+                rearmAdmitsWithinCredential
+              ) {
                 // The node journal holds this attempt's reason and proves its child
                 // is gone. Re-arm only after backoff and current authority revalidation.
                 mayHaveLaunched = false;
                 await waitBeforeRetry({
-                  delayMs: computeBackoff(ADMISSION_REARM_BACKOFF, admissionAttempts),
+                  delayMs: rearmDelayMs,
                   deadline,
                 });
                 const launchId = createHash("sha256")
