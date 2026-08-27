@@ -555,7 +555,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
       `,
       {
         intro: html`${t("cloudWorkersPage.intro")}
-        ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("cloudWorkersPage.documentation"))}`,
+        ${renderDocsLink(CLOUD_WORKERS_DOCS_URL, t("common.learnMore"))}`,
       },
     );
     return html`
