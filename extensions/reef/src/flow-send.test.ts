@@ -65,7 +65,7 @@ describe("ReefMessageFlow send recovery", () => {
     cfg.handle = "alice";
     cfg.guard!.rules = { outbound: "Never mention project Nightjar." };
     const policyVersion = effectiveGuardPolicyVersion("v1", cfg.guard!.rules);
-    expect(policyVersion).toMatch(/^v1\+[0-9a-f]{8}$/);
+    expect(policyVersion).toMatch(/^v1\+[0-9a-f]{64}$/);
     const guardMock = guard({ ...allow, policyVersion });
     const trusted = trust({ bob: peerTrust(bob) });
     const relay = transport();

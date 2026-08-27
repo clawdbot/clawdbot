@@ -3,7 +3,12 @@ import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
 import type { ReefAutonomy } from "./friend-types.js";
 
 const HandleSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/);
-const GuardRuleTextSchema = z.string().trim().min(1).max(GUARD_RULES_MAX_CHARS);
+// No trim transform: the raw text is hashed into the policy identity, and the
+// manifest JSON Schemas must express identical validity (non-blank via \S).
+const GuardRuleTextSchema = z
+  .string()
+  .max(GUARD_RULES_MAX_CHARS)
+  .regex(/\S/, "rules text must not be blank");
 const RelayUrlSchema = z
   .string()
   .regex(

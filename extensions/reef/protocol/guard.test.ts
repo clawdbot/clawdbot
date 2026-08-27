@@ -422,7 +422,7 @@ describe("operator sharing rules", () => {
     expect(effectiveGuardPolicyVersion("v1")).toBe("v1");
     expect(effectiveGuardPolicyVersion("v1", {})).toBe("v1");
     const withRules = effectiveGuardPolicyVersion("v1", rules);
-    expect(withRules).toMatch(/^v1\+[0-9a-f]{8}$/);
+    expect(withRules).toMatch(/^v1\+[0-9a-f]{64}$/);
     expect(effectiveGuardPolicyVersion("v1", { ...rules })).toBe(withRules);
     expect(effectiveGuardPolicyVersion("v1", { outbound: rules.outbound })).not.toBe(withRules);
     expect(effectiveGuardPolicyVersion("v1", { inbound: rules.outbound })).not.toBe(

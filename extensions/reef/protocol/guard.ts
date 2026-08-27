@@ -69,6 +69,8 @@ export function guardInstructions(direction: GuardDirection, rules?: GuardRules)
 // Rules text is part of the audited policy identity: the suffix flows into the
 // verdict echo check and approvalDigest, so editing the rules fails pending
 // review approvals closed instead of approving under a policy the owner changed.
+// Full untruncated digest: approvalDigest hashes this string, so a truncated
+// suffix would let colliding rule sets share an approval identity.
 export function effectiveGuardPolicyVersion(base: string, rules?: GuardRules): string {
   if (rules?.outbound === undefined && rules?.inbound === undefined) {
     return base;
@@ -76,7 +78,7 @@ export function effectiveGuardPolicyVersion(base: string, rules?: GuardRules): s
   const digest = sha256Hex(
     canonicalBytes({ inbound: rules.inbound ?? "", outbound: rules.outbound ?? "" }),
   );
-  return `${base}+${digest.slice(0, 8)}`;
+  return `${base}+${digest}`;
 }
 
 export const OUTBOUND_INSTRUCTIONS =

@@ -60,7 +60,9 @@ describe("Reef configuration boundary", () => {
     if (!parsed.success) {
       throw parsed.error;
     }
-    expect(parsed.data.guard?.rules?.outbound).toBe("Never share client names.");
+    // Untrimmed by design: the raw text is hashed into the policy identity and
+    // the manifest JSON Schemas share the exact same validity (non-blank \S).
+    expect(parsed.data.guard?.rules?.outbound).toBe(" Never share client names. ");
     for (const rules of [{ outbound: "   " }, { inbound: "x".repeat(2001) }, { extra: "no" }]) {
       expect(ReefChannelConfigSchema.safeParse({ guard: { ...guard, rules } }).success).toBe(false);
     }
