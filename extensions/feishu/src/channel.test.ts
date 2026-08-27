@@ -1336,40 +1336,49 @@ describe("feishuPlugin actions", () => {
     ]);
   });
 
-  it("renders presentation select labels into the card fallback", async () => {
-    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+  it.each(["send", "thread-reply"] as const)(
+    "preserves select commands in the %s card fallback without exposing callback values",
+    async (action) => {
+      sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
-    await feishuPlugin.actions?.handleAction?.({
-      action: "send",
-      params: {
-        to: "chat:oc_group_1",
-        presentation: {
-          blocks: [
-            {
-              type: "select",
-              placeholder: "Pick one",
-              options: [{ label: "Option A", value: "a" }],
-            },
-          ],
+      await feishuPlugin.actions?.handleAction?.({
+        action,
+        params: {
+          to: "chat:oc_group_1",
+          ...(action === "thread-reply" ? { messageId: "om_root" } : {}),
+          presentation: {
+            blocks: [
+              {
+                type: "select",
+                placeholder: "Pick <one> & continue",
+                options: [
+                  { label: "Status <one>", action: { type: "command", command: "/status" } },
+                  { label: "Callback", action: { type: "callback", value: "/opaque-callback" } },
+                  { label: "Legacy", value: "/opaque-legacy" },
+                ],
+              },
+            ],
+          },
         },
-      },
-      cfg,
-      accountId: undefined,
-      toolContext: {},
-    } as never);
+        cfg,
+        accountId: undefined,
+        toolContext: {},
+      } as never);
 
-    const sendCardArgs = requireRecord(
-      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
-      "send card args",
-    );
-    const card = requireRecord(sendCardArgs.card, "card");
-    expect(requireRecord(card.body, "card body").elements).toEqual([
-      {
-        tag: "markdown",
-        content: "Pick one:\n- Option A",
-      },
-    ]);
-  });
+      const sendCardArgs = requireRecord(
+        mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+        "send card args",
+      );
+      const card = requireRecord(sendCardArgs.card, "card");
+      expect(requireRecord(card.body, "card body").elements).toEqual([
+        {
+          tag: "markdown",
+          content:
+            "Pick &lt;one&gt; &amp; continue:\n- Status &lt;one&gt;: `/status`\n- Callback\n- Legacy",
+        },
+      ]);
+    },
+  );
 
   it.each(
     [
