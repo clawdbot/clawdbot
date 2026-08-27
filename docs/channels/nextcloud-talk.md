@@ -163,7 +163,7 @@ Provider options:
 - `channels.nextcloud-talk.replyToMode`: reply-reference mode (`off | first | all | batched`; default: `all`). Named accounts can override it with `channels.nextcloud-talk.accounts.<id>.replyToMode`.
 - `channels.nextcloud-talk.responsePrefix`: outbound reply prefix.
 - `channels.nextcloud-talk.markdown.tables`: markdown table rendering mode (`off | bullets | code | block`).
-- `channels.nextcloud-talk.mediaMaxMb`: inbound media cap (MB).
+- `channels.nextcloud-talk.mediaMaxMb`: media size cap (MB). Currently unused: inbound file shares are not downloaded — non-message webhook events (reactions, file shares) are acknowledged and logged instead.
 - `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork`: allow private/internal Nextcloud hosts past the SSRF guard.
 - `channels.nextcloud-talk.accounts.<id>`: per-account overrides (same keys); `defaultAccount` picks the default. Env vars `NEXTCLOUD_TALK_BOT_SECRET` / `NEXTCLOUD_TALK_API_PASSWORD` apply to the default account only.
 

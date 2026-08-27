@@ -382,4 +382,44 @@ describe("Nextcloud Talk durable ingress", () => {
       }
     });
   });
+
+  it("records the non-outcome when acknowledging a non-message event", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn();
+      const log = vi.fn();
+      const spool = createNextcloudTalkWebhookSpool({
+        accountId: "default",
+        queue,
+        deliver,
+        runtime: { error: vi.fn(), log },
+        pollIntervalMs: 60_000,
+        adoptionStallTimeoutMs: 5_000,
+        legacyReplayStore: null,
+      });
+      try {
+        // A file share arrives as a non-Note Create activity and is acked
+        // without a durable row; the drop must leave a visible log reason.
+        const fileShare = JSON.stringify({
+          type: "Create",
+          actor: { type: "Person", id: "alice", name: "Alice" },
+          object: {
+            type: "Document",
+            id: "file-1",
+            name: "report.pdf",
+            content: "",
+            mediaType: "application/pdf",
+          },
+          target: { type: "Collection", id: "room-1", name: "Room 1" },
+        });
+        await expect(spool.receive(fileShare)).resolves.toBe("ignored");
+        expect(log).toHaveBeenCalledWith(
+          "nextcloud-talk: ignored non-message webhook event (type=Create objectType=Document)",
+        );
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(deliver).not.toHaveBeenCalled();
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
 });

@@ -29,6 +29,21 @@ import {
 
 const NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS = 500;
 
+/** Best-effort event identity for the ignored-event log; never throws. */
+function describeIgnoredWebhookEvent(rawEvent: string): string {
+  try {
+    const envelope = parseRawObject(rawEvent);
+    const object = envelope.object;
+    const objectType =
+      object !== null && typeof object === "object" && !Array.isArray(object)
+        ? (object as Record<string, unknown>).type
+        : undefined;
+    return `type=${String(envelope.type ?? "unknown")} objectType=${String(objectType ?? "unknown")}`;
+  } catch {
+    return "unparseable payload";
+  }
+}
+
 const NextcloudTalkWebhookPayloadSchema: z.ZodType<NextcloudTalkWebhookPayload> = z.object({
   type: z.enum(["Create", "Update", "Delete"]),
   actor: z.object({
@@ -213,7 +228,16 @@ export function createNextcloudTalkWebhookSpool(options: {
       const receiveTask = (async () => {
         await startAfterMigration;
         const result = await monitor.admit(rawEvent);
-        return result.kind === "ignored" ? "ignored" : "accepted";
+        if (result.kind === "ignored") {
+          // Non-message events (reactions, file-share Documents, system
+          // activities) are acknowledged without a durable row; record the
+          // non-outcome so an operator's shared file is never silently lost.
+          options.runtime.log?.(
+            `nextcloud-talk: ignored non-message webhook event (${describeIgnoredWebhookEvent(rawEvent)})`,
+          );
+          return "ignored";
+        }
+        return "accepted";
       })();
       inFlightReceives.add(receiveTask);
       void receiveTask.then(
