@@ -2561,6 +2561,59 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it.each([
+    {
+      reason: "timeout",
+      runId: "accepted-run-remote-id",
+      throwError: createGatewayTimeoutError,
+      expectedReasonText: "timed out",
+    },
+    {
+      reason: "close",
+      runId: "accepted-run-remote-id-closed",
+      throwError: createGatewayClosedError,
+      expectedReasonText: "connection closed",
+    },
+  ])(
+    "preserves accepted run ID without a session key on remote --session-id $reason",
+    async ({ runId, throwError, expectedReasonText }) => {
+      mockRemoteGatewayRoster("explicit", ["ops", "research"]);
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        callGateway.mockImplementationOnce(async (requestValue: unknown) => {
+          const request = requireRecord(requestValue, "gateway request");
+          const onAccepted = request.onAccepted as ((payload: unknown) => void) | undefined;
+          onAccepted?.({ status: "accepted", runId });
+          throw throwError();
+        });
+
+        const result = await agentCliCommand(
+          { message: "hi", sessionId: "remote-session" },
+          runtime,
+          { process: signals.processLike },
+        );
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          status: "accepted_timeout",
+          runId,
+        });
+        expect(signals.processLike.exitCode).toBe(1);
+        expect(
+          mockMessages(runtime.error).some((message) =>
+            message.includes(`Gateway agent ${expectedReasonText} after accepting run ${runId}`),
+          ),
+        ).toBe(true);
+        expect(
+          mockMessages(runtime.error).some((message) =>
+            message.includes("To extend the CLI deadline: --timeout"),
+          ),
+        ).toBe(true);
+      }, remoteGatewayConfig);
+    },
+  );
+
   it("rejects non-transport errors without a local retry hint", async () => {
     await withTempStore(async () => {
       const error = Object.assign(new Error("missing scope: operator.admin"), {

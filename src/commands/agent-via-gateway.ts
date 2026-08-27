@@ -106,12 +106,12 @@ const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 
  */
 class GatewayAcceptedRunTransportError extends Error {
   readonly acceptedRunId: string;
-  readonly acceptedSessionKey: string;
+  readonly acceptedSessionKey?: string;
   readonly fallbackReason: "gateway_timeout" | "gateway_closed";
 
   constructor(params: {
     acceptedRunId: string;
-    acceptedSessionKey: string;
+    acceptedSessionKey?: string;
     fallbackReason: "gateway_timeout" | "gateway_closed";
     cause: unknown;
   }) {
@@ -1206,12 +1206,7 @@ async function agentViaGatewayCommand(
       // If the Gateway already accepted the run, surface the run identity so
       // callers can retain the accepted run ID after ambiguous transport loss
       // instead of silently dropping it.
-      if (
-        acceptedGatewayRun &&
-        isGatewayTransportError(err) &&
-        acceptedRunId &&
-        acceptedSessionKey
-      ) {
+      if (acceptedGatewayRun && isGatewayTransportError(err) && acceptedRunId) {
         throw new GatewayAcceptedRunTransportError({
           acceptedRunId,
           acceptedSessionKey,
