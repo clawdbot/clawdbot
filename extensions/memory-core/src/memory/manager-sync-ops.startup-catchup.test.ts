@@ -8,6 +8,7 @@ import {
   buildSessionEntry,
   statSessionEntrySync,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
+import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearConfigCache,
@@ -471,13 +472,15 @@ describe("session startup catch-up", () => {
     expect(restarted.getSourceMetadataUpdateCount()).toBe(1);
   });
 
-  it.each([
+  const cacheBoundSyncs: Array<[string, MemorySyncParams]> = [
     ["incremental", { reason: "session-delta" }],
     [
       "targeted session",
       { reason: "queued-sessions", sessions: [{ agentId: "main", sessionId: "thread" }] },
     ],
-  ] as const)("bounds the embedding cache on a %s sync", async (_label, params) => {
+  ];
+
+  it.each(cacheBoundSyncs)("bounds the embedding cache on a %s sync", async (_label, params) => {
     // Enforcement first lived inside runInPlaceReindex's shadow rebuild, bounding a throwaway
     // database and never the live one; moving it into the incremental branch then skipped the
     // paths that return early. Long-running databases stayed unbounded (openclaw/openclaw#114612).
