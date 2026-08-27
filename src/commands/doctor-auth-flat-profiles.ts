@@ -1024,7 +1024,15 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const rawStore = parseAuthProfileMigrationSource(
         receiptByPath.get(path.resolve(candidate.authPath)),
       );
-      const openAIProviderRepair = canonicalizeLegacyOpenAIAuthStore(rawStore, openAIProfileIdMap);
+      // Parse the standalone rotation state early so it canonicalizes with the credentials.
+      const rawState = parseAuthProfileMigrationSource(
+        receiptByPath.get(path.resolve(candidate.statePath)),
+      );
+      const openAIProviderRepair = canonicalizeLegacyOpenAIAuthStore(
+        rawStore,
+        rawState,
+        openAIProfileIdMap,
+      );
       const unresolvedSidecarProfileIds = new Set(
         collectUnresolvedLegacyOAuthSidecarProfileIds(rawStore),
       );
@@ -1064,9 +1072,6 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         configStore && isDefaultAgentCandidate(candidate, params.cfg, env) ? configStore : null;
       const legacyStore = coerceLegacyAuthStore(
         parseAuthProfileMigrationSource(receiptByPath.get(path.resolve(candidate.legacyPath))),
-      );
-      const rawState = parseAuthProfileMigrationSource(
-        receiptByPath.get(path.resolve(candidate.statePath)),
       );
       const state = coerceAuthProfileState(rawState);
       if (
@@ -1695,25 +1700,41 @@ export function maybeRepairOpenAICodexAuthConfig(
 
 function canonicalizeLegacyOpenAIAuthStore(
   raw: unknown,
+  stateRaw: unknown,
   profileIdMap: ReadonlyMap<string, string>,
 ): number | null {
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
     return null;
   }
   const rewrite = canonicalizeOpenAIProfileEntries(raw.profiles, { profileIdMap });
-  const orderChanged = canonicalizeOpenAIAuthOrder(raw, rewrite.profileIdMap);
-  const usageChanged = isRecord(raw.usageStats)
-    ? renameMappedProfileIdKeys(raw.usageStats, rewrite.profileIdMap)
-    : false;
-  const lastGoodChanged = isRecord(raw.lastGood)
-    ? canonicalizeOpenAILastGood(raw.lastGood, rewrite.profileIdMap)
-    : false;
+  // Canonicalize order/lastGood/usageStats on both the credential store and the
+  // standalone rotation state with the SAME profile-id map; state-only refs (no
+  // matching credential) are left dangling by the shared helpers, never stale.
+  const rotation = canonicalizeOpenAIAuthRotationState(raw, rewrite.profileIdMap);
+  if (isRecord(stateRaw)) {
+    canonicalizeOpenAIAuthRotationState(stateRaw, rewrite.profileIdMap);
+  }
   if (rewrite.profileIdMap.size > 0) {
     replaceMappedProfileId(raw, rewrite.profileIdMap);
   }
-  return rewrite.changed || orderChanged || usageChanged || lastGoodChanged
+  return rewrite.changed || rotation.order || rotation.usage || rotation.lastGood
     ? rewrite.profileIdMap.size
     : null;
+}
+
+function canonicalizeOpenAIAuthRotationState(
+  auth: Record<string, unknown>,
+  profileIdMap: Map<string, string>,
+): { order: boolean; usage: boolean; lastGood: boolean } {
+  return {
+    order: canonicalizeOpenAIAuthOrder(auth, profileIdMap),
+    usage: isRecord(auth.usageStats)
+      ? renameMappedProfileIdKeys(auth.usageStats, profileIdMap)
+      : false,
+    lastGood: isRecord(auth.lastGood)
+      ? canonicalizeOpenAILastGood(auth.lastGood, profileIdMap)
+      : false,
+  };
 }
 
 function recoverArchivedOpenAICodexAuthProfileIdMap(params: {

@@ -683,6 +683,99 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     },
   );
 
+  it("canonicalizes standalone auth-state rotation refs onto the same openai ids as credentials (#130018)", async () => {
+    const state = await makeTestState();
+    const namedLegacy = [
+      "openai-codex:alpha",
+      "openai-codex:bravo",
+      "openai-codex:charlie",
+      "openai-codex:delta",
+      "openai-codex:echo",
+    ];
+    const authPath = await writeLegacyAuthProfilesJson(state, {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "default-access",
+          refresh: "default-refresh",
+          expires: 1_900_000_000_000,
+          accountId: "default-account",
+        },
+        ...Object.fromEntries(
+          namedLegacy.map((id) => [
+            id,
+            {
+              type: "oauth",
+              provider: "openai-codex",
+              access: `${id}-access`,
+              refresh: `${id}-refresh`,
+              expires: 1_900_000_000_000,
+              accountId: `${id}-account`,
+            },
+          ]),
+        ),
+      },
+    });
+    const statePath = await state.writeText(
+      "agents/main/agent/auth-state.json",
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": namedLegacy },
+        lastGood: { "openai-codex": namedLegacy[0] },
+        usageStats: { [namedLegacy[0]]: { lastUsed: 123 } },
+      })}\n`,
+    );
+
+    // Build the same profile-id map the migration will use, so assertions stay
+    // decoupled from whichever canonical id each legacy profile lands on.
+    const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: {}, env: state.env });
+    const canonicalNamed = namedLegacy.map((id) => profileIdMap.get(id) ?? "");
+    const canonicalDefault = profileIdMap.get("openai-codex:default") ?? "";
+    for (const canonical of [...canonicalNamed, canonicalDefault]) {
+      expect(canonical).toMatch(/^openai:(?!codex)/);
+    }
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+      openAICodexAuthProfileIdMap: profileIdMap,
+      now: () => 789,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded).toBeDefined();
+    // Credentials migrated onto the canonical ids.
+    expect(loaded!.profiles?.[canonicalDefault]).toMatchObject({
+      provider: "openai",
+      accountId: "default-account",
+    });
+    for (const canonical of canonicalNamed) {
+      expect(loaded!.profiles?.[canonical]).toMatchObject({ provider: "openai" });
+    }
+    // Standalone rotation state canonicalized onto the SAME ids as credentials:
+    // no retired openai-codex namespace survives anywhere in order/lastGood/usageStats.
+    expect(loaded!.order?.["openai-codex"]).toBeUndefined();
+    expect(loaded!.lastGood?.["openai-codex"]).toBeUndefined();
+    expect(Object.keys(loaded!.usageStats ?? {})).toEqual(
+      expect.not.arrayContaining([expect.stringMatching(/^openai-codex/)]),
+    );
+    // Named-profile order preserved exactly once each, on the canonical ids.
+    expect(loaded!.order?.openai ?? []).toEqual(canonicalNamed);
+    expect(loaded!.lastGood?.openai).toBe(canonicalNamed[0]);
+    expect(loaded!.usageStats?.[canonicalNamed[0]]).toMatchObject({ lastUsed: 123 });
+    // Default credential stays available but is not injected into the explicit named order.
+    expect(loaded!.order?.openai ?? []).not.toContain(canonicalDefault);
+    // Consumed legacy files are archived.
+    expect(fs.existsSync(authPath)).toBe(false);
+    expect(fs.existsSync(statePath)).toBe(false);
+    expectMigratedArchive(authPath);
+    expectMigratedArchive(statePath);
+  });
+
   it("imports a valid legacy auth sibling when auth-profiles.json is malformed", async () => {
     const state = await makeTestState();
     const authPath = await state.writeText(
