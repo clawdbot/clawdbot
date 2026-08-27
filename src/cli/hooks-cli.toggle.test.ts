@@ -260,6 +260,14 @@ describe("hooks CLI metadata config keys", () => {
             : [exactNameHook, collidingKeyHook],
       });
 
+      await createHooksProgram().parseAsync(["hooks", "info", "shared", "--json"], {
+        from: "user",
+      });
+      expect(JSON.parse(capture.runtimeLogs.at(-1) ?? "null")).toMatchObject({
+        name: "shared",
+        hookKey: "metadata-key",
+      });
+
       await createHooksProgram().parseAsync(["hooks", "disable", "shared"], {
         from: "user",
       });

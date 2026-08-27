@@ -174,11 +174,11 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
  * Format detailed info for a single hook
  */
 export function formatHookInfo(
-  report: HookStatusReport,
+  { hooks }: HookStatusReport,
   hookName: string,
   opts: HookInfoOptions,
 ): string {
-  const hook = report.hooks.find((h) => h.name === hookName || h.hookKey === hookName);
+  const hook = hooks.find((h) => h.name === hookName) ?? hooks.find((h) => h.hookKey === hookName);
 
   if (!hook) {
     if (opts.json) {
