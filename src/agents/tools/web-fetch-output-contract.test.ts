@@ -154,6 +154,84 @@ describe("web_fetch output contract", () => {
     expect(second).not.toHaveProperty("spillTruncated");
   });
 
+  it.each(["title", "warning", "contentType", "extractor", "fetchedAt", "finalUrl"])(
+    "bounds provider-controlled %s before serialization and caching",
+    async (field) => {
+      fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
+      const providerExecute = vi.fn(async () => ({
+        text: "Useful provider body.",
+        [field]:
+          field === "finalUrl" ? `https://example.com/${"x".repeat(72_000)}` : "x".repeat(72_000),
+      }));
+      resolveWebFetchDefinitionMock.mockReturnValue({
+        provider: { id: "mock-provider" },
+        definition: { execute: providerExecute },
+      });
+      const tool = createContractTool({ cacheTtlMinutes: 1, maxChars: 1_000 });
+      const args = { url: `https://example.com/metadata-${field}` };
+      const first = await tool?.execute("metadata-first", args);
+      const second = await tool?.execute("metadata-cached", args);
+      for (const result of [first, second]) {
+        const details = requireDetails(result!);
+        expectContract(details);
+        expect(details.truncated).toBe(true);
+        expect(details.text).toContain("Useful provider body.");
+        expect((details[field] as string).length).toBeLessThanOrEqual(400);
+        expect(result?.content.find((block) => block.type === "text")?.text.length).toBeLessThan(
+          2_000,
+        );
+        expect(details.spill).toBeUndefined();
+        if (field === "finalUrl") {
+          expect(details.finalUrl).toBe(args.url);
+        }
+      }
+      expect(requireDetails(second!).cached).toBe(true);
+      expect(providerExecute).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([100, 300, 800, 1_000, 2_000])(
+    "shares a %i-character content budget without breaking metadata wrappers",
+    async (maxChars) => {
+      fetchWithWebToolsNetworkGuardMock.mockRejectedValue(new Error("direct fetch failed"));
+      resolveWebFetchDefinitionMock.mockReturnValue({
+        provider: { id: "mock-provider" },
+        definition: {
+          execute: async () => ({
+            text: "Useful provider body.",
+            title: "Title ".repeat(1_000),
+            warning: `Incomplete response. ${"🦞".repeat(1_000)}`,
+          }),
+        },
+      });
+      const result = await createContractTool({ maxChars })?.execute("shared-budget", {
+        url: "https://example.com/shared-budget",
+      });
+      const details = requireDetails(result!);
+      const spill = details.spill as { path: string } | undefined;
+      if (spill) {
+        spillPaths.add(spill.path);
+      }
+      expectContract(details);
+      const content = [details.text, details.title ?? "", details.warning ?? ""] as string[];
+      expect(content.reduce((length, value) => length + value.length, 0)).toBeLessThanOrEqual(
+        maxChars,
+      );
+      expect(details.truncated).toBe(true);
+      for (const field of [details.title, details.warning]) {
+        if (typeof field === "string") {
+          expect(field.trimStart()).toMatch(/^<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
+          expect(field).toMatch(/<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>$/);
+          expect(field).not.toMatch(/[\uD800-\uDFFF]/u);
+        }
+      }
+      if (maxChars >= 800) {
+        expect(details.text).toContain("Useful provider body.");
+        expect(details.warning).toContain("Incomplete response.");
+      }
+    },
+  );
+
   it("does not reuse cached responses across configured user agents", async () => {
     fetchWithWebToolsNetworkGuardMock.mockImplementation(
       async ({ init }: { init?: RequestInit }) => {
