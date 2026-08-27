@@ -23,9 +23,6 @@ import type {
   RouteGateFacts,
 } from "./types.js";
 
-/** Redacted subject identity assembled from a stable id plus optional platform aliases. */
-export type ChannelIngressSubject = InternalChannelIngressSubject;
-
 /** Normalized allowlist entry material produced by a channel identity adapter. */
 export type ChannelIngressAdapterEntry = InternalNormalizedEntry;
 
@@ -69,7 +66,7 @@ export type ChannelIngressIdentityDescriptor = {
   isWildcardEntry?: (value: string) => boolean;
   /** Optional custom match hook for platform-specific identity equivalence. */
   matchEntry?: (params: {
-    subject: ChannelIngressSubject;
+    subject: InternalChannelIngressSubject;
     entry: ChannelIngressAdapterEntry;
     context: "dm" | "group" | "route" | "command";
   }) => boolean | undefined;

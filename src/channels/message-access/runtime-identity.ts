@@ -11,10 +11,9 @@ import type {
   ChannelIngressIdentityDescriptor,
   ChannelIngressIdentityField,
   ChannelIngressIdentitySubjectInput,
-  ChannelIngressSubject,
   StableChannelIngressIdentityParams,
 } from "./runtime-types.js";
-import type { InternalMatchMaterial } from "./types.js";
+import type { NormalizedIngressEntry, NormalizedIngressSubject } from "./types.js";
 
 type ResolvedIdentityField = Required<Pick<ChannelIngressIdentityField, "key" | "kind">> &
   Omit<ChannelIngressIdentityField, "key" | "kind">;
@@ -96,7 +95,8 @@ function adapterEntry(params: {
   value: string;
   fallbackSuffix?: string;
   wildcard?: boolean;
-}): ChannelIngressAdapterEntry {
+}): NormalizedIngressEntry {
+  const dangerous = fieldDangerous(params.field, params.entry);
   return {
     opaqueEntryId:
       params.identity.resolveEntryId?.({
@@ -109,8 +109,9 @@ function adapterEntry(params: {
     value: params.value,
     identityFieldKey: params.field.key,
     ...(params.wildcard ? { wildcard: true } : {}),
-    authentication: fieldAuthentication(params.field, params.entry),
-    dangerous: fieldDangerous(params.field, params.entry),
+    authentication:
+      fieldAuthentication(params.field, params.entry) ?? (dangerous ? "mutable" : "asserted"),
+    dangerous,
     sensitivity: params.field.sensitivity,
   };
 }
@@ -197,14 +198,11 @@ export function createIdentityAdapter(
                 ]
               : [];
         }
-        return candidates.map(({ identifier }) => {
-          const pair = {
-            opaqueEntryId: entry.opaqueEntryId,
-            opaqueSubjectId: identifier.opaqueId,
-            subjectAuthentication: identifier.authentication,
-          };
-          return pair;
-        });
+        return candidates.map(({ identifier }) => ({
+          opaqueEntryId: entry.opaqueEntryId,
+          opaqueSubjectId: identifier.opaqueId,
+          subjectAuthentication: identifier.authentication,
+        }));
       });
       const matchedEntryIds = [...new Set(matchedPairs.map((pair) => pair.opaqueEntryId))];
       return {
@@ -219,21 +217,28 @@ export function createIdentityAdapter(
 export function createIdentitySubject(
   identity: ChannelIngressIdentityDescriptor,
   input: ChannelIngressIdentitySubjectInput,
-): ChannelIngressSubject {
+): NormalizedIngressSubject {
   const fields = identityFields(identity);
-  const identifiers: InternalMatchMaterial[] = fields.flatMap((field, index) => {
+  const identifiers: NormalizedIngressSubject["identifiers"] = fields.flatMap((field, index) => {
     const rawValue = index === 0 ? input.stableId : input.aliases?.[field.key];
     if (rawValue == null) {
       return [];
     }
     const value = String(rawValue);
+    const dangerous = fieldDangerous(field, value);
+    // A supplied map owns every per-message claim; omitted fields must not inherit
+    // a stronger static declaration from the identity descriptor.
+    const authentication =
+      input.authentication !== undefined
+        ? (input.authentication[field.key] ?? "unverified")
+        : (fieldAuthentication(field, value) ?? (dangerous ? "mutable" : "asserted"));
     return [
       {
         opaqueId: field.key,
         kind: field.kind,
         value,
-        authentication: input.authentication?.[field.key],
-        dangerous: fieldDangerous(field, value),
+        authentication,
+        dangerous,
         sensitivity: field.sensitivity,
       },
     ];

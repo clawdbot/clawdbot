@@ -112,7 +112,7 @@ describe("channel admission evidence", () => {
         },
         assuranceRef: "channel-admission",
         decisionCoverage: "enforced",
-        identifierAuthentication: "not-evaluated",
+        identifierAuthentication: "evaluated",
       });
       expect(Object.isFrozen(consumed)).toBe(true);
       expect(Object.isFrozen(consumed.invoker)).toBe(true);
@@ -256,7 +256,7 @@ describe("channel admission evidence", () => {
         },
         assuranceRef: "channel-admission",
         decisionCoverage: "enforced",
-        identifierAuthentication: "not-evaluated",
+        identifierAuthentication: "evaluated",
       });
       expect(
         consumeChannelAdmissionEvidence(

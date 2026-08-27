@@ -145,6 +145,73 @@ describe("identifier authentication", () => {
     expect(enabled.senderAccess.allowed).toBe(true);
   });
 
+  it("floors an alias missing from a supplied authentication map to unverified", async () => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        identity: {
+          authentication: "verified",
+          aliases: [{ key: "alias", authentication: "verified" }],
+        },
+        subject: {
+          stableId: "sender-1",
+          aliases: { alias: "alias-1" },
+          authentication: { stableId: "verified" },
+        },
+        allowFrom: ["alias-1"],
+      }),
+    );
+
+    expect(result.senderAccess.allowed).toBe(false);
+    expect(result.state.allowlists.dm.match.matchedPairs).toEqual([
+      {
+        opaqueEntryId: "entry-1:alias",
+        opaqueSubjectId: "alias",
+        subjectAuthentication: "unverified",
+      },
+    ]);
+  });
+
+  it("preserves verified static strength when the authentication map is absent", async () => {
+    const result = await resolveStableChannelMessageIngress(
+      base({
+        identity: { authentication: "verified" },
+        policy: { minIdentifierAuthentication: "verified" },
+      }),
+    );
+
+    expect(result.senderAccess.allowed).toBe(true);
+    expect(result.state.allowlists.dm.match.matchedPairs).toEqual([
+      {
+        opaqueEntryId: "entry-1:stableId",
+        opaqueSubjectId: "stableId",
+        subjectAuthentication: "verified",
+      },
+    ]);
+  });
+
+  it.each(["disabled", "enabled"] as const)(
+    "keeps mutable alias matching %s with only the primary claim supplied",
+    async (mutableIdentifierMatching) => {
+      const result = await resolveStableChannelMessageIngress(
+        base({
+          identity: {
+            key: "member-id",
+            aliases: [{ key: "display-name", kind: "username", dangerous: true }],
+          },
+          subject: {
+            stableId: "member-1",
+            aliases: { "display-name": "Echo" },
+            authentication: { "member-id": "asserted" },
+          },
+          allowFrom: ["Echo"],
+          policy: { mutableIdentifierMatching },
+        }),
+      );
+
+      expect(result.senderAccess.allowed).toBe(mutableIdentifierMatching === "enabled");
+    },
+  );
+
   it("does not let a wildcard without an exact primary identifier claim verified", async () => {
     const result = await resolveStableChannelMessageIngress(
       base({

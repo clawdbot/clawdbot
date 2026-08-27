@@ -9,7 +9,7 @@ import {
   allowedImplicitMentionKindsFromConfig,
   resolveInboundMentionDecision,
 } from "../mention-gating.js";
-import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
+import { applyIdentifierAuthenticationPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
 import {
   DEFAULT_IDENTIFIER_AUTHENTICATION,
   meetsIdentifierAuthentication,
@@ -24,7 +24,7 @@ import type {
   AccessGraphGate,
   ChannelIngressDecision,
   ChannelIngressPolicyInput,
-  ChannelIngressState,
+  NormalizedIngressState,
   RedactedIngressMatch,
 } from "./types.js";
 
@@ -43,7 +43,7 @@ function decisiveDecision(params: {
   };
 }
 
-function routeGates(state: ChannelIngressState): AccessGraphGate[] {
+function routeGates(state: NormalizedIngressState): AccessGraphGate[] {
   // Route gates run first because a matched route can block dispatch before sender,
   // command, or mention policy needs to evaluate.
   return state.routeFacts.map((route) => ({
@@ -57,7 +57,7 @@ function routeGates(state: ChannelIngressState): AccessGraphGate[] {
   }));
 }
 
-function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | null {
+function routeSenderEmptyGate(state: NormalizedIngressState): AccessGraphGate | null {
   // deny-when-empty route sender policy means the route matched but has no sender list to
   // authorize against, so it becomes an explicit route block.
   const route = state.routeFacts.find(
@@ -85,7 +85,7 @@ function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | nul
 }
 
 function commandGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
 }): AccessGraphGate {
   const command = params.policy.command;
@@ -100,10 +100,16 @@ function commandGate(params: {
     };
   }
   const useAccessGroups = command.useAccessGroups ?? true;
-  // Command authorization combines owner and group allowlists after mutable-id policy so
+  // Command authorization combines owner and group allowlists after authentication policy so
   // command control cannot be granted by identifiers the current policy rejects.
-  const owner = applyMutableIdentifierPolicy(params.state.allowlists.commandOwner, params.policy);
-  const group = applyMutableIdentifierPolicy(params.state.allowlists.commandGroup, params.policy);
+  const owner = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandOwner,
+    params.policy,
+  );
+  const group = applyIdentifierAuthenticationPolicy(
+    params.state.allowlists.commandGroup,
+    params.policy,
+  );
   const authorized = resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups,
     modeWhenAccessGroupsOff: command.modeWhenAccessGroupsOff,
@@ -148,7 +154,7 @@ function mergeCommandMatch(
 }
 
 function eventGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
   senderGate: AccessGraphGate;
   commandGate: AccessGraphGate;
@@ -208,7 +214,7 @@ function eventGate(params: {
 
 function activationMetadata(params: {
   activation?: ChannelIngressPolicyInput["activation"];
-  mentionFacts: ChannelIngressState["mentionFacts"];
+  mentionFacts: NormalizedIngressState["mentionFacts"];
   shouldSkip: boolean;
   effectiveWasMentioned?: boolean;
   shouldBypassMention?: boolean;
@@ -253,7 +259,7 @@ function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInpu
 }
 
 function activationGate(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
   commandGate: AccessGraphGate;
 }): AccessGraphGate {
@@ -307,7 +313,7 @@ function activationGate(params: {
 }
 
 export function decideChannelIngress(
-  state: ChannelIngressState,
+  state: NormalizedIngressState,
   policy: ChannelIngressPolicyInput,
 ): ChannelIngressDecision {
   const gates: AccessGraphGate[] = routeGates(state);

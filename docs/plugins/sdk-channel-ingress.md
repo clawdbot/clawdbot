@@ -157,6 +157,11 @@ weaker claim for that exact pair, then compares it with
 `minIdentifierAuthentication`. Identifiers of the same kind remain distinct,
 so a weak secondary email does not weaken a separately matched verified email.
 
+A subject that supplies a per-message `authentication` map must claim every
+field it wants counted. A field missing from a supplied map is treated as
+`unverified`, even if its identity descriptor declares a stronger static claim.
+Channels with static strength omit the map entirely.
+
 Existing plugins remain source-compatible during the deprecation window:
 
 | Deprecated field                                   | Exact mapping                        |

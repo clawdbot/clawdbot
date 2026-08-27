@@ -32,13 +32,18 @@ type MatchableIdentifier = {
 };
 
 /** Internal identifier material with the raw comparable value retained. */
-export type InternalMatchMaterial = MatchableIdentifier & {
+type InternalMatchMaterial = MatchableIdentifier & {
   value: string;
 };
 
 /** Internal subject representation used by the shared ingress kernel. */
 export type InternalChannelIngressSubject = {
   identifiers: InternalMatchMaterial[];
+};
+
+/** SDK inputs remain optional; kernel consumers receive resolved authentication. */
+export type NormalizedIngressSubject = {
+  identifiers: Array<InternalMatchMaterial & { authentication: IdentifierAuthentication }>;
 };
 
 /** Public, redacted form of a normalized allowlist entry. */
@@ -58,6 +63,10 @@ export type InternalNormalizedEntry = ChannelIngressNormalizedEntry & {
   identityFieldKey?: string;
 };
 
+export type NormalizedIngressEntry = InternalNormalizedEntry & {
+  authentication: IdentifierAuthentication;
+};
+
 /** Redacted diagnostic for an invalid, disabled, or unsupported allowlist entry. */
 export type RedactedIngressEntryDiagnostic = {
   opaqueEntryId?: string;
@@ -75,7 +84,7 @@ export type RedactedIngressMatch = {
 type RedactedIngressMatchedPair = {
   opaqueEntryId: string;
   opaqueSubjectId: string;
-  subjectAuthentication?: IdentifierAuthentication;
+  subjectAuthentication: IdentifierAuthentication;
 };
 
 /** Public normalization result for a set of allowlist entries. */
@@ -99,8 +108,8 @@ export type InternalChannelIngressAdapter = {
   }): InternalChannelIngressNormalizeResult | Promise<InternalChannelIngressNormalizeResult>;
 
   matchSubject(params: {
-    subject: InternalChannelIngressSubject;
-    entries: readonly InternalNormalizedEntry[];
+    subject: NormalizedIngressSubject;
+    entries: readonly NormalizedIngressEntry[];
     context: "dm" | "group" | "route" | "command";
   }): RedactedIngressMatch | Promise<RedactedIngressMatch>;
 };
@@ -145,6 +154,12 @@ export type ResolvedIngressAllowlist = {
   };
   match: RedactedIngressMatch;
   authentication?: RedactedIdentifierAuthenticationResult;
+};
+
+export type NormalizedIngressAllowlist = Omit<ResolvedIngressAllowlist, "normalizedEntries"> & {
+  normalizedEntries: Array<
+    ChannelIngressNormalizedEntry & { authentication: IdentifierAuthentication }
+  >;
 };
 
 type RedactedIdentifierAuthenticationResult = {
@@ -193,10 +208,7 @@ export type RouteGateFacts = {
 };
 
 /** Route gate facts after any route-specific sender allowlist is normalized. */
-export type ResolvedRouteGateFacts = Omit<
-  RouteGateFacts,
-  "senderAllowFrom" | "senderAllowFromSource"
-> & {
+type ResolvedRouteGateFacts = Omit<RouteGateFacts, "senderAllowFrom" | "senderAllowFromSource"> & {
   senderAllowlist?: ResolvedIngressAllowlist;
 };
 
@@ -386,6 +398,17 @@ export type ChannelIngressState = {
     commandOwner: ResolvedIngressAllowlist;
     commandGroup: ResolvedIngressAllowlist;
   };
+};
+
+export type NormalizedIngressState = Omit<ChannelIngressState, "allowlists" | "routeFacts"> & {
+  allowlists: {
+    [K in keyof ChannelIngressState["allowlists"]]: NormalizedIngressAllowlist;
+  };
+  routeFacts: Array<
+    Omit<ResolvedRouteGateFacts, "senderAllowlist"> & {
+      senderAllowlist?: NormalizedIngressAllowlist;
+    }
+  >;
 };
 
 /** Final runtime admission action for the inbound event. */

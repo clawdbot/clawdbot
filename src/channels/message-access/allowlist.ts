@@ -1,29 +1,28 @@
 /**
  * Channel ingress allowlist diagnostics.
  *
- * Merges allowlists, applies mutable identifier policy, and redacts access-graph facts.
+ * Merges allowlists, applies identifier authentication policy, and redacts access-graph facts.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
-  identifierAuthenticationFrom,
   meetsIdentifierAuthentication,
   minimumIdentifierAuthenticationFrom,
   weakestIdentifierAuthentication,
 } from "./identifier-authentication.js";
 import type {
   ChannelIngressPolicyInput,
-  ChannelIngressState,
+  NormalizedIngressState,
   IngressReasonCode,
   RedactedIngressAllowlistFacts,
   RedactedIngressEntryDiagnostic,
-  ResolvedIngressAllowlist,
+  NormalizedIngressAllowlist,
 } from "./types.js";
 
 /**
  * Returns the first access-group related failure reason for an allowlist.
  */
 export function allowlistFailureReason(
-  allowlist: ResolvedIngressAllowlist,
+  allowlist: NormalizedIngressAllowlist,
 ): IngressReasonCode | null {
   if (allowlist.accessGroups.failed.length > 0) {
     return "access_group_failed";
@@ -41,7 +40,7 @@ export function allowlistFailureReason(
  * Projects an allowlist into redacted diagnostics safe for ingress access graphs.
  */
 export function redactedAllowlistDiagnostics(
-  allowlist: ResolvedIngressAllowlist,
+  allowlist: NormalizedIngressAllowlist,
   reasonCode: IngressReasonCode,
 ): RedactedIngressAllowlistFacts {
   return {
@@ -56,9 +55,9 @@ export function redactedAllowlistDiagnostics(
 }
 
 function mergeResolvedAllowlists(
-  allowlists: readonly ResolvedIngressAllowlist[],
-): ResolvedIngressAllowlist {
-  const scopedAllowlists: ResolvedIngressAllowlist[] = [];
+  allowlists: readonly NormalizedIngressAllowlist[],
+): NormalizedIngressAllowlist {
+  const scopedAllowlists: NormalizedIngressAllowlist[] = [];
   for (const [index, allowlist] of allowlists.entries()) {
     const prefix = `source-${index + 1}:`;
     const normalizedEntries = [];
@@ -121,10 +120,10 @@ function mergeResolvedAllowlists(
 /**
  * Applies identifier authentication to exact matched entry/subject pairs.
  */
-function applyIdentifierAuthenticationPolicy(
-  allowlist: ResolvedIngressAllowlist,
+export function applyIdentifierAuthenticationPolicy(
+  allowlist: NormalizedIngressAllowlist,
   policy: ChannelIngressPolicyInput,
-): ResolvedIngressAllowlist {
+): NormalizedIngressAllowlist {
   const minimum = minimumIdentifierAuthenticationFrom(policy);
   const pairsByEntry = new Map<string, NonNullable<typeof allowlist.match.matchedPairs>>();
   for (const pair of allowlist.match.matchedPairs ?? []) {
@@ -134,17 +133,14 @@ function applyIdentifierAuthenticationPolicy(
   }
   const rejectedEntryIds = new Set<string>();
   for (const entry of allowlist.normalizedEntries) {
-    const entryAuthentication = identifierAuthenticationFrom(entry);
     const pairs = pairsByEntry.get(entry.opaqueEntryId);
     const pairStrengths = pairs?.map((pair) =>
-      pair.subjectAuthentication
-        ? weakestIdentifierAuthentication(entryAuthentication, pair.subjectAuthentication)
-        : entryAuthentication,
+      weakestIdentifierAuthentication(entry.authentication, pair.subjectAuthentication),
     );
     const accepted =
       pairStrengths && pairStrengths.length > 0
         ? pairStrengths.some((strength) => meetsIdentifierAuthentication(strength, minimum))
-        : meetsIdentifierAuthentication(entryAuthentication, minimum);
+        : meetsIdentifierAuthentication(entry.authentication, minimum);
     if (!accepted) {
       rejectedEntryIds.add(entry.opaqueEntryId);
     }
@@ -160,7 +156,7 @@ function applyIdentifierAuthenticationPolicy(
       .map((entry) => ({
         opaqueEntryId: entry.opaqueEntryId,
         reasonCode:
-          identifierAuthenticationFrom(entry) === "mutable"
+          entry.authentication === "mutable"
             ? ("mutable_identifier_disabled" as const)
             : ("identifier_authentication_too_weak" as const),
       })),
@@ -182,8 +178,7 @@ function applyIdentifierAuthenticationPolicy(
       evaluated:
         policy.minIdentifierAuthentication !== undefined ||
         policy.mutableIdentifierMatching !== undefined ||
-        (allowlist.match.matchedPairs?.some((pair) => pair.subjectAuthentication !== undefined) ??
-          false),
+        Boolean(allowlist.match.matchedPairs?.length),
       threshold: minimum,
       affectedMatch,
       rejectedEntryIds: [...rejectedEntryIds],
@@ -191,21 +186,13 @@ function applyIdentifierAuthenticationPolicy(
   };
 }
 
-/** @deprecated Use `applyIdentifierAuthenticationPolicy`. */
-export function applyMutableIdentifierPolicy(
-  allowlist: ResolvedIngressAllowlist,
-  policy: ChannelIngressPolicyInput,
-): ResolvedIngressAllowlist {
-  return applyIdentifierAuthenticationPolicy(allowlist, policy);
-}
-
 /**
  * Resolves the sender allowlist used for group/channel ingress after route overrides.
  */
 export function effectiveGroupSenderAllowlist(params: {
-  state: ChannelIngressState;
+  state: NormalizedIngressState;
   policy: ChannelIngressPolicyInput;
-}): ResolvedIngressAllowlist {
+}): NormalizedIngressAllowlist {
   let effective =
     params.policy.groupAllowFromFallbackToAllowFrom &&
     !params.state.allowlists.group.hasConfiguredEntries
