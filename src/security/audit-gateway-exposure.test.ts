@@ -330,13 +330,12 @@ describe("security audit gateway exposure findings", () => {
     ).toBe(true);
   });
 
-  it("evaluates trusted-proxy auth guardrails", () => {
+  it.each(["loopback", "lan"] as const)("evaluates trusted-proxy auth guardrails on %s", (bind) => {
     const cases: Array<{
       name: string;
       cfg: OpenClawConfig;
       expectedCheckId: string;
       expectedSeverity: "warn" | "critical";
-      suppressesGenericSharedSecretFindings?: boolean;
     }> = [
       {
         name: "trusted-proxy base mode",
@@ -352,7 +351,6 @@ describe("security audit gateway exposure findings", () => {
         },
         expectedCheckId: "gateway.trusted_proxy_auth",
         expectedSeverity: "critical",
-        suppressesGenericSharedSecretFindings: true,
       },
       {
         name: "missing trusted proxies",
@@ -462,16 +460,17 @@ describe("security audit gateway exposure findings", () => {
     ];
 
     for (const testCase of cases) {
-      const findings = collectGatewayConfigFindings(testCase.cfg, testCase.cfg, {});
+      const cfg = { ...testCase.cfg, gateway: { ...testCase.cfg.gateway, bind } };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
       expect(
         hasFinding(testCase.expectedCheckId, testCase.expectedSeverity, findings),
         testCase.name,
       ).toBe(true);
-      if (testCase.suppressesGenericSharedSecretFindings) {
-        const checkIds = findings.map((finding) => finding.checkId);
-        expect(checkIds).not.toContain("gateway.bind_no_auth");
-        expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
-      }
+      const checkIds = findings.map((finding) => finding.checkId);
+      expect(checkIds, testCase.name).toContain("gateway.trusted_proxy_auth");
+      expect(checkIds, testCase.name).not.toContain("gateway.bind_no_auth");
+      expect(checkIds, testCase.name).not.toContain("gateway.loopback_no_auth");
+      expect(checkIds, testCase.name).not.toContain("gateway.auth_no_rate_limit");
     }
   });
 
