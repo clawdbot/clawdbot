@@ -1,4 +1,5 @@
 // Control UI module implements app scroll behavior.
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
@@ -215,18 +216,15 @@ export function scheduleCommittedChatScroll(
       host.chatHasAutoScrolled = true;
     }
     host.chatFollowLocked = false;
-    const smoothEnabled =
-      smooth &&
-      (typeof window === "undefined" ||
-        typeof window.matchMedia !== "function" ||
-        !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+    const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
+    const smoothEnabled = behavior === "smooth";
     const scrollTop = target.scrollHeight;
     host.chatProgrammaticScrollTarget = scrollTop;
     host.chatIsProgrammaticScroll = true;
     if (host.chatScrollToEnd) {
-      host.chatScrollToEnd({ behavior: smoothEnabled ? "smooth" : "auto" });
+      host.chatScrollToEnd({ behavior });
     } else if (typeof target.scrollTo === "function") {
-      target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
+      target.scrollTo({ top: scrollTop, behavior });
     } else {
       target.scrollTop = scrollTop;
     }

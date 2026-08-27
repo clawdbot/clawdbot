@@ -50,33 +50,6 @@ const TOOL_CALL_HISTORY_SIZE = 30;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
-const DEFAULT_LOOP_DETECTION_CONFIG = {
-  enabled: false,
-  historySize: TOOL_CALL_HISTORY_SIZE,
-  warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
-  unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
-  criticalThreshold: CRITICAL_THRESHOLD,
-  globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-  detectors: {
-    genericRepeat: true,
-    knownPollNoProgress: true,
-    pingPong: true,
-  },
-};
-
-type ResolvedLoopDetectionConfig = {
-  enabled: boolean;
-  historySize: number;
-  warningThreshold: number;
-  unknownToolThreshold: number;
-  criticalThreshold: number;
-  globalCircuitBreakerThreshold: number;
-  detectors: {
-    genericRepeat: boolean;
-    knownPollNoProgress: boolean;
-    pingPong: boolean;
-  };
-};
 
 type ToolLoopDetectionScope = {
   runId?: string;
@@ -88,18 +61,6 @@ function selectHistoryForScope(
 ): ToolCallRecord[] {
   const runId = normalizeRunId(scope?.runId);
   return history.filter((record) => normalizeRunId(record.runId) === runId);
-}
-
-function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  return {
-    enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
-    historySize: DEFAULT_LOOP_DETECTION_CONFIG.historySize,
-    warningThreshold: DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
-    unknownToolThreshold: DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
-    criticalThreshold: DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
-    globalCircuitBreakerThreshold: DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
-    detectors: DEFAULT_LOOP_DETECTION_CONFIG.detectors,
-  };
 }
 
 /**
@@ -530,8 +491,7 @@ export function detectToolCallLoop(
   config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
-  const resolvedConfig = resolveLoopDetectionConfig(config);
-  if (!resolvedConfig.enabled) {
+  if (!config?.enabled) {
     return { stuck: false };
   }
   const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
@@ -543,11 +503,9 @@ export function detectToolCallLoop(
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
   const argumentChurnLivenessSignal =
-    argumentChurn.count >= resolvedConfig.warningThreshold
-      ? ("argument_churn" as const)
-      : undefined;
+    argumentChurn.count >= TOOL_LOOP_WARNING_THRESHOLD ? ("argument_churn" as const) : undefined;
 
-  if (unknownToolStreak.count >= resolvedConfig.unknownToolThreshold) {
+  if (unknownToolStreak.count >= UNKNOWN_TOOL_THRESHOLD) {
     return {
       stuck: true,
       level: "critical",
@@ -558,7 +516,7 @@ export function detectToolCallLoop(
     };
   }
 
-  if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
+  if (noProgressStreak >= GLOBAL_CIRCUIT_BREAKER_THRESHOLD) {
     log.error(
       `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
     );
@@ -572,11 +530,7 @@ export function detectToolCallLoop(
     };
   }
 
-  if (
-    knownPollTool &&
-    resolvedConfig.detectors.knownPollNoProgress &&
-    noProgressStreak >= resolvedConfig.criticalThreshold
-  ) {
+  if (knownPollTool && noProgressStreak >= CRITICAL_THRESHOLD) {
     log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
@@ -588,11 +542,7 @@ export function detectToolCallLoop(
     };
   }
 
-  if (
-    knownPollTool &&
-    resolvedConfig.detectors.knownPollNoProgress &&
-    noProgressStreak >= resolvedConfig.warningThreshold
-  ) {
+  if (knownPollTool && noProgressStreak >= TOOL_LOOP_WARNING_THRESHOLD) {
     log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
@@ -609,11 +559,7 @@ export function detectToolCallLoop(
     ? `pingpong:${canonicalPairKey(currentHash, pingPong.pairedSignature)}`
     : `pingpong:${toolName}:${currentHash}`;
 
-  if (
-    resolvedConfig.detectors.pingPong &&
-    pingPong.count >= resolvedConfig.criticalThreshold &&
-    pingPong.noProgressEvidence
-  ) {
+  if (pingPong.count >= CRITICAL_THRESHOLD && pingPong.noProgressEvidence) {
     log.error(
       `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
     );
@@ -628,7 +574,7 @@ export function detectToolCallLoop(
     };
   }
 
-  if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
+  if (pingPong.count >= TOOL_LOOP_WARNING_THRESHOLD) {
     log.warn(
       `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
     );
@@ -649,11 +595,7 @@ export function detectToolCallLoop(
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
-  if (
-    !knownPollTool &&
-    resolvedConfig.detectors.genericRepeat &&
-    noProgressStreak >= resolvedConfig.criticalThreshold
-  ) {
+  if (!knownPollTool && noProgressStreak >= CRITICAL_THRESHOLD) {
     log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
     return {
       stuck: true,
@@ -665,16 +607,12 @@ export function detectToolCallLoop(
     };
   }
 
-  if (argumentChurn.count >= resolvedConfig.warningThreshold) {
+  if (argumentChurn.count >= TOOL_LOOP_WARNING_THRESHOLD) {
     log.warn(`Argument churn warning: ${toolName} cycled through stable argument patterns`);
     return buildArgumentChurnWarning(toolName, argumentChurn);
   }
 
-  if (
-    !knownPollTool &&
-    resolvedConfig.detectors.genericRepeat &&
-    recentCount >= resolvedConfig.warningThreshold
-  ) {
+  if (!knownPollTool && recentCount >= TOOL_LOOP_WARNING_THRESHOLD) {
     log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
     return {
       stuck: true,
@@ -698,10 +636,9 @@ export function recordToolCall(
   toolName: string,
   params: unknown,
   toolCallId?: string,
-  config?: ToolLoopDetectionConfig,
+  _config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
 ): void {
-  const resolvedConfig = resolveLoopDetectionConfig(config);
   const runId = normalizeRunId(scope?.runId);
   if (!state.toolCallHistory) {
     state.toolCallHistory = [];
@@ -715,8 +652,8 @@ export function recordToolCall(
     timestamp: Date.now(),
   });
 
-  if (state.toolCallHistory.length > resolvedConfig.historySize) {
-    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
+  if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - TOOL_CALL_HISTORY_SIZE);
   }
 }
 
@@ -735,7 +672,6 @@ export function recordToolCallOutcome(
     runId?: string;
   },
 ): ToolCallRecord | undefined {
-  const resolvedConfig = resolveLoopDetectionConfig(params.config);
   const runId = normalizeRunId(params.runId);
   const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
   if (!outcome.resultHash && !outcome.outcomeKind) {
@@ -795,8 +731,8 @@ export function recordToolCallOutcome(
     recordedOutcome = record;
   }
 
-  if (state.toolCallHistory.length > resolvedConfig.historySize) {
-    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
+  if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - TOOL_CALL_HISTORY_SIZE);
   }
   return recordedOutcome;
 }
