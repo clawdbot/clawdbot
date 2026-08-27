@@ -327,6 +327,8 @@ export type CronServiceState = {
   lifecycleGeneration: number;
   schedulingPaused: boolean;
   schedulerStarted: boolean;
+  /** Owns scheduled-tick exclusion until startup catch-up publishes deferred slots. */
+  startupCatchup?: object;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
