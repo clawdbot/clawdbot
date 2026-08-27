@@ -636,6 +636,12 @@ describe("BrowserPanelController capture and input ownership", () => {
       details: { code: "ACT_UNKNOWN" },
       expected: false,
     },
+    {
+      name: "sanitized unknown action code with matching prose",
+      message: "act:evaluate is disabled by config (browser.evaluateEnabled=false).",
+      details: { unrecognizedCode: true },
+      expected: false,
+    },
   ])(
     "classifies $name without reinterpreting structured errors",
     async ({ message, details, expected }) => {

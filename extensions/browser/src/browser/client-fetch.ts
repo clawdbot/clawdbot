@@ -26,6 +26,7 @@ import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   parseBrowserErrorPayload,
   type BrowserActErrorCode,
+  type BrowserErrorPayload,
   type BrowserNoDisplayErrorMetadata,
   type BrowserNoDisplayErrorDetails,
 } from "./errors.js";
@@ -36,22 +37,16 @@ import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 export class BrowserServiceError extends Error {
   readonly status?: number;
   readonly code?: BrowserActErrorCode;
+  readonly unrecognizedCode?: true;
   readonly reason?: BrowserNoDisplayErrorMetadata["reason"];
   readonly details?: BrowserNoDisplayErrorDetails;
 
-  constructor(
-    message: string,
-    metadata?: {
-      code?: BrowserActErrorCode;
-      reason?: BrowserNoDisplayErrorMetadata["reason"];
-      details?: BrowserNoDisplayErrorDetails;
-    },
-    status?: number,
-  ) {
+  constructor(message: string, metadata?: BrowserErrorPayload, status?: number) {
     super(message);
     this.name = "BrowserServiceError";
     this.status = status;
     this.code = metadata?.code;
+    this.unrecognizedCode = metadata?.unrecognizedCode;
     this.reason = metadata?.reason;
     this.details = metadata?.details;
   }

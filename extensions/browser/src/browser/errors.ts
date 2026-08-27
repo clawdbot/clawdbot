@@ -51,9 +51,10 @@ export type BrowserNoDisplayErrorMetadata = {
 
 type WithNoDisplayMetadata<T> = T | (T & BrowserNoDisplayErrorMetadata);
 export type BrowserErrorResponse = WithNoDisplayMetadata<{ status: number; message: string }>;
-type BrowserErrorPayload = WithNoDisplayMetadata<{
+export type BrowserErrorPayload = WithNoDisplayMetadata<{
   error: string;
   code?: BrowserActErrorCode;
+  unrecognizedCode?: true;
 }>;
 
 /** Base browser error carrying an HTTP status code. */
@@ -211,11 +212,14 @@ export function parseBrowserErrorPayload(value: unknown): BrowserErrorPayload | 
     return null;
   }
   const code = isBrowserActErrorCode(body.code) ? body.code : undefined;
+  const unrecognizedCode =
+    body.unrecognizedCode === true || (body.code !== undefined && !code) ? true : undefined;
+  const actionCode = code ? { code } : unrecognizedCode ? { unrecognizedCode } : {};
   if (body.reason === BROWSER_ERROR_REASONS.noDisplayForHeadedProfile) {
     const details = parseNoDisplayDetails(body.details);
     if (details) {
-      return { error: body.error, ...(code ? { code } : {}), reason: body.reason, details };
+      return { error: body.error, ...actionCode, reason: body.reason, details };
     }
   }
-  return { error: body.error, ...(code ? { code } : {}) };
+  return { error: body.error, ...actionCode };
 }

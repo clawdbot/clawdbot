@@ -23,6 +23,7 @@ describe("browser action errors", () => {
     });
     expect(parseBrowserErrorPayload({ error: "failure", code: "UNTRUSTED_CODE" })).toEqual({
       error: "failure",
+      unrecognizedCode: true,
     });
   });
 });

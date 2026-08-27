@@ -218,8 +218,10 @@ export function isBrowserEvaluateDisabledError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;
   }
-  const code = err instanceof GatewayRequestError ? asRecord(err.details)?.code : undefined;
-  return code === undefined
+  const details = err instanceof GatewayRequestError ? asRecord(err.details) : null;
+  const code = details?.code;
+  const hasStructuredCode = code !== undefined || details?.unrecognizedCode === true;
+  return !hasStructuredCode
     ? err.message.includes("evaluateEnabled=false")
     : code === "ACT_EVALUATE_DISABLED";
 }
