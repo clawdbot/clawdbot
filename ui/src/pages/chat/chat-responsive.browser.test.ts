@@ -3997,7 +3997,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
                   <span class="agent-chat__goal-objective">Ship the aligned stack</span>
                 </span>
                 <span class="agent-chat__goal-elapsed">14m</span>
-                <span class="agent-chat__goal-actions"></span>
+                <span class="agent-chat__goal-actions">
+                  <button class="agent-chat__goal-action agent-chat__goal-expand">${iconSvg()}</button>
+                </span>
               </div>
             </div>
           </div>
@@ -4090,6 +4092,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             left(".chat-queue__copy"),
             left(".agent-chat__goal-label"),
           ],
+          trailingCenterDelta:
+            centerX(".session-progress-card__summary-chevron svg") -
+            centerX(".agent-chat__goal-expand svg"),
         };
       });
       expect(
@@ -4098,6 +4103,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(
         Math.max(...openStackAxes.contentLefts) - Math.min(...openStackAxes.contentLefts),
       ).toBeLessThan(0.5);
+      expect(Math.abs(openStackAxes.trailingCenterDelta)).toBeLessThan(0.5);
       expect(
         await page
           .locator(".session-progress-card__body")
@@ -4182,6 +4188,20 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             iconCenter(".chat-queue__leading svg"),
             iconCenter(".agent-chat__goal-icon svg"),
           ],
+          trailingCenterDelta:
+            iconCenter(".session-progress-card__summary-chevron svg") -
+            iconCenter(".agent-chat__goal-expand svg"),
+          trailingControlWidthDelta:
+            rect(".session-progress-card__summary-chevron").width -
+            rect(".agent-chat__goal-expand").width,
+          trailingPaddingDelta:
+            Number.parseFloat(
+              getComputedStyle(document.querySelector(".session-progress-card__summary")!)
+                .paddingRight,
+            ) -
+            Number.parseFloat(
+              getComputedStyle(document.querySelector(".agent-chat__goal-row")!).paddingRight,
+            ),
         };
       });
       expect(collapsed.countLeft).toBeGreaterThan(collapsed.currentRight);
@@ -4189,6 +4209,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(Math.max(...collapsed.iconCenters) - Math.min(...collapsed.iconCenters)).toBeLessThan(
         0.5,
       );
+      expect(Math.abs(collapsed.trailingCenterDelta)).toBeLessThan(0.5);
+      expect(Math.abs(collapsed.trailingControlWidthDelta)).toBeLessThan(0.5);
+      expect(Math.abs(collapsed.trailingPaddingDelta)).toBeLessThan(0.5);
       const closedRowCenters = await page.evaluate(() => {
         const centerY = (selector: string) => {
           const bounds = document.querySelector<HTMLElement>(selector)!.getBoundingClientRect();
