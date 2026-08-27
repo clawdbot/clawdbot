@@ -29,7 +29,6 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS = new Map<string, nu
   ["@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs", 1],
   ["@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts", 1],
   ["@openclaw/codex:dangerous-exec:src/doctor.ts", 1],
-  ["@openclaw/daytona-sandbox:dangerous-exec:src/upload.ts", 1],
   ["@openclaw/discord:dangerous-exec:src/voice/audio.ts", 1],
   ["@openclaw/imessage:dangerous-exec:src/client.ts", 1],
   ["@openclaw/llama-cpp-provider:dangerous-exec:src/llama-server-install.ts", 1],
@@ -55,15 +54,16 @@ const REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS = new Map<string, number>(
   REVIEWED_CODEX_SOURCE_LAYOUTS.flatMap((layout) => [...layout]),
 );
 
-// Generated chunks can contain multiple reviewed execution sites. Counts are
-// part of the contract so an added or missing site fails the release scan.
-const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS = new Map<string, number>([
+// Packed source files and generated chunks can contain reviewed execution sites.
+// Counts are part of the contract so an added or missing site fails the release scan.
+const OPTIONAL_REVIEWED_PUBLISHABLE_PACKED_PATH_CRITICAL_FINDING_COUNTS = new Map<string, number>([
   ["@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs", 1],
   ["@openclaw/acpx:dangerous-exec:dist/service-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/api.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js", 1],
   ["@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
+  ["@openclaw/daytona-sandbox:dangerous-exec:src/upload.ts", 1],
   ["@openclaw/llama-cpp-provider:dangerous-exec:dist/index.js", 1],
   ["@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js", 1],
   ["@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js", 1],
@@ -212,7 +212,7 @@ function isReviewedPublishableCriticalFinding(key: string): boolean {
   return (
     REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDING_COUNTS.has(key) ||
     REVIEWED_CODEX_SOURCE_CRITICAL_FINDING_COUNTS.has(key) ||
-    OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS.has(key)
+    OPTIONAL_REVIEWED_PUBLISHABLE_PACKED_PATH_CRITICAL_FINDING_COUNTS.has(key)
   );
 }
 
@@ -223,10 +223,11 @@ function expectedOptionalReviewedFindingsForPackedPath(
   const normalizedPath = normalizePackedFindingPath(packedPath);
   const keyPrefix = `${packageName}:`;
   const keySuffix = `:${normalizedPath}`;
-  return [...OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDING_COUNTS].flatMap(([key, count]) =>
-    key.startsWith(keyPrefix) && key.endsWith(keySuffix)
-      ? Array.from({ length: count }, () => key)
-      : [],
+  return [...OPTIONAL_REVIEWED_PUBLISHABLE_PACKED_PATH_CRITICAL_FINDING_COUNTS].flatMap(
+    ([key, count]) =>
+      key.startsWith(keyPrefix) && key.endsWith(keySuffix)
+        ? Array.from({ length: count }, () => key)
+        : [],
   );
 }
 
@@ -518,6 +519,20 @@ describe("publishable plugin npm package install security scan", () => {
     ).toEqual(["@openclaw/codex:dangerous-exec:dist/shared-client-<hash>.js"]);
     expect(
       expectedOptionalReviewedFindingsForPackedPath("@openclaw/codex", "dist/client-retired.js"),
+    ).toEqual([]);
+  });
+
+  it("reviews only the exact packed Daytona upload path", () => {
+    const uploadFinding = "@openclaw/daytona-sandbox:dangerous-exec:src/upload.ts";
+
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath("@openclaw/daytona-sandbox", "src/upload.ts"),
+    ).toEqual([uploadFinding]);
+    expect(
+      expectedOptionalReviewedFindingsForPackedPath(
+        "@openclaw/daytona-sandbox",
+        "src/relocated/upload.ts",
+      ),
     ).toEqual([]);
   });
 
