@@ -96,6 +96,27 @@ describe("docsSearchCommand", () => {
     });
   });
 
+  it("limits normalized search results before rendering", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [
+            { title: "CLI reference", link: "https://docs.openclaw.ai/cli" },
+            { title: "Plugin guide", link: "https://docs.openclaw.ai/plugins" },
+          ],
+        }),
+      ),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["openclaw"], runtime, { json: true, limit: 1 });
+
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      query: "openclaw",
+      results: [{ title: "CLI reference", link: "https://docs.openclaw.ai/cli" }],
+    });
+  });
+
   it("emits one JSON object for the docs homepage", async () => {
     const runtime = makeRuntime();
 

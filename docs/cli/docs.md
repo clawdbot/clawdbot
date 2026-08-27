@@ -15,13 +15,14 @@ Search the live OpenClaw docs index from the terminal.
 ```bash
 openclaw docs                              # print docs entrypoint and example search
 openclaw docs --json                       # print the same guidance as JSON
-openclaw docs <query...> [--json]          # search the live docs index
+openclaw docs <query...> [--json] [--limit <count>]
 ```
 
-| Argument/option | Description                                                                        |
-| --------------- | ---------------------------------------------------------------------------------- |
-| `[query...]`    | Free-form search query. Multi-word queries are joined with spaces and sent as one. |
-| `--json`        | Emit one machine-readable JSON object on stdout.                                   |
+| Argument/option   | Description                                                                        |
+| ----------------- | ---------------------------------------------------------------------------------- |
+| `[query...]`      | Free-form search query. Multi-word queries are joined with spaces and sent as one. |
+| `--json`          | Emit one machine-readable JSON object on stdout.                                   |
+| `--limit <count>` | Return at most this many results. The value must be a positive integer.            |
 
 With no query, `openclaw docs` prints the docs entrypoint URL and a sample search command instead of running a search.
 
@@ -30,6 +31,7 @@ With no query, `openclaw docs` prints the docs entrypoint URL and a sample searc
 ```bash
 openclaw docs browser existing-session
 openclaw docs browser existing-session --json
+openclaw docs plugin --limit 5
 openclaw docs sandbox allowHostControl
 openclaw docs gateway token secretref
 ```
