@@ -176,11 +176,12 @@ function toPollEncKeyBuffer(value: Uint8Array | string | null | undefined): Buff
 
 /**
  * Decodes an incoming `pollUpdateMessage` (still encrypted as delivered on
- * `messages.upsert`) into a plain vote payload. Baileys 7.0.0-rc13 itself
- * never performs this decode+emit (the relevant branch in its own
- * `process-message.js` is dead/commented-out code), so this replicates it
- * in-plugin using baileys' exported primitives against the single
- * already-managed socket — no parallel connection, no runtime patching.
+ * `messages.upsert`) into a plain vote payload. The checked-in Baileys
+ * 7.0.0-rc14 package exports `decryptPollVote` from `lib/Utils/process-message`
+ * and still leaves its automatic poll-vote decode/emit branch disabled, so
+ * this replicates that operation in-plugin using the exported primitive
+ * against the single already-managed socket — no parallel connection, no
+ * runtime patching.
  *
  * Returns undefined when the message isn't a poll vote, or when the
  * referenced poll creation message isn't in the local cache (e.g. it expired,
