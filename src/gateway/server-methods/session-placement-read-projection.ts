@@ -20,6 +20,7 @@ function projectSessionPlacementFields(params: {
           placement: projectWorkerSessionPlacement(
             placement,
             params.context.workerPlacementDiskSpaceReader?.read(placement),
+            params.context.workerPlacementRunnerAvailabilityReader?.read(placement),
           ),
         }
       : {}),

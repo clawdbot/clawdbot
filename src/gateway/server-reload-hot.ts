@@ -4,7 +4,6 @@ import { warmCurrentProviderAuthStateOffMainThread } from "../agents/model-provi
 import {
   markPreparedModelRuntimeSnapshotsStale,
   rejectPendingPreparedModelRuntimeReplacement,
-  refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeReplacementGateId,
 } from "../agents/prepared-model-runtime.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -20,7 +19,7 @@ import {
 } from "./config-reload-recovery.js";
 import type { GatewayReloadPlan } from "./config-reload.js";
 import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
-import { buildGatewayCronService } from "./server-cron.js";
+import { buildGatewayCronService, type GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import {
@@ -38,12 +37,14 @@ import {
   type GatewayReloadHandlerParams,
   type GatewayRestartTransactionResult,
 } from "./server-reload-contracts.js";
+import * as mrReload from "./server-reload-model-runtime-scope.js";
 import { createGatewayRestartCoordinator } from "./server-reload-restart.js";
 import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   collectChannelOperationFailures,
   disposeMcpRuntimesWithTimeout,
   resetPreparedModelRuntimeStateForHotReload,
+  revokeActiveSkillReviewsBeforeConfigPublication,
 } from "./server-reload-utils.js";
 import { startGatewayCronWithLogging } from "./server-runtime-services.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
@@ -101,6 +102,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       !isRestartRetryStopped() && (publication?.isCurrent?.() ?? true);
     const state = params.getState();
     const nextState = { ...state };
+    const modelRuntimeAgentIds = mrReload.resolveReloadAgentIds(plan.changedPaths);
+    const modelRuntimeRefreshScope = modelRuntimeAgentIds ? { agentIds: modelRuntimeAgentIds } : {};
 
     resetPreparedModelRuntimeStateForHotReload();
 
@@ -114,13 +117,34 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     nextState.hookClientIpConfig = resolveHookClientIpConfig(nextConfig);
 
+    let cronExitWatcherHandoff:
+      | { previous: GatewayCronExitWatcherHandoff; next: GatewayCronExitWatcherHandoff }
+      | undefined;
     if (plan.restartCron) {
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
         broadcast: params.broadcast,
         env: publication?.runtimeEnv ?? process.env,
+        // Without this a cron hot reload silently drops scheduler gateway
+        // context, so scheduled runs regress to contextless after any reload.
+        ...(params.resolveGatewayContext
+          ? { resolveGatewayContext: params.resolveGatewayContext }
+          : {}),
       });
+      if (
+        state.cronState.cronEnabled &&
+        nextState.cronState.cronEnabled &&
+        state.cronState.storePath === nextState.cronState.storePath
+      ) {
+        const [previous, next] = await Promise.all([
+          state.cronState.prepareExitWatcherHandoff?.(),
+          nextState.cronState.prepareExitWatcherHandoff?.(),
+        ]);
+        if (previous && next) {
+          cronExitWatcherHandoff = { previous, next };
+        }
+      }
     }
 
     resetDirectoryCache();
@@ -164,24 +188,25 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
       );
     };
-    const commitRuntime = async () => {
+    const commitRuntime = async (onCommit?: () => void) => {
       if (runtimeCommitted) {
         return;
       }
       const commit = async () => {
         if (plan.restartHeartbeat) {
           nextState.heartbeatRunner.updateConfig(nextConfig);
-          // Heartbeat cadence lives in system-owned cron monitor jobs;
-          // reconverge them against the new config in the background.
+        }
+        revokeActiveSkillReviewsBeforeConfigPublication(nextConfig);
+        if (plan.restartHeartbeat || plan.reconcileSkillReviewJobs) {
           void nextState.cronState.reconcileHeartbeatJobs(nextConfig).catch((error: unknown) => {
-            params.logReload.warn(`heartbeat monitor reconvergence failed: ${String(error)}`);
+            params.logReload.warn(`cron monitor reconvergence failed: ${String(error)}`);
           });
         }
         // Config, plugin hooks, and prepared stores publish as one generation. Synchronously
         // retire the prior stores at the commit edge so no request can mix generations.
         preparedModelRuntimeReplacementGateId = markPreparedModelRuntimeSnapshotsStale(
           "prepared model runtime owner is stale before config publication",
-          { waitForReplacement: true },
+          { waitForReplacement: true, ...modelRuntimeRefreshScope },
         );
         params.setState(nextState);
         // All rejecting work is complete. Publish pre-resolved lane limits at
@@ -191,15 +216,18 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         applyGatewayLaneConcurrency(laneConcurrency);
         runtimeCommitted = true;
+        onCommit?.();
         setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
         if (plan.restartCron) {
           params.cronReconciliation.invalidate();
           params.onCronRestart?.();
-          if (state.cronState.cron.stopAndDrain) {
+          if (cronExitWatcherHandoff) {
+            await cronExitWatcherHandoff.next.adopt(cronExitWatcherHandoff.previous.current());
+            await cronExitWatcherHandoff.previous.stopOwner();
+          } else if (state.cronState.cron.stopAndDrain) {
             await state.cronState.cron.stopAndDrain();
           } else {
             state.cronState.cron.stop();
-            state.cronState.stopExitWatchers();
             await state.cronState.stopStreamWatchers();
           }
           startGatewayCronWithLogging({
@@ -301,7 +329,8 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         });
         return;
       }
-      params.logReload.warn(`${surface} failed after config commit${detail}; restarting gateway`);
+      const commitState = runtimeCommitted ? "after config commit" : "before config commit";
+      params.logReload.warn(`${surface} failed ${commitState}${detail}; restarting gateway`);
       if (recoveryRestartScheduled) {
         return;
       }
@@ -436,9 +465,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
                 `stopping ${channel} account ${accountId} before plugin reload`,
               );
               await params.stopChannel(channel, accountId, { manual: false });
-              if (isPluginReloadAborted()) {
-                pluginReloadAborted = true;
-              }
+              pluginReloadAborted = isPluginReloadAborted();
             } catch (err) {
               accountStopFailures.push(`${channel}[${accountId}]`);
               params.logChannels.error(
@@ -460,9 +487,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             params.logChannels.info(`stopping ${channel} channel before plugin reload`);
             channelsStoppedBeforePluginReload.add(channel);
             await params.stopChannel(channel, undefined, { manual: false });
-            if (isPluginReloadAborted()) {
-              pluginReloadAborted = true;
-            }
+            pluginReloadAborted = isPluginReloadAborted();
           },
           onFailure: (channel, err) => {
             params.logChannels.error(
@@ -503,14 +528,22 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         try {
           pluginReloadResult = await params.reloadPlugins({
             nextConfig,
+            // Without a managed publication, the direct caller's input is itself authored.
+            sourceConfig: publication ? publication.sourceConfig : nextConfig,
             changedPaths: plan.changedPaths,
             beforeReplace: stopChannelsBeforePluginReplace,
             commitRuntime,
+            onReplacementTeardownFailure: (error) =>
+              scheduleRecoveryRestart("plugin service replacement teardown", error),
             env: publication?.runtimeEnv ?? process.env,
             isAborted: isPluginReloadAborted,
           });
         } catch (err) {
           if (!runtimeCommitted) {
+            // Once replacement teardown begins, old services cannot safely be rolled back.
+            if (recoveryRestartScheduled) {
+              throw err;
+            }
             const rollbackFailures = await rollbackStoppedPluginTargets(
               "failed plugin runtime publication",
             );
@@ -535,12 +568,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         }
         // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
         // skip metadata/runtime updates when the reload was cancelled mid-flight.
-        if (!pluginReloadAborted) {
+        if (!pluginReloadAborted && !isLifecycleReloadAborted()) {
           for (const channel of pluginReloadResult.restartChannels) {
             channelsToRestart.add(channel);
           }
           activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          // Only a successfully published replacement can authoritatively retire channel owners.
+          params.pruneInactiveChannelAccountState(activePluginChannelsAfterReload);
           resetPreparedModelRuntimeStateForHotReload();
+        } else {
+          pluginReloadAborted = true;
         }
       }
     }
@@ -576,9 +613,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     try {
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
-        catalogMode: "static",
-        allowGatewaySubagentBinding: true,
+      await mrReload.refreshModelRuntimeAfterHotReload({
+        config: nextConfig,
+        agentIds: modelRuntimeAgentIds,
+        pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
       });
     } catch (err) {
       scheduleRecoveryRestart("prepared model runtime reload", err);
@@ -624,7 +662,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await startGmailWatcherWithLogs({
               cfg: nextConfig,
               log: params.logHooks,
-              isCancelled: () => restartAbortController.signal.aborted,
               signal: restartAbortController.signal,
               onSkipped: () =>
                 params.logHooks.info(

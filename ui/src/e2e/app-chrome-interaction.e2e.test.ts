@@ -3,7 +3,10 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -57,7 +60,7 @@ async function captureUiProof(page: Page, fileName: string) {
 }
 
 suite.define(() => {
-  it("uses one canonical scrollbar profile and keeps selection in chat and inputs", async () => {
+  it("keeps canonical scrollbars without horizontal model-picker overflow and preserves selection", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });
     }
@@ -71,7 +74,7 @@ suite.define(() => {
         viewport: { height: 900, width: 1440 },
       },
       async ({ page }) => {
-        await installMockGateway(page, {
+        const gateway = await installMockGateway(page, {
           historyMessages: [
             {
               role: "assistant",
@@ -79,7 +82,12 @@ suite.define(() => {
             },
           ],
           models: [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+            {
+              contextWindow: 1_000_000,
+              id: "gpt-5.6-sol-openclaw",
+              name: "openai/gpt-5.6-sol-openclaw",
+              provider: "openai",
+            },
             ...Array.from({ length: 24 }, (_value, index) => ({
               id: `scroll-model-${index + 1}`,
               name: `Scroll Model ${index + 1}`,
@@ -108,6 +116,8 @@ suite.define(() => {
             sidebarSelection: getComputedStyle(sidebar).userSelect,
             sidebarScrollbar: getComputedStyle(sessions, "::-webkit-scrollbar").width,
             modelPickerScrollbar: getComputedStyle(modelPicker, "::-webkit-scrollbar").width,
+            modelPickerOverflowX: getComputedStyle(modelPicker).overflowX,
+            modelPickerHorizontalOverflow: modelPicker.scrollWidth - modelPicker.clientWidth,
           };
         });
         // One canonical width everywhere: the sidebar no longer overrides
@@ -120,6 +130,8 @@ suite.define(() => {
           sidebarSelection: "none",
           sidebarScrollbar: "12px",
           modelPickerScrollbar: "12px",
+          modelPickerOverflowX: "hidden",
+          modelPickerHorizontalOverflow: 0,
         });
         await page.keyboard.press("Escape");
         expect(await dragAcross(page, transcript)).toContain("Selectable transcript");
@@ -155,11 +167,10 @@ suite.define(() => {
         // 650px even against the mock gateway's tiny config fixture; General
         // became short enough to fit once the host panel moved to Gateway.
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
-        const settingsSidebar = page.locator(".settings-sidebar");
+        const { search: settingsSearch, sidebar: settingsSidebar } =
+          await waitForControlUiSettingsTakeover(page);
         const settingsTitle = settingsSidebar.locator(".settings-sidebar__title");
-        const settingsSearch = settingsSidebar.locator(".settings-sidebar__search-input");
         const content = page.locator(".content");
-        await settingsSidebar.waitFor();
         await expect
           .poll(() => content.evaluate((element) => element.scrollHeight))
           .toBeGreaterThan(await content.evaluate((element) => element.clientHeight));
@@ -203,6 +214,31 @@ suite.define(() => {
           element.scrollTop = Math.min(160, element.scrollHeight - element.clientHeight);
         });
         await captureUiProof(page, "03-settings-contextual-scrollbars.png");
+
+        const usageError = "Unknown system error -122, write";
+        await gateway.setMethodResponse("sessions.usage", {
+          __mockError: { code: "UNAVAILABLE", message: usageError },
+        });
+        await gateway.setMethodResponse("usage.cost", {
+          updatedAt: Date.now(),
+          days: 1,
+          daily: [],
+          totals: {},
+        });
+        await gateway.setMethodResponse("usage.status", {
+          updatedAt: Date.now(),
+          providers: [],
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const usageErrorCallout = page.locator(".usage-callout.callout.danger");
+        await usageErrorCallout.waitFor();
+        expect(await usageErrorCallout.textContent()).toContain(usageError);
+        expect(
+          await usageErrorCallout.evaluate((element) => getComputedStyle(element).userSelect),
+        ).toBe("text");
+        await page.evaluate(() => globalThis.getSelection()?.removeAllRanges());
+        expect(await dragAcross(page, usageErrorCallout)).toContain(usageError);
+        await captureUiProof(page, "04-usage-selectable-error.png");
       },
     );
   });

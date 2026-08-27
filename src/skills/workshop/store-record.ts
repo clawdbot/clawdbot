@@ -18,6 +18,8 @@ export const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
 export const MAX_SKILL_PROPOSAL_EVALUATION_BYTES = 512 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
+const PROPOSAL_DRAFT_FILE_PATTERN =
+  /^(?:PROPOSAL\.md|generations\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/PROPOSAL\.md)$/u;
 
 type SkillProposalRecordValidationError = {
   code: "invalid-proposal-metadata" | "invalid-rollback-metadata";
@@ -137,7 +139,7 @@ const skillProposalRecordSchema = z
     updatedAt: z.string(),
     autonomousCapture: z.literal(true).optional(),
     draftHash: z.string(),
-    draftFile: z.literal(PROPOSAL_DRAFT_FILE),
+    draftFile: z.string().regex(PROPOSAL_DRAFT_FILE_PATTERN),
     origin: z.unknown().optional(),
     originRunIds: z.unknown().optional(),
     originRunMutationCounts: z.unknown().optional(),

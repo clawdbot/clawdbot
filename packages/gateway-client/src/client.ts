@@ -19,6 +19,7 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocket } from "ws";
 import {
   isSensitiveUrlQueryParamName,
@@ -430,6 +431,8 @@ export class GatewayClient {
       },
       notifyStoppedClose: true,
       onConnectError: (error) => this.notifyConnectError(error),
+      onReconnectStopped: (error) =>
+        this.notifyReconnectPaused({ code: 1008, reason: error.message, detailCode: null }),
       onParseError: (error) =>
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
@@ -578,6 +581,14 @@ export class GatewayClient {
     ws.on("unexpected-response", (request: ClientRequest, response: IncomingMessage) => {
       void readUpgradeErrorBody(response).then((body) => {
         const statusCode = response.statusCode;
+        let gatewayError: { type?: unknown; message?: unknown } | undefined;
+        try {
+          const parsed: unknown = JSON.parse(body);
+          const parsedError = isRecord(parsed) ? parsed.error : undefined;
+          gatewayError = isRecord(parsedError) ? parsedError : undefined;
+        } catch {
+          // Plain-text and truncated rejections remain visible in the original error message.
+        }
         const rawLocation = response.headers.location;
         const location = rawLocation
           ? redactSensitiveUrlLikeString(
@@ -593,6 +604,14 @@ export class GatewayClient {
             reason: "websocket-upgrade-rejected",
             ...(statusCode === undefined ? {} : { httpStatus: statusCode }),
             ...(location ? { location } : {}),
+            ...(typeof gatewayError?.type === "string"
+              ? {
+                  gatewayErrorType: gatewayError.type,
+                  ...(typeof gatewayError.message === "string"
+                    ? { gatewayErrorMessage: gatewayError.message }
+                    : {}),
+                }
+              : {}),
           },
         });
         handlers.error(upgradeError);
@@ -992,6 +1011,7 @@ export class GatewayClient {
       this.logDebug("gateway rejected protocol v4; retrying node host with protocol v3");
       return { closeCode: 1008, closeReason: "connect retry" };
     }
+    this.nodeProtocolTransitionPending = false;
     const role = this.opts.role ?? "operator";
     const detailCode =
       error instanceof GatewayClientRequestError ? readConnectErrorDetailCode(error.details) : null;
@@ -1117,6 +1137,7 @@ export class GatewayClient {
         details,
         deviceTokenRetryPending: this.pendingDeviceTokenRetry,
         tokenMismatchIsTerminal: true,
+        protocolMismatchIsTerminal: !this.nodeProtocolTransitionPending,
         clientVersionMismatchIsTerminal: true,
       })
     ) {

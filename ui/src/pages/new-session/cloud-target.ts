@@ -84,10 +84,12 @@ export function renderCloudProfileMenuItems(params: {
   icon?: unknown;
   disabled?: boolean;
   disabledReason?: string;
+  profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
   onSelect: (profileId: string) => void;
 }) {
-  return params.profiles.map((profile) =>
-    renderSessionMenuItem(
+  return params.profiles.map((profile) => {
+    const profileDisabledReason = params.profileDisabledReason?.(profile);
+    return renderSessionMenuItem(
       {
         value: `cloud:${profile.id}`,
         label: t("newSession.cloudWorker", { profile: profile.id }),
@@ -99,16 +101,28 @@ export function renderCloudProfileMenuItems(params: {
               ? [t("newSession.environmentPersistent")]
               : undefined,
         checked: params.selectedId === profile.id,
-        disabled: params.disabled,
+        disabled: params.disabled || Boolean(profileDisabledReason),
         title:
-          params.disabled && params.disabledReason
-            ? params.disabledReason
-            : t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
+          (params.disabled ? params.disabledReason : profileDisabledReason) ??
+          t("newSession.cloudWorkerProvider", { provider: profile.providerId }),
         onSelect: () => params.onSelect(profile.id),
       },
       params.submitting,
-    ),
-  );
+    );
+  });
+}
+
+/** Machine shape as a picker sub-line; providers may report neither, one, or both numbers. */
+function machineShapeText(machine: DraftMachineOption): string | undefined {
+  const cpu = machine.cpu === undefined ? undefined : String(machine.cpu);
+  const memory = machine.memoryGb === undefined ? undefined : String(machine.memoryGb);
+  if (cpu && memory) {
+    return t("newSession.machineShape", { cpu, memory });
+  }
+  if (cpu) {
+    return t("newSession.machineCpu", { cpu });
+  }
+  return memory ? t("newSession.machineMemory", { memory }) : undefined;
 }
 
 export function renderCloudMachineMenuItems(params: {
@@ -122,7 +136,7 @@ export function renderCloudMachineMenuItems(params: {
       {
         value: `machine:${machine.id}`,
         label: machine.label,
-        sub: machine.description,
+        sub: machineShapeText(machine),
         facts: machine.default ? [t("newSession.machineDefault")] : undefined,
         checked: params.selectedId === machine.id,
         keepOpen: true,

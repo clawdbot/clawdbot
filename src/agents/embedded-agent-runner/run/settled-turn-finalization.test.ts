@@ -33,6 +33,11 @@ function settledFailedAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
     { role: "toolResult", toolCallId: "tool-exec", toolName: "exec", isError: true },
   ] as never;
   const attempt = makeEmbeddedRunnerAttempt({
+    terminal: {
+      kind: "failed",
+      source: "compaction",
+      error: new Error("native context compaction failed"),
+    },
     sessionIdUsed: "session-settled",
     sessionFileUsed: "/tmp/session-settled.jsonl",
     assistantTexts: [],

@@ -11,10 +11,8 @@ import {
 } from "openclaw/plugin-sdk/cron-store-runtime";
 import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { telegramMessagingTargetsMatch } from "./normalize.js";
 import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
@@ -24,30 +22,15 @@ import {
 const writebackLogger = createSubsystemLogger("telegram/target-writeback");
 const TELEGRAM_ADMIN_SCOPE = "operator.admin";
 
-function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined {
-  const normalized = normalizeTelegramLookupTarget(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.startsWith("@") ? normalizeLowercaseStringOrEmpty(normalized) : normalized;
-}
-
-function normalizeTelegramTargetForMatch(raw: string): string | undefined {
-  const parsed = parseTelegramTarget(raw);
-  const normalized = normalizeTelegramLookupTargetForMatch(parsed.chatId);
-  if (!normalized) {
-    return undefined;
-  }
-  const threadKey = parsed.messageThreadId == null ? "" : String(parsed.messageThreadId);
-  return `${normalized}|${threadKey}`;
-}
-
 function buildResolvedTelegramTarget(params: {
   raw: string;
   parsed: ReturnType<typeof parseTelegramTarget>;
   resolvedChatId: string;
 }): string {
   const { raw, parsed, resolvedChatId } = params;
+  if (parsed.directMessagesTopicId != null) {
+    return `${resolvedChatId}:direct-topic:${parsed.directMessagesTopicId}`;
+  }
   if (parsed.messageThreadId == null) {
     return resolvedChatId;
   }
@@ -59,18 +42,13 @@ function buildResolvedTelegramTarget(params: {
 function resolveLegacyRewrite(params: {
   raw: string;
   resolvedChatId: string;
-}): { matchKey: string; resolvedTarget: string } | null {
+}): { sourceTarget: string; resolvedTarget: string } | null {
   const parsed = parseTelegramTarget(params.raw);
-  if (normalizeTelegramChatId(parsed.chatId)) {
+  if (normalizeTelegramChatId(parsed.chatId) || !normalizeTelegramLookupTarget(parsed.chatId)) {
     return null;
   }
-  const normalized = normalizeTelegramLookupTargetForMatch(parsed.chatId);
-  if (!normalized) {
-    return null;
-  }
-  const threadKey = parsed.messageThreadId == null ? "" : String(parsed.messageThreadId);
   return {
-    matchKey: `${normalized}|${threadKey}`,
+    sourceTarget: params.raw,
     resolvedTarget: buildResolvedTelegramTarget({
       raw: params.raw,
       parsed,
@@ -81,7 +59,7 @@ function resolveLegacyRewrite(params: {
 
 function rewriteTargetIfMatch(params: {
   rawValue: unknown;
-  matchKey: string;
+  sourceTarget: string;
   resolvedTarget: string;
 }): string | null {
   if (typeof params.rawValue !== "string" && typeof params.rawValue !== "number") {
@@ -91,7 +69,7 @@ function rewriteTargetIfMatch(params: {
   if (!value) {
     return null;
   }
-  if (normalizeTelegramTargetForMatch(value) !== params.matchKey) {
+  if (!telegramMessagingTargetsMatch(value, params.sourceTarget)) {
     return null;
   }
   return params.resolvedTarget;
@@ -99,7 +77,7 @@ function rewriteTargetIfMatch(params: {
 
 function replaceTelegramDefaultToTargets(params: {
   cfg: OpenClawConfig;
-  matchKey: string;
+  sourceTarget: string;
   resolvedTarget: string;
 }): boolean {
   let changed = false;
@@ -111,7 +89,7 @@ function replaceTelegramDefaultToTargets(params: {
   const maybeReplace = (holder: Record<string, unknown>, key: string) => {
     const nextTarget = rewriteTargetIfMatch({
       rawValue: holder[key],
-      matchKey: params.matchKey,
+      sourceTarget: params.sourceTarget,
       resolvedTarget: params.resolvedTarget,
     });
     if (!nextTarget) {
@@ -155,7 +133,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   if (!rewrite) {
     return;
   }
-  const { matchKey, resolvedTarget } = rewrite;
+  const { sourceTarget, resolvedTarget } = rewrite;
   const hasGatewayAdminScope = params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) === true;
   const trustedInternalWriteback =
     params.gatewayClientScopes === undefined && params.trustedInternalWriteback === true;
@@ -171,7 +149,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
     const nextConfig = structuredClone(snapshot.config ?? {});
     const configChanged = replaceTelegramDefaultToTargets({
       cfg: nextConfig,
-      matchKey,
+      sourceTarget,
       resolvedTarget,
     });
     if (configChanged) {
@@ -201,7 +179,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
       }
       const nextTarget = rewriteTargetIfMatch({
         rawValue: job.delivery.to,
-        matchKey,
+        sourceTarget,
         resolvedTarget,
       });
       if (!nextTarget) {

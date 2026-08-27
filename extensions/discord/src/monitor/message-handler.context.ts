@@ -1,6 +1,7 @@
 // Discord plugin module implements message handler.context behavior.
 import {
   buildChannelInboundEventContext,
+  createCommandTurnContext,
   formatInboundEnvelope,
   formatInboundMediaUnavailableText,
   resolveEnvelopeFormatOptions,
@@ -10,6 +11,7 @@ import {
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import {
   buildHistoryContextFromEntries,
   buildInboundHistoryFromEntries,
@@ -36,13 +38,11 @@ import {
 } from "./message-handler.history.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { removeDiscordReplayHistoryEntry } from "./message-handler.retry.js";
-import {
-  formatDiscordMediaText,
-  resolveReferencedReplyMediaList,
-  resolveDiscordMessageText,
-  type DiscordMediaInfo,
-} from "./message-utils.js";
+import { formatDiscordMediaText, resolveReferencedReplyMediaList } from "./message-media.js";
+import type { DiscordMediaInfo } from "./message-media.js";
+import { resolveDiscordMessageText } from "./message-text.js";
 import { buildDirectLabel, buildGuildLabel, resolveReplyContext } from "./reply-context.js";
+import { buildDiscordRoutePeer } from "./route-resolution.js";
 import { resolveDiscordAutoThreadReplyPlan, resolveDiscordThreadStarter } from "./threading.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
@@ -88,6 +88,7 @@ export async function buildDiscordMessageProcessContext(params: {
     messageChannelId,
     isGuildMessage,
     isDirectMessage,
+    isGroupDm,
     baseText,
     preflightAudioTranscript,
     threadChannel,
@@ -104,6 +105,7 @@ export async function buildDiscordMessageProcessContext(params: {
     boundSessionKey,
     route,
     commandAuthorized,
+    hasControlCommand,
     resolveChannelIngress,
   } = ctx;
 
@@ -182,6 +184,12 @@ export async function buildDiscordMessageProcessContext(params: {
         })
       : body;
   const bodyWithMediaNotice = appendMediaUnavailableNotice(text) ?? text;
+  // Agent-facing body prefers the framed transcript and falls back to typed
+  // text; machine transcriptions are always labeled untrusted for the model.
+  const agentFacingBody =
+    preflightAudioTranscript !== undefined
+      ? formatAudioTranscriptForAgent(preflightAudioTranscript)
+      : (baseText ?? text);
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -258,6 +266,7 @@ export async function buildDiscordMessageProcessContext(params: {
       const starter = await resolveDiscordThreadStarter({
         channel: threadChannel,
         client,
+        accountId,
         parentId: threadParentId,
         parentType: threadParentType,
         resolveTimestampMs,
@@ -330,6 +339,11 @@ export async function buildDiscordMessageProcessContext(params: {
   const replyTarget = replyPlan.replyTarget;
   const replyReference = replyPlan.replyReference;
   const autoThreadContext = replyPlan.autoThreadContext;
+  const conversationParentId = threadChannel
+    ? threadParentId
+    : autoThreadContext
+      ? messageChannelId
+      : undefined;
 
   const effectiveFrom = isDirectMessage
     ? `discord:${author.id}`
@@ -372,7 +386,7 @@ export async function buildDiscordMessageProcessContext(params: {
       inboundEventKind: ctx.inboundEventKind,
     },
     {
-      parentId: threadChannel ? threadParentId : undefined,
+      parentId: conversationParentId,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
   );
@@ -398,14 +412,21 @@ export async function buildDiscordMessageProcessContext(params: {
       isBot: author.bot && !sender.isPluralKit ? true : undefined,
     },
     conversation: {
-      kind: isDirectMessage ? "direct" : "channel",
+      kind: isGroupDm ? "group" : isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
+      routePeer: buildDiscordRoutePeer({
+        isDirectMessage,
+        isGroupDm,
+        directUserId: author.id,
+        conversationId: messageChannelId,
+      }),
       nativeChannelId: messageChannelId,
+      avatar: ctx.conversationAvatar,
       label: fromLabel,
       spaceId: isGuildMessage
         ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined
         : undefined,
-      parentId: threadChannel ? threadParentId : undefined,
+      parentId: conversationParentId,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
     route: {
@@ -425,11 +446,13 @@ export async function buildDiscordMessageProcessContext(params: {
     message: {
       inboundEventKind: ctx.inboundEventKind,
       body: combinedBody,
-      rawBody: preflightAudioTranscript ?? baseText,
+      // RawBody/CommandBody keep only the typed text so machine-generated
+      // transcripts never enter command classification (telegram/whatsapp parity).
+      rawBody: baseText,
       // BodyForAgent wins over Body for the model's text, so the notice has to
-      // ride the agent-facing source too — keeping transcript precedence.
-      bodyForAgent: appendMediaUnavailableNotice(preflightAudioTranscript ?? baseText ?? text),
-      commandBody: preflightAudioTranscript ?? baseText,
+      // ride the agent-facing source too.
+      bodyForAgent: appendMediaUnavailableNotice(agentFacingBody),
+      commandBody: baseText,
       inboundHistory,
     },
     sessionTranscript: {
@@ -447,12 +470,10 @@ export async function buildDiscordMessageProcessContext(params: {
         authorized: commandAuthorized,
       },
     },
-    commandTurn: {
-      kind: "text-slash" as const,
-      source: "text" as const,
+    commandTurn: createCommandTurnContext(hasControlCommand ? "text" : "message", {
       authorized: commandAuthorized,
-      body: preflightAudioTranscript ?? baseText,
-    },
+      body: baseText,
+    }),
     media: await toInboundMediaFactsWithMetadata(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
@@ -479,7 +500,9 @@ export async function buildDiscordMessageProcessContext(params: {
                 );
                 return isContextAborted(abortSignal)
                   ? []
-                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList);
+                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList, {
+                      messageId: replyContext.id,
+                    });
               },
             }
           : undefined,

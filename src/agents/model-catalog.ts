@@ -16,7 +16,8 @@ import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-co
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import type {
@@ -57,6 +58,7 @@ type DiscoveredModel = {
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
+  thinkingLevelMap?: ModelCatalogEntry["thinkingLevelMap"];
   input?: ModelInputType[];
   params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
@@ -81,20 +83,10 @@ type ManifestModelCatalogCacheEntry = {
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
-const modelSuppressionLoader = createLazyImportLoader(
-  () => import("./model-suppression.runtime.js"),
-);
-const providerApiKeyResolverLoader = createLazyImportLoader(
+const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
+const loadProviderApiKeyResolver = createLazyPromise(
   () => import("./models-config.providers.secrets.js"),
 );
-
-function loadModelSuppression() {
-  return modelSuppressionLoader.load();
-}
-
-function loadProviderApiKeyResolver() {
-  return providerApiKeyResolverLoader.load();
-}
 
 export function resetModelCatalogBuilderCacheForTest() {
   manifestModelCatalogCache = new WeakMap();
@@ -179,8 +171,11 @@ function catalogRouteChanges(base: ModelCatalogEntry, overlay: ModelCatalogEntry
 function clearRouteBoundCatalogMetadata(entry: ModelCatalogEntry): ModelCatalogEntry {
   const {
     contextWindow: _contextWindow,
+    contextWindows: _contextWindows,
+    contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
     reasoning: _reasoning,
+    thinkingLevelMap: _thinkingLevelMap,
     input: _input,
     params: _params,
     compat: _compat,
@@ -194,7 +189,7 @@ function overlayCatalogMetadata(
   base: ModelCatalogEntry,
   overlay: ModelCatalogEntry,
   options?: {
-    catalogCompatRoute?: ModelCatalogEntry;
+    catalogRoute?: ModelCatalogEntry;
     preserveBaseCompat?: boolean;
     preserveBaseName?: boolean;
   },
@@ -205,14 +200,44 @@ function overlayCatalogMetadata(
   const routeChanged = catalogRouteChanges(base, overlay);
   const routeBase = routeChanged ? clearRouteBoundCatalogMetadata(base) : base;
   const params = mergeCatalogParams(routeBase.params, overlay.params);
+  const thinkingLevelMap = overlay.thinkingLevelMap ?? options?.catalogRoute?.thinkingLevelMap;
+  // Options + default are one normalized unit (default ∈ options): an overlay
+  // that replaces the options list must also own the default, or a base default
+  // absent from the new list would leak through the field-by-field merge.
+  const {
+    contextWindows: _baseContextWindows,
+    contextWindowDefault: _baseContextWindowDefault,
+    ...selectionNeutralBase
+  } = routeBase;
+  const contextWindowSelection =
+    overlay.contextWindows !== undefined
+      ? {
+          contextWindows: overlay.contextWindows,
+          ...(overlay.contextWindowDefault !== undefined
+            ? { contextWindowDefault: overlay.contextWindowDefault }
+            : {}),
+        }
+      : {
+          ...(routeBase.contextWindows !== undefined
+            ? { contextWindows: routeBase.contextWindows }
+            : {}),
+          ...((overlay.contextWindowDefault ?? routeBase.contextWindowDefault)
+            ? {
+                contextWindowDefault:
+                  overlay.contextWindowDefault ?? routeBase.contextWindowDefault,
+              }
+            : {}),
+        };
   return {
-    ...routeBase,
+    ...selectionNeutralBase,
+    ...contextWindowSelection,
     ...(routeChanged && !options?.preserveBaseName ? { name: overlay.name } : {}),
     ...(overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
+    ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
@@ -223,8 +248,8 @@ function overlayCatalogMetadata(
     ...(overlay.replacedBy !== undefined ? { replacedBy: overlay.replacedBy } : {}),
     compat: options?.preserveBaseCompat
       ? resolveCatalogOwnedModelCompat({
-          catalogRoute: options.catalogCompatRoute ?? base,
-          catalogCompat: (options.catalogCompatRoute ?? base).compat,
+          catalogRoute: options.catalogRoute ?? base,
+          catalogCompat: (options.catalogRoute ?? base).compat,
           configuredRoute: {
             api: overlay.api ?? base.api,
             baseUrl: overlay.baseUrl ?? base.baseUrl,
@@ -249,7 +274,7 @@ function mergeCatalogEntries(
   models: ModelCatalogEntry[],
   entries: ModelCatalogEntry[],
   options?: {
-    catalogCompatRoutes?: readonly ModelCatalogEntry[];
+    catalogRoutes?: readonly ModelCatalogEntry[];
     preserveBaseCompat?: boolean;
     preserveBaseName?: boolean;
   },
@@ -267,16 +292,16 @@ function mergeCatalogEntries(
     }
     const existing = models.at(existingIndex);
     if (existing) {
-      // The logical row may currently represent a sibling physical route. Compat
-      // must come from the catalog variant selected by config, not that sibling.
-      const catalogCompatRoute = options?.preserveBaseCompat
-        ? options.catalogCompatRoutes?.find(
+      // Logical rows can represent a sibling route; capabilities must come
+      // from the exact catalog variant selected by config, not that sibling.
+      const catalogRoute = options?.preserveBaseCompat
+        ? options.catalogRoutes?.find(
             (candidate) => catalogRouteVariantKey(candidate) === catalogRouteVariantKey(entry),
           )
         : undefined;
       models[existingIndex] = overlayCatalogMetadata(existing, entry, {
         ...options,
-        catalogCompatRoute,
+        catalogRoute,
       });
     }
   }
@@ -374,14 +399,13 @@ export function loadManifestModelCatalog(params: {
   if (cached?.snapshot === resolvedSnapshot) {
     return cached.rows;
   }
+  const plugins = resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config);
   const plan = planEffectiveModelCatalogRows({
-    registry: {
-      plugins: resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config),
-    },
+    registry: { plugins },
     config: params.config,
   });
   const providerOrderByKey = new Map<string, number>();
-  for (const plugin of resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config)) {
+  for (const plugin of plugins) {
     for (const [provider, providerCatalog] of Object.entries(
       plugin.modelCatalog?.providers ?? {},
     )) {
@@ -394,44 +418,10 @@ export function loadManifestModelCatalog(params: {
     }
   }
   const rows = plan.rows.map((row) => {
-    const entry: ModelCatalogEntry = {
-      id: row.id,
-      name: row.name,
-      provider: row.provider,
-      api: row.api,
-      status: row.status,
-    };
+    const entry = modelCatalogRowToEntry(row);
     const providerOrder = providerOrderByKey.get(catalogEntryDedupeKey(row.provider, row.id));
     if (providerOrder !== undefined) {
       entry.providerOrder = providerOrder;
-    }
-    if (row.baseUrl) {
-      entry.baseUrl = row.baseUrl;
-    }
-    const contextWindow = row.contextWindow ?? row.contextTokens;
-    if (contextWindow) {
-      entry.contextWindow = contextWindow;
-    }
-    if (row.contextTokens) {
-      entry.contextTokens = row.contextTokens;
-    }
-    if (typeof row.reasoning === "boolean") {
-      entry.reasoning = row.reasoning;
-    }
-    if (row.input?.length) {
-      entry.input = [...row.input];
-    }
-    if (row.compat) {
-      entry.compat = row.compat;
-    }
-    if (row.statusReason) {
-      entry.statusReason = row.statusReason;
-    }
-    if (row.replaces?.length) {
-      entry.replaces = [...row.replaces];
-    }
-    if (row.replacedBy) {
-      entry.replacedBy = row.replacedBy;
     }
     return entry;
   });
@@ -468,7 +458,7 @@ export async function buildPreparedModelCatalogSnapshot(
       manifestPlugins ??= manifestMetadataSnapshot.plugins;
       return manifestPlugins;
     };
-    const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
+    const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
     logStage("catalog-deps-ready");
     const entries = params.modelRegistry.getAll() as DiscoveredModel[];
     const declaredManifestModels = loadManifestModelCatalog({
@@ -478,7 +468,7 @@ export async function buildPreparedModelCatalogSnapshot(
     });
     logStage("registry-read", `entries=${entries.length}`);
 
-    const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+    const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModelCore({ config: cfg });
     logStage("suppress-resolver-ready");
 
     for (const entry of entries) {
@@ -525,6 +515,7 @@ export async function buildPreparedModelCatalogSnapshot(
         contextWindow,
         ...(contextTokens !== undefined ? { contextTokens } : {}),
         reasoning,
+        ...(entry.thinkingLevelMap ? { thinkingLevelMap: entry.thinkingLevelMap } : {}),
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,
@@ -570,7 +561,7 @@ export async function buildPreparedModelCatalogSnapshot(
     if (configuredModels.length > 0) {
       const entriesForAugment = [...models];
       mergeCatalogEntries(entriesForAugment, configuredModels, {
-        catalogCompatRoutes: routeVariants.entries,
+        catalogRoutes: routeVariants.entries,
         preserveBaseCompat: true,
         preserveBaseName: true,
       });
@@ -656,7 +647,7 @@ export async function buildPreparedModelCatalogSnapshot(
     if (configuredModels.length > 0) {
       mergeCatalogRouteVariants(routeVariants, configuredModels, { preserveBaseCompat: true });
       mergeCatalogEntries(models, configuredModels, {
-        catalogCompatRoutes: routeVariants.entries,
+        catalogRoutes: routeVariants.entries,
         preserveBaseCompat: true,
         preserveBaseName: true,
       });

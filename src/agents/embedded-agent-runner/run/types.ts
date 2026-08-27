@@ -29,7 +29,7 @@ import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import type { AuthStorage, ModelRegistry } from "../../sessions/index.js";
-import type { ToolErrorSummary, ToolRecoverySummary } from "../../tool-error-summary.js";
+import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
 import type { EmbeddedRunReplayMetadata, EmbeddedRunReplayState } from "../replay-state.js";
 import type { EmbeddedRunLivenessState } from "../types.js";
@@ -68,16 +68,11 @@ type EmbeddedRunAttemptToolTerminalObservation = {
   meta?: string;
   executionStarted?: boolean;
   outcome: "success" | "failure";
-  failure?: Omit<
-    ToolErrorSummary,
-    "toolName" | "meta" | "mutatingAction" | "ownerKey" | "actionFingerprint" | "fileTarget"
-  >;
+  failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
   /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
   nativeMutation?: {
     mutatingAction: boolean;
     replaySafe: boolean;
-    actionFingerprint?: string;
-    fileTarget?: ToolErrorSummary["fileTarget"];
   };
   /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
   ownerMutation?: {
@@ -87,7 +82,6 @@ type EmbeddedRunAttemptToolTerminalObservation = {
 
 type EmbeddedRunAttemptToolTerminalResolution = {
   lastToolError?: ToolErrorSummary;
-  lastToolRecovery?: ToolRecoverySummary;
   executionStarted: boolean;
   executedArguments?: Record<string, unknown>;
   sideEffectEvidence: boolean;
@@ -105,6 +99,12 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   admittedRunContext: NonNullable<RunEmbeddedAgentParams["admittedRunContext"]>;
+  /**
+   * Run-owned start timestamp captured by the embedded-run orchestrator before
+   * admission. Flows onto the queue handle so recovery can project the active
+   * run's authoritative start time instead of the session's subagent first-run.
+   */
+  startedAtMs?: number;
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   /** Host-resolved sandbox snapshot for plugin harness tool construction. */
@@ -285,12 +285,16 @@ export type EmbeddedRunAttemptResult = {
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
+    toolCallId?: string;
     meta?: string;
     replaySafe?: boolean;
     isError?: boolean;
+    terminate?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
+    /** Producer-recorded: this exec result parked a Code Mode run (status "waiting"). */
+    codeModeSuspended?: boolean;
   }>;
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   /** This attempt accepted work whose future output has a runtime-owned delivery path. */
@@ -304,7 +308,6 @@ export type EmbeddedRunAttemptResult = {
   /** Completed message_end snapshot owned by this model attempt. */
   currentAttemptCompletedAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
-  lastToolRecovery?: ToolRecoverySummary;
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
@@ -351,6 +354,8 @@ export type EmbeddedRunAttemptResult = {
    * how config-enabled code mode stays visible as a no-op on harness routes.
    */
   codeModeEngaged?: boolean;
+  /** Host-authenticated request for one bounded post-mutation inspection attempt. */
+  codeModeReconciliationCandidate?: boolean;
   /** Completed assistant round trips observed during this attempt. */
   assistantTurns?: number;
   /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */

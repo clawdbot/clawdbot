@@ -12,6 +12,9 @@ WORKFLOW_FILE="full-release-validation.yml"
 TARGET_SHA=""
 VERIFIER_WORKFLOW_SHA=""
 WORKFLOW_REF=""
+TRUSTED_WORKFLOW_REF=""
+TRUSTED_WORKFLOW_FULL_REF=""
+TRUSTED_WORKFLOW_SHA=""
 RELEASE_PROFILE=""
 RUN_RELEASE_SOAK="false"
 INPUTS_JSON=""
@@ -27,6 +30,9 @@ usage() {
   cat >&2 <<'EOF'
 Usage: find-reusable-release-validation.sh --target-sha <sha> --workflow-sha <sha> \
   --workflow-ref <main|release-ci/sha12-timestamp> \
+  [--trusted-workflow-ref <main|release-publish/sha12-run>] \
+  [--trusted-workflow-full-ref <refs/heads/main|refs/tags/release-publish/sha12-run>] \
+  [--trusted-workflow-sha <sha>] \
   --release-profile <beta|stable|full> --inputs-json <json> \
   [--run-release-soak <true|false>] [--repo <owner/repo>] [--repo-dir <path>] \
   [--workflow <file>] [--max-candidates <n>] [--github-output <file>]
@@ -53,6 +59,18 @@ while [[ $# -gt 0 ]]; do
       ;;
     --workflow-ref)
       WORKFLOW_REF="${2:-}"
+      shift 2
+      ;;
+    --trusted-workflow-ref)
+      TRUSTED_WORKFLOW_REF="${2:-}"
+      shift 2
+      ;;
+    --trusted-workflow-full-ref)
+      TRUSTED_WORKFLOW_FULL_REF="${2:-}"
+      shift 2
+      ;;
+    --trusted-workflow-sha)
+      TRUSTED_WORKFLOW_SHA="${2:-}"
       shift 2
       ;;
     --release-profile)
@@ -124,6 +142,16 @@ if [[ ! "$VERIFIER_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "Expected --workflow-sha to be a full lowercase commit SHA; got: ${VERIFIER_WORKFLOW_SHA}" >&2
   exit 2
 fi
+TRUSTED_WORKFLOW_REF="${TRUSTED_WORKFLOW_REF:-main}"
+TRUSTED_WORKFLOW_FULL_REF="${TRUSTED_WORKFLOW_FULL_REF:-refs/heads/main}"
+TRUSTED_WORKFLOW_SHA="${TRUSTED_WORKFLOW_SHA:-${VERIFIER_WORKFLOW_SHA}}"
+if [[ ! "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Expected --trusted-workflow-sha to be a full lowercase commit SHA; got: ${TRUSTED_WORKFLOW_SHA}" >&2
+  exit 2
+fi
+if [[ "$TRUSTED_WORKFLOW_SHA" != "$VERIFIER_WORKFLOW_SHA" ]]; then
+  no_reuse "trusted workflow SHA does not match verifier source SHA"
+fi
 if [[ "$WORKFLOW_REF" != "main" ]]; then
   expected_release_ref="release-ci/${VERIFIER_WORKFLOW_SHA:0:12}-"
   if [[ ! "$WORKFLOW_REF" =~ ^release-ci/[0-9a-f]{12}-[1-9][0-9]*$ ]] ||
@@ -149,18 +177,44 @@ if ! expected_inputs="$(jq -Sc 'if type == "object" then . else error("expected 
   exit 2
 fi
 
-workflow_lineage=""
-if ! workflow_lineage="$(
-  gh api "repos/${REPO}/compare/${VERIFIER_WORKFLOW_SHA}...main"
-)"; then
-  no_reuse "could not verify workflow SHA against trusted main"
-fi
-if ! jq -e \
-  --arg workflow_sha "$VERIFIER_WORKFLOW_SHA" '
-    (.status == "ahead" or .status == "identical")
-    and .merge_base_commit.sha == $workflow_sha
-  ' <<< "$workflow_lineage" >/dev/null; then
-  no_reuse "workflow SHA is not on trusted main lineage"
+trusted_workflow_route=""
+if [[ "$TRUSTED_WORKFLOW_REF" == "main" ]]; then
+  if [[ "$TRUSTED_WORKFLOW_FULL_REF" != "refs/heads/main" ]]; then
+    no_reuse "trusted main workflow full ref is invalid"
+  fi
+  workflow_lineage=""
+  if ! workflow_lineage="$(
+    gh api "repos/${REPO}/compare/${TRUSTED_WORKFLOW_SHA}...main"
+  )"; then
+    no_reuse "could not verify workflow SHA against trusted main"
+  fi
+  if ! jq -e \
+    --arg workflow_sha "$TRUSTED_WORKFLOW_SHA" '
+      (.status == "ahead" or .status == "identical")
+      and .merge_base_commit.sha == $workflow_sha
+    ' <<< "$workflow_lineage" >/dev/null; then
+    no_reuse "workflow SHA is not on trusted main lineage"
+  fi
+  trusted_workflow_route="main"
+elif [[ "$TRUSTED_WORKFLOW_REF" =~ ^release-publish/([0-9a-f]{12})-[1-9][0-9]*$ ]] &&
+  [[ "$TRUSTED_WORKFLOW_FULL_REF" == "refs/tags/${TRUSTED_WORKFLOW_REF}" ]] &&
+  [[ "$TRUSTED_WORKFLOW_REF" == "release-publish/${TRUSTED_WORKFLOW_SHA:0:12}-"* ]]; then
+  trusted_tag_json=""
+  if ! trusted_tag_json="$(
+    gh api "repos/${REPO}/git/ref/tags/${TRUSTED_WORKFLOW_REF}"
+  )"; then
+    no_reuse "could not verify protected trusted workflow tag"
+  fi
+  if ! jq -e \
+    --arg workflow_sha "$TRUSTED_WORKFLOW_SHA" '
+      .object.type == "commit"
+      and .object.sha == $workflow_sha
+    ' <<< "$trusted_tag_json" >/dev/null; then
+    no_reuse "protected trusted workflow tag moved or is not lightweight"
+  fi
+  trusted_workflow_route="protected-tag"
+else
+  no_reuse "trusted workflow identity is not main or an exact protected tag"
 fi
 
 # Exact-target reuse still requires internally consistent version stamps
@@ -190,7 +244,9 @@ for ((index = 0; index < run_count; index += 1)); do
     node "$VALIDATOR" \
       --validate-run "$run_id" \
       --repo "$REPO" \
-      --trusted-workflow-ref main \
+      --trusted-workflow-ref "$TRUSTED_WORKFLOW_REF" \
+      --trusted-workflow-full-ref "$TRUSTED_WORKFLOW_FULL_REF" \
+      --trusted-workflow-sha "$TRUSTED_WORKFLOW_SHA" \
       --verifier-source-sha "$VERIFIER_WORKFLOW_SHA" \
       --verifier-source-file "$VALIDATOR" \
       --json
@@ -217,14 +273,17 @@ for ((index = 0; index < run_count; index += 1)); do
   if ! jq -e \
     --arg repo "$REPO" \
     --arg run_id "$run_id" \
+    --arg trusted_workflow_full_ref "$TRUSTED_WORKFLOW_FULL_REF" \
+    --arg trusted_workflow_ref "$TRUSTED_WORKFLOW_REF" \
+    --arg trusted_workflow_route "$trusted_workflow_route" \
     --arg verifier_sha "$VERIFIER_WORKFLOW_SHA" '
       . as $record
       | .schema == "openclaw.release-validation-evidence/v3"
       and .valid == true
       and .repository == $repo
-      and .producerOnTrustedMainLineage == true
-      and .trustedWorkflowRef == "main"
-      and .trustedWorkflowFullRef == "refs/heads/main"
+      and .producerOnTrustedMainLineage == ($trusted_workflow_route == "main")
+      and .trustedWorkflowRef == $trusted_workflow_ref
+      and .trustedWorkflowFullRef == $trusted_workflow_full_ref
       and .directRoot == true
       and .evidenceReuse == null
       and .rerunGroup == "all"
@@ -239,7 +298,7 @@ for ((index = 0; index < run_count; index += 1)); do
       and (.root.artifact.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
       and all($record.current, $record.root;
         . as $parent
-        | .producerOnTrustedMainLineage == true
+        | .producerOnTrustedMainLineage == ($trusted_workflow_route == "main")
         and .workflowRefType == "branch"
         and .workflowPath == ".github/workflows/full-release-validation.yml"
         and .workflowFullRef == ("refs/heads/" + .workflowRef)
@@ -249,24 +308,34 @@ for ((index = 0; index < run_count; index += 1)); do
           .workflowRunPath == ".github/workflows/full-release-validation.yml"
           or .workflowRunPath == .workflowQualifiedPath
         )
-        and (
+        and if $trusted_workflow_route == "main" then
           (
-            .workflowRef == "main"
-            and (
-              (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
-              or (
-                .manifestVersion == 2
-                and .workflowRefProof == "legacy-v2-main-ancestry"
+            (
+              .workflowRef == "main"
+              and (
+                (.manifestVersion == 3 and .workflowRefProof == "manifest-v3-branch")
+                or (
+                  .manifestVersion == 2
+                  and .workflowRefProof == "legacy-v2-main-ancestry"
+                )
               )
             )
+            or (
+              .manifestVersion == 3
+              and .workflowRefProof == "manifest-v3-sha-pinned-main-ancestry"
+              and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
+              and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
+            )
           )
-          or (
-            .manifestVersion == 3
-            and .workflowRefProof == "manifest-v3-sha-pinned-main-ancestry"
-            and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
-            and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
+        else
+          .manifestVersion == 3
+          and (
+            .workflowRefProof == "manifest-v3-protected-tag-exact-sha"
+            or .workflowRefProof == "manifest-v3-protected-tag-tooling-lineage"
           )
-        )
+          and (.workflowRef | test("^release-ci/[0-9a-f]{12}-[1-9][0-9]*$"))
+          and (.workflowRef | startswith("release-ci/\($parent.workflowSha[0:12])-"))
+        end
       )
       and (.verifier.schemaVersion == 3)
       and (.verifier.sourceSha == $verifier_sha)

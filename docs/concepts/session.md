@@ -217,6 +217,7 @@ shown:
     maintenance: {
       mode: "enforce", // "enforce" applies cleanup; "warn" only reports
       pruneAfter: "30d",
+      archiveDashboardAfter: "7d", // false or 0 disables
       maxEntries: 500,
       preserveRecent: "7d", // optional; false or omitted disables
     },
@@ -258,9 +259,9 @@ model-run, cron, hook, heartbeat, ACP, and sub-agent sessions remain eligible
 for bounded cleanup. Protection can temporarily keep the store above its entry
 or disk target; it expires after the configured inactivity window.
 
-Recent-session protection does not archive sessions or change managed-worktree
-garbage collection. Archiving remains an explicit user action for sessions that
-should stay on the permanent shelf.
+Recent-session protection does not change managed-worktree garbage collection;
+durable dashboard sessions auto-archive after 7 days of inactivity by default,
+while other session types still require an explicit archive action.
 
 Archived and pinned sessions are user-protected and exempt from every automatic
 maintenance path, including age pruning, entry caps, model-run cleanup, and

@@ -36,6 +36,8 @@ export * from "./schema/secrets.js";
 export * from "./schema/session-placement.js";
 export * from "./schema/session-discussion.js";
 export * from "./schema/sessions.js";
+export * from "./schema/sessions-resolve.js";
+export * from "./schema/session-github-publication.js";
 export * from "./schema/sessions-viewer-presence.js";
 export * from "./schema/sessions-sharing.js";
 export * from "./schema/sessions-suggestions.js";

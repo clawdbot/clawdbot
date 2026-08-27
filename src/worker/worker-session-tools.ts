@@ -1,6 +1,16 @@
 import { Type } from "typebox";
+import { Value } from "typebox/value";
+import {
+  GitHubPublicationBodySchema,
+  GitHubPublicationTitleSchema,
+} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
   WORKER_SESSION_TOOL_MAX_TEXT_LENGTH,
+  type WorkerGitHubPublishParams,
+  type WorkerGitHubPublishResponseFrame,
+  type WorkerPortalParams,
+  type WorkerPortalResponseFrame,
+  WorkerPortalParamsSchema,
   type WorkerSessionsSendParams,
   type WorkerSessionsSendResponseFrame,
   type WorkerSessionsSpawnParams,
@@ -8,17 +18,24 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentToolResult } from "../agents/runtime/index.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  PORTAL_TOOL_DESCRIPTION,
+  PortalOutputSchema,
+  PortalToolSchema,
+} from "../agents/tools/portal-tool-contract.js";
 
 type WorkerSessionRpcClient = {
   requestSessionsSpawn(
     params: WorkerSessionsSpawnParams,
   ): Promise<WorkerSessionsSpawnResponseFrame>;
   requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame>;
+  requestGitHubPublish(
+    params: WorkerGitHubPublishParams,
+  ): Promise<WorkerGitHubPublishResponseFrame>;
+  requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame>;
 };
 
-function parseToolResult(
-  frame: WorkerSessionsSpawnResponseFrame | WorkerSessionsSendResponseFrame,
-) {
+function parseToolResult(frame: WorkerSessionsSpawnResponseFrame) {
   if (!frame.ok) {
     throw new Error(frame.error.message);
   }
@@ -40,6 +57,24 @@ function parseToolResult(
 
 export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAgentTool[] {
   return [
+    {
+      label: "GitHub Publish",
+      name: "github_publish",
+      description:
+        "Request Gateway-owned publication of this cloud session. Call only after the work is complete, then finish the turn. The Gateway reconciles the workspace, commits remaining changes as the effective GitHub user, pushes an exact HTTPS branch, and creates or reuses a draft pull request without sending credentials to this worker.",
+      parameters: Type.Object(
+        {
+          title: Type.Optional(GitHubPublicationTitleSchema),
+          body: Type.Optional(GitHubPublicationBodySchema),
+        },
+        { additionalProperties: false },
+      ),
+      execute: async (toolCallId, raw) => {
+        // SAFETY: the embedded agent runtime validates raw against this tool's schema.
+        const params = raw as Omit<WorkerGitHubPublishParams, "toolCallId">;
+        return parseToolResult(await client.requestGitHubPublish({ toolCallId, ...params }));
+      },
+    },
     {
       label: "Sessions",
       name: "sessions_spawn",
@@ -70,6 +105,23 @@ export function createWorkerSessionTools(client: WorkerSessionRpcClient): AnyAge
       execute: async (toolCallId, raw) => {
         const params = raw as Omit<WorkerSessionsSendParams, "toolCallId">;
         return parseToolResult(await client.requestSessionsSend({ toolCallId, ...params }));
+      },
+    },
+    {
+      label: "Portal",
+      name: "portal",
+      description: PORTAL_TOOL_DESCRIPTION,
+      parameters: PortalToolSchema,
+      outputSchema: PortalOutputSchema,
+      execute: async (toolCallId, raw) => {
+        if (!Value.Check(PortalToolSchema, raw)) {
+          throw new Error("Invalid portal tool arguments");
+        }
+        const params = { toolCallId, ...raw };
+        if (!Value.Check(WorkerPortalParamsSchema, params)) {
+          throw new Error("Portal tool arguments exceed the worker protocol limits");
+        }
+        return parseToolResult(await client.requestPortal(params));
       },
     },
   ];

@@ -813,7 +813,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       if (params.extractMode === "text") {
         text = markdownToText(body);
       }
-    } else if (normalizedContentType === "text/html") {
+    } else if (["text/html", "application/xhtml+xml"].includes(normalizedContentType)) {
       if (params.readabilityEnabled) {
         const readable = await extractReadableContent({
           html: body,

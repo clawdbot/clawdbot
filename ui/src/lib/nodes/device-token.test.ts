@@ -5,7 +5,6 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
-  revokeDeviceToken,
   rotateDeviceToken,
   storeDeviceAuthToken,
 } from "./index.ts";
@@ -91,34 +90,20 @@ afterEach(() => {
 describe("device token request lifecycle", () => {
   // A retired epoch is a reconnect, not a reason to destroy the credential: the previous
   // token is already dead on the server, so the caller still needs this one to recover.
-  it("returns a rotate response from a retired request epoch without persisting it", async () => {
+  it("persists a rotate response after its request epoch retires before success", async () => {
+    storeIdentity();
+    const { digest, digestMock } = deferIdentityFingerprint();
     const response = deferred<unknown>();
     const state = createState(() => response.promise);
 
     const operation = rotateDeviceToken(state, tokenParams);
     state.requestGeneration += 1;
     response.resolve({ token: "rotated-token", tokenDelivery: "in-band", ...rotationResult });
-
-    expect(await operation).toEqual({ delivery: "in-band", token: "rotated-token" });
-    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
-  });
-
-  it("rechecks rotate ownership after loading the local identity", async () => {
-    storeIdentity();
-    const { digest, digestMock } = deferIdentityFingerprint();
-    const state = createState(async () => ({
-      token: "rotated-token",
-      tokenDelivery: "in-band",
-      ...rotationResult,
-    }));
-
-    const operation = rotateDeviceToken(state, tokenParams);
     await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
-    state.requestGeneration += 1;
     digest.resolve(new Uint8Array([0]).buffer);
 
     expect(await operation).toEqual({ delivery: "in-band", token: "rotated-token" });
-    expect(loadDeviceAuthToken(tokenParams)).toBeNull();
+    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("rotated-token");
   });
 
   it("reports a cross-device rotation the Gateway withheld the token for", async () => {
@@ -226,21 +211,6 @@ describe("device token request lifecycle", () => {
     expect(await rotateDeviceToken(state, tokenParams)).toBeNull();
     expect(state.devicesError).toContain("unusable result");
     expect(loadDeviceAuthToken(tokenParams)).toBeNull();
-  });
-
-  it("does not clear a current token when a revoke request retires during identity loading", async () => {
-    storeIdentity();
-    storeDeviceAuthToken({ ...tokenParams, token: "current-token", scopes: ["operator.read"] });
-    const { digest, digestMock } = deferIdentityFingerprint();
-    const state = createState(async () => ({}));
-
-    const operation = revokeDeviceToken(state, tokenParams);
-    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
-    state.requestGeneration += 1;
-    digest.resolve(new Uint8Array([0]).buffer);
-    await operation;
-
-    expect(loadDeviceAuthToken(tokenParams)?.token).toBe("current-token");
   });
 
   it("normalizes malformed persisted scopes without breaking token loading", () => {

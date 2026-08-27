@@ -24,6 +24,8 @@ function requireDirectTlsConnect(request: GuardedDocumentRequest): Record<string
 }
 
 describe("resolveControlUiHandoffTarget", () => {
+  const ambientPassword = ["ambient", "password"].join("-");
+
   it("keeps plaintext custom browser and exact-base-path document URLs on loopback", async () => {
     const target = await resolveControlUiHandoffTarget({
       config: {
@@ -41,7 +43,38 @@ describe("resolveControlUiHandoffTarget", () => {
     expect(target.documentUrl).toBe(documentUrl);
     expect(target.probeUrl).toBe("ws://10.0.0.5:18789/dashboard");
     expect(target.loopbackAliasHost).toBe("10.0.0.5");
+    expect(target.dashboardUrl).toBe(`${documentUrl}#token=shared-test-token`);
   });
+
+  it.each([
+    ["blocks implicit token failure", undefined, undefined, "password", undefined],
+    ["blocks explicit token failure", "token", undefined, "token", undefined],
+    ["ignores inactive token refs", "password", undefined, "password", ambientPassword],
+  ] as const)(
+    "%s",
+    async (_label, configuredMode, configuredPassword, expectedMode, expectedHandoff) => {
+      const target = await resolveControlUiHandoffTarget({
+        config: {
+          gateway: {
+            auth: {
+              ...(configuredMode ? { mode: configuredMode } : {}),
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+              ...(configuredPassword ? { password: configuredPassword } : {}),
+            },
+          },
+        },
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "ambient-token",
+          OPENCLAW_GATEWAY_PASSWORD: ambientPassword,
+        },
+      });
+
+      expect(target.authMode).toBe(expectedMode);
+      expect(target.gatewayAuthHandoff).toBe(expectedHandoff);
+      expect(target.includeTokenInUrl).toBe(false);
+      expect(target.dashboardUrl).not.toContain("ambient-token");
+    },
+  );
 });
 
 describe("waitForControlUiDocument", () => {

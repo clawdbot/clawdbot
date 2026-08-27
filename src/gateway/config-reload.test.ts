@@ -160,6 +160,22 @@ describe("diffConfigPaths", () => {
     expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
   });
 
+  it.each(["speech", "realtime"] as const)("reloads only changed Talk %s owners", (surface) => {
+    const configure = (provider: string, model?: string) => ({
+      talk:
+        surface === "speech"
+          ? { providers: { [provider]: { model } } }
+          : { realtime: { providers: { [provider]: { model } } } },
+    });
+    for (const [prev, next, reload] of [
+      [{}, configure("first"), true],
+      [configure("first"), configure("second"), true],
+      [configure("first", "before"), configure("first", "after"), false],
+    ] as const) {
+      expect(buildGatewayReloadPlan(diffGatewayReloadPaths(prev, next)).reloadPlugins).toBe(reload);
+    }
+  });
+
   it.each([
     {
       name: "adds agents",
@@ -364,6 +380,7 @@ describe("buildGatewayReloadPlan", () => {
     "plugins.load.paths.0",
     "gateway.auth.mode",
     "secrets.egressProxy.enabled",
+    "secrets.egressProxy.allowedHosts",
     "secrets.egressProxy.bypassHosts",
   ])("keeps restart-owned path restart-backed: %s", (path) => {
     const plan = buildGatewayReloadPlan([path]);
@@ -406,6 +423,8 @@ describe("buildGatewayReloadPlan", () => {
       path: "plugins.entries.lossless-claw.config.mode",
       expected: { reloadPlugins: true, disposeMcpRuntimes: true },
     },
+    { path: "talk.provider", expected: { reloadPlugins: true } },
+    { path: "talk.realtime.provider", expected: { reloadPlugins: true } },
   ])("keeps hot-reload actions for $path", ({ path, expected }) => {
     const plan = buildGatewayReloadPlan([path]);
 
@@ -416,6 +435,19 @@ describe("buildGatewayReloadPlan", () => {
       noopPaths: [],
       ...expected,
     });
+  });
+
+  it("hot reloads Skill Workshop autonomous mode changes", () => {
+    const path = "skills.workshop.autonomous.mode";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+      noopPaths: [],
+      reconcileSkillReviewJobs: true,
+    });
+    expect(isNoopGatewayReloadPlan(plan)).toBe(false);
   });
 
   it.each([
@@ -4503,6 +4535,54 @@ describe("startGatewayConfigReloader", () => {
     expect(plan.changedPaths).toEqual(["plugins.installs.brave"]);
     expect(plan.restartReasons).toEqual(["plugins.installs.brave"]);
     expect(nextConfig).toBe(activeConfig);
+
+    await harness.reloader.stop();
+  });
+
+  it("forces a plugin reload when signaled metadata leaves config and install records identical", async () => {
+    const activeConfig: OpenClawConfig = {
+      gateway: { reload: {} },
+    };
+    const installRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave",
+        installPath: "/tmp/openclaw/plugins/brave",
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const readSnapshot = vi.fn(async () =>
+      makeSnapshot({
+        sourceConfig: activeConfig,
+        runtimeConfig: activeConfig,
+        config: activeConfig,
+        hash: "unchanged-config",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn(async () => ({ ...installRecords }));
+    const harness = createReloaderHarness(readSnapshot, {
+      initialConfig: activeConfig,
+      initialCompareConfig: activeConfig,
+      initialPluginInstallRecords: installRecords,
+      readPluginInstallRecords,
+    });
+
+    harness.reloader.notifyPluginMetadataChanged();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    const [plan, nextConfig] = getOnlyHotReloadCall(harness);
+    expect(plan.changedPaths).toEqual([]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(nextConfig).toBe(activeConfig);
+
+    // The refresh is consumed by the committed reload: a later watcher echo of
+    // identical bytes must not replace the plugin runtime generation again.
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).not.toHaveBeenCalled();
 
     await harness.reloader.stop();
   });

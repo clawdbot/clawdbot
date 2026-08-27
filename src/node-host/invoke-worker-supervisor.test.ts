@@ -1,9 +1,15 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   NODE_WORKER_BUNDLE_INSTALL_COMMAND,
   NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE,
+  NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+  NODE_WORKER_DESKTOP_STREAM_COMMAND,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  NODE_WORKER_PORTAL_STREAM_COMMAND,
   NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
@@ -36,6 +42,11 @@ afterEach(() => {
 function launchInput() {
   const fixture = writeNodeWorkerFixture(tempDirs.make("node-worker-invoke-"));
   return testWorkerLaunchInput(fixture.workspaceDir, "launch-1", "wait");
+}
+
+function mismatchedLaunchInput() {
+  const input = launchInput();
+  return { ...input, launchId: "other-launch" };
 }
 
 function fullReceipt(input = launchInput()): NodeWorkerLaunchReceipt {
@@ -77,6 +88,7 @@ function supervisorWith(receipt: NodeWorkerLaunchReceipt): NodeWorkerSupervisorC
     status: vi.fn(async () => receipt),
     retainWorkspaces: vi.fn(async () => ({ applied: true, deleted: 0, hasMore: false })),
     cancel: vi.fn(async () => receipt),
+    stopEnvironment: vi.fn(async () => {}),
   };
 }
 
@@ -85,6 +97,7 @@ type SupervisorMocks = {
   status: ReturnType<typeof vi.fn>;
   retainWorkspaces: ReturnType<typeof vi.fn>;
   cancel: ReturnType<typeof vi.fn>;
+  stopEnvironment: ReturnType<typeof vi.fn>;
 };
 
 function supervisorMocks(supervisor: NodeWorkerSupervisorControl): SupervisorMocks {
@@ -100,6 +113,7 @@ async function invokePrivate(params: {
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: { clientId: string; clientSecret: string };
   workspace?: NodeWorkerWorkspaceRuntime;
+  signal?: AbortSignal;
 }) {
   const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
   await handleInvoke(
@@ -116,6 +130,7 @@ async function invokePrivate(params: {
       ...(params.bundleInstaller ? { workerBundleInstaller: params.bundleInstaller } : {}),
       ...(params.supervisor ? { workerSupervisor: params.supervisor } : {}),
       ...(params.workspace ? { workerWorkspace: params.workspace } : {}),
+      ...(params.signal ? { signal: params.signal } : {}),
       gatewayUrl: params.gatewayUrl ?? "wss://gateway.example/tenant",
       ...(params.gatewayTlsFingerprint
         ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
@@ -134,6 +149,32 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it("settles environment teardown only after the exact owner has stopped", async () => {
+    const receipt = fullReceipt();
+    const supervisor = supervisorWith(receipt);
+    const owner = {
+      gatewayNamespace: receipt.gatewayNamespace,
+      environmentId: receipt.environmentId,
+      sessionId: receipt.sessionId,
+      ownerEpoch: receipt.ownerEpoch,
+    };
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+      paramsJSON: JSON.stringify(owner),
+      supervisor,
+    });
+
+    expect(supervisorMocks(supervisor).stopEnvironment).toHaveBeenCalledExactlyOnceWith(owner);
+    expect(result).toMatchObject({ ok: true, payloadJSON: "null" });
+    supervisorMocks(supervisor).stopEnvironment.mockRejectedValueOnce(new Error("still running"));
+    const failed = await invokePrivate({
+      command: NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+      paramsJSON: JSON.stringify(owner),
+      supervisor,
+    });
+    expect(failed.result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+  });
+
   it.each([
     { command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND, method: "launch" as const },
     { command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND, method: "status" as const },
@@ -195,6 +236,133 @@ describe("node-host worker supervisor commands", () => {
     expect(payload).not.toHaveProperty("descriptor");
     expect(payload).not.toHaveProperty("errorText");
   });
+
+  it.each([
+    NODE_WORKER_DESKTOP_STREAM_COMMAND,
+    NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+    NODE_WORKER_PORTAL_STREAM_COMMAND,
+    NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+  ])("dispatches %s before a colliding plugin command", async (command) => {
+    const supervisor = supervisorWith(fullReceipt());
+    const pluginHandle = vi.fn(async () => '{"plugin":true}');
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "malicious",
+        pluginName: "Malicious",
+        command: { command, handle: pluginHandle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    const { result } = await invokePrivate({
+      command,
+      paramsJSON: "{}",
+      supervisor,
+      signal: new AbortController().signal,
+    });
+
+    expect(pluginHandle).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
+
+  it.each([
+    {
+      name: "relative executable",
+      descriptor: { id: "terminal", executablePath: "openclaw-worker-terminal" },
+    },
+    {
+      name: "terminal arguments",
+      descriptor: { id: "terminal", executablePath: process.execPath, args: ["--unsafe"] },
+    },
+    {
+      name: "terminal CDP port",
+      descriptor: { id: "terminal", executablePath: process.execPath, cdpPort: 9222 },
+    },
+    {
+      name: "missing browser CDP port",
+      descriptor: { id: "browser", executablePath: process.execPath },
+    },
+    {
+      name: "invalid browser CDP port",
+      descriptor: { id: "browser", executablePath: process.execPath, cdpPort: 65_536 },
+    },
+  ])("rejects a worker desktop launch with $name", async ({ descriptor }) => {
+    const supervisor = supervisorWith(fullReceipt());
+
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+      paramsJSON: JSON.stringify(descriptor),
+      supervisor,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
+  });
+
+  it.runIf(process.platform !== "win32").each(["browser", "terminal"] as const)(
+    "runs one absolute zero-argument %s launcher without replay after failure",
+    async (appId) => {
+      const root = tempDirs.make("node-worker-desktop-launch-");
+      const executablePath = path.join(root, "launcher");
+      const markerPath = `${executablePath}.marker`;
+      fs.writeFileSync(
+        executablePath,
+        '#!/bin/sh\nprintf \'%s\\n\' "$#" >> "$0.marker"\nexit 7\n',
+        { mode: 0o755 },
+      );
+      const supervisor = supervisorWith(fullReceipt());
+
+      const { result } = await invokePrivate({
+        command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+        paramsJSON: JSON.stringify({
+          id: appId,
+          executablePath,
+          ...(appId === "browser" ? { cdpPort: 9222 } : {}),
+        }),
+        supervisor,
+      });
+
+      expect(result).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      expect(fs.readFileSync(markerPath, "utf8")).toBe("0\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "kills an in-flight desktop launcher when its invoke owner closes",
+    async () => {
+      const root = tempDirs.make("node-worker-desktop-launch-abort-");
+      const executablePath = path.join(root, "launcher");
+      const pidPath = `${executablePath}.pid`;
+      fs.writeFileSync(
+        executablePath,
+        '#!/bin/sh\nprintf \'%s\\n\' "$$" > "$0.pid"\nexec sleep 300\n',
+        { mode: 0o755 },
+      );
+      const controller = new AbortController();
+
+      const running = invokePrivate({
+        command: NODE_WORKER_DESKTOP_LAUNCH_COMMAND,
+        paramsJSON: JSON.stringify({ id: "terminal", executablePath }),
+        supervisor: supervisorWith(fullReceipt()),
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
+      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+      try {
+        controller.abort(new Error("desktop owner closed"));
+
+        await expect(running).resolves.toMatchObject({ result: undefined });
+        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+      } finally {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // The expected path already reaped the launcher.
+        }
+      }
+    },
+  );
 
   it("dispatches bundle installation before a colliding plugin command", async () => {
     const build = {
@@ -610,6 +778,11 @@ describe("node-host worker supervisor commands", () => {
       name: "extra cancel identity field",
       command: NODE_WORKER_SUPERVISOR_CANCEL_COMMAND,
       raw: JSON.stringify({ ...cancelInput(fullReceipt()), extra: true }),
+    },
+    {
+      name: "mismatched launch and turn ids",
+      command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+      raw: JSON.stringify(mismatchedLaunchInput()),
     },
     {
       name: "extra launch field",

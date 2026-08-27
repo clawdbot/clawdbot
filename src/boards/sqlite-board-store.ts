@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   BoardOp,
   BoardSnapshot,
-  BoardWidget,
   BoardWidgetMaterializedPutParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -33,6 +32,7 @@ import {
   type BoardWidgetHtmlDocument,
   type BoardWidgetHtmlViewMetadata,
   type BoardWidgetMcpAppDocument,
+  type BoardWidgetRegisteredDocument,
 } from "./board-store.js";
 import {
   BOARD_WIDGET_SNAPSHOT_COLUMNS,
@@ -42,6 +42,7 @@ import {
   parseManifest,
   parsePluginContent,
   resolveSqliteBoardWidgetPutParams,
+  rowToRegisteredDocument,
   rowToTab,
   rowToHtmlViewMetadata,
   rowToWidget,
@@ -196,7 +197,7 @@ function rowToHtmlDocument(
     revision: row.revision,
     sha256: row.sha256,
     viewGeneration: row.view_generation,
-    grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
+    grantState: effectiveGrantState(row.grant_state, manifest),
     ...(declared ? { declared } : {}),
   };
 }
@@ -496,7 +497,8 @@ export class SqliteBoardStore implements BoardStore {
                 parseDescriptor(existing.descriptor_json).serverName ===
                   canonicalParams.content.descriptor.serverName
               : existing.descriptor_json !== null &&
-                canonicalParams.content.kind === "plugin" &&
+                (canonicalParams.content.kind === "plugin" ||
+                  canonicalParams.content.kind === "registered") &&
                 parsePluginContent(existing.descriptor_json).pluginKind ===
                   canonicalParams.content.pluginKind
           : true;
@@ -577,6 +579,13 @@ export class SqliteBoardStore implements BoardStore {
           instanceId,
         );
         upsertTabs(transactionDatabase, previous, next);
+        const widget = next.widgets.find((candidate) => candidate.name === name)!;
+        if (!widget.contentOwner) {
+          throw new BoardValidationError(
+            "invalid_operation",
+            `board widget ${name} content ownership is unavailable`,
+          );
+        }
         const row = previous.widgetRows.find((candidate) => candidate.name === name)!;
         const manifest = parseManifest(row.manifest);
         const declared = manifest.declared;
@@ -589,14 +598,23 @@ export class SqliteBoardStore implements BoardStore {
               grant_state: decision,
               granted_sha: decision === "granted" ? row.sha256 : null,
               manifest: serializeManifest(
+                {
+                  contentOwner: widget.contentOwner,
+                  ...(widget.registeredContentKind
+                    ? { registeredContentKind: widget.registeredContentKind }
+                    : {}),
+                },
                 declared,
                 decision,
                 manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId
                   ? {
+                      kind: "mcp-app" as const,
                       interactive: manifest.mcpAppInteractive,
                       instanceId: manifest.mcpAppInstanceId,
                     }
-                  : undefined,
+                  : manifest.registeredInstanceId
+                    ? { kind: "registered" as const, instanceId: manifest.registeredInstanceId }
+                    : undefined,
                 {
                   presentation: manifest.presentation,
                   heightMode: manifest.heightMode,
@@ -615,7 +633,7 @@ export class SqliteBoardStore implements BoardStore {
     );
   }
 
-  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
+  private readWidgetRow(sessionKey: string, name: string) {
     const resolved = this.resolve(sessionKey);
     const result = withOpenClawAgentDatabaseReadOnly(
       (database) => {
@@ -631,6 +649,7 @@ export class SqliteBoardStore implements BoardStore {
               "content_kind",
               "html",
               "descriptor_json",
+              "title",
               "revision",
               "sha256",
               "view_generation",
@@ -641,10 +660,7 @@ export class SqliteBoardStore implements BoardStore {
             .where("name", "=", name)
             .limit(1),
         ).rows[0];
-        if (!row) {
-          return undefined;
-        }
-        return rowToHtmlDocument(row);
+        return row;
       },
       {
         agentId: resolved.agentId,
@@ -655,46 +671,36 @@ export class SqliteBoardStore implements BoardStore {
     return result.found ? result.value : undefined;
   }
 
+  readWidgetHtml(sessionKey: string, name: string): BoardWidgetHtmlDocument | undefined {
+    const row = this.readWidgetRow(sessionKey, name);
+    return row ? rowToHtmlDocument(row) : undefined;
+  }
+
   readWidgetMcpApp(sessionKey: string, name: string): BoardWidgetMcpAppDocument | undefined {
-    const resolved = this.resolve(sessionKey);
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        if (!hasSession(database, resolved.sessionKey) || !boardTablesPresent(database)) {
-          return undefined;
-        }
-        const db = getNodeSqliteKysely<BoardDatabase>(database.db);
-        const row = executeSqliteQuerySync(
-          database.db,
-          db
-            .selectFrom("board_widgets")
-            .select(["content_kind", "descriptor_json", "revision", "grant_state", "manifest"])
-            .where("session_key", "=", resolved.sessionKey)
-            .where("name", "=", name)
-            .limit(1),
-        ).rows[0];
-        if (!row || row.content_kind !== "mcp-app" || row.descriptor_json === null) {
-          return undefined;
-        }
-        const manifest = parseManifest(row.manifest);
-        if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
-          return undefined;
-        }
-        return {
-          descriptor: parseDescriptor(row.descriptor_json),
-          revision: row.revision,
-          instanceId: manifest.mcpAppInstanceId,
-          grantState: effectiveGrantState(row.grant_state as BoardWidget["grantState"], manifest),
-          declaredTools: manifest.declared?.tools ?? [],
-          interactive: manifest.mcpAppInteractive,
-        };
-      },
-      {
-        agentId: resolved.agentId,
-        ...(resolved.path ? { path: resolved.path } : {}),
-        env: this.options.env,
-      },
-    );
-    return result.found ? result.value : undefined;
+    const row = this.readWidgetRow(sessionKey, name);
+    if (!row || row.content_kind !== "mcp-app" || row.descriptor_json === null) {
+      return undefined;
+    }
+    const manifest = parseManifest(row.manifest);
+    if (manifest.mcpAppInteractive === undefined || manifest.mcpAppInstanceId === undefined) {
+      return undefined;
+    }
+    return {
+      descriptor: parseDescriptor(row.descriptor_json),
+      revision: row.revision,
+      instanceId: manifest.mcpAppInstanceId,
+      grantState: effectiveGrantState(row.grant_state, manifest),
+      declaredTools: manifest.declared?.tools ?? [],
+      interactive: manifest.mcpAppInteractive,
+    };
+  }
+
+  readWidgetRegistered(
+    sessionKey: string,
+    name: string,
+  ): BoardWidgetRegisteredDocument | undefined {
+    const row = this.readWidgetRow(sessionKey, name);
+    return row ? rowToRegisteredDocument(row) : undefined;
   }
 
   listSessionsWithBoards(): string[] {

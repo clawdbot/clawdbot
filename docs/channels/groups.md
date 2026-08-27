@@ -308,7 +308,7 @@ Control how group/room messages are handled per channel:
     - DM pairing approvals (`*-allowFrom` store entries) apply to DM access only; group sender authorization stays explicit to group allowlists.
     - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
     - Slack: allowlist uses `channels.slack.channels`.
-    - Matrix: allowlist uses `channels.matrix.groups`. Use room IDs (`!room:server`) or aliases (`#alias:server`); room-name keys match only with `channels.matrix.dangerouslyAllowNameMatching: true`, and unresolved entries are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
+    - Matrix: allowlist uses `channels.matrix.groups`. Use room IDs (`!room:server`, or the suffixless `!room` form on room version 12+) or aliases (`#alias:server`); room-name keys match only with `channels.matrix.dangerouslyAllowNameMatching: true`, and unresolved entries are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
     - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`: `groupEnabled`, `groupChannels`).
     - Telegram: sender allowlists accept numeric user IDs only (`"123456789"`; `telegram:`/`tg:` prefixes are stripped case-insensitively). `@username` entries do not match at runtime and log a warning; setup resolves `@username` to IDs. Negative chat IDs belong under `channels.telegram.groups`, not sender allowlists.
     - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
@@ -343,7 +343,7 @@ Supported implicit mention facts are channel-specific:
 | Quote of the bot      | WhatsApp, Zalo personal                          |
 | Bot joined the thread | Mattermost, Slack, Tlon                          |
 
-Each fact defaults to enabled when the channel produces it. Set the corresponding `implicitMentions` flag to `false` to stop that fact from bypassing mention gating; native explicit mentions remain unaffected. A flag has no effect on channels that do not produce that fact.
+Each fact defaults to enabled when the channel produces it. Among bundled channels, Mattermost, Slack, and Tlon read the corresponding `implicitMentions` flag; set it to `false` to stop that fact from bypassing mention gating. Native explicit mentions remain unaffected. The other bundled producers listed above do not currently read `implicitMentions`, so their facts always count as mentions and the flag cannot turn them off. A flag also has no effect on channels that do not produce that fact.
 
 ```json5
 {

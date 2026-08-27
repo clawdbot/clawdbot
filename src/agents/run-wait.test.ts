@@ -716,6 +716,28 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
     });
     expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
   });
+
+  it.each(["silent", "empty"] as const)(
+    "does not resurrect transcript text after an authoritative %s terminal reply",
+    async (disposition) => {
+      callGatewayMock.mockImplementation(async (request) => {
+        if (request.method === "agent.wait") {
+          return { status: "ok", terminalReply: { disposition } };
+        }
+        throw new Error("history must not override terminal reply evidence");
+      });
+
+      const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+        runId: `run-${disposition}-terminal-reply`,
+        sessionKey: "agent:main:child",
+        timeoutMs: 1_000,
+        baseline: { text: "older reply" },
+      });
+
+      expect(result).toEqual({ status: "ok", terminalReply: { disposition } });
+      expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual(["agent.wait"]);
+    },
+  );
 });
 
 describe("waitForAgentRunsToDrain", () => {

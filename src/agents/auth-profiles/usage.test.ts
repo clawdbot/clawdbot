@@ -6,6 +6,7 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setLoggerOverride } from "../../logging/logger.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
@@ -1173,11 +1174,8 @@ describe("markAuthProfileFailure — locked update failure", () => {
   it("drops bookkeeping without an unlocked full-store save", async () => {
     const store = makeStore(undefined);
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const previousTestConsole = process.env.OPENCLAW_TEST_CONSOLE;
-    const previousLogLevel = process.env.OPENCLAW_LOG_LEVEL;
     storeMocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
-    process.env.OPENCLAW_TEST_CONSOLE = "1";
-    process.env.OPENCLAW_LOG_LEVEL = "warn";
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     try {
       await markAuthProfileFailure({
         store,
@@ -1194,16 +1192,7 @@ describe("markAuthProfileFailure — locked update failure", () => {
         ),
       ).toBe(true);
     } finally {
-      if (previousTestConsole === undefined) {
-        delete process.env.OPENCLAW_TEST_CONSOLE;
-      } else {
-        process.env.OPENCLAW_TEST_CONSOLE = previousTestConsole;
-      }
-      if (previousLogLevel === undefined) {
-        delete process.env.OPENCLAW_LOG_LEVEL;
-      } else {
-        process.env.OPENCLAW_LOG_LEVEL = previousLogLevel;
-      }
+      setLoggerOverride(null);
       consoleWarn.mockRestore();
     }
   });

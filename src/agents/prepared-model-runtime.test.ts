@@ -5,12 +5,15 @@ import {
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
+  acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -21,7 +24,6 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -46,6 +48,96 @@ describe("prepared model runtime snapshots", () => {
       pluginGeneration: expect.any(Object),
     });
     await expect(build.completion).resolves.toBeUndefined();
+  });
+
+  it("materializes Claude CLI thinking capabilities on the prepared logical row", async () => {
+    const modelIds = ["claude-opus-5", "claude-sonnet-5"];
+    mocks.resolveStaticCatalogModel.mockImplementation(({ modelId, provider }) =>
+      provider === "claude-cli"
+        ? {
+            provider,
+            id: modelId,
+            name: `${modelId} (Claude CLI)`,
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            reasoning: true,
+            input: ["text" as const],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 1_000_000,
+            maxTokens: 128_000,
+          }
+        : undefined,
+    );
+    mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+      entries: modelIds.map((id) => ({ provider: "anthropic", id, name: id, reasoning: false })),
+      routeVariants: modelIds.map((id) => ({
+        provider: "anthropic",
+        id,
+        name: id,
+        reasoning: false,
+      })),
+    });
+    // Raw user config permits sparse provider model overrides. This omission is
+    // the contract under test: it must not become an explicit reasoning opt-out.
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: `anthropic/${modelIds[0]}` },
+          models: Object.fromEntries(
+            modelIds.map((modelId) => [
+              `anthropic/${modelId}`,
+              {
+                agentRuntime: { id: "claude-cli" },
+                params: { thinking: "medium" },
+              },
+            ]),
+          ),
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: modelIds.map((id) => ({ id, name: id })),
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      agentId: "main",
+      config,
+      agentDir: "/tmp/prepared-model-runtime-claude-cli-capabilities",
+    });
+    for (const modelId of modelIds) {
+      expect(
+        snapshot.modelCatalog.entries.find(
+          (entry) => entry.provider === "anthropic" && entry.id === modelId,
+        ),
+      ).toMatchObject({ reasoning: true });
+      expect(snapshot.modelCatalog.entries).not.toContainEqual(
+        expect.objectContaining({ provider: "claude-cli", id: modelId }),
+      );
+    }
+  });
+
+  it("publishes a run owner from the caller-selected metadata generation", async () => {
+    const lease = await acquireAgentRunPreparedModelRuntime(
+      {
+        config: {},
+        agentId: "main",
+        agentDir: "/tmp/selected-metadata-agent",
+        workspaceDir: "/tmp/selected-metadata-workspace",
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
+      },
+      {
+        catalogMode: "static",
+        pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
+      },
+    );
+
+    expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
+    lease.release();
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
@@ -111,12 +203,15 @@ describe("prepared model runtime snapshots", () => {
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(pluginRegistry);
 
     expect(
-      prepareWorkspacePluginRegistries({
-        config: {},
-        agentDir: "/tmp/native-provider-probe",
-        readOnly: true,
-        loadRuntimePlugins: true,
-      }).runtimePluginRegistry,
+      prepareWorkspacePluginRegistries(
+        {
+          config: {},
+          agentDir: "/tmp/native-provider-probe",
+          readOnly: true,
+          loadRuntimePlugins: true,
+        },
+        mocks.pluginMetadataSnapshot as never,
+      ).runtimePluginRegistry,
     ).toBe(pluginRegistry);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith(
       expect.objectContaining({ selections: undefined }),
@@ -180,6 +275,7 @@ describe("prepared model runtime snapshots", () => {
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledWith({
       config: {},
       env: process.env,
+      metadataSnapshot: mocks.pluginMetadataSnapshot,
       workspaceDir: "/tmp/prepared-model-runtime-plugin-workspace",
       selections: undefined,
     });
@@ -198,7 +294,7 @@ describe("prepared model runtime snapshots", () => {
       env,
     });
 
-    expect(getPreparedPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
+    expect(getPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
       rawConfig: config,
       env,
     });
@@ -237,6 +333,46 @@ describe("prepared model runtime snapshots", () => {
     expect(snapshot.modelCatalog.providerOutcomes).toEqual([
       { provider: "openai", status: "auth-rejected" },
     ]);
+  });
+
+  it("limits live discovery to the selected agent's models and authenticated providers", async () => {
+    const config = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6" } },
+        list: [
+          {
+            id: "selected",
+            model: { primary: "anthropic/claude-sonnet-5" },
+            modelPolicy: { allow: ["vllm/*"] },
+          },
+          {
+            id: "sibling",
+            model: { primary: "ollama/sibling" },
+            modelPolicy: { allow: ["sibling-only/*"] },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          unrelated: { baseUrl: "https://unrelated.example/v1", models: [] },
+          vllm: { baseUrl: "https://vllm.example/v1", models: [] },
+        },
+      },
+    } as OpenClawConfig;
+
+    await publishPreparedModelRuntimeSnapshot({
+      agentId: "selected",
+      config,
+      agentDir: "/tmp/prepared-model-runtime-selected-provider-scope",
+    });
+
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
+      config,
+      "/tmp/prepared-model-runtime-selected-provider-scope",
+      expect.objectContaining({
+        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "vllm"],
+      }),
+    );
   });
 
   it("captures static provider-hook rows in the same lifecycle generation", async () => {
@@ -294,6 +430,11 @@ describe("prepared model runtime snapshots", () => {
       input: ["text" as const, "image" as const],
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
       contextWindow: 1_050_000,
+      contextWindows: [
+        { id: "250k", label: "250K", contextWindow: 250_000 },
+        { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+      ],
+      contextWindowDefault: "1050k",
       maxTokens: 128_000,
     };
     mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
@@ -334,7 +475,7 @@ describe("prepared model runtime snapshots", () => {
         workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
       }),
     );
-    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledOnce();
+    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledTimes(2);
     expect(snapshot.agentId).toBe("qa");
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
@@ -348,6 +489,11 @@ describe("prepared model runtime snapshots", () => {
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
         contextWindow: 1_050_000,
+        contextWindows: [
+          { id: "250k", label: "250K", contextWindow: 250_000 },
+          { id: "1050k", label: "1.05M", contextWindow: 1_050_000 },
+        ],
+        contextWindowDefault: "1050k",
         reasoning: true,
         input: ["text", "image"],
       },

@@ -16,6 +16,13 @@ type TrackedActiveSessionRun = {
   executionStarted: boolean;
 };
 
+type VisibleActiveSessionRunState = {
+  active: boolean;
+  /** Complete exact active set. Omitted when another active owner exposes only liveness. */
+  runIds?: string[];
+  status?: "queued";
+};
+
 export function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
 ): TrackedActiveSessionRun[] {
@@ -149,7 +156,7 @@ export function resolveVisibleActiveSessionRunState(params: {
   defaultAgentId?: string;
   trackedActiveRuns?: readonly TrackedActiveSessionRun[];
   projectedAgentRunIndex?: ProjectedAgentRunIndex;
-}): { active: boolean; runIds: string[]; status?: "queued" } {
+}): VisibleActiveSessionRunState {
   const sessionId = params.sessionId?.trim();
   const resolvedAgentId =
     params.agentId ??
@@ -196,5 +203,10 @@ export function resolveVisibleActiveSessionRunState(params: {
     hasProjectedRun ||
     embeddedRunState === "running";
   const active = running || matchingTrackedRuns.length > 0 || embeddedRunState === "queued";
-  return { active, runIds, ...(active && !running ? { status: "queued" as const } : {}) };
+  const identitiesComplete = !hasProjectedRun && embeddedRunState === undefined;
+  return {
+    active,
+    ...(identitiesComplete ? { runIds } : {}),
+    ...(active && !running ? { status: "queued" as const } : {}),
+  };
 }

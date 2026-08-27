@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
@@ -25,14 +26,6 @@ const nativeSkillIsolationByClient = new WeakMap<
 
 function isMissingPathError(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
-function isPathWithin(root: string, candidate: string): boolean {
-  const relative = path.relative(path.resolve(root), path.resolve(candidate));
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
 }
 
 async function canonicalizeExistingPath(candidate: string): Promise<string> {
@@ -72,13 +65,13 @@ async function collectPersonalSkillRealPaths(
     const realDefaultCodexHome = await canonicalizeExistingPath(defaultCodexHome);
     roots.push({
       dir: path.join(defaultCodexHome, "skills"),
-      onlyEscapedStateTargets: isPathWithin(realStateDir, realDefaultCodexHome),
+      onlyEscapedStateTargets: isPathInside(realStateDir, realDefaultCodexHome),
     });
   }
   const configuredCodexHome = codexHome?.trim() || process.env.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     const realCodexHome = await canonicalizeExistingPath(configuredCodexHome);
-    const stateOwned = isPathWithin(realStateDir, realCodexHome);
+    const stateOwned = isPathInside(realStateDir, realCodexHome);
     roots.push({
       dir: path.join(configuredCodexHome, "skills"),
       // Direct descendants of a state-owned Codex home belong to this isolated instance.
@@ -98,7 +91,7 @@ async function collectPersonalSkillRealPaths(
   const recordSkillFile = async (filePath: string, onlyEscapedStateTargets: boolean) => {
     try {
       const skillRealPath = await fs.realpath(filePath);
-      if (!onlyEscapedStateTargets || !isPathWithin(realStateDir, skillRealPath)) {
+      if (!onlyEscapedStateTargets || !isPathInside(realStateDir, skillRealPath)) {
         skillPaths.add(skillRealPath);
       }
     } catch (error) {

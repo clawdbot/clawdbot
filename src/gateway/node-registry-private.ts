@@ -4,34 +4,45 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import {
   isPrivateNodeInvokeCommand,
+  NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
 } from "../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
+  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
+  type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import type { NodeWorkerBundleStatus } from "../shared/node-list-types.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
-import type {
-  NodeInvokeStreamController,
-  PendingInvoke,
-  PendingSystemRunEvent,
-} from "./node-registry.invoke-stream.js";
-import { normalizeSystemRunTimeoutMs } from "./node-registry.system-run.js";
+import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
 import {
+  normalizeSystemRunInvokeParams,
+  resolvePendingSystemRunEvent,
+} from "./node-registry.system-run.js";
+import {
+  createNodeRunnerStatePublisher,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
+  sameBundleStatusObservation,
   sameNodeWorkerHostDeclaration,
   type NodeRunnerInventoryRecord,
   type NodeRunnerRegistrySession,
+  type NodeRunnerStateChange,
+  type NodeRunnerStatePublisher,
+  type NodeWorkerBundleStatusObservation,
   type NodeWorkerSupervisorNodeProof,
 } from "./node-runner-inventory-runtime.js";
 
-export type { NodeWorkerSupervisorNodeProof } from "./node-runner-inventory-runtime.js";
+export type {
+  NodeRunnerStateChange,
+  NodeWorkerSupervisorNodeProof,
+} from "./node-runner-inventory-runtime.js";
 
 type NodeRegistryPrivateSession = NodeRunnerRegistrySession;
 
@@ -66,20 +77,20 @@ type NodeInvokeParams = {
 
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
-type NodeWorkerBundleStatusObservation = {
-  bundleHash: string;
-  status: NodeWorkerBundleStatus;
-};
-
 export type NodeWorkerSupervisorTransport = {
   listCurrentNodes(): Promise<readonly NodeWorkerSupervisorNodeProof[]>;
+  hasCurrentRunner(nodeId: string): boolean;
   getIssue?(nodeId: string): NodeRunnerInventoryIssue | undefined;
   getBundleStatus?(nodeId: string): NodeWorkerBundleStatusObservation | undefined;
   acceptBundleStatus?(
     node: NodeWorkerSupervisorNodeProof,
     observation: NodeWorkerBundleStatusObservation | undefined,
   ): boolean;
-  isCurrent(node: NodeWorkerSupervisorNodeProof, requireLaunchEligibility?: boolean): boolean;
+  isCurrent(
+    node: NodeWorkerSupervisorNodeProof,
+    requireLaunchEligibility?: boolean,
+    requiredCommands?: readonly string[],
+  ): boolean;
   invoke(params: {
     node: NodeWorkerSupervisorNodeProof;
     command: NodeWorkerPrivateCommand;
@@ -127,8 +138,8 @@ type NodeRegistryPrivateState = {
   context: NodeRegistryPrivateContext;
   runnerInventoryByConn: Map<string, NodeRunnerInventoryRecord>;
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
+  runnerState: NodeRunnerStatePublisher;
   generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
-  publishRunnerInventoryChanged: (nodeId: string) => void;
   invokeCore: (params: NodeInvokeParams, allowPrivateCommand: boolean) => Promise<NodeInvokeResult>;
   updateRunnerInventory: (params: {
     nodeId: string;
@@ -140,66 +151,12 @@ type NodeRegistryPrivateState = {
 
 const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<object, NodeRegistryPrivateState>();
 
-function resolvePendingSystemRunEvent(params: {
-  command: string;
-  params?: unknown;
-}): PendingSystemRunEvent | undefined {
-  if (params.command !== "system.run" || !params.params || typeof params.params !== "object") {
-    return undefined;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const runId = normalizeOptionalString(obj.runId) ?? "";
-  if (!runId) {
-    return undefined;
-  }
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  const sessionKey = normalizeOptionalString(obj.sessionKey) ?? "";
-  return {
-    runId,
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-  };
-}
-
-function normalizeSystemRunInvokeParams(params: { command: string; params?: unknown }): unknown {
-  if (
-    params.command !== "system.run" ||
-    !params.params ||
-    typeof params.params !== "object" ||
-    Array.isArray(params.params)
-  ) {
-    return params.params;
-  }
-  const obj = params.params as Record<string, unknown>;
-  const normalized: Record<string, unknown> = {
-    ...obj,
-    runId: normalizeOptionalString(obj.runId) || randomUUID(),
-  };
-  const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
-  if (timeoutMs === undefined) {
-    delete normalized.timeoutMs;
-  } else {
-    normalized.timeoutMs = timeoutMs;
-  }
-  return normalized;
-}
-
-function sameBundleStatusObservation(
-  left: NodeWorkerBundleStatusObservation | undefined,
-  right: NodeWorkerBundleStatusObservation | undefined,
-): boolean {
-  return (
-    left?.bundleHash === right?.bundleHash &&
-    left?.status.status === right?.status.status &&
-    (left?.status.status !== "installed" ||
-      (right?.status.status === "installed" && left.status.version === right.status.version))
-  );
-}
-
 function isWorkerSupervisorProofCurrent(
   state: NodeRegistryPrivateState,
   proof: NodeWorkerSupervisorNodeProof,
   requireLaunchEligibility: boolean,
+  requiredCommands: readonly string[] = [],
+  requireEnvironmentSession = false,
 ): boolean {
   const node = state.context.getNode(proof.nodeId);
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
@@ -212,7 +169,10 @@ function isWorkerSupervisorProofCurrent(
     current.clientId === proof.clientId &&
     current.clientMode === proof.clientMode &&
     current.protocolFeature === proof.protocolFeature &&
-    (!requireLaunchEligibility || current.workerHost.capacity === "available")
+    (!requireLaunchEligibility || current.workerHost.capacity.available > 0) &&
+    (!requireEnvironmentSession ||
+      current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
+    requiredCommands.every((command) => current.commands.includes(command))
   );
 }
 
@@ -242,7 +202,7 @@ function updateWorkerRunnerInventory(
     const changed = inventoryChanged || statusChanged;
     if (changed) {
       state.context.publishActiveNodeContext();
-      state.publishRunnerInventoryChanged(node.nodeId);
+      state.runnerState.reconcile(node.nodeId, true);
     }
     return { changed };
   }
@@ -251,10 +211,17 @@ function updateWorkerRunnerInventory(
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeatures: [...params.declaration.protocolFeatures],
-    ...(workerHost ? { workerHost: { ...workerHost } } : {}),
+    ...(workerHost
+      ? {
+          workerHost: workerHost.enabled
+            ? { ...workerHost, capacity: { ...workerHost.capacity } }
+            : { enabled: false },
+        }
+      : {}),
   };
   const statusCleared =
     next.workerHost?.enabled !== true ||
@@ -264,13 +231,14 @@ function updateWorkerRunnerInventory(
       : false;
   const changed =
     !previous ||
+    previous.pairingGeneration !== next.pairingGeneration ||
     !sameWorkerProtocolFeatures(previous.protocolFeatures, next.protocolFeatures) ||
     !sameNodeWorkerHostDeclaration(previous.workerHost, next.workerHost) ||
     statusCleared;
   if (changed) {
     state.runnerInventoryByConn.set(node.connId, next);
     state.context.publishActiveNodeContext();
-    state.publishRunnerInventoryChanged(node.nodeId);
+    state.runnerState.reconcile(node.nodeId, true);
   }
   return { changed };
 }
@@ -280,6 +248,11 @@ async function invokeNodeRegistryCore(
   params: NodeInvokeParams,
   allowPrivateCommand: boolean,
 ): Promise<NodeInvokeResult> {
+  let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
+  // Explicit budgets include pairing and serialization; omitted budgets retain
+  // the post-dispatch default, and zero keeps long-lived invokes unbounded.
+  const deadlineAtMs =
+    Number.isFinite(params.timeoutMs) && timeoutMs > 0 ? Date.now() + timeoutMs : undefined;
   if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
     return {
       ok: false,
@@ -319,7 +292,14 @@ async function invokeNodeRegistryCore(
     };
   }
   if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
-    const resolution = await state.context.resolvePairingLease(node);
+    const pairingNode = node;
+    const resolution = await awaitWithinDeadline(
+      () => state.context.resolvePairingLease(pairingNode),
+      deadlineAtMs,
+    );
+    if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
     if (resolution.status === "unavailable") {
       return {
         ok: false,
@@ -340,21 +320,11 @@ async function invokeNodeRegistryCore(
       };
     }
   }
-  if (params.isDispatchAuthorized?.() === false) {
-    return {
-      ok: false,
-      error: {
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        message: "runtime authority closed before node dispatch",
-      },
-    };
-  }
   const requestId = randomUUID();
   const invokeParams = normalizeSystemRunInvokeParams({
     command: params.command,
     params: params.params,
   });
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
   const payload = {
     id: requestId,
     nodeId: params.nodeId,
@@ -369,6 +339,24 @@ async function invokeNodeRegistryCore(
     command: params.command,
     params: invokeParams,
   });
+  // Serialization can consume the budget or close caller-owned authority.
+  // Revalidate both before arming pending state and handing off to transport.
+  if (params.isDispatchAuthorized?.() === false) {
+    return {
+      ok: false,
+      error: {
+        code: "APPROVAL_AUTHORITY_CLOSED",
+        message: "runtime authority closed before node dispatch",
+      },
+    };
+  }
+  if (deadlineAtMs !== undefined) {
+    timeoutMs = Math.max(0, deadlineAtMs - Date.now());
+    if (timeoutMs === 0) {
+      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
+    }
+    payload.timeoutMs = timeoutMs;
+  }
   const result = new Promise<NodeInvokeResult>((resolve, reject) => {
     const pending: PendingInvoke = {
       nodeId: params.nodeId,
@@ -440,8 +428,8 @@ export function registerNodeRegistryPrivateRuntime(
   state.context = context;
   state.runnerInventoryByConn = new Map();
   state.bundleStatusByConn = new Map();
+  state.runnerState = createNodeRunnerStatePublisher(context.getNode, state.runnerInventoryByConn);
   state.generationBoundInvokes = new WeakMap();
-  state.publishRunnerInventoryChanged = () => {};
   state.invokeCore = async (params, allowPrivateCommand) =>
     await invokeNodeRegistryCore(state, params, allowPrivateCommand);
   state.updateRunnerInventory = (params) => updateWorkerRunnerInventory(state, params);
@@ -453,6 +441,7 @@ export function registerNodeRegistryPrivateRuntime(
         return proof ? [proof] : [];
       });
     },
+    hasCurrentRunner: state.runnerState.hasCurrent,
     getIssue: (nodeId) => {
       const node = context.getNode(nodeId);
       return node ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn) : undefined;
@@ -483,12 +472,12 @@ export function registerNodeRegistryPrivateRuntime(
         state.bundleStatusByConn.delete(node.connId);
       }
       if (!sameBundleStatusObservation(previous, observation)) {
-        state.publishRunnerInventoryChanged(node.nodeId);
+        state.runnerState.reconcile(node.nodeId, true);
       }
       return true;
     },
-    isCurrent: (node, requireLaunchEligibility = false) =>
-      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility),
+    isCurrent: (node, requireLaunchEligibility = false, requiredCommands = []) =>
+      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility, requiredCommands),
     invoke: async (params) => {
       if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
         return {
@@ -501,7 +490,10 @@ export function registerNodeRegistryPrivateRuntime(
         isWorkerSupervisorProofCurrent(
           state,
           params.node,
-          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+          false,
+          [],
+          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
+            params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
         );
       if (!isProofCurrent()) {
         return {
@@ -549,15 +541,23 @@ export function createNodeRegistryRuntime<TRegistry extends object>(
   };
 }
 
-export function setNodeRunnerInventoryChangedListener(
+export function setNodeRunnerStateChangedListener(
   nodeRegistry: object,
-  listener: (nodeId: string) => void,
+  listener: (nodeId: string, change: NodeRunnerStateChange) => void,
 ): void {
   const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
   if (!state) {
     throw new Error("node registry private runtime was not initialized");
   }
-  state.publishRunnerInventoryChanged = listener;
+  state.runnerState.setListener(listener);
+}
+
+export function reconcileNodeRunnerAvailability(nodeRegistry: object, nodeId: string): void {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(nodeRegistry);
+  if (!state) {
+    throw new Error("node registry private runtime was not initialized");
+  }
+  state.runnerState.reconcile(nodeId, false);
 }
 
 export function invokePublicNodeRegistry(
@@ -593,7 +593,7 @@ export function forgetNodeRunnerInventory(nodeRegistry: object, connId: string):
     return;
   }
   state.bundleStatusByConn.delete(connId);
-  state.publishRunnerInventoryChanged(declaration.nodeId);
+  state.runnerState.reconcile(declaration.nodeId, true);
 }
 
 export function isNodeRunnerSessionHost(params: {
@@ -608,11 +608,7 @@ export function isNodeRunnerSessionHost(params: {
     return false;
   }
   const proof = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
-  return Boolean(
-    proof &&
-    proof.pairingGeneration === params.pairingGeneration &&
-    proof.workerHost.capacity === "available",
-  );
+  return Boolean(proof && proof.pairingGeneration === params.pairingGeneration);
 }
 
 function getNodeRunnerInventoryIssue(params: {
@@ -625,6 +621,23 @@ function getNodeRunnerInventoryIssue(params: {
   return state && node?.connId === params.connId
     ? resolveNodeRunnerInventoryIssue(node, state.runnerInventoryByConn)
     : undefined;
+}
+
+export function collectNodeWorkerCapacityByNodeId(
+  registry: object,
+  connectedNodes: ReadonlyArray<{ nodeId: string; connId: string }>,
+): Map<string, NodeWorkerCapacitySnapshot> {
+  const state = NODE_REGISTRY_PRIVATE_STATES.get(registry);
+  return new Map(
+    connectedNodes.flatMap((node) => {
+      const current = state?.context.getNode(node.nodeId);
+      if (!state || !current || current.connId !== node.connId) {
+        return [];
+      }
+      const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
+      return proof ? [[node.nodeId, { ...proof.workerHost.capacity }] as const] : [];
+    }),
+  );
 }
 
 export function collectNodeWorkerBundleStatusByNodeId(
@@ -682,8 +695,10 @@ export function settleNodeRegistryPairingGenerationChange(params: {
   if (!state) {
     return;
   }
-  if (state.bundleStatusByConn.delete(params.connId)) {
-    state.publishRunnerInventoryChanged(params.nodeId);
+  const inventoryChanged = state.runnerInventoryByConn.delete(params.connId);
+  const statusChanged = state.bundleStatusByConn.delete(params.connId);
+  if (inventoryChanged || statusChanged) {
+    state.runnerState.reconcile(params.nodeId, true);
   }
   for (const pending of state.context.pendingInvokes.values()) {
     const binding = state.generationBoundInvokes.get(pending);

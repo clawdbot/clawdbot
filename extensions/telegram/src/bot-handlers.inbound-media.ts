@@ -35,8 +35,8 @@ import {
   buildTelegramThreadParams,
   getTelegramTextParts,
   hasBotMention,
-  resolveTelegramMessageThreadSpec,
   resolveTelegramPrimaryMedia,
+  type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { isTelegramForumServiceMessage } from "./forum-service-message.js";
@@ -49,8 +49,7 @@ type MediaAuthorization = {
   chatId: number;
   isGroup: boolean;
   isForum: boolean;
-  resolvedThreadId?: number;
-  dmThreadId?: number;
+  threadSpec: TelegramThreadSpec;
   senderId: string;
   effectiveGroupAllow: NormalizedAllowFrom;
   effectiveDmAllow: NormalizedAllowFrom;
@@ -135,8 +134,11 @@ export function createTelegramInboundMedia({
   const resolveUnaddressedGroupMediaDisposition = async (
     authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
   ): Promise<TelegramGroupMediaDisposition> => {
-    const { ctx, msg, chatId, isGroup, isForum, resolvedThreadId, dmThreadId, senderId } =
-      authorization;
+    const { ctx, msg, chatId, isGroup, senderId, threadSpec } = authorization;
+    const resolvedThreadId =
+      threadSpec.scope === "forum" || threadSpec.scope === "direct-messages"
+        ? threadSpec.id
+        : undefined;
     const textParts = getTelegramTextParts(msg);
     const documentMime = msg.document?.mime_type?.split(";")[0]?.trim().toLowerCase();
     const mayNeedDownload =
@@ -152,15 +154,11 @@ export function createTelegramInboundMedia({
     const sessionState = resolveTelegramSessionState({
       chatId,
       isGroup,
-      isForum,
-      resolvedThreadId,
-      messageThreadId: resolvedThreadId ?? dmThreadId,
+      threadSpec,
       senderId,
       runtimeCfg: authorization.authorizationCfg,
     });
     const activationOverride = resolveGroupActivation({
-      chatId,
-      messageThreadId: resolvedThreadId,
       sessionKey: sessionState.sessionKey,
       agentId: sessionState.agentId,
       cfg: authorization.authorizationCfg,
@@ -214,7 +212,7 @@ export function createTelegramInboundMedia({
       sessionState.agentId,
       {
         provider: "telegram",
-        conversationId: buildTelegramGroupPeerId(chatId, resolvedThreadId),
+        conversationId: buildTelegramGroupPeerId(chatId, threadSpec),
         providerPolicy:
           authorization.authorizationCfg.channels?.telegram?.accounts?.[accountId]?.mentionPatterns,
       },
@@ -356,16 +354,13 @@ export function createTelegramInboundMedia({
           }
           // Classic polling cannot replay a failed album; retain its existing partial-delivery path.
           runtime.log?.(warn(`media group: skipping photo that failed to fetch: ${String(error)}`));
-          allMedia.push({ kind: nativeKind, sourceMessageId });
-          selection.set(sourceMessageId, "exclude");
-          skippedCount++;
-          continue;
         }
         if (media) {
           await recordMessageResolvedMedia({ msg, media, botUserId: ctx.me?.id });
           allMedia.push({
             path: media.path,
             contentType: media.contentType,
+            ...(media.fileName ? { fileName: media.fileName } : {}),
             kind: media.kind,
             stickerMetadata: media.stickerMetadata,
             sourceMessageId,
@@ -373,7 +368,11 @@ export function createTelegramInboundMedia({
           materializedCount++;
           selection.set(sourceMessageId, "include");
         } else {
-          allMedia.push({ kind: nativeKind, sourceMessageId });
+          allMedia.push({
+            kind: nativeKind,
+            sourceMessageId,
+            unavailable: { reason: "download-failed" },
+          });
           selection.set(sourceMessageId, "exclude");
           skippedCount++;
         }
@@ -388,9 +387,7 @@ export function createTelegramInboundMedia({
               primary.msg.chat.id,
               `⚠️ Received ${materializedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
               {
-                ...buildTelegramThreadParams(
-                  resolveTelegramMessageThreadSpec(primary.msg, entry.isForum),
-                ),
+                ...buildTelegramThreadParams(entry.threadSpec),
                 reply_parameters: {
                   message_id: primary.msg.message_id,
                   allow_sending_without_reply: true,
@@ -406,6 +403,7 @@ export function createTelegramInboundMedia({
         promptContextMessageSelection: selection,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
+          threadSpec: entry.threadSpec,
           ...(finalIngressMessageId != null
             ? { messageIdOverride: String(finalIngressMessageId) }
             : {}),
@@ -439,8 +437,7 @@ export function createTelegramInboundMedia({
     if (!mediaGroupId) {
       return false;
     }
-    const threadId = input.resolvedThreadId ?? input.dmThreadId;
-    const key = `media:${input.chatId}:${threadId ?? "main"}:${mediaGroupId}`;
+    const key = `media:${input.chatId}:${input.threadSpec.scope}:${input.threadSpec.id ?? "main"}:${mediaGroupId}`;
     const existing = buffer.get(key);
     const participant = createSpooledReplayParticipantForBufferedWork(
       `media-group:${key}:${input.msg.message_id}`,

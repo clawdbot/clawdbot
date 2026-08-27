@@ -3,13 +3,16 @@ import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { computeBackoff, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { ChannelGatewayContext } from "../runtime-api.js";
 import { sendBuzzTextOneShot, startBuzzBus, type BuzzBus } from "./buzz-bus.js";
 import { handleBuzzInbound } from "./inbound.js";
+import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
 import { getBuzzRuntime } from "./runtime.js";
 import { buildBuzzTarget, isConfiguredBuzzChannel, parseBuzzTarget } from "./target.js";
 import {
+  assertBuzzAccountAvailable,
   resolveBuzzAccount,
   resolveDefaultBuzzAccountId,
   type ResolvedBuzzAccount,
@@ -62,10 +65,8 @@ function resolveBuzzProfileName(params: {
 export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<ResolvedBuzzAccount>) {
   const channelRuntime = ctx.channelRuntime as PluginRuntime["channel"] | undefined;
   const buildContext = channelRuntime?.inbound.buildContext;
-  const account = resolveBuzzAccount({
-    cfg: ctx.cfg,
-    accountId: ctx.account.accountId,
-  });
+  const account = ctx.account;
+  assertBuzzAccountAvailable(account);
   if (!account.configured) {
     throw new Error(`Buzz is not configured for account "${account.accountId}"`);
   }
@@ -78,9 +79,11 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
   const configuredChannelIds = new Set(channelIds);
   const profileName = resolveBuzzProfileName({ cfg: ctx.cfg, account, channelIds });
 
-  let hasAttemptedSession = false;
+  const watermarkStore = openBuzzRecoveryWatermarkStore({ accountId: account.accountId });
+
   let reconnectAttempt = 0;
   while (!ctx.abortSignal.aborted) {
+    const historyMap = new Map<string, HistoryEntry[]>();
     let bus: BuzzBus | undefined;
     let cycleError: Error | undefined;
     let connectedAt: number | undefined;
@@ -89,9 +92,13 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       reportBusFailure = resolve;
     });
     try {
-      const sessionSince =
-        Math.floor(Date.now() / 1000) - (hasAttemptedSession ? RECONNECT_LOOKBACK_SECONDS : 0);
-      hasAttemptedSession = true;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const sinceByRoom = await resolveBuzzRecoverySince({
+        store: watermarkStore,
+        channelIds,
+        nowSeconds,
+        lookbackSeconds: RECONNECT_LOOKBACK_SECONDS,
+      });
       bus = await startBuzzBus({
         accountId: account.accountId,
         relayUrl: account.relayUrl,
@@ -99,9 +106,9 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
         authTag: account.authTag,
         profileName,
         channelIds,
-        since: sessionSince,
+        since: (channelId) => sinceByRoom.get(channelId) ?? nowSeconds,
         signal: ctx.abortSignal,
-        onMessage: async (message, sessionBus, signal) => {
+        onMessage: async (message, sessionBus, signal, assertCurrent) => {
           // Subscription filters reduce traffic, but relay events remain untrusted.
           if (!isConfiguredBuzzChannel(configuredChannelIds, message.channelId)) {
             return;
@@ -112,6 +119,8 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
             bus: sessionBus,
             message,
             signal,
+            assertCurrent,
+            historyMap,
             buildContext,
           });
         },
@@ -174,10 +183,12 @@ export async function startBuzzGatewayAccount(ctx: ChannelGatewayContext<Resolve
       }
       cycleError = error instanceof Error ? error : new Error(String(error));
     } finally {
-      await bus?.close();
+      // Retire before fallible async shutdown so new work cannot reacquire this bus.
       if (activeBuses.get(account.accountId) === bus) {
         activeBuses.delete(account.accountId);
       }
+      await bus?.close();
+      historyMap.clear();
       ctx.setStatus({
         accountId: account.accountId,
         running: false,
@@ -235,6 +246,7 @@ export const buzzOutboundAdapter = {
     const runtime = getBuzzRuntime();
     const resolvedAccountId = accountId ?? resolveDefaultBuzzAccountId(cfg);
     const account = resolveBuzzAccount({ cfg, accountId: resolvedAccountId });
+    assertBuzzAccountAvailable(account);
     if (!account.enabled) {
       throw new Error(`Buzz is disabled for account ${resolvedAccountId}`);
     }

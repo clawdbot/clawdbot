@@ -152,7 +152,7 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
-- `--runtime <runtime>`: Service runtime (`node`)
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--force`: Reinstall/overwrite if already installed
 
 > **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
@@ -242,11 +242,11 @@ identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| State                                                    | Purpose                                                                                                                          |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `state/openclaw.sqlite` (`node_host_config`)             | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
-| `state/openclaw.sqlite` (`device_identities`, `primary`) | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
-| `state/openclaw.sqlite` (`device_auth_tokens`)           | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
+| State                                                                   | Purpose                                                                                                                          |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
 
 `--node-id` changes only the client instance ID in shared SQLite state. It does
 not change the cryptographic device ID or clear pairing auth. Migrating a retired

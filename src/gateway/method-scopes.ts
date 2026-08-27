@@ -190,6 +190,12 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   if (method === "sessions.create") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
   }
+  if (method === "sessions.dispatch") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
+  if (method === "sessions.move") {
+    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+  }
   if (method === "sessions.delete") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? ADMIN_SCOPE];
   }

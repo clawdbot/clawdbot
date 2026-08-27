@@ -124,6 +124,54 @@ describe("resolveProjectedSessionContextTokens", () => {
     ).toBe(1_000_000);
   });
 
+  it("falls back to the matching persisted resolution while current resolution is unavailable", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: { ...matchingRuntimeEntry, contextTokensSource: "resolved-v1" },
+        ...currentSelection,
+        resolvedContextTokens: undefined,
+      }),
+    ).toBe(272_000);
+  });
+
+  it("rejects a legacy resolved row because its producer may have reused a fallback", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: { ...matchingRuntimeEntry, contextTokensSource: "resolved" },
+        ...currentSelection,
+        resolvedContextTokens: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not resurrect a removed runtime-configured cap while resolution is unavailable", () => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: { ...matchingRuntimeEntry, contextTokensSource: "runtime-configured" },
+        ...currentSelection,
+        resolvedContextTokens: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "provider", patch: { modelProvider: "openrouter" } },
+    { name: "model", patch: { model: "gpt-5.5" } },
+    { name: "harness", patch: { agentHarnessId: "openclaw" } },
+  ])("rejects a persisted resolution owned by a different $name", ({ patch }) => {
+    expect(
+      resolveProjectedSessionContextTokens({
+        entry: {
+          ...matchingRuntimeEntry,
+          contextTokensSource: "resolved-v1",
+          ...patch,
+        },
+        ...currentSelection,
+        resolvedContextTokens: undefined,
+      }),
+    ).toBeUndefined();
+  });
+
   it("preserves a locked native window ahead of current configuration", () => {
     expect(
       resolveProjectedSessionContextTokens({

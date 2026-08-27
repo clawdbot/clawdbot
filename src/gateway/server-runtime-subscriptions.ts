@@ -5,9 +5,11 @@ import {
   resolveAuditMessageMode,
 } from "../audit/audit-config.js";
 import { createAuditEventRecorder } from "../audit/audit-recorder.js";
+import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
 import { configureMessageActionDecisionSink } from "../audit/message-action-decision.js";
 import { onTrustedMessageAuditEvent } from "../audit/message-audit-events.js";
+import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
 import {
   configureChannelAdmissionDecisionSink,
   configureChannelAdmissionEvidenceCollection,
@@ -29,6 +31,7 @@ import {
   removeChatAbortControllerEntry,
   type RestartRecoveryCandidate,
 } from "./chat-abort.js";
+import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
 import type {
   ChatRunState,
   SessionEventSubscriberRegistry,
@@ -41,6 +44,7 @@ import { defaultSessionCompanionContextReader } from "./session-companion-contex
 import { createSessionCompanion } from "./session-companion.js";
 import { createSessionObserver } from "./session-observer.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { resolveTaskRequesterSessionTarget } from "./task-session-access.js";
 import type { TerminalSessionManager } from "./terminal/session-manager.js";
 
 function dispatchEventHandler<TEvent>(params: {
@@ -71,7 +75,7 @@ function terminalTaskId(event: TaskRegistryObserverEvent): string | undefined {
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
   log: SubsystemLogger;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: GatewayBroadcastFn;
   broadcastToConnIds: (
     event: string,
     payload: unknown,
@@ -99,6 +103,9 @@ export function startGatewayEventSubscriptions(params: {
   const clearExecutionIdentityAdmissionSink = configureExecutionIdentityAdmissionSink(
     auditRecorder.recordExecutionIdentity,
   );
+  const clearExecutionDecisionWorkSink = configureExecutionDecisionWorkSink(
+    auditRecorder.recordExecutionDecisionWork,
+  );
   const clearChannelAdmissionEvidenceCollection = configureChannelAdmissionEvidenceCollection(
     isExecutionIdentityCollectionEnabled(runtimeConfig),
   );
@@ -106,6 +113,9 @@ export function startGatewayEventSubscriptions(params: {
     auditRecorder.recordExecutionDecision,
   );
   const clearMessageActionDecisionSink = configureMessageActionDecisionSink(
+    auditRecorder.recordExecutionDecision,
+  );
+  const clearRuntimeActionDecisionSink = configureRuntimeActionDecisionSink(
     auditRecorder.recordExecutionDecision,
   );
   const sessionObserver = createSessionObserver({
@@ -368,10 +378,12 @@ export function startGatewayEventSubscriptions(params: {
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
+    clearExecutionDecisionWorkSink();
     clearExecutionIdentityAdmissionSink();
     clearChannelAdmissionEvidenceCollection();
     clearChannelAdmissionDecisionSink();
     clearMessageActionDecisionSink();
+    clearRuntimeActionDecisionSink();
     await agentEventHandlerLoader
       .peek()
       ?.then((handler) => handler.dispose())
@@ -408,6 +420,7 @@ export function startGatewayEventSubscriptions(params: {
   const taskObservers = {
     onEvent: (event: TaskRegistryObserverEvent) => {
       let payload: TaskEventPayload;
+      let sessionTarget: ReturnType<typeof resolveTaskRequesterSessionTarget>;
       switch (event.kind) {
         case "upserted": {
           const task = mapTaskSummary(event.task);
@@ -417,18 +430,25 @@ export function startGatewayEventSubscriptions(params: {
           }
           lastTaskSummaryById.set(task.id, summary);
           payload = { action: "upserted", task };
+          sessionTarget = resolveTaskRequesterSessionTarget(event.task);
           break;
         }
         case "deleted":
           lastTaskSummaryById.delete(event.taskId);
           payload = { action: "deleted", taskId: event.taskId };
+          sessionTarget = resolveTaskRequesterSessionTarget(event.previous);
           break;
         case "restored":
           lastTaskSummaryById.clear();
           payload = { action: "restored" };
           break;
       }
-      params.broadcast("task", payload, { dropIfSlow: true });
+      params.broadcast("task", payload, {
+        dropIfSlow: true,
+        ...(sessionTarget
+          ? { sessionKeys: [sessionTarget.sessionKey], agentId: sessionTarget.agentId }
+          : {}),
+      });
       const taskId = terminalTaskId(event);
       if (taskId) {
         params.terminalSessions.closeTaskSessions(taskId);

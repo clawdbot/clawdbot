@@ -2,8 +2,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { formatConcreteConfigPath } from "../shared/dot-path.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import { listOfficialExternalChannelSecretTargetRegistryEntries } from "./official-external-channel-secret-contract.js";
+import { parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
 const SECRET_INPUT_SHAPE = "secret_input"; // pragma: allowlist secret
@@ -20,14 +22,15 @@ function createPluginOpenClawConfigSecretTargetEntry(
   pluginId: string,
   configPath: string,
 ): SecretTargetRegistryEntry {
-  const pathPattern = ["plugins", "entries", pluginId, "config", ...configPath.split(".")].join(
-    ".",
-  );
+  const pluginConfigPath = ["plugins", "entries", pluginId, "config"];
+  const pathPatternSegments = [...pluginConfigPath, ...parseDotPath(configPath)];
+  const pathPattern = `${formatConcreteConfigPath(pluginConfigPath)}.${configPath}`;
   return {
     id: pathPattern,
     targetType: pathPattern,
     configFile: "openclaw.json",
     pathPattern,
+    pathPatternSegments,
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,
@@ -107,7 +110,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "auth-profiles.api_key.key",
     targetType: "auth-profiles.api_key.key",
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     pathPattern: "profiles.*.key",
     refPathPattern: "profiles.*.keyRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -120,7 +123,7 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
   {
     id: "auth-profiles.token.token",
     targetType: "auth-profiles.token.token",
-    configFile: "auth-profiles.json",
+    configFile: "auth-profile-store",
     pathPattern: "profiles.*.token",
     refPathPattern: "profiles.*.tokenRef",
     secretShape: SIBLING_REF_SHAPE,
@@ -452,6 +455,13 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     allowWorkspaceScopedCurrent: true,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
+  return buildSecretTargetRegistryFromPlugins(plugins);
+}
+
+/** Builds secret targets from one exact manifest-registry plugin set. */
+export function buildSecretTargetRegistryFromPlugins(
+  plugins: readonly PluginManifestRecord[],
+): SecretTargetRegistryEntry[] {
   const channelPlugins = plugins.filter(
     (record) =>
       record.channels.length > 0 ||

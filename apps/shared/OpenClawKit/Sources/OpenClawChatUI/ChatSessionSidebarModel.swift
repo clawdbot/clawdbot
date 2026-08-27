@@ -384,8 +384,8 @@ public enum ChatSessionSidebarModel {
         if let hasActiveRun = change.hasActiveRun {
             session.hasActiveRun = hasActiveRun
         }
-        if let activeRunIds = change.activeRunIds {
-            session.activeRunIds = activeRunIds
+        if change.activeRunIdsPresent {
+            session.activeRunIds = change.activeRunIds
         }
         if let startedAt = change.startedAt {
             session.startedAt = startedAt

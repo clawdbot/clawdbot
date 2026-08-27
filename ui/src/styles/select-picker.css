@@ -34,10 +34,10 @@ wa-select.settings-select::part(listbox) {
      would let the listbox overflow when the popup has little room to open. */
   max-height: min(320px, var(--auto-size-available-height, calc(100vh - 48px)));
   padding: 6px;
-  border: 1px solid color-mix(in srgb, var(--border-strong) 86%, transparent);
+  border: 1px solid var(--overlay-border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--overlay-shadow);
   color: var(--text);
 }
 

@@ -28,7 +28,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   const logs: string[] = [];
   const runtime = {
-    log: (msg: string) => logs.push(msg),
+    log: (msg: string) => logs.push(...msg.split("\n")),
     error: () => {},
     exit: () => {},
   } as RuntimeEnv;
@@ -353,6 +353,46 @@ describe("printCronList", () => {
     expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
   });
 
+  it("includes condition triggers on stream schedules", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      trigger: { script: "json({ fire: true })" },
+      state: {},
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+  });
+
+  it("shows disabled stream sources and their actionable failure reason", () => {
+    const job = createBaseJob({
+      schedule: { kind: "stream", command: ["node", "events.mjs"] },
+      state: {
+        streamStatus: "disabled",
+        streamError: "stream sources require cron.triggers.enabled=true",
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    const row = list.logs.find((line) => line.includes(job.id)) ?? "";
+    expect(row).toContain("disabled");
+    expect(row).not.toContain("idle");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "stream status: disabled");
+    expectLogsToInclude(
+      show.logs,
+      "stream error: stream sources require cron.triggers.enabled=true",
+    );
+  });
+
   it("shows on-exit schedules in list and show output", () => {
     const job = createBaseJob({
       id: "on-exit-job",
@@ -393,6 +433,102 @@ describe("printCronList", () => {
     expect(singleLine).toContain("error");
     expect(singleLine).not.toContain("(1x)");
   });
+
+  it.each([
+    { label: "required", bestEffort: false },
+    { label: "best-effort", bestEffort: true },
+    { label: "default", bestEffort: undefined },
+  ])(
+    "makes $label undelivered automation output visible without changing JSON status",
+    ({ bestEffort }) => {
+      const job = createBaseJob({
+        id: "undelivered-job",
+        delivery: {
+          mode: "announce",
+          ...(bestEffort === undefined ? {} : { bestEffort }),
+        },
+        state: {
+          lastRunStatus: "ok",
+          lastDeliveryStatus: "not-delivered",
+          lastDeliveryError: "primary route rejected",
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, "ok (not delivered)");
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+      expectLogsToInclude(show.logs, "status: ok (not delivered)");
+      expectLogsToInclude(show.logs, "last delivery error: primary route rejected");
+
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({
+        status: "ok",
+        state: { lastRunStatus: "ok", lastDeliveryStatus: "not-delivered" },
+      });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: "ok" }],
+      });
+    },
+  );
+
+  it.each([
+    {
+      label: "disabled",
+      enabled: false,
+      running: false,
+      runStatus: "ok" as const,
+      expectedStatus: "disabled",
+    },
+    {
+      label: "running",
+      enabled: true,
+      running: true,
+      runStatus: "ok" as const,
+      expectedStatus: "running",
+    },
+    {
+      label: "paused but force-running",
+      enabled: false,
+      running: true,
+      runStatus: "ok" as const,
+      expectedStatus: "running",
+    },
+    {
+      label: "failed",
+      enabled: true,
+      running: false,
+      runStatus: "error" as const,
+      expectedStatus: "error",
+    },
+  ])(
+    "does not let prior non-delivery override a $label automation",
+    ({ enabled, running, runStatus, expectedStatus }) => {
+      const job = createBaseJob({
+        enabled,
+        state: {
+          lastRunStatus: runStatus,
+          lastDeliveryStatus: "not-delivered",
+          ...(running ? { runningAtMs: Date.now() } : {}),
+        },
+      });
+
+      const list = createRuntimeLogCapture();
+      printCronList([job], list.runtime);
+      expectLogsToInclude(list.logs, expectedStatus);
+
+      const show = createRuntimeLogCapture();
+      printCronShow(job, show.runtime);
+
+      expectLogsToInclude(show.logs, `status: ${expectedStatus}`);
+      expect(show.logs.join("\n")).not.toContain("ok (not delivered)");
+      expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: expectedStatus });
+      expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({
+        jobs: [{ status: expectedStatus }],
+      });
+    },
+  );
 
   it("shows why the scheduler auto-disabled a job without changing JSON status", () => {
     const runFailures = createBaseJob({
@@ -675,9 +811,9 @@ describe("parseAt", () => {
 });
 
 describe("getCronChannelOptions", () => {
-  it("falls back to a generic channel placeholder when no plugins are loaded", () => {
+  it("falls back to a channel plugin id placeholder when no plugins are loaded", () => {
     hoisted.listChannelPluginsMock.mockReturnValue([]);
-    expect(getCronChannelOptions()).toBe("last|<channel-id>");
+    expect(getCronChannelOptions()).toBe("last|<channel-plugin-id>");
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {

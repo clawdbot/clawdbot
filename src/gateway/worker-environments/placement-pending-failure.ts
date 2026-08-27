@@ -1,7 +1,6 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  isCurrentPlacementTurnClaim,
   placementTurnOwner,
   required,
   type WorkerSessionPlacementRecord,
@@ -14,7 +13,10 @@ import {
   clearWorkerTurnToolState,
 } from "./placement-session-tool-operations.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
-import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
+import {
+  isCurrentWorkerWorkspacePendingResultOwner,
+  type WorkerWorkspacePendingResult,
+} from "./placement-workspace-result.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime) {
@@ -28,6 +30,9 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
       const recoveryError = boundedWorkerError(error);
       const outcome = write((db) => {
         const current = getRequired(db, sessionId);
+        if (!isCurrentWorkerWorkspacePendingResultOwner(current, pending)) {
+          throw new Error(`Session ${sessionId} workspace result owner changed before failure`);
+        }
         const persisted = current.turnClaim;
         const releasedClaim: WorkerSessionTurnClaim | null = persisted
           ? {
@@ -35,31 +40,9 @@ export function createPlacementPendingFailureOps(runtime: PlacementStoreRuntime)
               claimId: persisted.claimId,
               runId: persisted.runId,
               placementGeneration: persisted.generation,
-              owner: placementTurnOwner({
-                executionMode: current.executionMode,
-                environmentId: pending.environmentId,
-                activeOwnerEpoch: pending.ownerEpoch,
-              }),
+              owner: placementTurnOwner(current),
             }
           : null;
-        const exactClaim =
-          releasedClaim === null ||
-          (releasedClaim.claimId === pending.claimId &&
-            releasedClaim.runId === pending.runId &&
-            releasedClaim.placementGeneration === pending.placementGeneration &&
-            isCurrentPlacementTurnClaim(current, releasedClaim));
-        if (
-          (current.state !== "active" && current.state !== "draining") ||
-          current.environmentId !== pending.environmentId ||
-          current.activeOwnerEpoch !== pending.ownerEpoch ||
-          current.generation !==
-            (current.state === "active"
-              ? pending.placementGeneration
-              : pending.placementGeneration + 1) ||
-          !exactClaim
-        ) {
-          throw new Error(`Session ${sessionId} workspace result owner changed before failure`);
-        }
         const pendingQuery =
           getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_pending_results">>(db);
         const exactPending = executeSqliteQuerySync(

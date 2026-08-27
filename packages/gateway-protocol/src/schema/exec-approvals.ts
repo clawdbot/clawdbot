@@ -1,7 +1,7 @@
 import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
-import { ApprovalChannelReviewerSchema } from "./approvals.js";
+import { ApprovalChannelReviewerSchema, ApprovalScopeSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -266,6 +266,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  scope: Type.Optional(ApprovalScopeSchema),
   unavailableDecisions: Type.Optional(
     Type.Array(Type.String({ enum: ["allow-always"] }), {
       minItems: 1,
@@ -305,6 +306,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   ),
   requireDeliveryRoute: Type.Optional(Type.Boolean()),
   suppressDelivery: Type.Optional(Type.Boolean()),
+  deliverToApprovalClientsOnly: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   twoPhase: Type.Optional(Type.Boolean()),
 });

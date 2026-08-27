@@ -231,6 +231,7 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "cron.remove",
   "cron.run",
   "cron.runs",
+  "secrets.store.delete",
 ]);
 
 const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);
@@ -503,11 +504,13 @@ export async function resolveMessageActionAgentRuntimeIdentityToken(params: {
   const resolvedMessageActionContext = terminalSourceReply
     ? {
         ...messageActionContext,
+        turnCapability: params.turnCapability,
         sourceReplyFinal: true as const,
         sourceReplyToolCallId: sourceReplyToolCallId!,
       }
     : {
         ...messageActionContext,
+        turnCapability: params.turnCapability,
         ...(params.sourceReplyFinal === false ? { sourceReplyFinal: false as const } : {}),
         ...(sourceReplyToolCallId ? { sourceReplyToolCallId } : {}),
       };

@@ -13,9 +13,127 @@ import {
 } from "./auto-reply-delivery.test-helpers.js";
 import { processLineMessage as processOrderedLineMessage } from "./markdown-to-line.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
-import { createFlexMessage as createProviderFlexMessage } from "./send.js";
+import {
+  createFlexMessage as createProviderFlexMessage,
+  createLocationMessage as createRealLocationMessage,
+} from "./send.js";
 
 describe("deliverLineAutoReply", () => {
+  it.each([
+    { name: "without quick replies", quickReplies: [] as string[] },
+    { name: "with final quick replies", quickReplies: ["Continue"] },
+  ])("keeps ordinary Markdown blocks in source order $name", async ({ quickReplies }) => {
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: processOrderedLineMessage,
+      chunkMarkdownText,
+    });
+    const markdown =
+      "Before\n\n```js\nfirst()\n```\n\nBetween\n\n| Name | Value |\n|---|---|\n| Item | one |\n\nAfter";
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: markdown },
+      lineData: quickReplies.length > 0 ? { quickReplies } : {},
+      deps,
+    });
+
+    expect(replyMessageLine).toHaveBeenCalledOnce();
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+    const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "LINE reply messages");
+    expect(
+      messages.map((message) =>
+        message.type === "flex"
+          ? message.altText
+          : message.type === "text"
+            ? message.text
+            : message.type,
+      ),
+    ).toEqual(["Before", "Code", "Between", "Table", "After"]);
+    if (quickReplies.length > 0) {
+      expect(messages.at(-1)).toMatchObject({ quickReply: { items: quickReplies } });
+      expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
+    }
+  });
+
+  it.each([
+    {
+      name: "a fenced code block",
+      markdown: "```js\nfirst()\n```",
+      cards: ["Code"],
+    },
+    {
+      name: "a Markdown table",
+      markdown: "| Name | Value |\n|---|---|\n| Item | one |",
+      cards: ["Table"],
+    },
+    {
+      name: "consecutive code and table cards",
+      markdown: "```js\nfirst()\n```\n\n| Name | Value |\n|---|---|\n| Item | one |",
+      cards: ["Code", "Table"],
+    },
+  ])("keeps media as the final quick-reply carrier after $name", async ({ markdown, cards }) => {
+    const lineData = { quickReplies: ["Continue"] };
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: processOrderedLineMessage,
+      chunkMarkdownText,
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: markdown, mediaUrls: ["https://example.com/image.jpg"] },
+      lineData,
+      deps,
+    });
+
+    const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "LINE reply messages");
+    expect(
+      messages.map((message) => (message.type === "flex" ? message.altText : message.type)),
+    ).toEqual([...cards, "image"]);
+    expect(messages.at(-1)).toMatchObject({
+      type: "image",
+      originalContentUrl: "https://example.com/image.jpg",
+      quickReply: { items: ["Continue"] },
+    });
+    expect(messages.slice(0, -1).every((message) => !("quickReply" in message))).toBe(true);
+    expect(pushMessagesLine).not.toHaveBeenCalled();
+  });
+
+  it("keeps quick replies on final media when ordered cards overflow the reply token", async () => {
+    const lineData = { quickReplies: ["Continue"] };
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      processLineMessage: processOrderedLineMessage,
+      chunkMarkdownText,
+    });
+
+    await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: {
+        text: Array.from({ length: 6 }, (_, index) => `\`\`\`js\ncard${index}()\n\`\`\``).join(
+          "\n\n",
+        ),
+        mediaUrls: ["https://example.com/image.jpg"],
+      },
+      lineData,
+      deps,
+    });
+
+    expect(replyMessageLine.mock.calls[0]?.[1].map((message) => message.type)).toEqual([
+      "flex",
+      "flex",
+      "flex",
+      "flex",
+      "flex",
+    ]);
+    expect(pushMessagesLine.mock.calls[0]?.[1]).toMatchObject([
+      { type: "flex", altText: "Code" },
+      {
+        type: "image",
+        originalContentUrl: "https://example.com/image.jpg",
+        quickReply: { items: ["Continue"] },
+      },
+    ]);
+  });
+
   it.each([
     { name: "without quick replies", quickReplies: [] as string[] },
     { name: "with final quick replies", quickReplies: ["Continue"] },
@@ -101,21 +219,19 @@ describe("deliverLineAutoReply", () => {
     expect(result.visibleReplySent).toBe(true);
   });
 
-  it.each([
-    { name: "title", title: " ", address: "1 Main Street" },
-    { name: "address", title: "Meet here", address: " " },
-  ])("skips a direct location with a blank $name while delivering text", async (location) => {
+  it("delivers whatever the location builder returns, including its text degradation", async () => {
+    // A blank required field makes LINE reject the pin, and the builder answers
+    // with the sender's values as text. The reply must carry that, not drop it.
     const lineData = {
-      location: { ...location, latitude: 35.6895, longitude: 139.6917 },
+      location: { title: "Meet here", address: " ", latitude: 35.6895, longitude: 139.6917 },
     };
-    const createLocationMessage = vi.fn<LineAutoReplyDeps["createLocationMessage"]>((value) =>
-      value.title.trim() && value.address.trim()
-        ? {
-            type: "location" as const,
-            ...value,
-          }
-        : null,
-    );
+    const degraded = {
+      type: "text" as const,
+      text: "Meet here" + String.fromCharCode(10) + "35.6895, 139.6917",
+    };
+    // The real builder decides the degradation; injecting a stand-in here would
+    // only prove the stand-in was pushed.
+    const createLocationMessage = vi.fn(createRealLocationMessage);
     const { deps, replyMessageLine } = createDeps({ createLocationMessage });
 
     const result = await deliverLineAutoReply({
@@ -127,7 +243,8 @@ describe("deliverLineAutoReply", () => {
 
     expect(replyMessageLine).toHaveBeenCalledExactlyOnceWith(
       "token",
-      [{ type: "text", text: "Meet me there." }],
+      // No quick replies here, so the text leads and rich parts follow it.
+      [{ type: "text", text: "Meet me there." }, degraded],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(createLocationMessage).toHaveBeenCalledOnce();

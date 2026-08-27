@@ -19,6 +19,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+  SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY,
   SUGGEST_TASK_TOOL_DISPLAY_SUMMARY,
   DISMISS_TASK_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
@@ -115,6 +116,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Run sandboxed remote analysis",
     sectionId: "runtime",
     profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "secrets",
+    label: "secrets",
+    description: "Request and manage write-only credentials",
+    sectionId: "runtime",
+    profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
   },
   {
@@ -230,6 +239,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "github_identity_status",
+    label: "github_identity_status",
+    description: "Inspect the effective GitHub identity and credential health",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "github_publish",
+    label: "github_publish",
+    description: "Publish the reconciled session worktree as a draft GitHub pull request",
+    sectionId: "sessions",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "agents_wait",
     label: "agents_wait",
     description: AGENTS_WAIT_TOOL_DISPLAY_SUMMARY,
@@ -304,7 +329,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "terminal",
     label: "terminal",
-    description: "Own visible gateway terminal",
+    description: "Use shared operator terminals with policy-governed input",
     sectionId: "ui",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -439,8 +464,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "skill_workshop",
     label: "skill_workshop",
-    description:
-      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+    description: SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY,
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -559,7 +583,10 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 }
 
 /** Lists core tools grouped into UI sections. */
-export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreToolSection[] {
+export function listCoreToolSections(params?: {
+  swarmEnabled?: boolean;
+  githubPublicationAvailable?: boolean;
+}): CoreToolSection[] {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
   const swarmEnabled = params?.swarmEnabled === true;
@@ -567,7 +594,12 @@ export function listCoreToolSections(params?: { swarmEnabled?: boolean }): CoreT
     id: section.id,
     label: section.label,
     tools: CORE_TOOL_DEFINITIONS.filter(
-      (tool) => tool.sectionId === section.id && (tool.id !== "agents_wait" || swarmEnabled),
+      (tool) =>
+        tool.sectionId === section.id &&
+        (tool.id !== "agents_wait" || swarmEnabled) &&
+        (tool.id !== "github_identity_status" ||
+          params?.githubPublicationAvailable !== undefined) &&
+        (tool.id !== "github_publish" || params?.githubPublicationAvailable === true),
     ).map((tool) => ({
       id: tool.id,
       label: tool.label,

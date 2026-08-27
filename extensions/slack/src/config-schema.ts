@@ -27,6 +27,7 @@ const SecretInputSchema = buildSecretInputSchema();
 const SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS = 20_000;
 
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  style: z.enum(["card", "compact"]).optional(),
   nativeTaskCards: z.boolean().optional(),
 }).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
@@ -92,6 +93,7 @@ const SlackAccountSchema = z
       omit: ["groupAllowFrom"],
       streaming: SlackStreamingConfigSchema.optional(),
     }),
+    joinIntro: z.boolean().optional(),
     postAs: SlackIdentitySchema.default("bot"),
     mode: z.enum(["socket", "http", "relay"]).optional(),
     relay: SlackRelaySchema.optional(),

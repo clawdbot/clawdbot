@@ -33,6 +33,7 @@ import {
   readControlCursor,
   toCatalogSession,
 } from "./session-catalog-parsing.js";
+import { isOpenClawManagedCodexThread } from "./session-catalog-provenance.js";
 import type {
   CodexSessionCatalogControl,
   CodexSessionCatalogControlFactory,
@@ -117,6 +118,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
   clientId?: string;
   connectionFingerprint?: string;
   createRequestSnapshot: () => CodexSessionCatalogRequestSnapshot;
+  localSessionsRoot?: string;
   now: () => number;
   withPinnedConnection: CodexSessionCatalogControl["withPinnedConnection"];
 }): CodexSessionCatalogControl {
@@ -134,6 +136,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
       const cwd = pageParams.cwd?.trim() || undefined;
       const maxPages = search ? MAX_TITLE_SEARCH_CATALOG_PAGES : 1;
       const sessions: CodexSessionCatalogSession[] = [];
+      const managedThreads: Array<{ threadId: string; rolloutPath?: string }> = [];
       let cursor = readControlCursor(pageParams.cursor, "request");
       let nextCursor: string | undefined;
       let backwardsCursor: string | undefined;
@@ -142,7 +145,6 @@ function createCodexSessionCatalogControlFromRequests(params: {
       const deadline = params.now() + requests.requestTimeoutMs;
 
       for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
-        const remaining = limit - sessions.length;
         const remainingTimeoutMs = Math.ceil(deadline - params.now());
         if (remainingTimeoutMs <= 0) {
           throw new Error("Codex session catalog listing timed out");
@@ -150,7 +152,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
         const response = await requests.listThreads(
           {
             archived: false,
-            limit: remaining,
+            limit: limit - sessions.length,
             modelProviders: [],
             // Match Codex's resume picker/latest-session ordering so a session
             // created outside OpenClaw enters the first catalog page immediately.
@@ -164,14 +166,24 @@ function createCodexSessionCatalogControlFromRequests(params: {
         if (pageIndex === 0) {
           backwardsCursor = readControlCursor(response.backwardsCursor, "backwards response");
         }
-        sessions.push(
-          ...response.data
-            .flatMap((thread) => {
-              const session = toCatalogSession(thread, false);
-              return session ? [session] : [];
-            })
-            .filter((session) => !search || session.name?.toLocaleLowerCase().includes(search)),
-        );
+        for (const thread of response.data) {
+          if (await isOpenClawManagedCodexThread(thread, params.localSessionsRoot)) {
+            const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
+            managedThreads.push({
+              threadId: thread.id,
+              ...(rolloutPath ? { rolloutPath } : {}),
+            });
+            continue;
+          }
+          const session = toCatalogSession(thread, false);
+          if (
+            session &&
+            (!search ||
+              (session.name ?? session.fallbackName)?.toLocaleLowerCase().includes(search))
+          ) {
+            sessions.push(session);
+          }
+        }
         nextCursor = readControlCursor(response.nextCursor, "next response");
         if (!nextCursor || sessions.length >= limit) {
           break;
@@ -184,6 +196,7 @@ function createCodexSessionCatalogControlFromRequests(params: {
       }
       return {
         sessions,
+        ...(managedThreads.length > 0 ? { managedThreads } : {}),
         ...(nextCursor ? { nextCursor } : {}),
         ...(backwardsCursor ? { backwardsCursor } : {}),
       };
@@ -326,6 +339,7 @@ export function createCodexSessionCatalogControl(params: {
             clientId: resolveCodexAppServerClientInstanceId(client),
             connectionFingerprint: buildCodexAppServerConnectionFingerprint(runtime, agentDir),
             createRequestSnapshot: () => requests,
+            ...(source?.localSessionsRoot ? { localSessionsRoot: source.localSessionsRoot } : {}),
             now,
             withPinnedConnection: async (nestedRun) => await nestedRun(pinnedControl),
           });
@@ -336,6 +350,7 @@ export function createCodexSessionCatalogControl(params: {
     };
     const control = createCodexSessionCatalogControlFromRequests({
       createRequestSnapshot: () => createRequestSnapshot(agentId, source),
+      ...(source?.localSessionsRoot ? { localSessionsRoot: source.localSessionsRoot } : {}),
       now,
       withPinnedConnection,
     });

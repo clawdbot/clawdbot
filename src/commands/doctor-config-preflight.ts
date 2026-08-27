@@ -1,37 +1,29 @@
 /** Config preflight for doctor: legacy config/state migration, recovery, and snapshot loading. */
-import fs from "node:fs/promises";
-import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import {
   parseConfigJson5,
-  preserveConfigSnapshotAsClobbered,
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
 } from "../config/io.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { resolveCanonicalConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type {
   MigrationCheckpointIdentity,
   StartupMigrationLease,
 } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../state/openclaw-state-ownership.js";
-import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
-import {
-  migrationCheckpointIdentitiesMatch,
-  resolveMigrationCheckpointIdentity,
-} from "./doctor-config-preflight-checkpoint.js";
+import { resolveMigrationCheckpointIdentity } from "./doctor-config-preflight-checkpoint.js";
+import { maybeMigrateLegacyConfig } from "./doctor-config-preflight-legacy-config.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   needsRefreshedPluginIndexPersistence,
@@ -39,20 +31,18 @@ import {
   readDoctorConfigPreflightSnapshot,
   type DoctorConfigPreflightPluginSnapshotRead,
 } from "./doctor-config-preflight-plugin-index.js";
-import {
-  formatStartupPluginVerificationFailure,
-  refreshStartupPluginQuarantine,
-  runStartupUpgradeConvergence,
-} from "./doctor-config-preflight-plugin-verification.js";
+import { completeStartupMigrationPreflight } from "./doctor-config-preflight-startup.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
+import { maybeRepairPluginOpenClawHostLinks } from "./doctor-plugin-host-links.js";
 import {
-  formatStartupMigrationFailure,
   refuseStartupMigrationsForLiveGatewayOwner,
   throwStartupMigrationGuardRejected,
-  throwStartupMigrationIdentityChanged,
-  throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
+import {
+  commitUpgradeConfigRepair,
+  planUpgradeConfigRepair,
+} from "./doctor/shared/automatic-upgrade-config-repair.js";
 import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 
@@ -63,58 +53,6 @@ const loadDoctorStateMigrations = createLazyRuntimeModule(
 const loadLegacyCronRepair = createLazyRuntimeModule(
   () => import("./doctor/cron/legacy-repair.js"),
 );
-
-async function maybeMigrateLegacyConfig(): Promise<string[]> {
-  const changes: string[] = [];
-  const home = resolveHomeDir();
-  if (!home) {
-    return changes;
-  }
-
-  const targetPath = resolveCanonicalConfigPath();
-  const targetDir = path.dirname(targetPath);
-  try {
-    await fs.access(targetPath);
-    return changes;
-  } catch {
-    // missing config
-  }
-
-  const legacyCandidates = [path.join(home, ".clawdbot", "clawdbot.json")];
-
-  let legacyPath: string | null = null;
-  for (const candidate of legacyCandidates) {
-    try {
-      await fs.access(candidate);
-      legacyPath = candidate;
-      break;
-    } catch {
-      // continue
-    }
-  }
-  if (!legacyPath) {
-    return changes;
-  }
-
-  await fs.mkdir(targetDir, { recursive: true });
-  try {
-    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
-    changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
-  } catch (err) {
-    // EEXIST means a config already lives at the target — nothing to migrate.
-    // Any other failure (EACCES, ENOSPC) must surface: doctor would otherwise
-    // proceed as a fresh install while the operator's legacy config exists.
-    const code = err && typeof err === "object" && "code" in err ? err.code : undefined;
-    if (code !== "EEXIST") {
-      throw new Error(
-        `Failed to migrate legacy config ${legacyPath} -> ${targetPath}: ${formatErrorMessage(err)}`,
-        { cause: err },
-      );
-    }
-  }
-
-  return changes;
-}
 
 export type DoctorConfigPreflightResult = {
   snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
@@ -370,6 +308,49 @@ export async function runDoctorConfigPreflight(
       ) {
         await ensureStartupMigrationLease();
       }
+      // Commit the admitted config repair under the startup lease before state migration. The
+      // canonical write changes the snapshot identity, so derive every checkpoint from its reread.
+      const preflightSnapshot = configSnapshotRead.snapshot;
+      const automaticUpgradeRepair = gatewayStartupCheckpointRequired
+        ? planUpgradeConfigRepair(preflightSnapshot)
+        : null;
+      if (automaticUpgradeRepair) {
+        if (!startupMigrationLease) {
+          throw new Error("Automatic upgrade config repair requires the startup migration lease.");
+        }
+        const configRepairAllowed =
+          options.beforeStateMigrations === undefined ||
+          (await measurePreflightStep("upgrade-config-repair-guard", () =>
+            options.beforeStateMigrations?.(preflightSnapshot),
+          ));
+        if (!configRepairAllowed) {
+          throwStartupMigrationGuardRejected();
+        }
+        await measurePreflightStep("upgrade-config-repair", () =>
+          commitUpgradeConfigRepair(automaticUpgradeRepair, preflightSnapshot),
+        );
+        note("Removed stable upgrade config keys before state migration.", "Doctor changes");
+        configSnapshotRead = await readConfigSnapshotForPreflight();
+        const repairedBaseConfig =
+          configSnapshotRead.snapshot.sourceConfig ?? configSnapshotRead.snapshot.config ?? {};
+        migrationCheckpointIdentity = resolveMigrationCheckpointIdentity({
+          snapshot: configSnapshotRead.snapshot,
+          baseConfig: repairedBaseConfig,
+          pluginMigrationFingerprint: configSnapshotRead.pluginMigrationFingerprint,
+        });
+        shouldRecordStateCheckpoint =
+          stateMigrationsRequested &&
+          migrationCheckpoint.needsStateMigrationCheckpoint({
+            env: startupMigrationEnv,
+            identity: migrationCheckpointIdentity,
+          });
+        shouldRecordStartupCheckpoint = migrationCheckpoint.needsStartupMigrationCheckpoint({
+          env: startupMigrationEnv,
+          identity: migrationCheckpointIdentity,
+        });
+        shouldPersistRefreshedPluginIndex =
+          needsRefreshedPluginIndexPersistence(configSnapshotRead);
+      }
     }
     // A current state checkpoint proves this root already completed every automatic migration.
     // Keep repeated short-lived commands out of the legacy migration import graph.
@@ -418,14 +399,8 @@ export async function runDoctorConfigPreflight(
         typeof snapshot.raw === "string" &&
         !parseConfigJson5(snapshot.raw).ok
       ) {
-        const clobberedPath = await preserveConfigSnapshotAsClobbered(snapshot);
-        if (!clobberedPath) {
-          throw new Error(
-            `Config could not be parsed or recovered, and doctor could not preserve a .clobbered snapshot. The original remains unchanged at ${snapshot.path}; refusing to apply repairs.`,
-          );
-        }
         throw new Error(
-          `Config could not be parsed or recovered. Original preserved at ${clobberedPath}. The current file remains unchanged; refusing to apply repairs.`,
+          `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`,
         );
       }
     }
@@ -476,6 +451,18 @@ export async function runDoctorConfigPreflight(
       throwStartupMigrationGuardRejected();
     }
     if (stateMigrations && stateMigrationsAllowed && freshConfigGuardAllowed) {
+      if (gatewayStartupCheckpointRequired && snapshot.valid) {
+        if (!startupMigrationLease) {
+          throw new Error("Startup plugin host-link repair requires the startup migration lease.");
+        }
+        // Repair host links under the pinned lease before plugin migrations import packages.
+        await measurePreflightStep("plugin-host-link-repair", () =>
+          maybeRepairPluginOpenClawHostLinks({
+            env: startupMigrationEnv,
+            prompter: { shouldRepair: true },
+          }),
+        );
+      }
       const {
         autoMigrateLegacyState,
         autoMigrateLegacyPluginDoctorState,
@@ -538,6 +525,9 @@ export async function runDoctorConfigPreflight(
                 env: process.env,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                ...(gatewayStartupCheckpointRequired
+                  ? { allowLegacyDeviceIdentityImport: true }
+                  : {}),
               }),
             ),
           );
@@ -648,96 +638,23 @@ export async function runDoctorConfigPreflight(
       configSnapshotRead = persistedSnapshotRead;
       migrationCheckpointIdentity = persistedIdentity;
     }
-    if (
-      (shouldRecordStateCheckpoint || shouldRecordStartupCheckpoint) &&
-      startupMigrationHeartbeatError
-    ) {
-      throw startupMigrationHeartbeatError instanceof Error
-        ? startupMigrationHeartbeatError
-        : new Error("OpenClaw startup migration lease heartbeat failed.");
-    }
-    if (
-      shouldRecordStateCheckpoint &&
-      stateMigrationsAllowed &&
-      freshConfigGuardAllowed &&
-      startupMigrationWarnings.length === 0 &&
-      snapshot.valid
-    ) {
-      if (!migrationCheckpoint) {
-        throw new Error("OpenClaw state migration checkpoint module was not loaded.");
-      }
-      migrationCheckpoint.recordSuccessfulStateMigrations({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-        lease: startupMigrationLease,
-      });
-    }
-    if (gatewayStartupCheckpointRequired) {
-      if (startupMigrationWarnings.length > 0) {
-        throwStartupMigrationRefusal(
-          formatStartupMigrationFailure({
-            warnings: startupMigrationWarnings,
-            blockers: [],
-          }),
-        );
-      }
-      if (shouldRecordStartupCheckpoint && !snapshot.valid) {
-        throwStartupMigrationRefusal(
-          formatStartupMigrationFailure({
-            warnings: [],
-            blockers: ['OpenClaw config is invalid; run "openclaw doctor --fix" before startup.'],
-          }),
-        );
-      }
-      // This state is established before the first Gateway plugin load and remains
-      // fixed for the boot. Refresh it on every process start because migration
-      // checkpoints do not persist plugin availability or quarantine state.
-      setActiveDegradedPlugins([]);
-      if (snapshot.valid) {
-        const pluginConvergence = shouldRecordStartupCheckpoint
-          ? await runStartupUpgradeConvergence({
-              cfg: baseConfig,
-              env: process.env,
-              ...(options.measure ? { measure: options.measure } : {}),
-            })
-          : await refreshStartupPluginQuarantine({
-              cfg: baseConfig,
-              env: process.env,
-              ...(options.measure ? { measure: options.measure } : {}),
-            });
-        setActiveDegradedPlugins(pluginConvergence.quarantinedPlugins);
-        if (pluginConvergence.blockingDiagnostic) {
-          throwStartupMigrationRefusal(
-            formatStartupPluginVerificationFailure(pluginConvergence.blockingDiagnostic),
-          );
-        }
-        if (shouldRecordStartupCheckpoint) {
-          const convergedSnapshotRead = await readConfigSnapshotForPreflight(false);
-          const convergedBaseConfig =
-            convergedSnapshotRead.snapshot.sourceConfig ??
-            convergedSnapshotRead.snapshot.config ??
-            {};
-          const convergedIdentity = resolveMigrationCheckpointIdentity({
-            snapshot: convergedSnapshotRead.snapshot,
-            baseConfig: convergedBaseConfig,
-            pluginMigrationFingerprint: convergedSnapshotRead.pluginMigrationFingerprint,
-          });
-          if (!migrationCheckpointIdentitiesMatch(migrationCheckpointIdentity, convergedIdentity)) {
-            throwStartupMigrationIdentityChanged();
-          }
-        }
-      }
-    }
-    if (shouldRecordStartupCheckpoint) {
-      if (!migrationCheckpoint) {
-        throw new Error("OpenClaw startup migration checkpoint module was not loaded.");
-      }
-      migrationCheckpoint.recordSuccessfulStartupMigrations({
-        env: startupMigrationEnv,
-        identity: migrationCheckpointIdentity,
-        lease: startupMigrationLease,
-      });
-    }
+    await completeStartupMigrationPreflight({
+      baseConfig,
+      freshConfigGuardAllowed,
+      gatewayStartupCheckpointRequired,
+      migrationCheckpoint,
+      migrationCheckpointIdentity,
+      measure: options.measure,
+      readConfigSnapshotForPreflight,
+      shouldRecordStartupCheckpoint,
+      shouldRecordStateCheckpoint,
+      snapshot,
+      startupMigrationEnv,
+      startupMigrationHeartbeatError,
+      startupMigrationLease,
+      startupMigrationWarnings,
+      stateMigrationsAllowed,
+    });
 
     return {
       snapshot,

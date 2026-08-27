@@ -343,6 +343,12 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
+/** Exact node authority and worker capacity required by one paired-device runtime. */
+export type DevicePlacementRequirement = {
+  requiredNodeCommands: readonly string[];
+  consumesWorkerSlot: boolean;
+};
+
 type AgentHarnessRunCapability<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
@@ -354,6 +360,8 @@ type AgentHarnessRunCapability<
    * dynamic probing; an empty list marks an explicit-only harness.
    */
   autoSelection?: { providerIds: readonly string[] };
+  /** Declares host-owned remote execution and its exact paired-device requirements. */
+  cloudPlacement?: { mode: "remote-exec"; devicePlacement?: DevicePlacementRequirement };
   /**
    * Plugin ids this harness owner permits to execute its locked sessions.
    * Delegates receive work admission and execution only; session mutation stays owner-only.
@@ -416,8 +424,30 @@ type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
 };
 
+export type AgentHarnessSessionDeletionParams = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  /** Revalidate the captured registry, harness, and operation before each side effect. */
+  assertCurrent: () => void;
+};
+
+export type AgentHarnessSessionDeletionMutation = {
+  /** Synchronously remove only the prepared owner's state at the session commit edge. */
+  commit: () => void;
+  /** Restore only that removal when the authoritative session transaction rolls back. */
+  rollback: () => void;
+};
+
 type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
+  /** Prepare outside the session writer; release native resources after its commit completes. */
+  withSessionDeletion?<T>(
+    this: void,
+    params: AgentHarnessSessionDeletionParams,
+    run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
+  ): Promise<T>;
   dispose?(): Promise<void> | void;
 };
 

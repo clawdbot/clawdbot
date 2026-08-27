@@ -5,13 +5,13 @@ import { admitInitialUserMessageHandoff } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 
-type ChatPaneStartupContext = Pick<ApplicationContext, "cloudStartup">;
+type ChatPaneStartupContext = Pick<ApplicationContext, "placementStartup">;
 
 export function subscribeChatPaneStartup(
   context: ChatPaneStartupContext,
   getState: () => ChatPageHost | undefined,
 ): () => void {
-  return context.cloudStartup.subscribe(() => {
+  return context.placementStartup.subscribe(() => {
     const state = getState();
     if (state) {
       admitInitialUserMessageHandoff(state, state.sessionKey);

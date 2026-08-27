@@ -10,10 +10,12 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage, ThinkingLevel } from "../../types.js";
@@ -21,7 +23,6 @@ import { convertToLlm, type HarnessMessage } from "../messages.js";
 import { buildSessionContext, projectSessionEntryMessage } from "../session/session.js";
 import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
-  type CompactionEntry,
   CompactionError,
   err,
   InvalidSummaryOutputError,
@@ -49,16 +50,34 @@ export interface CompactionDetails {
   /** Files modified in the compacted history. */
   modifiedFiles: string[];
 }
+
+function parseCompactionDetails(value: unknown): CompactionDetails | undefined {
+  const details = asOptionalRecord(value);
+  if (
+    !details ||
+    !Array.isArray(details.readFiles) ||
+    !details.readFiles.every((file): file is string => typeof file === "string") ||
+    !Array.isArray(details.modifiedFiles) ||
+    !details.modifiedFiles.every((file): file is string => typeof file === "string")
+  ) {
+    return undefined;
+  }
+  return { readFiles: details.readFiles, modifiedFiles: details.modifiedFiles };
+}
+
 function extractFileOperations(
   messages: AgentMessage[],
   entries: SessionTreeEntry[],
   prevBoundaryIndex: number,
 ): FileOperations {
   const fileOps = createFileOps();
-  if (prevBoundaryIndex >= 0 && entries[prevBoundaryIndex]?.type === "compaction") {
-    const prevCompaction = entries[prevBoundaryIndex] as CompactionEntry;
-    if (!prevCompaction.fromHook && prevCompaction.details) {
-      mergeSummaryFileOperations(fileOps, prevCompaction.details as CompactionDetails);
+  if (prevBoundaryIndex >= 0) {
+    const prevCompaction = entries[prevBoundaryIndex];
+    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
+      const details = parseCompactionDetails(prevCompaction.details);
+      if (details) {
+        mergeSummaryFileOperations(fileOps, details);
+      }
     }
   }
   for (const msg of messages) {
@@ -91,15 +110,21 @@ export interface CompactionResult<T = unknown> {
 export const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
 export const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 
-export function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS) {
+export function capCompactionSummary(
+  summary: string,
+  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
+  preservedSuffix = "",
+) {
   if (maxChars <= 0 || summary.length <= maxChars) {
     return summary;
   }
-  if (maxChars < SUMMARY_TRUNCATED_MARKER.length) {
+  const suffix = preservedSuffix && summary.endsWith(preservedSuffix) ? preservedSuffix : "";
+  if (maxChars < SUMMARY_TRUNCATED_MARKER.length + suffix.length) {
     return truncateUtf16Safe(summary, maxChars);
   }
-  const budget = maxChars - SUMMARY_TRUNCATED_MARKER.length;
-  return `${truncateUtf16Safe(summary, budget)}${SUMMARY_TRUNCATED_MARKER}`;
+  const budget = maxChars - SUMMARY_TRUNCATED_MARKER.length - suffix.length;
+  const prefix = suffix ? summary.slice(0, -suffix.length) : summary;
+  return `${truncateUtf16Safe(prefix, budget)}${SUMMARY_TRUNCATED_MARKER}${suffix}`;
 }
 
 /** Compaction thresholds and retention settings. */
@@ -269,6 +294,9 @@ function countContentBlockChars(
 
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return 0;
+  }
   let chars = 0;
   const harnessMessage = message as HarnessMessage;
 
@@ -309,9 +337,6 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      if (harnessMessage.excludeFromContext === true) {
-        return 0;
-      }
       chars =
         estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
@@ -608,7 +633,7 @@ async function runSummarizationCompletion(params: {
     params.thinkingLevel,
   );
   const response = params.streamFn
-    ? await (await params.streamFn(params.model, context, options)).result()
+    ? await consumeAgentCoreStream(params.streamFn(params.model, context, options))
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
   if (response.stopReason === "aborted") {
     return err(
@@ -687,14 +712,36 @@ export interface CompactionPreparation {
   turnPrefixMessages: AgentMessage[];
   /** Whether compaction splits a turn. */
   isSplitTurn: boolean;
+  /** Explicit terminal state of the turn whose prefix was split from its retained suffix. */
+  splitTurnCompleted?: boolean;
   /** Estimated context tokens before compaction. */
   tokensBefore: number;
   /** Previous compaction summary used for iterative updates. */
   previousSummary?: string;
+  /** File metadata already appended to the previous compaction summary. */
+  previousSummaryDetails?: CompactionDetails;
   /** File operations extracted from summarized history. */
   fileOps: FileOperations;
   /** Settings used to prepare compaction. */
   settings: CompactionSettings;
+}
+
+function latestUserTurnCompleted(messages: AgentMessage[]): boolean {
+  let sawTurnTail = false;
+  let completed = false;
+  for (const message of messages.toReversed()) {
+    if (message.role === "user") {
+      return completed;
+    }
+    if (!sawTurnTail && (message.role === "assistant" || message.role === "toolResult")) {
+      sawTurnTail = true;
+      completed =
+        message.role === "assistant" &&
+        message.stopReason === "stop" &&
+        message.content.some((block) => block.type === "text" && block.text.trim().length > 0);
+    }
+  }
+  return false;
 }
 
 /** Prepare session entries for compaction, or return undefined when compaction is not applicable. */
@@ -702,11 +749,13 @@ export function prepareCompaction(
   pathEntries: SessionTreeEntry[],
   settings: CompactionSettings,
 ): Result<CompactionPreparation | undefined, CompactionError> {
+  const lastEntry = pathEntries.at(-1);
   if (
-    pathEntries.at(-1)?.type === "compaction" ||
-    pathEntries.at(-1)?.type === "reset" ||
-    pathEntries.length === 0
+    !lastEntry ||
+    lastEntry.type === "reset" ||
+    (lastEntry.type === "compaction" && lastEntry.fromHook)
   ) {
+    // Safeguard-owned compactions are anti-loop boundaries for the current turn.
     return ok(undefined);
   }
 
@@ -720,12 +769,16 @@ export function prepareCompaction(
   }
 
   let previousSummary: string | undefined;
+  let previousSummaryDetails: CompactionDetails | undefined;
   let effectiveEntries = pathEntries;
   let resetPreludeMessages: AgentMessage[] = [];
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
     const prevBoundary = pathEntries[prevBoundaryIndex];
     previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
+    if (prevBoundary?.type === "compaction" && !prevBoundary.fromHook) {
+      previousSummaryDetails = parseCompactionDetails(prevBoundary.details);
+    }
     const firstKeptEntryId =
       prevBoundary?.type === "compaction" || prevBoundary?.type === "reset"
         ? prevBoundary.firstKeptEntryId
@@ -800,12 +853,23 @@ export function prepareCompaction(
     }
   }
   const turnPrefixMessages: AgentMessage[] = [];
+  const retainedTurnSuffixMessages: AgentMessage[] = [];
   if (cutPoint.isSplitTurn) {
     for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
       const entry = effectiveEntries.at(i);
       const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
       if (msg) {
         turnPrefixMessages.push(msg);
+      }
+    }
+    for (let i = cutPoint.firstKeptEntryIndex; i < boundaryEnd; i++) {
+      const entry = effectiveEntries.at(i);
+      if (!entry || (i > cutPoint.firstKeptEntryIndex && isTurnStartEntry(entry))) {
+        break;
+      }
+      const msg = getMessageFromEntryForCompaction(entry);
+      if (msg) {
+        retainedTurnSuffixMessages.push(msg);
       }
     }
   }
@@ -824,8 +888,17 @@ export function prepareCompaction(
     messagesToSummarize,
     turnPrefixMessages,
     isSplitTurn: cutPoint.isSplitTurn,
+    ...(cutPoint.isSplitTurn
+      ? {
+          splitTurnCompleted: latestUserTurnCompleted([
+            ...turnPrefixMessages,
+            ...retainedTurnSuffixMessages,
+          ]),
+        }
+      : {}),
     tokensBefore,
     previousSummary,
+    previousSummaryDetails,
     fileOps,
     settings,
   });
@@ -867,6 +940,7 @@ export async function compact(
     isSplitTurn,
     tokensBefore,
     previousSummary,
+    previousSummaryDetails,
     fileOps,
     settings,
   } = preparation;
@@ -881,6 +955,13 @@ export async function compact(
   }
 
   const summarizeTurnPrefix = isSplitTurn && turnPrefixMessages.length > 0;
+  const previousFileOperations = previousSummaryDetails
+    ? formatFileOperations(previousSummaryDetails.readFiles, previousSummaryDetails.modifiedFiles)
+    : "";
+  const preservedPreviousSummary =
+    previousFileOperations && previousSummary?.endsWith(previousFileOperations)
+      ? previousSummary.slice(0, -previousFileOperations.length)
+      : previousSummary;
   const historyResult =
     messagesToSummarize.length > 0 || !summarizeTurnPrefix
       ? await generateSummary(
@@ -896,12 +977,12 @@ export async function compact(
           streamFn,
           runtime,
         )
-      : ok<string, CompactionError>("No prior history.");
+      : ok<string, CompactionError>(preservedPreviousSummary ?? "No prior history.");
   if (!historyResult.ok) {
     return err(historyResult.error);
   }
 
-  let summary = historyResult.value;
+  let latestContext = "";
   if (summarizeTurnPrefix) {
     const turnPrefixResult = await generateTurnPrefixSummary(
       turnPrefixMessages,
@@ -917,11 +998,26 @@ export async function compact(
     if (!turnPrefixResult.ok) {
       return err(turnPrefixResult.error);
     }
-    summary = `${summary}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
+    latestContext = `\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
   }
 
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-  summary += formatFileOperations(readFiles, modifiedFiles);
+  const fileOperations = formatFileOperations(readFiles, modifiedFiles);
+  const preservedHistoryChars = Math.min(
+    historyResult.value.length,
+    Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2),
+  );
+  const latestContextBudget =
+    MAX_COMPACTION_SUMMARY_CHARS -
+    SUMMARY_TRUNCATED_MARKER.length -
+    fileOperations.length -
+    preservedHistoryChars;
+  latestContext = `${capCompactionSummary(latestContext, latestContextBudget)}${fileOperations}`;
+  const summary = capCompactionSummary(
+    `${historyResult.value}${latestContext}`,
+    MAX_COMPACTION_SUMMARY_CHARS,
+    latestContext,
+  );
 
   return ok({
     summary,

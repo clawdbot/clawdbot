@@ -3,9 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
+  type PreservedSessionWorktree,
+  type SessionsDeleteResult,
   validateSessionsDeleteParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { managedWorktrees } from "../../agents/worktrees/service.js";
+import { classifyWorktreeRemovalError, managedWorktrees } from "../../agents/worktrees/service.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   deleteSessionEntryLifecycle,
@@ -227,7 +229,7 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     let deleteBlockedByArchiveOrOwnership = false;
     let preparedDeleteSessionId: string | undefined;
     let deletedWorktreeId: string | undefined;
-    let worktreePreserved: { id: string; branch: string; path: string } | undefined;
+    let worktreePreserved: PreservedSessionWorktree | undefined;
     const deletion = await runExclusiveSessionLifecycleMutation({
       scope: storePath,
       identities: deleteLifecycleIdentities,
@@ -472,15 +474,16 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
             ? managedWorktrees.findLiveById(deletedWorktreeId)
             : undefined;
           if (deletedWorktree) {
-            worktreePreserved = {
-              id: deletedWorktree.id,
-              branch: deletedWorktree.branch,
-              path: deletedWorktree.path,
-            };
             if (
               deletedWorktree.ownerKind !== "session" ||
               deletedWorktree.ownerId !== deletedSessionKey
             ) {
+              worktreePreserved = {
+                id: deletedWorktree.id,
+                branch: deletedWorktree.branch,
+                path: deletedWorktree.path,
+                reason: "owner-mismatch",
+              };
               sessionLog.warn(
                 `refusing to clean up worktree ${deletedWorktree.id} for deleted session ${deletedSessionKey}: registry owner is ${deletedWorktree.ownerKind}${deletedWorktree.ownerId ? ` ${deletedWorktree.ownerId}` : ""}`,
               );
@@ -490,11 +493,19 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
                   id: deletedWorktree.id,
                   reason: "session-delete",
                 });
-                worktreePreserved = undefined;
               } catch (error) {
                 sessionLog.warn(
                   `failed to clean up worktree for deleted session ${deletedSessionKey}: ${formatErrorMessage(error)}`,
                 );
+                const liveWorktree = managedWorktrees.findLiveById(deletedWorktree.id);
+                if (liveWorktree) {
+                  worktreePreserved = {
+                    id: liveWorktree.id,
+                    branch: liveWorktree.branch,
+                    path: liveWorktree.path,
+                    reason: classifyWorktreeRemovalError(error),
+                  };
+                }
               }
             }
           }
@@ -509,17 +520,14 @@ export const sessionDeleteHandlers: GatewayRequestHandlers = {
     const archivedTranscripts = deletion.archivedTranscripts;
     const archived = archivedTranscripts.map((entryLocal) => entryLocal.archivedPath);
 
-    respond(
-      true,
-      {
-        ok: true,
-        key: target.canonicalKey,
-        deleted,
-        archived,
-        ...(worktreePreserved ? { worktreePreserved } : {}),
-      },
-      undefined,
-    );
+    const response: SessionsDeleteResult = {
+      ok: true,
+      key: target.canonicalKey,
+      deleted,
+      archived,
+      ...(worktreePreserved ? { worktreePreserved } : {}),
+    };
+    respond(true, response, undefined);
     if (deleted) {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,

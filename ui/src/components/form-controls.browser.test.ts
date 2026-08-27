@@ -326,7 +326,7 @@ describeBrowserLayout("touch-primary form controls", () => {
 });
 
 describeBrowserLayout("mount fallback cursor", () => {
-  it("advertises its controls with the hand in a browser tab, alongside its real link", async () => {
+  it("uses the arrow for recovery controls and the hand for its real link", async () => {
     const page = await desktopContext.newPage();
     try {
       await page.setContent(readStyleSheet("ui/index.html"));
@@ -345,11 +345,9 @@ describeBrowserLayout("mount fallback cursor", () => {
         };
       });
 
-      // A browser tab is display-mode: browser, so the fallback follows the same
-      // cursor policy as the app it is standing in for.
       expect(cursors).toEqual({
-        retry: "pointer",
-        wait: "pointer",
+        retry: "default",
+        wait: "default",
         docs: "pointer",
       });
     } finally {
@@ -484,7 +482,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             <div class="shell shell--mobile-nav">
               <span class="nav-item">Mobile navigation</span>
               <div class="file-view__search"><input value="query" /></div>
-              <div class="sidebar-agent-menu__filter"><input value="agent" /></div>
               <input class="settings-sidebar__search-input" value="settings" />
               <div class="sidebar-recent-session sidebar-recent-session--child">
                 <span class="sidebar-recent-session__name">Child session</span>
@@ -508,7 +505,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
             childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
             childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
             coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
-            agentFilter: fontSize(".sidebar-agent-menu__filter input"),
             fileSearch: fontSize(".file-view__search input"),
             settingsSearch: fontSize(".settings-sidebar__search-input"),
             navItem: fontSize(".shell--mobile-nav .nav-item"),
@@ -520,7 +516,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         childName: 12,
         childTrail: 10,
         coarsePointer: true,
-        agentFilter: 16,
         fileSearch: 16,
         settingsSearch: 16,
         navItem: 12,
@@ -530,7 +525,6 @@ describeBrowserLayout("app chrome interaction styles", () => {
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
       });
       const scaled = await readSizes();
-      expect(scaled.agentFilter).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
       expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
       expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);

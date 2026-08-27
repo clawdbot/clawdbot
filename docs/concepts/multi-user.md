@@ -46,7 +46,7 @@ The sidebar's session filter menu gains an **Owners** section when ownership is 
 - A specific person or agent shows the sessions they currently own.
 - **Involving me** shows sessions you own plus sessions where you have prompted at least once. This filter is evaluated by the Gateway against the full participant history and matches only your authenticated profile identity — channel-native sender ids are display-only and never match, so a numeric channel id cannot collide with your profile.
 
-**Involving me** requires a signed-in Gateway profile. The **People** sort mode groups sessions by current owner and orders the groups by name.
+**Involving me** requires a signed-in Gateway profile. When the loaded sessions have multiple owners, **Group by Person** creates a section for each current owner, and the **Owners** sort mode orders those owner groups by name.
 
 ## Reading the avatars
 
@@ -56,7 +56,21 @@ The Control UI keeps ownership and presence visually distinct:
 - When other people or agents have prompted the session, the row avatar becomes a **pair-stack**: the owner stays in front, and either the single other participant peeks out behind, or a **+N** count summarizes several. The chat header shows the owner chip plus a participant facepile of up to four avatars. The owner is excluded from the participant display.
 - Ringed or translucent presence avatars show people who are currently connected or watching; they come from live presence, not ownership, and disappear when those viewers leave.
 
+When several people watch the same session, the transcript also shows a live typing indicator above the composer. Someone typing in the Control UI streams their draft text into the indicator bubble as they type; other typists show a three-dot bubble. Drafts are ephemeral presence: they are never persisted, never enter the session transcript or the model's context, and fade a moment after the typist pauses or sends.
+
 When the loaded session list contains fewer than two distinct owner identities and no session has recorded outside participants, OpenClaw hides all ownership and owner-filter chrome. A single-user gateway therefore looks unchanged.
+
+## People cards
+
+Hover or focus a person in the sidebar's **Online** section to open their information card. The details button also opens the card on touch devices. Selecting the person's name or **View activity** opens their Activity page.
+
+The card shows how long the person has been continuously connected, their reported app/device context and time zone, and their last observed activity during that online period. Opening a different session, typing, and sending a new message count as activity; connection heartbeats and agent responses do not. **Not observed yet** means no qualifying activity has been recorded, not that the person is inactive. These timing facts are ephemeral and reset after the person's final connection closes or the Gateway restarts.
+
+People presence is shared with operators who have read access (`operator.read`, also implied by `operator.write` or `operator.admin`). Those readers may see other people's online and activity timing and reported time zone whether or not the person is watching a session. Node and pairing-only connections receive neither the presence inventory nor its activity-driven events. This does not change cross-reader IP visibility or provide isolation for all Gateway metadata; see [Who can see presence](/concepts/presence#who-can-see-presence).
+
+**Viewing now** and **Recent sessions** link only to sessions available in your loaded session list. Recent sessions reflect reliable ownership or creation attribution, not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+
+The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders; opening someone's card never borrows that person's session access.
 
 ## Agent-spawned sessions
 
@@ -77,6 +91,8 @@ Start a session as a draft to keep work in progress out of teammates' sidebars u
 ## Turn attribution
 
 Turn sender attribution is best-effort. Steering can merge input into an active turn, so the transcript cannot always represent each person's contribution as a separate turn. Participant history records that an actor prompted the session, not which words were theirs.
+
+GitHub-backed sign-in through Cloudflare Access or Tailscale Serve automatically verifies the person's GitHub account under **Settings → Profile → Identity**. Public `Co-authored-by` credit remains a separate, default-off **Git co-author credit** toggle. Attribution uses that explicit preference plus the durable profile participant records described above, not display names or the four-person facepile projection. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for privacy, eligibility, bounds, account changes, and disabling future credit.
 
 ## Related
 

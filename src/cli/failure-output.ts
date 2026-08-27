@@ -41,7 +41,7 @@ export class ExpectedCliError extends Error {
   }
 }
 
-function isGatewayCredentialsCliError(
+export function isGatewayCredentialsCliError(
   error: unknown,
 ): error is Error & { method: string; configPath: string } {
   // Keep the root failure renderer lean; importing gateway/call would pull the

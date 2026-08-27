@@ -3,6 +3,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { formatCountdown } from "../lib/format.ts";
+import type { UpdateProgress } from "./update-confirmation.ts";
 import { readUpdateAvailableValue, readUpdateScheduleValue } from "./update-schedule-dto.ts";
 
 export type ApplicationStatusBanner = {
@@ -21,6 +22,50 @@ export type RecordedUpdateAttempt = {
   targetSha: string | null;
   failure: UpdateFailureCause | null;
 };
+
+/**
+ * Structural leaf contract, not `Pick<ApplicationContext, ...>`: `context.ts`
+ * reaches this module through `overlays-types.ts`, so naming the context type
+ * here closes an import cycle. Naming only the fields the watcher reads keeps
+ * every real context assignable.
+ */
+type UpdateProgressSources = {
+  gateway: {
+    snapshot: { phase: string };
+    subscribe: (listener: () => void) => () => void;
+  };
+  overlays: {
+    snapshot: {
+      updateRunning: boolean;
+      updateReconciliationPending: boolean;
+      updateStatusBanner: ApplicationStatusBanner | null;
+    };
+    subscribe: (listener: () => void) => () => void;
+  };
+};
+
+export function createUpdateProgressWatcher(
+  context: UpdateProgressSources,
+): (listener: (progress: UpdateProgress) => void) => () => void {
+  return (listener) => {
+    const emit = () => {
+      const update = context.overlays.snapshot;
+      const banner = update.updateStatusBanner;
+      listener({
+        busy: update.updateRunning || update.updateReconciliationPending,
+        connected: context.gateway.snapshot.phase === "connected",
+        failure: banner && banner.tone !== "info" ? banner.text : null,
+      });
+    };
+    const stopOverlays = context.overlays.subscribe(emit);
+    const stopGateway = context.gateway.subscribe(emit);
+    emit();
+    return () => {
+      stopOverlays();
+      stopGateway();
+    };
+  };
+}
 
 const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 const UPDATE_RESTART_HEALTH_PENDING_REASON = "restart-health-pending";
@@ -575,6 +620,21 @@ export function formatUpdateTargetLabel(
   }
   const version = target?.kind === "package" ? target.version : updateAvailable?.latestVersion;
   return version ? t("updates.target.version", { version }) : null;
+}
+
+export function isUpdateActionable(
+  updateAvailable: UpdateAvailable | null | undefined,
+  updateSchedule: UpdateScheduleState | null | undefined,
+  updateBusy: boolean,
+): boolean {
+  const target = updateSchedule?.target;
+  return Boolean(
+    updateBusy ||
+    updateSchedule?.campaign ||
+    (updateAvailable && updateAvailable.latestVersion !== updateAvailable.currentVersion) ||
+    (updateAvailable?.commitsBehind !== undefined && updateAvailable.commitsBehind > 0) ||
+    (target?.kind === "git" && target.commitsBehind > 0),
+  );
 }
 
 export function resolveUpdateStatusBanner(params: {

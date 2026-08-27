@@ -167,12 +167,38 @@ describe("policy CLI agent ownership", () => {
     expect(output.join("\n")).toContain("Pass --agent <id>.");
   });
 
-  it("rejects an unknown explicit owner", async () => {
+  it.each([
+    {
+      name: "check without root options",
+      args: ["check", "--agent", "ghost", "--json"],
+      profile: "",
+      container: "",
+      hint: "openclaw agents list",
+    },
+    {
+      name: "check with an active profile",
+      args: ["check", "--agent", "ghost", "--json"],
+      profile: "testprof",
+      container: "",
+      hint: "openclaw --profile testprof agents list",
+    },
+    {
+      name: "relative compare with an active container",
+      args: ["compare", "--agent", "ghost", "--baseline", "baseline.policy.jsonc", "--json"],
+      profile: "testprof",
+      container: "testbox",
+      hint: "openclaw --container testbox agents list",
+    },
+  ])("rejects an unknown explicit owner for $name with runnable guidance", async (testCase) => {
     await writeExplicitFleetConfig();
+    vi.stubEnv("OPENCLAW_PROFILE", testCase.profile);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", testCase.container);
 
-    const { exitCode, output } = await runPolicyCli(["check", "--agent", "ghost", "--json"]);
+    const { exitCode, output } = await runPolicyCli(testCase.args);
 
     expect(exitCode).toBe(2);
-    expect(output.join("\n")).toContain('Unknown agent id "ghost"');
+    expect(output.join("\n")).toContain(
+      `Unknown agent id "ghost". Run ${testCase.hint} to see configured agents.`,
+    );
   });
 });

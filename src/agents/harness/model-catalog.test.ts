@@ -18,7 +18,19 @@ const cfg = {
 } as OpenClawConfig;
 
 const snapshot: ModelCatalogSnapshot = {
-  entries: [],
+  entries: [
+    {
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol (API)",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      },
+    },
+  ],
   routeVariants: [
     {
       provider: "openai",
@@ -36,6 +48,31 @@ const snapshot: ModelCatalogSnapshot = {
       contextWindow: 1_050_000,
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      params: { providerFact: "kept", codexAppServerRuntimeModel: "stale-runtime" },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        supportsTools: false,
+      },
+    },
+    {
+      provider: "openai",
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      },
+    },
+    {
+      provider: "openai",
+      id: "provider-empty-reasoner",
+      name: "Provider Empty Reasoner",
+      compat: { supportedReasoningEfforts: [] },
     },
   ],
 };
@@ -65,6 +102,8 @@ describe("agent harness model catalog", () => {
         name: "GPT-5.6 Terra",
         api: "openai-chatgpt-responses" as const,
         baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: false,
+        compat: { supportedReasoningEfforts: [] },
       },
       {
         provider: "openai",
@@ -72,6 +111,25 @@ describe("agent harness model catalog", () => {
         name: "GPT-5.6 Sol (account)",
         api: "openai-chatgpt-responses" as const,
         baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        params: { codexAppServerRuntimeModel: "gpt-5.6-sol-runtime" },
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["high", "ultra"],
+          supportsTools: true,
+        },
+      },
+      {
+        provider: "openai",
+        id: "custom-reasoner",
+        name: "Custom Reasoner",
+        compat: { supportedReasoningEfforts: ["high"] },
+      },
+      {
+        provider: "openai",
+        id: "provider-empty-reasoner",
+        name: "Provider Empty Reasoner",
+        compat: { supportedReasoningEfforts: ["high"] },
       },
     ]);
 
@@ -86,11 +144,27 @@ describe("agent harness model catalog", () => {
       pluginRegistry: registryWithCatalog(loadModelCatalog as never),
     });
 
-    expect(result.entries.map((entry) => entry.id)).toEqual(["gpt-5.6-terra", "gpt-5.6-sol"]);
+    expect(result.entries.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+      "custom-reasoner",
+      "provider-empty-reasoner",
+    ]);
+    expect(result.entries[0]?.compat?.supportedReasoningEfforts).toEqual([]);
     expect(result.entries[1]).toMatchObject({
       name: "GPT-5.6 Sol (account)",
       contextWindow: 1_050_000,
+      params: {
+        providerFact: "kept",
+        codexAppServerRuntimeModel: "gpt-5.6-sol-runtime",
+      },
+      compat: {
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        supportsTools: true,
+      },
     });
+    expect(result.entries[2]?.compat?.supportedReasoningEfforts).toEqual(["high"]);
+    expect(result.entries[3]?.compat?.supportedReasoningEfforts).toEqual(["high"]);
     expect(result.routeVariants).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "gpt-5.6-sol", api: "openai-chatgpt-responses" }),

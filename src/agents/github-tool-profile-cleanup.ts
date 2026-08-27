@@ -4,6 +4,7 @@ import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { listAgentIds, resolveAgentConfig } from "./agent-scope.js";
+import { listGitHubOAuthRecords } from "./github-oauth-records.js";
 import {
   resolveManagedGitHubAgentKey,
   resolveManagedGitHubProfileRoot,
@@ -17,7 +18,7 @@ type GitHubProfileCleanupResult = { removed: number; warnings: string[] };
 
 async function cleanupProfileRoot(params: {
   root: string;
-  currentProfileId?: string;
+  preservedProfileIds: ReadonlySet<string>;
   warnings: string[];
 }): Promise<number> {
   let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
@@ -60,7 +61,7 @@ async function cleanupProfileRoot(params: {
       params.warnings.push(`refused unsafe managed GitHub profile cleanup candidate: ${candidate}`);
       continue;
     }
-    if (isProfile && entry.name === params.currentProfileId) {
+    if (isProfile && params.preservedProfileIds.has(entry.name)) {
       continue;
     }
     const resolved = await fs.realpath(candidate);
@@ -146,7 +147,7 @@ async function removeOrphanAgentRoot(params: {
 
 async function cleanupAgentProfileRegistry(params: {
   root: string;
-  currentProfiles: ReadonlyMap<string, string | undefined>;
+  preservedProfiles: ReadonlyMap<string, ReadonlySet<string>>;
   warnings: string[];
 }): Promise<number> {
   let rootStat: Awaited<ReturnType<typeof fs.lstat>>;
@@ -174,10 +175,10 @@ async function cleanupAgentProfileRegistry(params: {
       params.warnings.push(`ignored unexpected managed GitHub agent entry: ${candidate}`);
       continue;
     }
-    if (params.currentProfiles.has(entry.name)) {
+    if (params.preservedProfiles.has(entry.name)) {
       removed += await cleanupProfileRoot({
         root: candidate,
-        currentProfileId: params.currentProfiles.get(entry.name),
+        preservedProfileIds: params.preservedProfiles.get(entry.name) ?? new Set(),
         warnings: params.warnings,
       });
       continue;
@@ -202,20 +203,38 @@ export async function cleanupRetiredManagedGitHubProfiles(params: {
     scope: "system",
     env: params.env,
   });
+  const systemProfiles = new Set(
+    params.config.tools?.github?.profileId ? [params.config.tools.github.profileId] : [],
+  );
+  const agentProfiles = new Map<string, Set<string>>(
+    listAgentIds(params.config).map((agentId) => {
+      const profileId = resolveAgentConfig(params.config, agentId)?.tools?.github?.profileId;
+      return [resolveManagedGitHubAgentKey(agentId), new Set(profileId ? [profileId] : [])];
+    }),
+  );
+  // Initial setup can be durable before its config CAS is known. Pending
+  // refresh metadata also owns the selected stable profile until recovery.
+  for (const { record } of listGitHubOAuthRecords()) {
+    if (!record) {
+      continue;
+    }
+    if (record.scope === "system") {
+      systemProfiles.add(record.profileId);
+      continue;
+    }
+    const agentKey = resolveManagedGitHubAgentKey(record.agentId);
+    const profiles = agentProfiles.get(agentKey) ?? new Set<string>();
+    profiles.add(record.profileId);
+    agentProfiles.set(agentKey, profiles);
+  }
   let removed = await cleanupProfileRoot({
     root: systemRoot,
-    currentProfileId: params.config.tools?.github?.profileId,
+    preservedProfileIds: systemProfiles,
     warnings,
   });
-  const currentProfiles = new Map(
-    listAgentIds(params.config).map((agentId) => [
-      resolveManagedGitHubAgentKey(agentId),
-      resolveAgentConfig(params.config, agentId)?.tools?.github?.profileId,
-    ]),
-  );
   removed += await cleanupAgentProfileRegistry({
     root: path.join(path.dirname(systemRoot), "agents"),
-    currentProfiles,
+    preservedProfiles: agentProfiles,
     warnings,
   });
   if (warnings.length <= MAX_CLEANUP_WARNINGS) {

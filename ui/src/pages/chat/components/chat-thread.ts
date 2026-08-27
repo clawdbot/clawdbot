@@ -22,14 +22,15 @@ import {
 } from "../../../components/markdown-tables.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import {
   handleTranscriptContextMenu,
   handleTranscriptPointerUp,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import {
-  type ChatTranscriptSession,
   ChatTranscriptController,
+  type ChatTranscriptSession,
 } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
@@ -135,7 +136,7 @@ function renderTranscriptShell(
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
-          <div class="chat-thread-inner">
+          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
             ${historySentinel} ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
             ${projection.isEmpty && projection.searchOpen
@@ -150,6 +151,7 @@ function renderTranscriptShell(
       ${ref((element) => {
         if (element instanceof HTMLElement) {
           initializeMarkdownCodeBlocks(element);
+          hydrateLinkFavicons(element, props.fetchLinkFavicon);
         }
       })}
       role="log"

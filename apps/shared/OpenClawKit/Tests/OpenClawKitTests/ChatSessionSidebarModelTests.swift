@@ -307,7 +307,7 @@ struct ChatSessionSidebarModelTests {
         #expect(sections.flatMap(\.nodes).map(\.session.key) == ["agent:main:research"])
     }
 
-    @Test(arguments: ["holiday", "KYOTO", "session-123", "  HoLiDaY  "])
+    @Test(arguments: ["holiday", "KYOTO", "session-123", "team planning", "  HoLiDaY  "])
     func `sidebar search matches every canonical gateway session field`(_ query: String) {
         let matching = self.entry(
             key: "agent:main:roadmap",
@@ -315,7 +315,8 @@ struct ChatSessionSidebarModelTests {
             label: "Summer holiday",
             subject: "Kyoto itinerary",
             sessionId: "session-123",
-            updatedAt: 200)
+            updatedAt: 200,
+            category: "Team Planning")
         let other = self.entry(
             key: "agent:main:other",
             displayName: "Unrelated",
@@ -774,6 +775,32 @@ struct ChatSessionSidebarModelTests {
         #expect(cleared.observerDigest == nil)
         #expect(cleared.status == nil)
         #expect(cleared.lastRunError == nil)
+    }
+
+    @Test func `active run id tombstone clears exact ids while omission is inert`() throws {
+        let existing = self.entry(
+            key: "agent:main:work",
+            updatedAt: 100,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["run-exact"])
+        let decoder = JSONDecoder()
+
+        let omitted = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":200,"hasActiveRun":true}}"#.utf8))
+        let retained = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: omitted,
+            to: [existing]))
+        #expect(retained[0].activeRunIds == ["run-exact"])
+
+        let tombstoned = try decoder.decode(
+            OpenClawChatSessionsChangedEvent.self,
+            from: Data(#"{"reason":"run-progress","session":{"key":"agent:main:work","updatedAt":300,"hasActiveRun":true,"activeRunIds":null}}"#.utf8))
+        let cleared = try #require(ChatSessionSidebarModel.applying(
+            sessionChange: tombstoned,
+            to: retained))
+        #expect(cleared[0].activeRunIds == nil)
     }
 
     @Test func `subtitle precedence keeps attention and status above observer digest`() {

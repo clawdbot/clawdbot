@@ -37,6 +37,10 @@ export const discordChannelConfigUiHints = {
     },
     progress: { includeCommentary: true },
   }),
+  joinIntro: {
+    label: "Discord Guild Join Introduction",
+    help: "Post one brief, room-specific introduction when the bot joins an allowed Discord guild (default: true). Account settings override the channel-wide setting.",
+  },
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
@@ -172,7 +176,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.autoJoin": {
     label: "Discord Voice Auto-Join",
-    help: "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+    help: "Voice channels to auto-join (list of guildId/channelId entries). Set whenOccupied on an entry to connect only while humans are present.",
+  },
+  "voice.autoJoin.*.whenOccupied": {
+    label: "Discord Voice Auto-Join When Occupied",
+    help: "Join and remain in this auto-managed voice channel only while at least one human is present. The OpenClaw bot and other bots do not count. Default: false.",
   },
   "voice.allowedChannels": {
     label: "Discord Voice Allowed Channels",
@@ -305,7 +313,7 @@ export const discordChannelConfigUiHints = {
   },
   activities: {
     label: "Discord Activities",
-    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+    help: "Enable the Discord Activity presenter for the core show_widget tool on this account. Activity routes and the launch handler remain disabled when this block is absent.",
   },
   "activities.clientSecret": {
     label: "Discord Activities Client Secret",

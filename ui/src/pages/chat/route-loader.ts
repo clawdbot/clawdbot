@@ -6,7 +6,6 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import { sessionRefFromPath, type SessionPathTarget } from "../../app-session-route-paths.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
@@ -30,10 +29,12 @@ import {
   resolveUiGlobalAliasAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
+import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import { findCachedShortSession, sessionKeyUuid } from "./route-loader-short-cache.ts";
 import {
   resolveShortSessionReference,
   type SessionReferenceResolution,
+  type SessionRoutePresentation,
 } from "./route-loader-short-resolve.ts";
 
 const SESSION_REF_SEARCH_LIMIT = 20;
@@ -341,7 +342,7 @@ function canonicalSessionLocation(params: {
   context: ApplicationContext;
   location: RouteLocation;
   face: BoardFace;
-  row: GatewaySessionRow;
+  row: SessionRoutePresentation;
   shortIdLength?: number;
 }): RouteLocation | null | undefined {
   const face = params.face;
@@ -433,7 +434,7 @@ function resolvedSessionRouteData(params: {
   context: ApplicationContext;
   location: RouteLocation;
   face: BoardFace;
-  row: GatewaySessionRow;
+  row: SessionRoutePresentation;
   preferenceDerived: boolean;
   shortId?: string;
 }): Extract<ChatRouteData, { kind: "session" }> | null {
@@ -465,7 +466,7 @@ function resolvedMainSessionRouteData(params: {
   context: ApplicationContext;
   location: RouteLocation;
   face: BoardFace;
-  row: GatewaySessionRow;
+  row: SessionRoutePresentation;
   target: Extract<SessionPathTarget, { kind: "main" }>;
   preferenceDerived: boolean;
 }): Extract<ChatRouteData, { kind: "session" }> | null {

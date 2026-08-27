@@ -52,7 +52,8 @@ import {
   type TelegramPromptContextProjectionSequence,
   type TelegramPromptContextSource,
 } from "./prompt-context-projection.js";
-import { editMessageTelegram } from "./send.js";
+import { registerTelegramQuestionDelivery } from "./question-finalization.js";
+import { editMessageReplyMarkupTelegram, editMessageTelegram } from "./send.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
 type TelegramDeliveryConfig = TurnConfig & {
@@ -331,10 +332,7 @@ export async function sendPayload(
   }
 }
 
-export async function emitPreviewFinalizedHook(
-  turn: Turn,
-  result: LaneDeliveryResult,
-): Promise<void> {
+async function emitPreviewFinalizedHook(turn: Turn, result: LaneDeliveryResult): Promise<void> {
   if (
     turn.isSuperseded() ||
     (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial")
@@ -348,7 +346,7 @@ export async function emitPreviewFinalizedHook(
     chatId: String(turn.context.chatId),
     accountId: turn.context.route.accountId,
     content: result.delivery.content,
-    success: true,
+    success: result.kind === "preview-finalized",
     messageId: result.delivery.messageId,
     isGroup: turn.context.isGroup,
     groupId: turn.context.isGroup ? String(turn.context.chatId) : undefined,
@@ -359,6 +357,55 @@ export async function emitPreviewFinalizedHook(
       logVerbose(`telegram preview-finalized transcriptMirror failed: ${formatErrorMessage(err)}`);
     });
   }
+}
+
+export async function handlePreviewFinalizedResult(
+  turn: Turn,
+  result: LaneDeliveryResult,
+): Promise<void> {
+  if (result.kind !== "preview-finalized" && result.kind !== "preview-finalized-partial") {
+    return;
+  }
+  await emitPreviewFinalizedHook(turn, result);
+  if (result.kind === "preview-finalized-partial") {
+    // The preview is already visible, so this failure is terminal: preserve its
+    // receipt and prevent outer fallback delivery from duplicating the message.
+    markFinalDelivered(turn);
+    throw mergeTelegramPartialDeliveryError(result.error, {
+      receipt: result.delivery.receipt,
+      content: result.delivery.content,
+      messageIds: result.delivery.receipt.platformMessageIds,
+      visibleReplySent: true,
+    });
+  }
+}
+
+export function registerTelegramQuestionDeliveryForMessage(
+  turn: Turn,
+  payload: ReplyPayload,
+  delivery: { messageId: number; text: string },
+): void {
+  const { chatId } = turn.context;
+  const accountId = turn.context.route.accountId;
+  const api = turn.bot.api;
+  const cfg = turn.cfg;
+  const linkPreview = turn.telegramCfg.linkPreview;
+  const editText = turn.telegramDeps.editMessageTelegram ?? editMessageTelegram;
+  const { messageId, text } = delivery;
+  registerTelegramQuestionDelivery({
+    accountId,
+    chatId: String(chatId),
+    messageId,
+    payload,
+    text,
+    textLimit: turn.textLimit,
+    clearButtons: async () => {
+      await editMessageReplyMarkupTelegram(chatId, messageId, [], { api, cfg, accountId });
+    },
+    annotate: async (finalText) => {
+      await editText(chatId, messageId, finalText, { api, cfg, accountId, linkPreview });
+    },
+  });
 }
 
 async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
@@ -387,7 +434,7 @@ async function materializeAnswerLaneBeforeRotation(turn: Turn): Promise<void> {
     durable: false,
   });
   turn.activeAnswerBlockDelivery = undefined;
-  await emitPreviewFinalizedHook(turn, result);
+  await handlePreviewFinalizedResult(turn, result);
 }
 
 async function deliverTelegramProgressModeFinalAnswer(
@@ -485,15 +532,11 @@ export async function deliverFinalAnswerText(
       markFinalDelivered(turn);
     }
   }
-  if (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial") {
-    await emitPreviewFinalizedHook(turn, result);
-  }
-  if (result.kind === "preview-finalized-partial") {
-    throw mergeTelegramPartialDeliveryError(result.error, {
-      receipt: result.delivery.receipt,
-      content: result.delivery.content,
-      messageIds: result.delivery.receipt.platformMessageIds,
-      visibleReplySent: true,
+  await handlePreviewFinalizedResult(turn, result);
+  if (result.kind === "preview-finalized") {
+    registerTelegramQuestionDeliveryForMessage(turn, answerPayload, {
+      messageId: result.delivery.messageId,
+      text: result.delivery.content,
     });
   }
   return result;

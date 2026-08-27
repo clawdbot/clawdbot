@@ -341,6 +341,7 @@ const grammySpies = vi.hoisted(() => ({
   editMessageTextSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   editMessageReplyMarkupSpy: vi.fn(async () => ({ message_id: 88 })) as AnyAsyncMock,
   deleteMessageSpy: vi.fn(async () => true) as AnyAsyncMock,
+  deleteBusinessMessagesSpy: vi.fn(async () => true) as AnyAsyncMock,
   setMessageReactionSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   setMyCommandsSpy: vi.fn(async () => undefined) as AnyAsyncMock,
   getMeSpy: vi.fn(async () => ({
@@ -367,6 +368,7 @@ export const sendChatActionSpy: AnyMock = grammySpies.sendChatActionSpy;
 export const editMessageTextSpy: AnyAsyncMock = grammySpies.editMessageTextSpy;
 export const editMessageReplyMarkupSpy: AnyAsyncMock = grammySpies.editMessageReplyMarkupSpy;
 export const deleteMessageSpy: AnyAsyncMock = grammySpies.deleteMessageSpy;
+export const deleteBusinessMessagesSpy: AnyAsyncMock = grammySpies.deleteBusinessMessagesSpy;
 export const setMessageReactionSpy: AnyAsyncMock = grammySpies.setMessageReactionSpy;
 export const setMyCommandsSpy: AnyAsyncMock = grammySpies.setMyCommandsSpy;
 export const getChatSpy: AnyAsyncMock = grammySpies.getChatSpy;
@@ -442,6 +444,7 @@ const telegramBotRuntimeForTest = {
       editMessageText: grammySpies.editMessageTextSpy,
       editMessageReplyMarkup: grammySpies.editMessageReplyMarkupSpy,
       deleteMessage: grammySpies.deleteMessageSpy,
+      deleteBusinessMessages: grammySpies.deleteBusinessMessagesSpy,
       setMessageReaction: grammySpies.setMessageReactionSpy,
       setMyCommands: grammySpies.setMyCommandsSpy,
       getMe: grammySpies.getMeSpy,
@@ -699,6 +702,8 @@ beforeEach(() => {
   editMessageReplyMarkupSpy.mockResolvedValue({ message_id: 88 });
   deleteMessageSpy.mockReset();
   deleteMessageSpy.mockResolvedValue(true);
+  deleteBusinessMessagesSpy.mockReset();
+  deleteBusinessMessagesSpy.mockResolvedValue(true);
   enqueueSystemEventSpy.mockReset();
   wasSentByBot.mockReset();
   wasSentByBot.mockReturnValue(false);

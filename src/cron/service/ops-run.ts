@@ -43,9 +43,12 @@ import type {
 } from "./state.js";
 import { emit, isImmediateCronRunMode } from "./state.js";
 import { ensureLoaded, publishCronRuntimeRows, runPostPersistCronNotifications } from "./store.js";
-import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 import {
-  recordCronOutcomeForJob,
+  createCronOwnerExecutionIdentityAdmission,
+  tryFinishCronTaskRunWithoutHistory,
+} from "./task-runs.js";
+import { recordCronOutcomeForJob } from "./timer-outcome-events.js";
+import {
   resolveCronRunScheduleOwnership,
   resolveCronRunTriggerOwnership,
 } from "./timer-outcomes.js";
@@ -55,6 +58,7 @@ import {
   applyTriggerNoFireResult,
   applyTriggerRunResult,
   armTimer,
+  authorCronRunCompletion,
   executeJobCoreWithTimeout,
 } from "./timer.js";
 import { wake } from "./wake.js";
@@ -160,16 +164,22 @@ async function finishPreparedManualRun(
         streamScheduleKey: prepared.streamScheduleKey,
         streamSourceIdentity: prepared.streamSourceIdentity,
         runReceipt: prepared.runReceipt,
+        executionIdentity: createCronOwnerExecutionIdentityAdmission({
+          state,
+          runReceipt: prepared.runReceipt,
+          taskId: prepared.taskId,
+          flowId: prepared.flowId,
+        }),
       });
     } catch (err) {
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
         receiptSettlementDisposition = "owner-unavailable";
       }
-      coreResult = {
+      coreResult = authorCronRunCompletion(state, executionJob, {
         status: "error",
         error:
           err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
-      };
+      });
     }
     if (prepared.onTriggerDisposition) {
       const disposition = coreResult.triggerEval?.busy
@@ -205,10 +215,12 @@ async function finishPreparedManualRun(
           action: "finished",
           job,
           status: triggerSkipped ? "skipped" : coreResult.status,
+          completionStatus: triggerSkipped ? "failed" : coreResult.completionStatus,
           error: triggerSkipped
             ? "queued manual run skipped: trigger condition not met"
             : coreResult.error,
           deliveryError: coreResult.deliveryError,
+          deliverySuppressionReason: coreResult.deliverySuppressionReason,
           summary: triggerSkipped ? undefined : coreResult.summary,
           diagnostics: coreResult.diagnostics,
           delivered: coreResult.delivered,
@@ -227,6 +239,9 @@ async function finishPreparedManualRun(
         taskRunId,
         {
           errorClassification: triggerSkipped ? undefined : coreResult.errorClassification,
+          failureNotificationDetail: triggerSkipped
+            ? undefined
+            : coreResult.failureNotificationDetail,
         },
       );
     };
@@ -361,12 +376,14 @@ async function finishPreparedManualRun(
               action: "finished",
               job: committed.job,
               status: coreResult.status,
+              completionStatus: coreResult.completionStatus,
               error: coreResult.error,
               summary: coreResult.summary,
               diagnostics: coreResult.diagnostics,
               delivered: committed.job.state.lastDelivered,
               deliveryStatus: committed.job.state.lastDeliveryStatus,
               deliveryError: committed.job.state.lastDeliveryError,
+              deliverySuppressionReason: committed.job.state.deliverySuppressionReason,
               failureNotificationDelivery: failureNotificationDeliveryFromJobState(committed.job),
               delivery: coreResult.delivery,
               sessionId: coreResult.sessionId,
@@ -384,8 +401,12 @@ async function finishPreparedManualRun(
             taskRunId,
             {
               triggerEval: coreResult.triggerEval,
-              scriptResult: coreResult,
+              scriptResult: {
+                scriptStateChanged: coreResult.scriptStateChanged,
+                scriptState: coreResult.scriptState,
+              },
               errorClassification: coreResult.errorClassification,
+              failureNotificationDetail: coreResult.failureNotificationDetail,
             },
           );
         }

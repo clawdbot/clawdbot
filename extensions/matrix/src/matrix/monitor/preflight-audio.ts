@@ -1,10 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createChannelPreflightAudio } from "openclaw/plugin-sdk/media-understanding-runtime";
 
-export function formatMatrixAudioTranscript(transcript: string): string {
-  return `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify(transcript)}`;
-}
-
 export function isMatrixAudioContent(params: { msgtype?: string; mimetype?: string }): boolean {
   if (params.msgtype === "m.audio") {
     return true;

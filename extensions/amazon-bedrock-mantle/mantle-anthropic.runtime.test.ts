@@ -1,5 +1,9 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 // Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
+import {
+  notifyProviderStreamOpened,
+  withProviderAcceptanceObserver,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createMantleAnthropicStreamFn } from "./mantle-anthropic.runtime.js";
@@ -54,19 +58,26 @@ function firstStreamOptions(deps: ReturnType<typeof createTestDeps>): Record<str
 }
 
 describe("createMantleAnthropicStreamFn", () => {
-  it("uses authToken bearer auth for Mantle Anthropic requests", () => {
+  it("uses authToken bearer auth for Mantle Anthropic requests", async () => {
     const stream = { kind: "anthropic-stream" };
     const model = createTestModel();
     const context = { messages: [] };
     const deps = createTestDeps();
     deps.stream.mockReturnValue(stream as never);
-
-    const result = createMantleAnthropicStreamFn(deps)(model, context, {
-      apiKey: "bedrock-bearer-token",
-      headers: {
-        "X-Caller": "caller-header",
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver(
+      {
+        apiKey: "bedrock-bearer-token",
+        onResponse,
+        headers: {
+          "X-Caller": "caller-header",
+        },
       },
-    });
+      acceptanceObserver,
+    );
+
+    const result = createMantleAnthropicStreamFn(deps)(model, context, options);
 
     expect(result).toBe(stream);
     const clientOptions = requireRecord(mockCallArg(deps.createClient), "client options");
@@ -87,6 +98,9 @@ describe("createMantleAnthropicStreamFn", () => {
       "bedrock-bearer-token",
     );
     expect(streamOptions.thinkingEnabled).toBe(false);
+    expect(streamOptions.onResponse).toBe(onResponse);
+    await notifyProviderStreamOpened({ options: streamOptions, cancelStream: vi.fn() });
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
   it("omits unsupported Opus 4.7 sampling and reasoning overrides", () => {

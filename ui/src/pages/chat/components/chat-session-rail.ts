@@ -1,4 +1,3 @@
-import type { ProgressCard } from "@openclaw/gateway-protocol";
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
@@ -8,7 +7,6 @@ import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/con
 import { icons } from "../../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
-import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -219,7 +217,6 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
   @property({ attribute: false }) activeRunId: string | null = null;
   @property({ attribute: false }) startedAt?: number;
   @property({ attribute: false }) lastReadAt?: number;
-  @property({ attribute: false }) progressCard: ProgressCard | null = null;
   @property({ attribute: false }) pullRequests: ControlUiSessionPullRequest[] = [];
   @property({ attribute: false }) companion: ChatSessionCompanionThread = {
     exchanges: [],
@@ -626,44 +623,52 @@ export class ChatSessionRailElement extends OpenClawLightDomElement {
         ${digest
           ? html`<div class="chat-session-rail__digest">${this.renderDigestDetails(digest)}</div>`
           : nothing}
-        ${renderSessionProgressCard(this.progressCard, "rail")} ${this.renderThread()}
+        ${this.renderThread()}
         ${this.companion.exchanges.length === 0 && !this.companion.pendingQuestion
           ? this.renderStarters()
           : nothing}
         <form
-          class="chat-session-rail__composer"
+          class="agent-chat__input chat-session-rail__composer"
           @submit=${(event: SubmitEvent) => {
             event.preventDefault();
             this.submit();
           }}
         >
-          <label class="chat-session-rail__prompt">
-            <input
-              class="chat-session-rail__input"
-              type="text"
-              maxlength="400"
-              autocomplete="off"
-              aria-label=${t("chat.rail.askLabel")}
-              .value=${this.companion.draft}
-              placeholder=${this.companion.pendingQuestion
-                ? t("chat.rail.askPending")
-                : t("chat.rail.askPlaceholder")}
-              ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
-              @input=${(event: InputEvent) => {
-                this.onDraftChange?.((event.currentTarget as HTMLInputElement).value);
-              }}
-            />
-          </label>
-          <button
-            class="chat-send-btn"
-            type="submit"
-            aria-label=${t("chat.rail.askSubmit")}
-            ?disabled=${!this.connected ||
-            this.companion.pendingQuestion !== null ||
-            !this.companion.draft.trim()}
-          >
-            ${icons.arrowUp}
-          </button>
+          <div class="agent-chat__composer-input-row">
+            <label class="agent-chat__composer-combobox chat-session-rail__prompt">
+              <input
+                class="chat-session-rail__input"
+                type="text"
+                maxlength="400"
+                autocomplete="off"
+                aria-label=${t("chat.rail.askLabel")}
+                .value=${this.companion.draft}
+                placeholder=${this.companion.pendingQuestion
+                  ? t("chat.rail.askPending")
+                  : t("chat.rail.askPlaceholder")}
+                ?disabled=${!this.connected || this.companion.pendingQuestion !== null}
+                @input=${(event: InputEvent) => {
+                  this.onDraftChange?.((event.currentTarget as HTMLInputElement).value);
+                }}
+              />
+            </label>
+          </div>
+          <div class="agent-chat__composer-footer">
+            <div class="agent-chat__composer-trail">
+              <div class="agent-chat__composer-actions">
+                <button
+                  class="chat-send-btn"
+                  type="submit"
+                  aria-label=${t("chat.rail.askSubmit")}
+                  ?disabled=${!this.connected ||
+                  this.companion.pendingQuestion !== null ||
+                  !this.companion.draft.trim()}
+                >
+                  ${icons.arrowUp}
+                </button>
+              </div>
+            </div>
+          </div>
         </form>
       </section>
     `;

@@ -2,6 +2,7 @@ import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-h
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import { requestOptions } from "../command-rpc.js";
 import { readCodexPluginConfig } from "./config-parsing.js";
+import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
 
 const OPENAI_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex";
@@ -20,23 +21,21 @@ function codexAppServerModelsToCatalogEntries(
 ): ModelCatalogEntry[] {
   return models.map((model, providerOrder) => {
     const input = model.inputModalities.filter(isModelInputType);
+    const runtimeParams = buildCodexRuntimeModelParams(model.id, model.model);
     return {
       provider: "openai",
-      id: model.model,
-      name: model.displayName ?? model.model,
+      id: model.id,
+      name: model.displayName ?? model.id,
       providerOrder,
       api: "openai-chatgpt-responses",
       baseUrl: OPENAI_CODEX_BASE_URL,
       reasoning: model.supportedReasoningEfforts.length > 0,
       ...(input.length > 0 ? { input } : {}),
-      ...(model.supportedReasoningEfforts.length > 0
-        ? {
-            compat: {
-              supportsReasoningEffort: true,
-              supportedReasoningEfforts: model.supportedReasoningEfforts,
-            },
-          }
-        : {}),
+      ...(runtimeParams ? { params: runtimeParams } : {}),
+      compat: {
+        supportsReasoningEffort: model.supportedReasoningEfforts.length > 0,
+        supportedReasoningEfforts: model.supportedReasoningEfforts,
+      },
     };
   });
 }

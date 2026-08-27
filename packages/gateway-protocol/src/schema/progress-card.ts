@@ -43,6 +43,7 @@ export const ProgressCardPutParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   markdown: Type.Optional(Type.String()),
   plan: Type.Optional(Type.Array(ProgressCardStepSchema, { maxItems: PROGRESS_CARD_MAX_STEPS })),
+  expectedRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 export type ProgressCardPutParams = Static<typeof ProgressCardPutParamsSchema>;
 

@@ -322,7 +322,7 @@ export async function finalizeChatSendNonAgentReplies(params: {
     });
     if (appended.ok) {
       if (appended.messageId && assistantContent?.length) {
-        await attachManagedOutgoingMediaToMessage({
+        attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
           blocks: assistantContent,
         });

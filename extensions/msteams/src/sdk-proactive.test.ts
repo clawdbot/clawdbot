@@ -10,7 +10,8 @@ const clientState = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("@microsoft/teams.api", () => ({
+vi.mock("@microsoft/teams.api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@microsoft/teams.api")>()),
   Client: vi.fn(function MockClient(this: unknown, serviceUrl: string, http: unknown) {
     clientState.created.push({ serviceUrl, http });
     return {

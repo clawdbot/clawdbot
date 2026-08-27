@@ -3,6 +3,7 @@
  */
 
 import type { MediaKind } from "@openclaw/media-core/constants";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
 
@@ -42,19 +43,21 @@ export type ChatGuardianNotice = {
   key: string;
   runId: string;
   timestamp: number;
-  kind: "approved" | "denied" | "warning";
+  kind: "approved" | "denied" | "reviewing" | "strict-review-required" | "warning";
+  source?: "system";
   command?: string;
   riskLevel?: string;
   rationale?: string;
   message?: string;
 };
 
-export type ChatQueueSkillWorkshopRevision = {
-  proposalId: string;
-  agentId?: string;
-  /** Process-local owner; revision requests must never replay after reconnect. */
-  connectionClient?: object;
-  connectionEpoch?: number;
+export type ToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  userAuthorization?: string;
+  rationale?: string;
 };
 
 export type ChatQueueItem = {
@@ -63,7 +66,6 @@ export type ChatQueueItem = {
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
-  kind?: "queued" | "steered";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -74,13 +76,12 @@ export type ChatQueueItem = {
   sendAttempts?: number;
   sendError?: string;
   sendRunId?: string;
-  /** Immutable active run selected when this row first became a steer. */
-  steerTargetRunId?: string;
+  /** One-send override retained with the durable row for reconnect and retry. */
+  queueMode?: QueueMode;
   sendState?:
     | "waiting-model"
     | "waiting-idle"
     | "executing-command"
-    | "steering"
     | "sending"
     | "waiting-reconnect"
     | "unconfirmed"
@@ -90,7 +91,6 @@ export type ChatQueueItem = {
   sessionKey?: string;
   agentId?: string;
   sender?: SenderIdentity;
-  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 /** Union type for items in the chat thread */
@@ -104,7 +104,10 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       label?: string;
       startsTurn?: true;
+      boundaryId?: string;
       tone?: "danger";
+      /** Collapse the body behind a disclosure; the label line stays visible. */
+      collapsedBody?: true;
     }
   | {
       kind: "divider";
@@ -116,8 +119,22 @@ export type ChatItem =
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
-  | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
-  | { kind: "reading-indicator"; key: string; startedAt: number }
+  | {
+      kind: "stream";
+      key: string;
+      text: string;
+      startedAt: number;
+      isStreaming: boolean;
+      runId?: string;
+      boundaryId?: string;
+    }
+  | {
+      kind: "reading-indicator";
+      key: string;
+      startedAt: number;
+      runId?: string;
+      boundaryId?: string;
+    }
   | { kind: "question"; key: string; questionId: string; startedAt: number };
 
 export type ChatStreamSegment = {
@@ -178,6 +195,7 @@ export type MessageGroup = {
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
   timestamp: number;
   isStreaming: boolean;
+  runId?: string;
 };
 
 /** Content item types in a normalized message */

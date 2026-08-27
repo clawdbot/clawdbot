@@ -147,6 +147,15 @@ export interface MemoryEmbeddingCache {
   updated_at: number;
 }
 
+export interface MemoryEntryOrigins {
+  agent_id: string;
+  entry_key: string;
+  observed_at: number;
+  origin_class: string;
+  session_id: string;
+  session_key: string | null;
+}
+
 export interface MemoryIndexChunkProvenance {
   chunk_id: string;
   observed_at: number;
@@ -194,6 +203,13 @@ export interface MemoryIndexState {
   revision: number;
 }
 
+export interface MemorySessionTombstones {
+  agent_id: string;
+  created_at: number;
+  reason: string;
+  session_id: string;
+}
+
 export interface MessageToolRunOutcomes {
   agent_id: string;
   id: Generated<number>;
@@ -221,6 +237,7 @@ export interface SessionConversations {
   first_seen_at: number;
   last_seen_at: number;
   role: Generated<string>;
+  route_context_json: string | null;
   session_id: string;
 }
 
@@ -274,6 +291,7 @@ export interface SessionParticipants {
   actor_id: string;
   actor_source: string | null;
   actor_type: string;
+  contribution_count: number | null;
   first_prompted_at: number;
   last_prompted_at: number;
   session_key: string;
@@ -488,12 +506,14 @@ export interface DB {
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_entry_origins: MemoryEntryOrigins;
   memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunk_recall_metadata: MemoryIndexChunkRecallMetadata;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
+  memory_session_tombstones: MemorySessionTombstones;
   message_tool_run_outcomes: MessageToolRunOutcomes;
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;

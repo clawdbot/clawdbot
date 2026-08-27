@@ -6,7 +6,7 @@ import { parseFenceSpans } from "../../packages/markdown-core/src/fences.js";
 
 // Extracts assistant-message canvas previews from tool JSON or markdown embed
 // shortcodes. The returned text strips consumed shortcodes for channel delivery.
-type CanvasSurface = "assistant_message";
+type CanvasSurface = "assistant_message" | "node_panel";
 type CanvasSandbox = "strict" | "scripts";
 
 type McpAppPreviewDescriptor = {
@@ -95,7 +95,7 @@ function coerceMcpAppDescriptor(
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
-  return value === "assistant_message" ? value : undefined;
+  return value === "assistant_message" || value === "node_panel" ? value : undefined;
 }
 
 function normalizeSandbox(value: string | undefined): CanvasSandbox | undefined {

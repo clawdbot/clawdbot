@@ -26,7 +26,6 @@ import { resolveHomeDir, shortenHomeInString, shortenHomePath } from "../utils.j
 
 type RemovalResult = {
   ok: boolean;
-  skipped?: boolean;
 };
 
 type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
@@ -171,7 +170,7 @@ export async function removePath(
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
   if (!target?.trim()) {
-    return { ok: false, skipped: true };
+    return { ok: false };
   }
   const resolved = path.resolve(target);
   const label = opts?.label ?? resolved;
@@ -182,7 +181,7 @@ export async function removePath(
   }
   if (opts?.dryRun) {
     runtime.log(`[dry-run] remove ${displayLabel}`);
-    return { ok: true, skipped: true };
+    return { ok: true };
   }
   try {
     await fs.rm(resolved, { recursive: true, force: true });
@@ -271,7 +270,7 @@ async function removePathPreserving(
   opts?: RemovalOptions,
 ): Promise<RemovalResult> {
   if (!target?.trim()) {
-    return { ok: false, skipped: true };
+    return { ok: false };
   }
   const resolved = path.resolve(target);
   const label = opts?.label ?? resolved;
@@ -281,7 +280,7 @@ async function removePathPreserving(
     return { ok: false };
   }
   if (shouldPreservePath(resolved, preservePaths)) {
-    return { ok: true, skipped: true };
+    return { ok: true };
   }
   if (!pathContainsPreservedPath(resolved, preservePaths)) {
     return removePath(resolved, runtime, opts);
@@ -292,7 +291,7 @@ async function removePathPreserving(
       .map((preservePath) => shortenHomeInString(preservePath))
       .join(", ");
     runtime.log(`[dry-run] remove ${displayLabel} preserving ${preserved}`);
-    return { ok: true, skipped: true };
+    return { ok: true };
   }
   try {
     const stat = await fs.lstat(resolved);
@@ -410,13 +409,13 @@ export async function removeStateAndLinkedPaths(
             dryRun: true,
             label: cleanup.stateDir,
           });
-    if (!cleanup.configInsideState) {
-      await removePath(cleanup.configPath, runtime, { dryRun: true, label: cleanup.configPath });
-    }
-    if (!cleanup.oauthInsideState) {
-      await removePath(cleanup.oauthDir, runtime, { dryRun: true, label: cleanup.oauthDir });
-    }
-    return stateRemoval.ok;
+    const configRemoval = cleanup.configInsideState
+      ? { ok: true }
+      : await removePath(cleanup.configPath, runtime, { dryRun: true, label: cleanup.configPath });
+    const oauthRemoval = cleanup.oauthInsideState
+      ? { ok: true }
+      : await removePath(cleanup.oauthDir, runtime, { dryRun: true, label: cleanup.oauthDir });
+    return stateRemoval.ok && configRemoval.ok && oauthRemoval.ok;
   }
   if (isUnsafeRemovalTarget(requestedStateDir)) {
     runtime.error(`Refusing to remove unsafe path: ${shortenHomeInString(cleanup.stateDir)}`);
@@ -516,6 +515,7 @@ export async function removeWorkspaceDirs(
   runtime: RuntimeEnv,
   opts?: {
     dryRun?: boolean;
+    preserveWorkspace?: boolean;
     removeStateRows?: boolean;
     removeWorkspace?: (workspace: string) => Promise<boolean>;
   },
@@ -539,9 +539,11 @@ export async function removeWorkspaceDirs(
     const statePlan = opts?.removeStateRows
       ? await attempt(stateLabel, () => prepareWorkspaceStateDeletion(workspace))
       : undefined;
-    const result = opts?.removeWorkspace
-      ? { ok: (await attempt(workspace, () => opts.removeWorkspace!(workspace))) === true }
-      : await removePath(workspace, runtime, { dryRun: opts?.dryRun, label: workspace });
+    const result = opts?.preserveWorkspace
+      ? { ok: true }
+      : opts?.removeWorkspace
+        ? { ok: (await attempt(workspace, () => opts.removeWorkspace!(workspace))) === true }
+        : await removePath(workspace, runtime, { dryRun: opts?.dryRun, label: workspace });
     if (!result.ok) {
       failures.add(workspace);
       continue;

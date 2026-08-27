@@ -31,6 +31,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/p
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
@@ -53,6 +54,7 @@ import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleRoots = new Map<string, string>();
 const log = createSubsystemLogger("channels");
 
 type ReadOnlyChannelPluginOptions = {
@@ -87,6 +89,7 @@ let nextReadOnlyChannelPluginObjectId = 1;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   readOnlyChannelPluginResolutionCache.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
 });
 
 function cloneReadOnlyChannelPluginResolution(
@@ -432,6 +435,7 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     return {};
   }
   try {
+    moduleRoots.set(params.record.setupSource, params.record.rootDir);
     const moduleLoader = getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath: params.record.setupSource,
@@ -614,6 +618,7 @@ function addManifestChannelPlugins(
   options: {
     pluginIds: ReadonlySet<string>;
     channelIds: readonly string[];
+    includeSetupFallbackPlugins: boolean;
   },
 ): void {
   const channelIds = new Set(options.channelIds);
@@ -628,7 +633,9 @@ function addManifestChannelPlugins(
       if (!channelIds.has(channelId)) {
         continue;
       }
-      if (!canUseManifestChannelPlugin(record, channelId)) {
+      // Inventory can describe accounts without executing setup. Setup-backed callers
+      // must still see missing capabilities when a runtime-dependent setup fails.
+      if (options.includeSetupFallbackPlugins && !canUseManifestChannelPlugin(record, channelId)) {
         continue;
       }
       addChannelPlugins(byId, [buildManifestChannelPlugin({ record, channelId })], {
@@ -706,6 +713,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
+  const includeSetupFallbackPlugins = options.includeSetupFallbackPlugins === true;
   const loadedChannelPlugins = listChannelPlugins();
   const cacheKey = resolveReadOnlyChannelPluginResolutionCacheKey({
     cfg,
@@ -761,7 +769,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
 
   addChannelPlugins(byId, loadedChannelPlugins);
 
-  if (options.includeSetupFallbackPlugins === true) {
+  if (includeSetupFallbackPlugins) {
     for (const channelId of configuredChannelIds) {
       if (byId.has(channelId)) {
         continue;
@@ -801,6 +809,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
       ),
     ),
     channelIds: bundledManifestMissingChannelIds,
+    includeSetupFallbackPlugins,
   });
 
   const missingConfiguredChannelIds = configuredChannelIds.filter(
@@ -816,7 +825,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   });
   if (externalPluginIds.length > 0) {
     const externalPluginIdSet = new Set(externalPluginIds);
-    if (options.includeSetupFallbackPlugins === true) {
+    if (includeSetupFallbackPlugins) {
       const missingChannelIdSet = new Set(missingConfiguredChannelIds);
       for (const record of externalManifestRecords) {
         if (!externalPluginIdSet.has(record.id) || !record.setupSource) {
@@ -858,6 +867,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
     addManifestChannelPlugins(byId, externalManifestRecords, {
       pluginIds: externalPluginIdSet,
       channelIds: externalManifestMissingChannelIds,
+      includeSetupFallbackPlugins,
     });
   }
 

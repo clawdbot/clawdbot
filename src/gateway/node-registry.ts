@@ -35,6 +35,7 @@ import {
   forgetNodeRunnerInventory,
   invokePublicNodeRegistry,
   isNodeRegistryPendingInvokeConnectionActive,
+  reconcileNodeRunnerAvailability,
   registerNodeRegistryPrivateRuntime,
   settleNodeRegistryPairingGenerationChange,
 } from "./node-registry-private.js";
@@ -46,7 +47,7 @@ import {
   type PendingSystemRunEvent,
 } from "./node-registry.invoke-stream.js";
 import { normalizeNodeSkillDescriptors } from "./node-skill-descriptors.js";
-import { MAX_BUFFERED_BYTES } from "./server-constants.js";
+import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 /** Connected node session advertised over Gateway websocket. */
@@ -134,7 +135,6 @@ type PingableSocket = {
 
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
-const WEBSOCKET_OPEN_READY_STATE = 1;
 const SLOW_CONSUMER_CLOSE_CODE = 1008;
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
@@ -573,6 +573,7 @@ export class NodeRegistry {
     if (replacesPresence) {
       this.publishActiveNodeContext();
     }
+    reconcileNodeRunnerAvailability(this, nodeId);
     return session;
   }
 
@@ -600,6 +601,7 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
+    reconcileNodeRunnerAvailability(this, nodeId);
     return unregistersCurrentNode ? nodeId : null;
   }
 
@@ -690,6 +692,7 @@ export class NodeRegistry {
         this.authorizedSystemRunEvents.delete(key);
       }
     }
+    reconcileNodeRunnerAvailability(this, node.nodeId);
     this.options.onPairingInvalidated?.({ nodeId: node.nodeId, connId: node.connId });
     return node.lastActiveAtMs !== undefined;
   }
@@ -1063,14 +1066,15 @@ export class NodeRegistry {
     if (generationTransition) {
       const previousPairingGeneration = node.pairingGeneration;
       node.pairingGeneration = generationTransition.nextPairingGeneration;
-      // Protocol features describe this exact live process. Keep the connection
-      // declaration while private proof resolution binds the new generation.
+      // Runner declarations are pairing-generation facts. Retire the old
+      // declaration so the live process must publish for its promoted generation.
       settleNodeRegistryPairingGenerationChange({
         registry: this,
         nodeId,
         connId: node.connId,
         nextPairingGeneration: generationTransition.nextPairingGeneration,
       });
+      reconcileNodeRunnerAvailability(this, nodeId);
       if (previousPairingGeneration) {
         this.options.onPairingGenerationChanged?.({
           nodeId,
@@ -1124,6 +1128,29 @@ export class NodeRegistry {
 
   handleInvokeProgress(params: NodeInvokeProgressParams): boolean {
     return this.invokeStreams.handleProgress(params);
+  }
+
+  /** Re-enters only the root that owns this exact live node invocation. */
+  runPendingInvokeContinuation<T>(params: {
+    invokeId: string;
+    nodeId: string;
+    connId: string | undefined;
+    run: () => Promise<T>;
+  }): Promise<T> | null {
+    const pending = this.pendingInvokes.get(params.invokeId);
+    if (
+      !pending?.admissionContinuation ||
+      pending.nodeId !== params.nodeId ||
+      pending.connId !== params.connId ||
+      !isNodeRegistryPendingInvokeConnectionActive({
+        registry: this,
+        pending,
+        currentNode: this.nodesById.get(params.nodeId),
+      })
+    ) {
+      return null;
+    }
+    return pending.admissionContinuation.run(params.run);
   }
 
   /** Authorize an inbound system.run event against a recently issued node invoke. */
@@ -1481,6 +1508,7 @@ export class NodeRegistry {
     } catch {
       /* ignore */
     }
+    node.client.socket.terminate();
     return true;
   }
 }

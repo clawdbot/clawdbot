@@ -18,7 +18,9 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  discoverServer: vi.fn(),
   ensureModel: vi.fn(),
+  ensureChat: vi.fn(),
   prepareServer: vi.fn(),
   inspectRuntime: vi.fn(),
   genericCreate: vi.fn(),
@@ -32,8 +34,14 @@ vi.mock("openclaw/plugin-sdk/embedding-providers", async (importOriginal) => ({
 vi.mock("./src/managed-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./src/managed-server.js")>()),
   ensureLlamaCppModel: mocks.ensureModel,
+  ensureManagedLlamaServerForChat: mocks.ensureChat,
   prepareManagedLlamaServer: mocks.prepareServer,
   inspectLlamaServerRuntime: mocks.inspectRuntime,
+}));
+
+vi.mock("./src/external-server/discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/external-server/discovery.js")>()),
+  discoverLlamaServer: mocks.discoverServer,
 }));
 
 import llamaCppPlugin from "./index.js";
@@ -52,7 +60,9 @@ let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
+  mocks.discoverServer.mockReset();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
+  mocks.ensureChat.mockResolvedValue(undefined);
   mocks.prepareServer.mockResolvedValue({});
   mocks.inspectRuntime.mockResolvedValue({
     engine: "llama.cpp",
@@ -75,12 +85,11 @@ beforeEach(() => {
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   vi.clearAllMocks();
 });
 
-function registerTextProvider(): ProviderPlugin {
+function captureTextRegistration(): { providers: ProviderPlugin[] } {
   const providers: ProviderPlugin[] = [];
   llamaCppPlugin.register(
     createTestPluginApi({
@@ -93,7 +102,14 @@ function registerTextProvider(): ProviderPlugin {
       registerProvider: (provider) => providers.push(provider),
     }),
   );
-  return expectDefined(providers[0], "llama.cpp provider");
+  return { providers };
+}
+
+function registerTextProvider(): ProviderPlugin {
+  return expectDefined(
+    captureTextRegistration().providers.find((provider) => provider.id === LLAMA_CPP_PROVIDER_ID),
+    "llama.cpp provider",
+  );
 }
 
 function configuredOptions() {
@@ -141,16 +157,64 @@ describe("llama.cpp provider plugin", () => {
   });
 
   it("uses the normal OpenAI-compatible text transport", () => {
-    expect(registerTextProvider()).toEqual(
+    const { providers } = captureTextRegistration();
+    const provider = expectDefined(providers[0], "llama.cpp provider");
+
+    expect(providers.map((registered) => registered.id)).toEqual([LLAMA_CPP_PROVIDER_ID]);
+    expect(provider).toEqual(
       expect.objectContaining({
         id: LLAMA_CPP_PROVIDER_ID,
         label: "llama.cpp",
         normalizeToolSchemas: expect.any(Function),
         inspectToolSchemas: expect.any(Function),
-        auth: [expect.objectContaining({ id: "local" })],
+        auth: expect.arrayContaining([
+          expect.objectContaining({ id: "local" }),
+          expect.objectContaining({ id: "existing-server" }),
+        ]),
       }),
     );
-    expect(registerTextProvider()).not.toHaveProperty("createStreamFn");
+    expect(provider.auth.map((method) => method.id)).toEqual(["local", "existing-server"]);
+    expect(provider.auth.map((method) => method.wizard?.choiceId)).toEqual([
+      "llama-cpp",
+      "llama-cpp-existing-server",
+    ]);
+    expect(provider).not.toHaveProperty("createStreamFn");
+  });
+
+  it("never discovers external models for a managed local service", async () => {
+    const provider = registerTextProvider();
+    const prepareDynamicModel = expectDefined(provider.prepareDynamicModel, "dynamic model hook");
+    const { config } = configuredOptions();
+
+    await expect(
+      prepareDynamicModel({
+        config,
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: "gemma-4-e4b-it-q4_k_m",
+        modelRegistry: {} as never,
+        providerConfig: config.models.providers[LLAMA_CPP_PROVIDER_ID],
+      }),
+    ).resolves.toBeUndefined();
+    expect(mocks.discoverServer).not.toHaveBeenCalled();
+  });
+
+  it("keeps an embedding-only managed model inventory empty", async () => {
+    const provider = registerTextProvider();
+    const catalog = expectDefined(provider.catalog, "managed model catalog");
+    const options = configuredOptions();
+    options.config.models.providers[LLAMA_CPP_PROVIDER_ID].models = [];
+
+    const result = await catalog.run({
+      config: options.config,
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    if (!result || !("provider" in result)) {
+      throw new Error("managed catalog returned no provider");
+    }
+    expect(result.provider.models).toEqual([]);
   });
 
   it("registers local embeddings through the generic provider contract", () => {
@@ -239,7 +303,7 @@ describe("llama.cpp provider plugin", () => {
     );
     expect(mocks.prepareServer).toHaveBeenCalledWith(
       expect.objectContaining({
-        chatModelPath: undefined,
+        chatModel: { mode: "preserve" },
         embeddingModelPath: "/models/model.gguf",
       }),
     );
@@ -248,6 +312,50 @@ describe("llama.cpp provider plugin", () => {
       model: "/models/custom-embedding.gguf",
     });
   });
+
+  it.each([
+    ["uses an active custom local model", { enabled: true, provider: "local" }],
+    ["uses another memory provider", { enabled: true, provider: "openai" }],
+    ["has memory search disabled", { enabled: false, provider: "local" }],
+  ] as const)(
+    "keeps chat preparation independent from embedding config when memory %s",
+    async (_label, searchConfig) => {
+      const staleEmbeddingSource = "hf:retired-org/removed-embedding-model-GGUF/embedding.gguf";
+      const configured = configuredOptions();
+      const providerConfig = configured.config.models.providers[LLAMA_CPP_PROVIDER_ID];
+      const config = {
+        ...configured.config,
+        memory: {
+          search: {
+            ...searchConfig,
+            local: { modelPath: staleEmbeddingSource },
+          },
+        },
+      };
+      const provider = registerTextProvider();
+      const selectedModel = expectDefined(providerConfig.models[0], "managed chat model");
+      const inner = vi.fn(() => ({}) as never);
+      const wrapped = provider.wrapStreamFn?.({
+        config,
+        provider: LLAMA_CPP_PROVIDER_ID,
+        modelId: selectedModel.id,
+        model: {
+          ...selectedModel,
+          provider: LLAMA_CPP_PROVIDER_ID,
+          baseUrl: providerConfig.baseUrl,
+        },
+        streamFn: inner,
+      } as never);
+
+      await wrapped?.({} as never, { messages: [] } as never, {});
+
+      expect(mocks.ensureChat).toHaveBeenCalledWith({
+        provider: providerConfig,
+        model: expect.objectContaining({ id: selectedModel.id }),
+      });
+      expect(inner).toHaveBeenCalledOnce();
+    },
+  );
 
   it("keeps registered text setup chat-capable when local memory is enabled", async () => {
     const provider = registerTextProvider();
@@ -286,8 +394,11 @@ describe("llama.cpp provider plugin", () => {
       expect(result.defaultModel).toBe(`${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`);
       expect(mocks.prepareServer).toHaveBeenCalledWith(
         expect.objectContaining({
-          chatModelId: DEFAULT_LLAMA_CPP_MODEL_ID,
-          chatModelPath: "/models/chat.gguf",
+          chatModel: expect.objectContaining({
+            mode: "configure",
+            id: DEFAULT_LLAMA_CPP_MODEL_ID,
+            path: "/models/chat.gguf",
+          }),
           embeddingModelPath: "/models/embedding.gguf",
         }),
       );
@@ -298,11 +409,15 @@ describe("llama.cpp provider plugin", () => {
 
   it("preserves default local index identity across old and managed cache paths", () => {
     const modelCacheDir = path.join(os.tmpdir(), "managed-llama-models");
+    const options = configuredOptions();
+    Object.assign(options.config.models.providers[LLAMA_CPP_PROVIDER_ID], {
+      params: { modelCacheDir },
+    });
     const identity = llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({
-      config: {},
-      provider: "local",
-      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-      local: { modelPath: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL, modelCacheDir },
+      ...options,
+      local: {
+        modelPath: path.join(modelCacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+      },
     });
 
     expect(identity).toMatchObject({

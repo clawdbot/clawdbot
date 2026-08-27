@@ -26,7 +26,6 @@ import {
   createTargetedScriptLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
-  shouldRunCanvasA2uiNativeResourceCheck,
   shouldRunControlUiI18nVerify,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
@@ -42,11 +41,11 @@ import {
   delegationFailedBeforeRunning,
 } from "../../scripts/check-changed.mts";
 import { resolveOxfmtInvocation } from "../../scripts/format-docs.mts";
-import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
+const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
 const tsxImport = pathToFileURL(createRequire(import.meta.url).resolve("tsx")).href;
 type ExecFileSyncFailure = Error & { status?: number | null; stderr?: Buffer };
 const nestedGitEnvKeys = [
@@ -220,23 +219,6 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
-  it("detects direct script execution from Windows argv paths", () => {
-    expect(
-      isDirectRunPath(
-        "C:\\repo\\scripts\\check-changed.mjs",
-        "c:\\repo\\scripts\\check-changed.mjs",
-        "win32",
-      ),
-    ).toBe(true);
-    expect(
-      isDirectRunPath(
-        "C:\\repo\\scripts\\changed-lanes.mjs",
-        "C:\\repo\\scripts\\check-changed.mjs",
-        "win32",
-      ),
-    ).toBe(false);
-  });
-
   it.each([
     {
       name: "prints changed lane help without treating --help as a changed path",
@@ -389,14 +371,49 @@ describe("scripts/changed-lanes", () => {
     const result = runRepoScript("scripts/check-changed.mjs", [
       "--dry-run",
       "--",
-      "extensions/lmstudio/src/api.ts",
+      "extensions/lmstudio/src/model-reasoning.ts",
     ]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("[check:changed:dry-run] lanes=extensions, extensionTests");
     expect(result.stderr).toContain(
-      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/lmstudio/src/api.ts",
+      "[check:changed:dry-run] would run: node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions/lmstudio/src/model-reasoning.ts",
     );
+  });
+
+  it("keeps the hidden maintainer helper trio on tooling checks through both CLIs", () => {
+    const paths = [
+      githubActivityHelper,
+      ".agents/skills/openclaw-pr-maintainer/SKILL.md",
+      "test/scripts/github-activity-helper.test.ts",
+    ];
+    const lanes = runChangedLanesCli(repoRoot, ["--json", "--", ...paths]);
+    const result = runRepoScript("scripts/check-changed.mjs", ["--dry-run", "--", ...paths]);
+
+    expectLanes(lanes.lanes, { docs: true, testRoot: true, tooling: true });
+    expect(lanes).toMatchObject({ extensionImpactFromCore: false, docsOnly: false });
+    expect(lanes.paths.toSorted()).toEqual(paths.toSorted());
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("[check:changed:dry-run] lanes=testRoot, docs, tooling");
+    const commands = result.stderr
+      .split("\n")
+      .filter((line) => line.startsWith("[check:changed:dry-run] would run: "))
+      .map((line) => line.replace("[check:changed:dry-run] would run: ", ""));
+    expect(commands).toEqual([
+      "pnpm check:no-conflict-markers",
+      "pnpm check:changelog-attributions",
+      "pnpm check:doctor-deprecation-registry",
+      "pnpm lint:extensions:no-guarded-wildcard-reexports",
+      "pnpm lint:extensions:no-plugin-sdk-wildcard-reexports",
+      "pnpm dup:check:coverage",
+      "pnpm check:coercion-helpers",
+      "pnpm deps:pins:check",
+      `pnpm format:check --no-error-on-unmatched-pattern -- ${lanes.paths.join(" ")}`,
+      "pnpm deps:patches:check",
+      "node scripts/report-test-temp-creations.mjs --base origin/main --head HEAD",
+      "pnpm tsgo:test:root",
+      "pnpm lint:scripts",
+    ]);
   });
 
   it("includes untracked worktree files in the default local diff", () => {
@@ -811,6 +828,12 @@ describe("scripts/changed-lanes", () => {
       oxlintTargets: [],
       stylelintTargets: ["ui/src/styles/base.css"],
     },
+    {
+      name: "public theme palette only",
+      paths: ["ui/public/themes/tide.css"],
+      oxlintTargets: [],
+      stylelintTargets: ["ui/public/themes/tide.css"],
+    },
   ])("targets style lint for $name without broad core lint", (testCase) => {
     const plan = createChangedCheckPlan(detectChangedLanes(testCase.paths), {
       env: { PATH: "/usr/bin" },
@@ -854,7 +877,7 @@ describe("scripts/changed-lanes", () => {
       paths: [
         "extensions/lmstudio/src/embedding-provider.ts",
         "extensions/lmstudio/src/stream.ts",
-        "extensions/lmstudio/src/api.ts",
+        "extensions/lmstudio/src/model-reasoning.ts",
         "extensions/lmstudio/src/models.fetch.ts",
         "extensions/lmstudio/src/setup.ts",
         "extensions/lmstudio/src/defaults.ts",
@@ -1038,11 +1061,11 @@ describe("scripts/changed-lanes", () => {
     {
       name: "targets small extension lint diffs",
       create: createTargetedExtensionLintCommand,
-      targets: ["extensions/lmstudio/src/api.ts", "docs/help/testing.md"],
+      targets: ["extensions/lmstudio/src/model-reasoning.ts", "docs/help/testing.md"],
       expected: {
         name: "lint extension changed file",
         tsconfig: "config/tsconfig/oxlint.extensions.json",
-        path: "extensions/lmstudio/src/api.ts",
+        path: "extensions/lmstudio/src/model-reasoning.ts",
       },
     },
     {
@@ -1260,7 +1283,7 @@ describe("scripts/changed-lanes", () => {
     },
     {
       name: "routes extension production changes to extension prod and extension test lanes",
-      path: "extensions/lmstudio/src/api.ts",
+      path: "extensions/lmstudio/src/model-reasoning.ts",
       expected: {
         lanes: { extensions: true, extensionTests: true },
         includes: ["tsgo:extensions", "tsgo:extensions:test"],
@@ -1289,31 +1312,64 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
-  it("expands public core/plugin contracts to extension validation", () => {
-    const result = detectChangedLanes(["src/plugin-sdk/core.ts"]);
-    const plan = createChangedCheckPlan(result);
+  it.each([{ otherPaths: [] }, { otherPaths: [githubActivityHelper] }])(
+    "expands public core/plugin contracts with $otherPaths to extension validation",
+    ({ otherPaths }) => {
+      const result = detectChangedLanes(["src/plugin-sdk/core.ts", ...otherPaths]);
+      const plan = createChangedCheckPlan(result);
 
-    expect(result.extensionImpactFromCore).toBe(true);
-    expectLanes(result.lanes, {
-      core: true,
-      coreTests: true,
-      extensions: true,
-      extensionTests: true,
-    });
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:core");
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions:test");
-  });
+      expect(result.extensionImpactFromCore).toBe(true);
+      expectLanes(result.lanes, {
+        core: true,
+        coreTests: true,
+        extensions: true,
+        extensionTests: true,
+        tooling: otherPaths.length > 0,
+      });
+      expect(plan.commands.map((command) => command.args[0])).toEqual(
+        expect.arrayContaining([
+          "tsgo:core",
+          "tsgo:core:test",
+          "tsgo:extensions",
+          "tsgo:extensions:test",
+        ]),
+      );
+    },
+  );
 
-  it("fails safe for root config changes", () => {
-    const result = detectChangedLanes(["pnpm-lock.yaml"]);
-    const plan = createChangedCheckPlan(result);
+  it.each([
+    "pnpm-lock.yaml",
+    ".agents/skills/openclaw-pr-maintainer/scripts/unknown-helper.sh",
+    `${githubActivityHelper}.bak`,
+    `${githubActivityHelper}/child.sh`,
+    `other/${githubActivityHelper}`,
+    ".agents/skills/openclaw-pr-maintainer-extra/scripts/github-activity.sh",
+    ".agents/config.json",
+    ".agents/skills/autoreview/scripts/autoreview",
+    ".agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs",
+  ])("fails safe for %s even alongside the hidden maintainer helper", (changedPath) => {
+    for (const paths of [[changedPath], [githubActivityHelper, changedPath]]) {
+      const result = detectChangedLanes(paths);
+      const plan = createChangedCheckPlan(result);
 
-    expect(result.lanes.all).toBe(true);
-    expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:all");
-    expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+      expectLanes(result.lanes, { all: true, tooling: paths.includes(githubActivityHelper) });
+      expect(result.extensionImpactFromCore).toBe(true);
+      expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:all");
+      expect(plan.commands.map((command) => command.args[0])).toContain("lint");
+      expect(plan.commands.map((command) => command.args[0])).not.toContain("test");
+    }
   });
 
   it.each([
+    ...[
+      githubActivityHelper,
+      `./${githubActivityHelper}`,
+      githubActivityHelper.replaceAll("/", "\\"),
+    ].map((helperPath) => ({
+      name: `routes hidden maintainer helper ${helperPath} to tooling instead of all lanes`,
+      paths: [helperPath],
+      excludesTests: true,
+    })),
     {
       name: "routes gitignore changes to tooling instead of all lanes",
       paths: [".gitignore"],
@@ -1369,6 +1425,7 @@ describe("scripts/changed-lanes", () => {
     const commands = createChangedCheckPlan(result).commands.map((command) => command.args[0]);
 
     expectLanes(result.lanes, { tooling: true });
+    expect(result.extensionImpactFromCore).toBe(false);
     expect(commands).toContain("lint:scripts");
     expect(commands).not.toContain("tsgo:all");
     if (excludesTests) {
@@ -1656,6 +1713,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/generate-prompt-snapshots.ts",
         "test/helpers/agents/happy-path-prompt-snapshots.ts",
         "test/fixtures/agents/prompt-snapshots/runtime-happy-path/telegram-direct-codex-message-tool.md",
+        "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/discord-group-codex-message-tool.md.diff",
       ],
       changedPath: "test/helpers/agents/happy-path-prompt-snapshots.ts",
       expected: {
@@ -2126,70 +2184,6 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it("checks native A2UI resources when the copied resource tree changes", () => {
-    const result = detectChangedLanes([
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
-    ]);
-    const plan = createChangedCheckPlan(result);
-
-    expectLanes(result.lanes, {
-      apps: true,
-    });
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it("checks native A2UI resources when bundle inputs or generated outputs change", () => {
-    const result = detectChangedLanes([
-      "extensions/canvas/package.json",
-      "extensions/canvas/src/host/a2ui/.bundle.hash",
-      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
-      "pnpm-lock.yaml",
-    ]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
-  });
-
-  it.each([
-    "apps/android/app/build.gradle.kts",
-    "apps/ios/project.yml",
-    "apps/linux/src-tauri/build.rs",
-    "apps/linux/src-tauri/src/canvas.rs",
-  ])("checks native A2UI ownership when %s changes", (ownerPath) => {
-    const result = detectChangedLanes([ownerPath]);
-    const plan = createChangedCheckPlan(result);
-
-    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual(
-      expect.objectContaining({
-        name: "Canvas A2UI native resource generation",
-        bin: "node",
-        args: ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      }),
-    );
   });
 
   it.each([

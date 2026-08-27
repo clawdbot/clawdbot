@@ -17,6 +17,7 @@ const SCENARIOS = new Set([
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
+  "prerelease-plugin-registry",
   "tilde-log-path",
   "meeting-transcripts-sqlite",
   "versioned-runtime-deps",
@@ -391,14 +392,16 @@ function seedState() {
 function assertConfigSurvived() {
   const config = getConfig();
   const coverage = getCoverage();
-  if (getScenario() === "meeting-transcripts-sqlite") {
+  const scenario = getScenario();
+  if (scenario === "meeting-transcripts-sqlite") {
     // This focused migration fixture proves state import/export across one published
     // baseline; the broad base scenario owns unrelated agent/channel config parity.
     return;
   }
 
   if (acceptsIntent(coverage, "update")) {
-    assert(config.update?.channel === "stable", "update.channel was not preserved");
+    const expectedChannel = scenario === "prerelease-plugin-registry" ? "beta" : "stable";
+    assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
     assert(config.gateway?.auth?.mode === "token", "gateway auth mode was not preserved");
@@ -429,12 +432,12 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    if (acceptsIntent(coverage, "configured-plugin-installs")) {
+    if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
       assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
     } else {
       assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
     }
-    if (getScenario() === "codex-allowlist-survival") {
+    if (scenario === "codex-allowlist-survival") {
       assert(pluginAllow.includes("codex"), "Codex plugin allow entry missing");
     }
     if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
@@ -507,7 +510,7 @@ function assertConfigSurvived() {
     }
   }
 
-  if (getScenario() === "channel-post-core-restore") {
+  if (scenario === "channel-post-core-restore") {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "post-core channel restore dropped WhatsApp");
     assert(

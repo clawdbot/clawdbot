@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { hashWorkerCredential } from "./credential.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
 import { signalWorkerTurnClaimClosed } from "./placement-turn-claims.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -178,6 +187,170 @@ describe("worker environment service", () => {
     await expect(
       workerService.commitTranscript(identity, support.transcriptRequest(identity, "fenced")),
     ).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
+  });
+
+  it("records credential, build, owner-epoch, and successful worker admission gates", async () => {
+    const environmentId = "worker-sensitive-environment";
+    const sessionId = "session-sensitive-worker";
+    const environmentIdentity = support.seedAttachedIdentity(environmentId, sessionId);
+    const { claim, store } = claimWorkerPlacement({
+      environmentId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      runId: "run-worker-receipts",
+      sessionId,
+    });
+    const operationalRun = createOperationalRunInstanceRef(claim.runId);
+    const delegatedAuthority = claimAgentRunDelegatedAuthority(operationalRun);
+    bindWorkerTurnExecutionIdentity(
+      store,
+      claim,
+      createExecutionIdentityAdmissionToken(claim.runId, {
+        contextId: "context-worker-receipts",
+        executionId: "execution-worker-receipts",
+        now: 100,
+      }),
+      operationalRun,
+      { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+    );
+    const gate = createWorkerSessionPlacementGate(store);
+    const workerService = support.createService(support.createProvider(), { placementStore: gate });
+    const credential = await workerService.acquireTurnCredential(claim);
+    const admission = {
+      environmentId,
+      credential: credential.credential,
+      sessionId,
+      runId: claim.runId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      rpcSetVersion: 1,
+      handshake: support.BOOTSTRAP_RECEIPT,
+    };
+    const receipts: DecisionReceiptV1[] = [];
+    const clear = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    try {
+      await expect(
+        workerService.admitWorker({ ...admission, credential: "credential-must-not-leak" }),
+      ).resolves.toEqual({ ok: false, reason: "invalid-credential" });
+      await expect(
+        workerService.admitWorker({
+          ...admission,
+          handshake: { ...admission.handshake, bundleHash: "b".repeat(64) },
+        }),
+      ).resolves.toEqual({ ok: false, reason: "bundle-mismatch" });
+      await expect(
+        workerService.admitWorker({ ...admission, ownerEpoch: admission.ownerEpoch + 1 }),
+      ).resolves.toEqual({ ok: false, reason: "invalid-credential" });
+      await expect(workerService.admitWorker(admission)).resolves.toMatchObject({ ok: true });
+    } finally {
+      clear();
+      releaseAgentRunDelegatedAuthority(delegatedAuthority);
+    }
+    expect(receipts.map((receipt) => receipt.decision.reasonCode)).toEqual([
+      "worker_admission_invalid_credential",
+      "worker_admission_bundle_mismatch",
+      "worker_admission_gate_allowed",
+    ]);
+    expect(receipts.map((receipt) => receipt.enforcement.coverageState)).toEqual([
+      "enforced",
+      "enforced",
+      "enforced",
+    ]);
+    const serialized = JSON.stringify(receipts);
+    expect(serialized).not.toContain("credential-must-not-leak");
+    expect(serialized).not.toContain("b".repeat(64));
+    expect(serialized).not.toContain(environmentId);
+    expect(serialized).not.toContain(sessionId);
+  });
+
+  it("does not attribute a late admission result to a replacement using the same run id", async () => {
+    const environmentId = "worker-admission-replacement";
+    const sessionId = "session-admission-replacement";
+    const environmentIdentity = support.seedAttachedIdentity(environmentId, sessionId);
+    const { claim: first, store } = claimWorkerPlacement({
+      environmentId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      runId: "run-admission-replacement",
+      sessionId,
+    });
+    const firstOperationalRun = createOperationalRunInstanceRef(first.runId);
+    const firstAuthority = claimAgentRunDelegatedAuthority(firstOperationalRun);
+    bindWorkerTurnExecutionIdentity(
+      store,
+      first,
+      createExecutionIdentityAdmissionToken(first.runId, {
+        contextId: "context-admission-first",
+        executionId: "execution-admission-first",
+        now: 100,
+      }),
+      firstOperationalRun,
+      { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+    );
+    let resumeInstallation: (() => void) | undefined;
+    support.testState.prepareInstallation = vi.fn(
+      async () =>
+        await new Promise<typeof support.BUNDLE_ARTIFACT>((resolve) => {
+          resumeInstallation = () => resolve(support.BUNDLE_ARTIFACT);
+        }),
+    );
+    const gate = createWorkerSessionPlacementGate(store);
+    const workerService = support.createService(support.createProvider(), { placementStore: gate });
+    const firstCredential = await workerService.acquireTurnCredential(first);
+    const receipts: DecisionReceiptV1[] = [];
+    const clear = configureRuntimeActionDecisionSink((receipt) => {
+      receipts.push(receipt);
+      return true;
+    });
+    const admission = {
+      environmentId,
+      credential: firstCredential.credential,
+      sessionId,
+      runId: first.runId,
+      ownerEpoch: environmentIdentity.ownerEpoch,
+      rpcSetVersion: 1,
+      handshake: support.BOOTSTRAP_RECEIPT,
+    };
+    let secondAuthority: ReturnType<typeof claimAgentRunDelegatedAuthority> | undefined;
+    try {
+      const pendingAdmission = workerService.admitWorker(admission);
+      expect(support.testState.prepareInstallation).toHaveBeenCalledOnce();
+
+      store.releaseTurn(first);
+      releaseAgentRunDelegatedAuthority(firstAuthority);
+      const placement = store.get(sessionId)!;
+      const second = store.claimTurn({
+        sessionId,
+        agentId: placement.agentId,
+        sessionKey: placement.sessionKey,
+        claimId: "claim-admission-replacement",
+        runId: first.runId,
+        owner: { kind: "worker", environmentId, ownerEpoch: environmentIdentity.ownerEpoch },
+      });
+      const secondOperationalRun = createOperationalRunInstanceRef(second.runId);
+      secondAuthority = claimAgentRunDelegatedAuthority(secondOperationalRun);
+      bindWorkerTurnExecutionIdentity(
+        store,
+        second,
+        createExecutionIdentityAdmissionToken(second.runId, {
+          contextId: "context-admission-second",
+          executionId: "execution-admission-second",
+          now: 101,
+        }),
+        secondOperationalRun,
+        { agentId: "main", sessionKey: `agent:main:${sessionId}` },
+      );
+      resumeInstallation?.();
+
+      await expect(pendingAdmission).resolves.toEqual({ ok: false, reason: "invalid-credential" });
+      expect(receipts).toEqual([]);
+    } finally {
+      clear();
+      releaseAgentRunDelegatedAuthority(firstAuthority);
+      if (secondAuthority) {
+        releaseAgentRunDelegatedAuthority(secondAuthority);
+      }
+    }
   });
 
   it("keeps restart-inherited claims recovery-only across every worker authority surface", async () => {

@@ -3,7 +3,7 @@ import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { PublishedModelCatalogOwnerCandidate } from "../agents/prepared-model-catalog.types.js";
 import { setPreparedModelRuntimeAuthLoader } from "../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
-import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.facts.js";
+import { markPreparedModelCatalogFull } from "../agents/prepared-model-runtime.full-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadDeferredCatalog,

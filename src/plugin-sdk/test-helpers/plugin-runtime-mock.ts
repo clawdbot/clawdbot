@@ -565,6 +565,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           { id: "high", label: "high" },
         ],
       })),
+      runCommandFromIngress: vi.fn<PluginRuntime["agent"]["runCommandFromIngress"]>(),
       runEmbeddedAgent: runEmbeddedAgentMock,
       resolveAgentTimeoutMs: vi.fn<PluginRuntime["agent"]["resolveAgentTimeoutMs"]>(() => 30_000),
       ensureAgentWorkspace: vi
@@ -1014,6 +1015,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       deleteSession: vi.fn(),
     },
+    hooks: {
+      dispatchHookAgentTurn: vi.fn(),
+    },
     sandbox: {
       resolveWorkspaceAuthority: vi.fn(),
       prepareWorkspaceAuthority: vi.fn(),
@@ -1043,6 +1047,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),
       invoke: vi.fn(),
+      openDuplex: vi.fn(),
     },
   };
 

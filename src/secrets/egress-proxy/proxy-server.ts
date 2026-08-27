@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer as createHttpServer,
@@ -61,10 +61,9 @@ export type SecretEgressProxyHandle = {
 
 type ConnectTarget = { hostname: string; port: number };
 type RegisteredRun = {
-  digest: Buffer;
   key: string;
   sentinelBindings: Map<string, { allowedHosts: Set<string>; name: string }>;
-  token: string;
+  token: Buffer;
 };
 
 function normalizeHostname(raw: string): string {
@@ -120,15 +119,12 @@ function runKey(run: Readonly<{ instanceId: string; runId: string }>): string {
   return `${run.runId}\0${run.instanceId}`;
 }
 
-// Proxy tokens are 256-bit random bearer credentials, not user-chosen passwords, so a
-// slow KDF would add per-request latency on the proxy hot path without making brute force
-// any more infeasible. A process-keyed MAC is the right primitive: it normalizes attacker-
-// controlled input to a fixed length for constant-time compare, and a leaked digest cannot
-// be correlated back to a token without the in-memory key.
-const tokenMacKey = randomBytes(32);
-
-function tokenDigest(token: string): Buffer {
-  return createHmac("sha256", tokenMacKey).update(token).digest();
+function parseProxyToken(token: string): Buffer | undefined {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+    return undefined;
+  }
+  const bytes = Buffer.from(token, "base64url");
+  return bytes.length === 32 && bytes.toString("base64url") === token ? bytes : undefined;
 }
 
 function parseBasicProxyPassword(header: string | string[] | undefined): string | undefined {
@@ -284,6 +280,7 @@ function createUpstreamRequestOptions(params: {
 /** Starts one authenticated, loopback-only substitution proxy. */
 export async function startSecretEgressProxyServer(params: {
   caDir: string;
+  allowedHosts?: readonly string[];
   bypassHosts?: readonly string[];
   onAudit: (event: SecretEgressProxyAuditEvent) => void;
 }): Promise<SecretEgressProxyHandle> {
@@ -295,11 +292,28 @@ export async function startSecretEgressProxyServer(params: {
     ca: [...rootCertificates, caPem],
   });
   const bypassHosts = new Set((params.bypassHosts ?? []).map(normalizeHostname));
+  const allowedHosts =
+    params.allowedHosts === undefined
+      ? undefined
+      : new Set(params.allowedHosts.map(normalizeHostname));
   const tokens = new Map<string, RegisteredRun>();
   const sockets = new Set<Socket>();
   const tlsServers = new Map<string, Promise<HttpsServer>>();
 
   const audit = (event: SecretEgressProxyAuditEvent) => params.onAudit(event);
+  const hostAllowed = (host: string, registered: RegisteredRun): boolean => {
+    if (allowedHosts === undefined || allowedHosts.has(host) || bypassHosts.has(host)) {
+      return true;
+    }
+    for (const binding of registered.sentinelBindings.values()) {
+      if (binding.allowedHosts.has(host)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hostNotAllowedBody = (host: string): string =>
+    `Host "${host}" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host ${host}, then restart the Gateway.\n`;
   const authorize = (
     headers: IncomingHttpHeaders,
   ): RegisteredRun | Exclude<SecretEgressRefusalReason, "destination-not-allowed"> => {
@@ -311,9 +325,12 @@ export async function startSecretEgressProxyServer(params: {
     if (!password) {
       return "invalid-proxy-auth";
     }
-    const candidate = tokenDigest(password);
+    const candidate = parseProxyToken(password);
+    if (!candidate) {
+      return "invalid-proxy-auth";
+    }
     for (const registered of tokens.values()) {
-      if (timingSafeEqual(candidate, registered.digest)) {
+      if (timingSafeEqual(candidate, registered.token)) {
         return registered;
       }
     }
@@ -335,6 +352,12 @@ export async function startSecretEgressProxyServer(params: {
         reason: "non-https-request",
       });
       sendHttpRefusal(forward.response);
+      forward.request.resume();
+      return;
+    }
+    if (!hostAllowed(host, forward.registered)) {
+      audit({ kind: "refused", host, substituted: false, reason: "host-not-allowed" });
+      sendHttpRefusal(forward.response, 403, hostNotAllowedBody(host));
       forward.request.resume();
       return;
     }
@@ -535,6 +558,19 @@ export async function startSecretEgressProxyServer(params: {
         upstream.once("error", () => clientSocket.destroy());
         return;
       }
+      if (!hostAllowed(target.hostname, authorization)) {
+        const body = hostNotAllowedBody(target.hostname);
+        audit({
+          kind: "refused",
+          host: target.hostname,
+          substituted: false,
+          reason: "host-not-allowed",
+        });
+        clientSocket.end(
+          `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}`,
+        );
+        return;
+      }
       try {
         const tlsServer = await tlsServerFor(target, authorization);
         clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
@@ -574,12 +610,10 @@ export async function startSecretEgressProxyServer(params: {
       const key = runKey(run);
       let registered = tokens.get(key);
       if (!registered) {
-        const token = randomBytes(32).toString("base64url");
         registered = {
-          digest: tokenDigest(token),
           key,
           sentinelBindings: new Map(),
-          token,
+          token: randomBytes(32),
         };
         tokens.set(key, registered);
       }
@@ -596,10 +630,12 @@ export async function startSecretEgressProxyServer(params: {
       // proxy-URL credentials. Base64 is acceptable here: loopback is the only
       // listener, the token is run-scoped, and a process that can read it from
       // this env can already read the sentinels that authorize substitution.
-      const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${registered.token}@127.0.0.1:${address.port}`;
+      const token = registered.token.toString("base64url");
+      const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${token}@127.0.0.1:${address.port}`;
       return {
         HTTPS_PROXY: proxyUrl,
         HTTP_PROXY: proxyUrl,
+        NODE_USE_ENV_PROXY: "1",
         NODE_EXTRA_CA_CERTS: trustBundlePath,
         SSL_CERT_FILE: trustBundlePath,
         CURL_CA_BUNDLE: trustBundlePath,

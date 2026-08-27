@@ -2,9 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import {
-  abortReplyMessageInjectionTarget,
-  recordAcceptedReplyMessageInjectionTarget,
-  type ReplyMessageInjectionOutcome,
+  finalizeReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -16,9 +14,8 @@ vi.mock("../../auto-reply/reply/dispatch-from-config.audit.js", () => ({
   emitInboundMessageAuditTerminal: vi.fn(),
 }));
 vi.mock("../../auto-reply/reply/reply-run-registry.js", () => ({
-  abortReplyMessageInjectionTarget: vi.fn(() => true),
   beginReplyMessageInjectionTarget: vi.fn(),
-  recordAcceptedReplyMessageInjectionTarget: vi.fn(),
+  finalizeReplyMessageInjectionAttempt: vi.fn(),
 }));
 vi.mock("../../auto-reply/reply/message-received-hooks.js", () => ({
   emitMessageReceivedHooks: vi.fn(),
@@ -40,7 +37,7 @@ vi.mock("../agent-turn/agent-job.js", () => ({
   setGatewayDedupeEntry: vi.fn(),
 }));
 
-function makeParams(outcome: Extract<ReplyMessageInjectionOutcome, { status: "accepted" }>) {
+function makeParams() {
   const context = {
     logGateway: { warn: vi.fn() },
     chatRunState: { hasAbortMarker: () => true },
@@ -49,7 +46,7 @@ function makeParams(outcome: Extract<ReplyMessageInjectionOutcome, { status: "ac
   return {
     context,
     ctx: { Provider: "dashboard", From: "user", To: "user", Body: "steer" },
-    outcome,
+    attempt: {},
     persistUserTurnTranscriptBestEffort: vi.fn(async () => undefined),
     session: {
       agentId: "main",
@@ -61,7 +58,6 @@ function makeParams(outcome: Extract<ReplyMessageInjectionOutcome, { status: "ac
     },
     startedAt: Date.now(),
     target: {} as ReplyMessageInjectionTarget,
-    targetRunId: "run-1",
   } as unknown as Parameters<typeof finalizeAcceptedChatSendMessageInjection>[0];
 }
 
@@ -71,12 +67,14 @@ beforeEach(() => {
 
 describe("finalizeAcceptedChatSendMessageInjection", () => {
   it("audits a confirmed steer as completed active_run_injected", async () => {
-    await finalizeAcceptedChatSendMessageInjection(
-      makeParams({ status: "accepted", result: undefined } as never),
-    );
+    vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
+      status: "accepted",
+      outcome: { status: "accepted" },
+      targetRunId: "run-1",
+      aborted: false,
+    });
+    await finalizeAcceptedChatSendMessageInjection(makeParams());
 
-    expect(abortReplyMessageInjectionTarget).not.toHaveBeenCalled();
-    expect(recordAcceptedReplyMessageInjectionTarget).toHaveBeenCalledOnce();
     expect(logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "completed", reason: "active_run_injected" }),
     );
@@ -89,14 +87,17 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
   });
 
   it("audits an unconfirmed-transcript steer abort as skipped, not completed", async () => {
-    await finalizeAcceptedChatSendMessageInjection(
-      makeParams({
+    vi.mocked(finalizeReplyMessageInjectionAttempt).mockResolvedValueOnce({
+      status: "accepted",
+      outcome: {
         status: "accepted",
         result: { transcriptCommit: "unconfirmed", errorMessage: "commit timeout" },
-      } as never),
-    );
+      },
+      targetRunId: "run-1",
+      aborted: true,
+    });
+    await finalizeAcceptedChatSendMessageInjection(makeParams());
 
-    expect(abortReplyMessageInjectionTarget).toHaveBeenCalledOnce();
     expect(logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "skipped", reason: "reply_operation_aborted" }),
     );

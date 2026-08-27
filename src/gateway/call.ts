@@ -62,6 +62,7 @@ import {
   GatewayClient,
   isGatewayConnectAssemblyError,
   type GatewayClientCloseInfo,
+  type GatewayClientOptions,
   type GatewayClientRequestOptions,
 } from "./client.js";
 import {
@@ -82,7 +83,10 @@ import {
   resolveEdgeAuthHeaders,
   type EdgeAuthHeadersConfig,
 } from "./edge-auth.js";
-import { canSkipGatewayConfigLoad } from "./explicit-connection-policy.js";
+import {
+  canSkipGatewayConfigLoad,
+  isExplicitGatewayConnection,
+} from "./explicit-connection-policy.js";
 import { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";
 import {
   CLI_DEFAULT_OPERATOR_SCOPES,
@@ -116,6 +120,7 @@ type CallGatewayBaseOptions = {
   token?: string;
   password?: string;
   tlsFingerprint?: string;
+  preauthHandshakeTimeoutMs?: number;
   config?: OpenClawConfig;
   method: string;
   params?: unknown;
@@ -135,6 +140,7 @@ type CallGatewayBaseOptions = {
   requiredStoredDeviceAuthScopes?: OperatorScope[];
   requireLocalBackendSharedAuth?: boolean;
   sharedStateMode?: "read-only";
+  onHelloOk?: GatewayClientOptions["onHelloOk"];
   deviceIdentity?: DeviceIdentity | null;
   instanceId?: string;
   minProtocol?: number;
@@ -407,6 +413,19 @@ async function loadGatewayConfig(): Promise<OpenClawConfig> {
   return await defaultGetRuntimeConfig();
 }
 
+/**
+ * Load config for a fully flag-addressed connection. Config only supplies
+ * gateway.remote.edgeAuth here, so an unreadable or invalid config degrades to
+ * empty rather than blocking a connection the flags already describe.
+ */
+async function loadGatewayConfigForExplicitConnection(): Promise<OpenClawConfig> {
+  try {
+    return await loadGatewayConfig();
+  } catch {
+    return {};
+  }
+}
+
 function loadGatewayConfigForConnectionDetails(): OpenClawConfig {
   return readGatewayDispatchConfig();
 }
@@ -624,8 +643,18 @@ async function resolveGatewayCallContext(
     urlOverride,
     explicitAuth,
   });
+  const explicitConnection = isExplicitGatewayConnection({
+    config: opts.config,
+    urlOverride,
+    explicitAuth,
+  });
   const config =
-    opts.config ?? (canSkipConfigLoad ? ({} as OpenClawConfig) : await loadGatewayConfig());
+    opts.config ??
+    (canSkipConfigLoad
+      ? ({} as OpenClawConfig)
+      : explicitConnection
+        ? await loadGatewayConfigForExplicitConnection()
+        : await loadGatewayConfig());
   const configPath = opts.configPath ?? resolveGatewayConfigPath(process.env);
   const isRemoteMode = opts.localPortOverride === undefined && config.gateway?.mode === "remote";
   return {
@@ -828,7 +857,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
   password?: string;
   edgeAuthHeaders?: Readonly<Record<string, string>>;
   tlsFingerprint?: string;
-  preauthHandshakeTimeoutMs?: number;
   timeoutMs: number | null;
   startupTimeoutMs: number;
   safeTimerTimeoutMs: number;
@@ -846,7 +874,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
     password,
     edgeAuthHeaders,
     tlsFingerprint,
-    preauthHandshakeTimeoutMs,
     timeoutMs,
     startupTimeoutMs,
     safeTimerTimeoutMs,
@@ -929,7 +956,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       password,
       edgeAuthHeaders,
       tlsFingerprint,
-      preauthHandshakeTimeoutMs,
+      preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),
@@ -953,6 +980,9 @@ async function executeGatewayRequestWithScopes<T>(params: {
           clearTimeout(timer);
           timer = undefined;
         }
+        try {
+          opts.onHelloOk?.(hello);
+        } catch {}
         void (async () => {
           try {
             ensureGatewaySupportsRequiredMethods({

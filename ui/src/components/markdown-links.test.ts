@@ -514,6 +514,40 @@ describe("toSanitizedMarkdownHtml links", () => {
     });
   });
 
+  describe("link favicon placeholders", () => {
+    it("emits no favicon markup unless explicitly enabled", () => {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a)"));
+
+      expect(fragment.querySelector("img.markdown-link-favicon")).toBeNull();
+    });
+
+    it("emits an inert hostname-only placeholder for enabled web links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("[Docs](https://docs.example.com/a?secret=1#fragment)", {
+          linkFavicons: true,
+        }),
+      );
+
+      const image = fragment.querySelector<HTMLImageElement>("img.markdown-link-favicon");
+      expect(image?.dataset.linkFaviconHost).toBe("docs.example.com");
+      expect(image?.hasAttribute("src")).toBe(false);
+      expect(image?.alt).toBe("");
+    });
+
+    it("keeps the bundled GitHub mark and skips image-only links", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[OpenClaw](https://github.com/openclaw/openclaw) [![badge](data:image/png;base64,iVBORw0KGgo=)](https://example.com)",
+          { linkFavicons: true },
+        ),
+      );
+
+      expect(fragment.querySelector("a.markdown-github-link")).not.toBeNull();
+      expect(fragment.querySelector("a.markdown-github-link img.markdown-link-favicon")).toBeNull();
+      expect(fragment.querySelectorAll("img.markdown-link-favicon")).toHaveLength(0);
+    });
+  });
+
   describe("session links", () => {
     const sessionKey = "agent:roboclaw:dashboard:2139bddb-3211-4641-b993-10f619f124e6";
 

@@ -156,6 +156,12 @@ describe("fetchHttpJson error body boundary", () => {
         return;
       }
 
+      if (req.url === "/evaluate-disabled") {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" }));
+        return;
+      }
+
       res.writeHead(500, { "Content-Type": "text/plain" });
       let written = 0;
       let closed = false;
@@ -272,6 +278,19 @@ describe("fetchHttpJson error body boundary", () => {
         headlessSource: "config",
         displayPresent: false,
       },
+    });
+  });
+
+  it("preserves validated browser action error codes over HTTP", async () => {
+    const error = await fetchBrowserJson(`${baseUrl}/evaluate-disabled`).catch(
+      (err: unknown) => err,
+    );
+
+    expect(error).toMatchObject({
+      name: "BrowserServiceError",
+      message: "evaluation disabled",
+      code: "ACT_EVALUATE_DISABLED",
+      status: 403,
     });
   });
 });

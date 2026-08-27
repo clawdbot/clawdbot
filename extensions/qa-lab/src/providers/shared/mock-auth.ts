@@ -14,6 +14,22 @@ export function buildQaMockProfileId(provider: string): string {
   return `qa-mock-${provider}`;
 }
 
+export function applyQaMockAuthProfileConfig(params: {
+  cfg: OpenClawConfig;
+  providers?: readonly string[];
+}): OpenClawConfig {
+  let next = params.cfg;
+  for (const provider of uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS)) {
+    next = applyAuthProfileConfig(next, {
+      profileId: buildQaMockProfileId(provider),
+      provider,
+      mode: "api_key",
+      displayName: `QA mock ${provider} credential`,
+    });
+  }
+  return next;
+}
+
 /**
  * In mock provider modes the qa suite runs against an embedded mock server
  * instead of a real provider API. The mock does not validate credentials, but
@@ -41,7 +57,6 @@ export async function stageQaMockAuthProfiles(params: {
 }): Promise<OpenClawConfig> {
   const agentIds = uniqueStrings(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS);
   const providers = uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS);
-  let next = params.cfg;
   for (const agentId of agentIds) {
     await writeQaAuthProfiles({
       agentId,
@@ -59,13 +74,5 @@ export async function stageQaMockAuthProfiles(params: {
       stateDir: params.stateDir,
     });
   }
-  for (const provider of providers) {
-    next = applyAuthProfileConfig(next, {
-      profileId: buildQaMockProfileId(provider),
-      provider,
-      mode: "api_key",
-      displayName: `QA mock ${provider} credential`,
-    });
-  }
-  return next;
+  return applyQaMockAuthProfileConfig({ cfg: params.cfg, providers });
 }

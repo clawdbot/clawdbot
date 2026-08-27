@@ -79,6 +79,7 @@ type ThinkingSession = {
   modelProvider?: string;
   model?: string;
   agentRuntime?: { id?: string };
+  thinkingLevel?: string;
   thinkingLevels?: Array<{ label: string }>;
   thinkingOptions?: string[];
 };
@@ -95,6 +96,7 @@ async function listMainSessionWithThinking(params: {
   sessionModel: string;
   agentRuntime?: "codex" | "openclaw";
   selectedByOverride?: boolean;
+  thinkingLevel?: string;
   readPreparedGatewayModelCatalog?: () => Promise<
     Array<{
       provider: string;
@@ -121,6 +123,7 @@ async function listMainSessionWithThinking(params: {
       main: sessionStoreEntry("sess-main", {
         modelProvider: params.sessionModelProvider,
         model: params.sessionModel,
+        ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
         ...(params.selectedByOverride === false
           ? {}
           : {
@@ -273,4 +276,27 @@ test("session rows keep the selected Codex Sol model when runtime metadata conta
       thinkingLevel: "max",
     },
   });
+});
+
+test("unsupported generic stored levels clamp through the current profile", async () => {
+  const { session } = await listMainSessionWithThinking({
+    reqId: "req-e2e-generic-ultra",
+    primaryModel: "test-generic/reasoner",
+    sessionModelProvider: "test-generic",
+    sessionModel: "reasoner",
+    agentRuntime: "codex",
+    thinkingLevel: "ultra",
+    readPreparedGatewayModelCatalog: async () => [
+      {
+        provider: "test-generic",
+        id: "reasoner",
+        name: "Generic Reasoner",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["max"] },
+      },
+    ],
+  });
+
+  expect(session?.thinkingOptions).not.toContain("ultra");
+  expect(session?.thinkingLevel).toBe("max");
 });

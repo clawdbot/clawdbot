@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
@@ -16,13 +16,13 @@ import {
   sameDefaultInferenceRoute,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-import { redactSetupInferenceError } from "./setup-inference-activate.js";
 import {
   type ActivateSetupInferenceDeps,
   type BoundVerifySetupInferenceResult,
   type CompleteSetupInferenceResult,
   type VerifySetupInferenceResult,
   invalidSetupConfigError,
+  redactSetupInferenceError,
 } from "./setup-inference-core.js";
 import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
 import {
@@ -235,7 +235,7 @@ export async function verifySetupInferenceConfig(params: {
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
   const cfg = params.config;
-  const routeAgentId = resolveSystemAgentTargetAgentId(cfg, params.agentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(cfg, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(cfg, routeAgentId)) {
     return {
       ok: false,
@@ -502,7 +502,7 @@ export async function completeSetupInferenceConfig(params: {
     ...params.deps,
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
   };
-  const routeAgentId = resolveSystemAgentTargetAgentId(params.config, params.agentId);
+  const routeAgentId = resolveAmbientOwnerAgentId(params.config, params.agentId);
   if (!resolveAgentEffectiveModelPrimary(params.config, routeAgentId)) {
     return { ok: false, status: "unavailable", error: "No agent model is configured." };
   }

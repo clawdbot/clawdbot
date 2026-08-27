@@ -23,6 +23,7 @@ import {
   writeNpmBeforePolicyFixture,
   writeNpmFreshnessConflictFixture,
   writeNpmInstallRetryFixture,
+  writeNpmLifecycleFixture,
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install-cli.sh";
@@ -45,7 +46,14 @@ function linkRequiredShellTools(bin: string) {
   }
 }
 
+function linkNodeExecutable(nodeDir: string) {
+  const bin = join(nodeDir, "bin");
+  mkdirSync(bin, { recursive: true });
+  symlinkSync(process.execPath, join(bin, "node"));
+}
+
 function writeInstalledOpenClawEntry(nodeDir: string) {
+  linkNodeExecutable(nodeDir);
   const entry = join(nodeDir, "lib", "node_modules", "openclaw", "dist", "entry.js");
   mkdirSync(join(entry, ".."), { recursive: true });
   writeFileSync(entry, "");
@@ -197,6 +205,62 @@ describe("install-cli.sh", () => {
     } finally {
       rmSync(tmp, { force: true, recursive: true });
     }
+  });
+
+  it("round-trips dynamic installer values through independent NDJSON records", () => {
+    const root = tempDirs.make("openclaw-install-cli-json-events-");
+    const dynamicValue = `quote"\\lobster🦞${String.fromCharCode(
+      ...Array.from({ length: 31 }, (_, index) => index + 1),
+    )}end`;
+    const repo = join(root, dynamicValue);
+    const legacyDir = join(repo, "Peekaboo");
+    const fakeNode = join(root, "node");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(fakeNode, '#!/bin/bash\nprintf "%s" "$EVENT_VALUE"\n');
+    chmodSync(fakeNode, 0o755);
+
+    const success = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `cd ${JSON.stringify(process.cwd())}`,
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "JSON=1",
+        'cleanup_legacy_submodules "$REPO"',
+        "try_link_usable_node_runtime_from_path() { return 0; }",
+        `node_bin() { printf '%s\\n' ${JSON.stringify(fakeNode)}; }`,
+        "install_alpine_node",
+        'emit_json done version "$EVENT_VALUE"',
+      ].join("\n"),
+      { EVENT_VALUE: dynamicValue, REPO: repo },
+    );
+
+    expect(success.status, success.stderr || success.stdout).toBe(0);
+    expect(existsSync(legacyDir)).toBe(false);
+    const successLines = success.stdout.trimEnd().split("\n");
+    expect(successLines).toHaveLength(5);
+    const successEvents = successLines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(successEvents).toEqual([
+      { event: "step", name: "legacy-submodule", status: "start", path: legacyDir },
+      { event: "step", name: "legacy-submodule", status: "ok", path: legacyDir },
+      { event: "step", name: "node", status: "start", method: "apk" },
+      { event: "step", name: "node", status: "ok", method: "system", version: dynamicValue },
+      { event: "done", ok: true, version: dynamicValue },
+    ]);
+
+    const failure = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `cd ${JSON.stringify(process.cwd())}`,
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "JSON=1",
+        'fail "$EVENT_VALUE"',
+      ].join("\n"),
+      { EVENT_VALUE: dynamicValue },
+    );
+
+    expect(failure.status).toBe(1);
+    expect(failure.stdout.trimEnd().split("\n")).toHaveLength(1);
+    expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
   });
 
   it("rejects a git checkout without a commit before updating it", () => {
@@ -464,7 +528,7 @@ describe("install-cli.sh", () => {
     `);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain("selected=22.22.3");
+    expect(result.stdout).toContain("selected=22.23.2");
     expect(script).toContain('armv7|armv7l) echo "armv7l"');
   });
 
@@ -483,10 +547,10 @@ describe("install-cli.sh", () => {
     `);
 
     expect(result.status).toBe(17);
-    expect(result.stdout).toContain("selected=22.22.3");
+    expect(result.stdout).toContain("selected=22.23.2");
     expect(result.stdout).toContain("first-path=");
-    expect(result.stdout).toContain("/tools/node-v22.22.3/bin");
-    expect(result.stdout).not.toContain("/tools/node-v24.15.0/bin");
+    expect(result.stdout).toContain("/tools/node-v22.23.2/bin");
+    expect(result.stdout).not.toContain("/tools/node-v24.19.0/bin");
   });
 
   it("fails early for unavailable Node 24 Linux ARMv7 downloads", () => {
@@ -604,7 +668,10 @@ describe("install-cli.sh", () => {
     const dependencyInstallIndex = script.indexOf(
       'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
     );
-    const wrapperIndex = script.indexOf('cat > "${PREFIX}/bin/openclaw"', compatibilityIndex);
+    const wrapperIndex = script.indexOf(
+      'publish_executable_wrapper "${PREFIX}/bin/openclaw"',
+      compatibilityIndex,
+    );
 
     expect(checkoutIndex).toBeGreaterThan(-1);
     expect(compatibilityIndex).toBeGreaterThan(checkoutIndex);
@@ -660,6 +727,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "npm_lifecycle_allow_arg() { :; }",
           'install_node() { mkdir -p "$(node_dir)/lib/node_modules/openclaw/dist"; : > "$(node_dir)/lib/node_modules/openclaw/dist/entry.js"; }',
           "ensure_git() { :; }",
           'npm_bin() { printf "/usr/bin/true\\n"; }',
@@ -760,7 +828,7 @@ describe("install-cli.sh", () => {
       const home = join(tmp, "home");
       const prefixInput = input === "literal tilde" ? "~/openclaw-local" : "openclaw-local";
       const prefix = join(input === "literal tilde" ? home : installRoot, "openclaw-local");
-      const nodeDir = join(prefix, "tools", "node-v24.15.0");
+      const nodeDir = join(prefix, "tools", "node-v24.19.0");
       const repoInput = input === "literal tilde" ? "~/openclaw-source" : "openclaw-source";
       const repo = join(input === "literal tilde" ? home : installRoot, "openclaw-source");
       mkdirSync(installRoot, { recursive: true });
@@ -770,10 +838,10 @@ describe("install-cli.sh", () => {
       mkdirSync(join(repo, "dist"), { recursive: true });
       mkdirSync(otherRoot, { recursive: true });
       symlinkSync(process.execPath, join(nodeDir, "bin", "node"));
-      symlinkSync("node-v24.15.0", join(prefix, "tools", "node"));
+      symlinkSync("node-v24.19.0", join(prefix, "tools", "node"));
       writeFileSync(
         join(nodeDir, "bin", "npm"),
-        '#!/bin/bash\nif [[ "$1" == "config" ]]; then printf "null\\n"; fi\n',
+        '#!/bin/bash\nif [[ "$1" == "--version" ]]; then printf "11.15.0\\n"; elif [[ "$1" == "config" ]]; then printf "null\\n"; fi\n',
       );
       chmodSync(join(nodeDir, "bin", "npm"), 0o755);
       for (const entry of [
@@ -1018,8 +1086,8 @@ describe("install-cli.sh", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).not.toContain("Installing Node via apk");
       expect(() => readFileSync(apkLog, "utf8")).toThrow();
-      const nodeLink = join(prefix, "tools", "node-v24.15.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v24.15.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v24.19.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.19.0", "bin", "npm");
       expect(lstatSync(nodeLink).isSymbolicLink()).toBe(true);
       expect(readlinkSync(nodeLink)).toBe(fakeNode);
       expect(readlinkSync(npmLink)).toBe(fakeNpm);
@@ -1285,8 +1353,8 @@ describe("install-cli.sh", () => {
       );
 
       expect(result.status).toBe(0);
-      const nodeLink = join(prefix, "tools", "node-v24.15.0", "bin", "node");
-      const npmLink = join(prefix, "tools", "node-v24.15.0", "bin", "npm");
+      const nodeLink = join(prefix, "tools", "node-v24.19.0", "bin", "node");
+      const npmLink = join(prefix, "tools", "node-v24.19.0", "bin", "npm");
       expect(readFileSync(badNpmLog, "utf8")).toBe("--version\n");
       expect(readFileSync(goodNpmLog, "utf8")).toBe("--version\n");
       expect(readFileSync(goodNodeLog, "utf8")).toContain("npm --version");
@@ -1599,6 +1667,106 @@ describe("install-cli.sh", () => {
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
   });
 
+  it.each([
+    { expected: "", version: "11.15.0" },
+    { expected: "--allow-scripts=openclaw", version: "11.16.0" },
+    { expected: "--allow-scripts=openclaw", version: "12.0.0" },
+  ])("resolves canonical npm lifecycle policy for npm $version", ({ expected, version }) => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-lifecycle-"));
+    const npm = join(tmp, "npm");
+    writeNpmLifecycleFixture(npm);
+    try {
+      const result = runInstallCliShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+          `result="$(npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest)"`,
+          `printf '%s' "$result"`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: version },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(expected);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["invalid", "npm 12.0.0 warning"])(
+    "rejects npm version %s before mutation",
+    (version) => {
+      const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-lifecycle-invalid-"));
+      const npm = join(tmp, "npm");
+      const args = join(tmp, "args");
+      writeNpmLifecycleFixture(npm);
+      try {
+        const result = runInstallCliShell(
+          [
+            `source ${JSON.stringify(SCRIPT_PATH)}`,
+            `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+            `npm_lifecycle_allow_arg ${JSON.stringify(npm)} openclaw@latest`,
+          ].join("\n"),
+          { NPM_FAKE_ARGS: args, NPM_FAKE_VERSION: version },
+        );
+        expect(result.status).not.toBe(0);
+        expect(existsSync(args)).toBe(false);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each([
+    ["openclaw@npm:@scope/candidate@1.0.0", "--allow-scripts=@scope/candidate"],
+    ["file:/tmp/openclaw.tgz", "--allow-scripts=file:/tmp/openclaw.tgz"],
+    [
+      "https://example.invalid/openclaw.tgz",
+      "--allow-scripts=https://example.invalid/openclaw.tgz",
+    ],
+  ])("uses npm-resolved lifecycle identity for %s", (spec, expected) => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-identity-"));
+    const npm = join(tmp, "npm");
+    writeNpmLifecycleFixture(npm);
+    try {
+      const result = runInstallCliShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `node_bin() { printf '%s\n' ${JSON.stringify(process.execPath)}; }`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(spec)}`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: "12.0.0" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe(expected);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("relativizes absolute npm path identities against the command cwd", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-identity-comma,"));
+    const npm = join(tmp, "npm");
+    const commandCwd = join(tmp, "safe");
+    const candidate = join(tmp, "candidate.tgz");
+    mkdirSync(commandCwd);
+    writeNpmLifecycleFixture(npm);
+    try {
+      const result = runInstallCliShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `node_bin() { printf '%s\\n' ${JSON.stringify(process.execPath)}; }`,
+          `cd ${JSON.stringify(commandCwd)}`,
+          `npm_lifecycle_allow_arg ${JSON.stringify(npm)} ${JSON.stringify(candidate)} "$PWD"`,
+        ].join("\n"),
+        { NPM_FAKE_VERSION: "12.0.0" },
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("--allow-scripts=../candidate.tgz");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit --before when raw user npmrc config contains min-release-age", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-npmrc-"));
     const bin = join(tmp, "bin");
@@ -1638,6 +1806,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "npm_lifecycle_allow_arg() { :; }",
           `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
           `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
           "emit_json() { :; }",
@@ -1722,6 +1891,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "npm_lifecycle_allow_arg() { :; }",
           `npm_bin() { printf '%s\\n' ${JSON.stringify(fakeNpm)}; }`,
           `node_dir() { printf '%s\\n' ${JSON.stringify(nodeDir)}; }`,
           "emit_json() { :; }",
@@ -1812,6 +1982,7 @@ describe("install-cli.sh", () => {
       const nodeDir = join(tmp, "node");
       const prefix = join(tmp, "prefix");
       writeNpmInstallRetryFixture(fakeNpm);
+      linkNodeExecutable(nodeDir);
 
       try {
         const result = runInstallCliShell(
@@ -1862,6 +2033,7 @@ describe("install-cli.sh", () => {
     const nodeDir = join(tmp, "node");
     const prefix = join(tmp, "prefix");
     writeNpmInstallRetryFixture(fakeNpm);
+    linkNodeExecutable(nodeDir);
 
     try {
       const result = runInstallCliShell(
@@ -1901,11 +2073,11 @@ describe("install-cli.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-freshness-"));
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
-    const nodeBin = join(prefix, "tools/node-v24.15.0/bin");
+    const nodeBin = join(prefix, "tools/node-v24.19.0/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
-    writeInstalledOpenClawEntry(join(prefix, "tools", "node-v24.15.0"));
+    writeInstalledOpenClawEntry(join(prefix, "tools", "node-v24.19.0"));
     writeFileSync(join(home, ".npmrc"), "min-release-age=7\n");
     writeNpmFreshnessConflictFixture(join(nodeBin, "npm"), argsLog);
 
@@ -1938,12 +2110,12 @@ describe("install-cli.sh", () => {
     const prefix = join(tmp, "prefix");
     const home = join(tmp, "home");
     const project = join(tmp, "project");
-    const nodeBin = join(prefix, "tools/node-v24.15.0/bin");
+    const nodeBin = join(prefix, "tools/node-v24.19.0/bin");
     const argsLog = join(tmp, "npm-args.log");
     mkdirSync(nodeBin, { recursive: true });
     mkdirSync(home, { recursive: true });
     mkdirSync(project, { recursive: true });
-    writeInstalledOpenClawEntry(join(prefix, "tools", "node-v24.15.0"));
+    writeInstalledOpenClawEntry(join(prefix, "tools", "node-v24.19.0"));
     writeFileSync(join(home, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n");
     writeFileSync(join(project, ".npmrc"), "min-release-age=7\n");
     writeNpmBeforePolicyFixture(join(nodeBin, "npm"), argsLog);

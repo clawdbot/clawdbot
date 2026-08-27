@@ -12,14 +12,56 @@ import {
 } from "../avatar.ts";
 import {
   buildAgentContext,
+  buildModelOptions,
   formatBytes,
   listSelectableAgents,
   normalizeAgentLabel,
   normalizeAgentTargetLabel,
+  resolveAgentSkillsFilter,
   resolveEffectiveModelFallbacks,
   resolveToolProfileOptions,
   resolveToolSections,
 } from "./display.ts";
+
+describe("buildModelOptions", () => {
+  const model = "openai/gpt-5.6-luna";
+  const catalog = [
+    {
+      id: "gpt-5.6-luna",
+      name: "GPT 5.6 Luna",
+      provider: "openai",
+      alias: "gateway-alias",
+      tags: ["default", "configured"],
+    },
+  ];
+
+  it.each([
+    {
+      name: "inherits the default alias when agent metadata omits alias",
+      agentMetadata: { agentRuntime: { id: "codex" } },
+      label: "GPT 5.6 Luna · global-luna",
+    },
+    {
+      name: "lets an explicit empty agent alias disable the inherited alias",
+      agentMetadata: { alias: "" },
+      label: "GPT 5.6 Luna",
+    },
+  ])("$name", ({ agentMetadata, label }) => {
+    const config = {
+      agents: {
+        defaults: { models: { [model]: { alias: "global-luna" } } },
+        entries: { worker: { models: { [model]: agentMetadata } } },
+      },
+    };
+
+    expect(buildModelOptions(config, null, catalog, "worker")).toContainEqual({
+      value: model,
+      label,
+      provider: "openai",
+      tags: ["default", "configured"],
+    });
+  });
+});
 
 describe("normalizeAgentTargetLabel", () => {
   it("uses resolved configured names but preserves ids for synthesized defaults", () => {
@@ -373,6 +415,36 @@ describe("resolveChatAvatarRenderUrl", () => {
   });
 });
 
+describe("resolveAgentSkillsFilter", () => {
+  it("inherits the default filter when the agent has no override", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: [" github ", "weather"] },
+            entries: { main: { default: true } },
+          },
+        },
+        "main",
+      ),
+    ).toEqual(["github", "weather"]);
+  });
+
+  it("prefers an explicit empty agent filter over inherited defaults", () => {
+    expect(
+      resolveAgentSkillsFilter(
+        {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { skills: [] } },
+          },
+        },
+        "main",
+      ),
+    ).toEqual([]);
+  });
+});
+
 describe("buildAgentContext", () => {
   it("falls back to agent payload workspace/model when config form is unavailable", () => {
     const context = buildAgentContext(
@@ -419,6 +491,23 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/default-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+  });
+
+  it("shows inherited skill filters in the agent context", () => {
+    const context = buildAgentContext(
+      { id: "main" },
+      {
+        agents: {
+          defaults: { skills: ["github", "weather"] },
+          entries: { main: { default: true } },
+        },
+      },
+      null,
+      "main",
+      null,
+    );
+
+    expect(context.skillsLabel).toBe("2 selected");
   });
 
   it("prefers per-agent configured identity over runtime global identity in agent panels", () => {

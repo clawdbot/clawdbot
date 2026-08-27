@@ -12,11 +12,13 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import {
   type AgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import { getMediaDir } from "../media/store.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import * as mediaStore from "../media/store.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -30,6 +32,7 @@ import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
 import { resetPreparedModelCatalogStateForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
   agentCommandMock,
@@ -41,7 +44,14 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-session-");
+const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-session-", {
+  client: {
+    id: "gateway-client",
+    version: "1.0.0",
+    platform: "test",
+    mode: "backend",
+  },
+});
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
@@ -163,7 +173,7 @@ const offloadedImageAttachment = () => ({
 });
 
 async function listInboundMedia(): Promise<Set<string>> {
-  const entries = await fs.readdir(path.join(getMediaDir(), "inbound")).catch(() => []);
+  const entries = await fs.readdir(path.join(mediaStore.getMediaDir(), "inbound")).catch(() => []);
   return new Set(entries);
 }
 
@@ -602,6 +612,125 @@ describe("gateway server agent", () => {
     },
   );
 
+  test.each(["success", "error"] as const)(
+    "sessionless %s discards offloaded inbound media without a transcript owner",
+    async (outcome) => {
+      vi.mocked(agentCommandMock).mockImplementationOnce(async () => {
+        if (outcome === "error") {
+          throw new Error("forced provider failure");
+        }
+        return undefined;
+      });
+      const inboundBefore = await listInboundMedia();
+      const runId = `sessionless-media-${outcome}`;
+      const attachments =
+        outcome === "success"
+          ? [
+              { ...offloadedImageAttachment(), fileName: "large-a.png" },
+              baseImageAttachment(),
+              { ...offloadedImageAttachment(), fileName: "large-b.png" },
+            ]
+          : [offloadedImageAttachment()];
+      const res = await rpcReq(gatewaySuite.ws, "agent", {
+        message: "inspect media",
+        groupId: "group-sessionless-media",
+        groupChannel: "discord",
+        attachments,
+        idempotencyKey: runId,
+      });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+      const call = await waitForAgentCommandCall(runId);
+      expect(call.sessionKey).toBeUndefined();
+      if (outcome === "success") {
+        expect(call.media).toHaveLength(2);
+        expect(call.images).toHaveLength(1);
+      }
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await expectNoNewInboundMedia(inboundBefore);
+    },
+  );
+
+  test("prompt-persistence suppression discards offloaded media without a transcript row", async () => {
+    vi.mocked(agentCommandMock).mockImplementationOnce(async () => {});
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
+    await setTestSessionStore({
+      entries: { main: { sessionId: "suppressed-media-session", updatedAt: Date.now() } },
+    });
+    const inboundBefore = await listInboundMedia();
+    const runId = "suppressed-media";
+    const res = await rpcReq(gatewaySuite.ws, "agent", {
+      message: "inspect media privately",
+      sessionKey: "main",
+      suppressPromptPersistence: true,
+      attachments: [offloadedImageAttachment()],
+      idempotencyKey: runId,
+    });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    const call = await waitForAgentCommandCall(runId);
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    await expect(
+      readSessionMessagesAsync(
+        {
+          agentId: "main",
+          sessionId: "suppressed-media-session",
+          sessionKey: String(call.sessionKey),
+          storePath: gatewaySuite.sessionStorePath,
+        },
+        { mode: "full", reason: "prompt-suppressed media leak reproduction" },
+      ),
+    ).resolves.toEqual([]);
+    await expectNoNewInboundMedia(inboundBefore);
+  });
+
+  test("prompt-suppressed abort discards each managed offload once after early run cleanup", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
+    await setTestSessionStore({
+      entries: { main: { sessionId: "aborted-media-session", updatedAt: Date.now() } },
+    });
+    vi.mocked(agentCommandMock).mockImplementationOnce(
+      async (rawOpts) =>
+        await new Promise<void>((_resolve, reject) => {
+          (rawOpts as { abortSignal?: AbortSignal }).abortSignal?.addEventListener(
+            "abort",
+            () => reject(createAbortError("forced provider abort")),
+            { once: true },
+          );
+        }),
+    );
+    const deleteSpy = vi.spyOn(mediaStore, "deleteMediaBuffer");
+    const inboundBefore = await listInboundMedia();
+    const runId = "prompt-suppressed-media-abort";
+    try {
+      const res = await rpcReq(gatewaySuite.ws, "agent", {
+        message: "abort after admission",
+        sessionKey: "main",
+        suppressPromptPersistence: true,
+        attachments: [offloadedImageAttachment()],
+        idempotencyKey: runId,
+      });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+      const call = await waitForAgentCommandCall(runId);
+      const abortRes = await rpcReq(gatewaySuite.ws, "chat.abort", {
+        sessionKey: call.sessionKey,
+        runId,
+      });
+      expect(abortRes.ok, JSON.stringify(abortRes)).toBe(true);
+      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await expectNoNewInboundMedia(inboundBefore);
+
+      const mediaRef = (call.media as Array<{ url: string }>)[0]?.url;
+      const mediaId = mediaRef?.split("/").at(-1);
+      expect(mediaId).toBeTruthy();
+      expect(
+        deleteSpy.mock.calls.filter(([id, subdir]) => id === mediaId && subdir === "inbound"),
+      ).toHaveLength(1);
+    } finally {
+      deleteSpy.mockRestore();
+    }
+  });
+
   test("agent rejects unknown reply channel", async () => {
     const inboundBefore = await listInboundMedia();
     const res = await rpcReq(gatewaySuite.ws, "agent", {
@@ -743,6 +872,7 @@ describe("gateway server agent", () => {
   test("agent retains image offload facts beside the claim-check line", async () => {
     testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
     await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
+    const inboundBefore = await listInboundMedia();
     const call = await runAgentImageRequest({
       idempotencyKey: "idem-agent-offloaded-media",
       sessionId: "sess-main-offloaded-media",
@@ -762,6 +892,23 @@ describe("gateway server agent", () => {
     await expect(fs.stat(media?.[0]?.path ?? "")).resolves.toMatchObject({
       isFile: expect.any(Function),
     });
+    const transcript = await readSessionMessagesAsync(
+      {
+        agentId: "main",
+        sessionId: "sess-main-offloaded-media",
+        sessionKey: String(call.sessionKey),
+        storePath: gatewaySuite.sessionStorePath,
+      },
+      { mode: "full", reason: "durable agent media custody regression" },
+    );
+    // Inbound ids are random; compare the durable fact against its public
+    // redaction contract because an id can resemble sensitive text.
+    const transcriptMediaUrl = media?.[0]?.url ? redactSensitiveText(media[0].url) : undefined;
+    expect(
+      (transcript[0] as { __openclaw?: { media?: Array<{ url?: string }> } })["__openclaw"]?.media,
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ url: transcriptMediaUrl })]));
+    const inboundAfter = await listInboundMedia();
+    expect([...inboundAfter].filter((entry) => !inboundBefore.has(entry))).toHaveLength(1);
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {

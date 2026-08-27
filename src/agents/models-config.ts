@@ -26,8 +26,8 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.j
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import {
   resolveAgentWorkspaceDir,
+  resolveAmbientOwnerAgentId,
   resolveDefaultAgentDir,
-  resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -297,7 +297,9 @@ function prepareModelsConfigContext(
     options.workspaceDir ??
     (agentDirOverride?.trim()
       ? undefined
-      : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+      : // Same ambient owner resolveDefaultAgentDir just used for agentDir; resolving it
+        // on the deprecated chain here rejected explicit fleets owned by a system agent.
+        resolveAgentWorkspaceDir(cfg, resolveAmbientOwnerAgentId(cfg)));
   const fingerprintEnv = createConfigRuntimeEnv(cfg, options.env ?? {});
   const env = options.env ? fingerprintEnv : createConfigRuntimeEnv(cfg);
   const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);

@@ -137,6 +137,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -168,6 +169,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -183,6 +185,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -201,11 +204,9 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   // runtime; dropping the staged config silently changes credential ownership.
   const envKey = resolveEnvApiKey(params.provider, env, {
     config: params.config,
-    workspaceDir: resolveAgentWorkspaceDir(
-      params.config,
-      resolveDefaultAgentId(params.config),
-      env,
-    ),
+    workspaceDir:
+      params.workspaceDir ??
+      resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), env),
   });
 
   if (selectedMode === "ref") {

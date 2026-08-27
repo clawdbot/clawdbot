@@ -11,10 +11,10 @@ import {
   createAttachedChannelResultAdapter,
   createEmptyChannelResult,
 } from "openclaw/plugin-sdk/channel-send-result";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import {
   buildLineMediaMessage,
   hasLineSpecificMediaOptions,
@@ -29,7 +29,7 @@ import {
 } from "./rich-messages.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineChannelData, LineSendResult } from "./types.js";
+import type { LineChannelData, LineSendResult, ResolvedLineAccount } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
 
@@ -51,7 +51,6 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const lineRuntime = runtime.channel.line;
     const location = lineData.location;
     const locationMessage = location ? outboundRuntime.createLocationMessage(location) : null;
-    const validLocation = locationMessage ? location : undefined;
     const sendText = lineRuntime?.pushMessageLine ?? outboundRuntime.pushMessageLine;
     const sendBatch = lineRuntime?.pushMessagesLine ?? outboundRuntime.pushMessagesLine;
     const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
@@ -217,9 +216,9 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         }
       }
 
-      if (validLocation) {
+      if (location) {
         await recordResult(
-          sendLocation(to, validLocation, {
+          sendLocation(to, location, {
             verbose: false,
             cfg,
             accountId: accountId ?? undefined,
@@ -245,7 +244,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    if (orderedMessages) {
+    if (orderedMessages && !shouldSendQuickRepliesInline) {
       for (const [index, message] of orderedMessages.entries()) {
         const isLast = index === orderedMessages.length - 1;
         if (message.type === "flex") {

@@ -8,31 +8,47 @@ title: "Worker"
 
 # `openclaw worker`
 
-`openclaw worker` is the restricted runtime entry point for a cloud worker
-orchestrator to launch inside a prepared worker environment. It is not a
-general-purpose command for manual worker registration.
+`openclaw worker` is the restricted runtime entry point for a Gateway-owned
+launcher to start inside a prepared cloud or paired-node worker environment.
+It is not a general-purpose command for manual worker registration.
 
-The gateway installs the matching OpenClaw bundle and opens the host-key-pinned
-reverse SSH tunnel. The worker launcher starts this command with a prepared
-assignment. The command connects through the tunnel-forwarded local socket and
-admits as the dedicated `worker` role.
+The Gateway installs the matching OpenClaw bundle through the enrolled node's
+authenticated connection. The worker launcher starts this command with a
+prepared assignment, and the worker connects back to the Gateway over its own
+authenticated outbound WebSocket as the dedicated `worker` role.
 
 ## Launch contract
 
 The command reads exactly one bounded JSON launch envelope from standard input.
-The envelope carries the local socket location, minted worker credential, bundle
-and protocol identity, owner epoch, the single assigned session and turn, and the
-exact worker-local tool names authorized for that turn. The Gateway resolves this
-final tool set from current policy before handoff; raw config and scheduled-owner
-identity never enter the worker envelope.
+The envelope carries the Gateway worker endpoint, minted worker credential,
+bundle and protocol identity, owner epoch, the single assigned session and turn,
+and the exact worker-local tool names authorized for that turn. The Gateway
+resolves this final tool set from current policy before handoff; raw config and
+scheduled-owner identity never enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
+
+The node supervisor uses a private managed entry point that can admit successive
+turns into the same environment while background processes remain. Each turn
+still receives a fresh bounded envelope, Gateway connection, and tool authority.
+The standalone command above remains a single-turn entry point.
 
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the
 envelope. Operators should start workers through the cloud worker
 orchestrator rather than invoke this entry point directly.
+
+If admission exhausts its 120-second retry budget, the terminal error includes
+the attempt count, Gateway host and port (or local socket path), and last failure.
+`connect failed` means the WebSocket did not open; check reachability and TLS.
+`no hello within deadline` means it opened but the Gateway did not complete worker
+admission. A retryable admission rejection retains its reason. These bounded,
+credential-redacted details appear in the node launch journal and turn error.
+
+Container launches revalidate the pinned daemon identity before creating each
+container. This check allows 30 seconds for a busy daemon; a timeout still fails
+the launch and names the command. A changed daemon identity remains a hard failure.
 
 ## Runtime boundary
 
@@ -51,14 +67,18 @@ Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
 no standing provider or forge credentials.
 
+The worker loads workspace `AGENTS.md` through the bounded bootstrap loader and
+appends Gateway-supplied system instructions as literal text. It does not discover
+`SYSTEM.md` or `APPEND_SYSTEM.md` from the workspace or agent state directory.
+
 Worker-to-worker session dispatch is not exposed in this mode. Placement and
 dispatch remain gateway-owned: an operator can dispatch an existing local,
 managed-worktree session through the Gateway, while a worker process cannot
 dispatch itself or another worker.
 
 The prepared assignment carries the transcript context, accepted base leaf,
-commit sequence, and live-event cursor. On a tunnel reconnect, the process
-re-admits with the same credential and owner epoch, retains the accepted
+commit sequence, and live-event cursor. On a worker WebSocket reconnect, the
+process re-admits with the same credential and owner epoch, retains the accepted
 transcript base, replays its unacknowledged live-event tail, and reattaches an
 in-flight inference turn with the same identity. The terminal inference message
 is authoritative if streamed deltas were missed. A superseding owner epoch
@@ -70,9 +90,9 @@ duplicate commit is produced; any still-uncommitted in-memory tail from that
 run is lost. Relaunch belongs to the milestone-3 placement owner, which must
 create a fresh assignment from the gateway's authoritative transcript and
 commit ledger. Likewise, a gateway process restart terminates a pending
-inference turn with a provider error; only a tunnel or worker WebSocket
-reconnect can reattach to an active same-process inference stream.
+inference turn with a provider error; only a worker WebSocket reconnect can
+reattach to an active same-process inference stream.
 
 See [Gateway protocol](/gateway/protocol#worker-role-and-closed-protocol) for the
-closed worker RPC surface and [Cloud workers plan](/plan/cloud-workers) for the
+closed worker RPC surface and [Cloud workers](/gateway/cloud-workers) for the
 architecture and security model.

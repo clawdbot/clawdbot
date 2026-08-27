@@ -4,6 +4,7 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  closeRequestAfterResponse,
   isRequestBodyLimitError,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
@@ -111,19 +112,6 @@ function respondWebhookBodyReadError(params: {
   res.statusCode = invalidStatusCode ?? 400;
   res.end(invalidMessage ?? "Bad Request");
   return { ok: false };
-}
-
-function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
-  const once = Reflect.get(res, "once");
-  if (typeof once !== "function") {
-    return;
-  }
-  res.setHeader("Connection", "close");
-  once.call(res, "finish", () => {
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
 }
 
 /** Create an in-memory limiter that caps concurrent webhook handlers per key. */

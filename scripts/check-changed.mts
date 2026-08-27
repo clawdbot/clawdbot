@@ -102,8 +102,6 @@ const DEPRECATION_HYGIENE_PATH_RE =
   /^(?:package\.json$|src\/|extensions\/|packages\/|scripts\/(?:check-deprecated-api-usage\.mts$|plugin-boundary-report\.ts$|lib\/plugin-sdk))/u;
 const WRAPPER_SHADOWING_PATH_RE =
   /^(?:package\.json$|src\/|scripts\/(?:check-(?:export-name-collisions|wrapper-shadowing)\.mts$|lib\/ts-guard-utils\.mts$))/u;
-const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
-  /^(?:pnpm-lock\.yaml$|apps\/(?:android\/app\/build\.gradle\.kts$|ios\/project\.yml$|linux\/src-tauri\/(?:build\.rs$|src\/canvas\.rs$)|shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/)|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mts$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/control-ui-i18n-[^/]+\.ts)$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
@@ -114,10 +112,10 @@ const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/src\/.+\.(?:css|ts)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
 const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/src\/.+\.css$/u;
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -337,12 +335,6 @@ export function shouldRunDeprecationHygieneChecks(paths: string[]) {
 export function shouldRunWrapperShadowingCheck(paths: string[]) {
   return paths.some((changedPath) =>
     WRAPPER_SHADOWING_PATH_RE.test(normalizeChangedPath(changedPath)),
-  );
-}
-
-export function shouldRunCanvasA2uiNativeResourceCheck(paths: string[]) {
-  return paths.some((changedPath) =>
-    CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
   );
 }
 
@@ -642,14 +634,6 @@ export function createChangedCheckPlan(
   }
   if (result.lanes.all || shouldRunWrapperShadowingCheck(result.paths)) {
     add("wrapper shadowing", ["check:wrapper-shadowing"]);
-  }
-  if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
-    addCommand(
-      "Canvas A2UI native resource generation",
-      "node",
-      ["--import", "tsx", "scripts/sync-native-a2ui.mts", "--check"],
-      baseEnv,
-    );
   }
   if (shouldRunAppcastOwnerTest(result.paths)) {
     add(

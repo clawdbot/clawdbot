@@ -93,7 +93,10 @@ function projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): J
         type: "message",
         role: "user",
         content: [
-          { type: "input_text", text: requireBoundedText(upstreamUserText, "upstream user text") },
+          {
+            type: "input_text",
+            text: requireBoundedText(upstreamUserText, "upstream user text", MAX_PROJECTION_BYTES),
+          },
         ],
       },
     ];

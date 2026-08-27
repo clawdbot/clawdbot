@@ -18,7 +18,6 @@ import {
 } from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
 type StreamEvent = Record<string, unknown> & { type?: string };
-const PAYLOAD_CAPTURE_TIMEOUT_MS = 5_000;
 
 function xaiAssistantMessage(content: AssistantMessage["content"]): AssistantMessage {
   return {
@@ -149,10 +148,6 @@ async function captureXaiResponsesPayloadWithThinking(
   } as Model<"openai-responses">);
 
   const payloadPromise = new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timeout = setTimeout(
-      () => reject(new Error("provider payload callback was not invoked")),
-      PAYLOAD_CAPTURE_TIMEOUT_MS,
-    );
     const stream = streamSimple(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -161,13 +156,15 @@ async function captureXaiResponsesPayloadWithThinking(
         cacheRetention: "none",
         reasoning,
         onPayload: (payload) => {
-          clearTimeout(timeout);
           resolve(structuredClone(payload as Record<string, unknown>));
           throw new Error("stop after payload capture");
         },
       },
     );
-    void stream.result();
+    void stream.result().then(
+      () => reject(new Error("provider payload callback was not invoked")),
+      (error: unknown) => reject(error instanceof Error ? error : new Error(String(error))),
+    );
   });
 
   return await payloadPromise;

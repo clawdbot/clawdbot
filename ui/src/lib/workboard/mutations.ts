@@ -1,7 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import {
+  changedDraftPayload,
   draftPayload,
+  rebaseWorkboardDraft,
   removeCardAndReferences,
   replaceCard,
   resetDraftState,
@@ -90,21 +92,45 @@ export async function saveWorkboardCardDraft(params: {
   ) {
     return;
   }
+  const cardId = state.editingCardId;
+  const base = state.editingCardBase;
+  if (!base || base.id !== cardId) {
+    state.error = "This card changed before editing began. Cancel and reopen it to continue.";
+    params.requestUpdate?.();
+    return;
+  }
   invalidateWorkboardLoads(params.host);
   state.draftSaving = true;
   state.loading = true;
   state.error = null;
-  const cardId = state.editingCardId;
   params.requestUpdate?.();
   try {
+    const patch = changedDraftPayload(state);
+    if (Object.keys(patch).length === 0) {
+      resetDraftState(state);
+      return;
+    }
     const payload = await params.client.request("workboard.cards.update", {
       id: cardId,
-      patch: draftPayload(state),
+      expectedUpdatedAt: base.updatedAt,
+      patch,
     });
     replaceCard(state, normalizeCardPayload(payload));
     resetDraftState(state);
   } catch (error) {
-    state.error = formatError(error);
+    if (
+      error instanceof GatewayRequestError &&
+      error.code === "workboard_conflict" &&
+      isRecord(error.details) &&
+      error.details.type === "workboard_card_conflict"
+    ) {
+      const current = normalizeCardPayload(error.details);
+      replaceCard(state, current);
+      rebaseWorkboardDraft(state, current);
+      state.error = `${error.message} Your unsaved edits remain in the form.`;
+    } else {
+      state.error = formatError(error);
+    }
   } finally {
     state.draftSaving = false;
     state.loading = false;
@@ -142,7 +168,11 @@ export async function addWorkboardCardComment(params: {
       id: cardId,
       body,
     });
-    replaceCard(state, normalizeCardPayload(payload));
+    const current = normalizeCardPayload(payload);
+    replaceCard(state, current);
+    if (state.editingCardId === cardId && state.editingCardBase?.id === cardId) {
+      rebaseWorkboardDraft(state, current);
+    }
     if (params.body === undefined) {
       state.draftCommentBody = "";
     } else if (state.detailCardId === cardId) {

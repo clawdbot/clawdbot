@@ -7,7 +7,7 @@ import {
   isBoardWidgetBridgeRequest,
 } from "./widget-bridge.ts";
 
-const SANDBOX_READY_TIMEOUT_MS = 10_000;
+const WIDGET_LOAD_TIMEOUT_MS = 10_000;
 
 type BoardWidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
@@ -15,6 +15,7 @@ type BoardWidgetSandboxHostOptions = {
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
+  controlUiBaseUrl?: string;
   client?: BoardWidgetBridgeGatewayClient;
   resolveFrameUrl: BoardWidgetFrameUrl;
   confirmPrompt: (text: string) => boolean;
@@ -38,8 +39,11 @@ export class BoardWidgetSandboxHost {
   private ready = false;
   private readyTimer: number | null = null;
   private loadedDocumentKey = "";
-  private loadingDocumentKey = "";
-  private loadGeneration = 0;
+  private activeDocumentLoad: {
+    controller: AbortController;
+    key: string;
+    timeout: number;
+  } | null = null;
   private requestGeneration = 0;
   private readonly pendingRequests = new Map<string, number>();
 
@@ -59,8 +63,7 @@ export class BoardWidgetSandboxHost {
     this.active = active;
     if (!active) {
       this.clearReadyTimeout();
-      this.loadGeneration += 1;
-      this.loadingDocumentKey = "";
+      this.cancelDocumentLoad();
       this.cancelPendingRequests("Widget inactive");
       this.requestGeneration += 1;
       return;
@@ -115,11 +118,10 @@ export class BoardWidgetSandboxHost {
   }
 
   reset(): void {
-    this.loadGeneration += 1;
+    this.cancelDocumentLoad();
     this.requestGeneration += 1;
     this.pendingRequests.clear();
     this.loadedDocumentKey = "";
-    this.loadingDocumentKey = "";
     this.bridgePort?.close();
     this.bridgePort = null;
     this.adoptedTicket = "";
@@ -291,6 +293,18 @@ export class BoardWidgetSandboxHost {
     }
   }
 
+  private cancelDocumentLoad(): void {
+    const load = this.activeDocumentLoad;
+    // Clear ownership before aborting so the rejection is stale and cannot
+    // spend the retry budget or clear a replacement load.
+    this.activeDocumentLoad = null;
+    if (!load) {
+      return;
+    }
+    window.clearTimeout(load.timeout);
+    load.controller.abort();
+  }
+
   private scheduleReadyTimeout(): void {
     if (!this.active || this.ready || this.readyTimer !== null) {
       return;
@@ -303,7 +317,7 @@ export class BoardWidgetSandboxHost {
       // Browsers do not expose iframe HTTP failures through `error`. Bound the
       // proxy handshake so an unavailable adjacent listener cannot stay blank.
       this.retrySandboxFrame();
-    }, SANDBOX_READY_TIMEOUT_MS);
+    }, WIDGET_LOAD_TIMEOUT_MS);
   }
 
   private retrySandboxFrame(): void {
@@ -346,7 +360,15 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.offeredTicket = ticket;
-    this.bridgePort.postMessage({ type: "openclaw:widget-host-init", ticket }, []);
+    const controlUiBaseUrl = this.options.controlUiBaseUrl?.trim();
+    this.bridgePort.postMessage(
+      {
+        type: "openclaw:widget-host-init",
+        ticket,
+        ...(controlUiBaseUrl ? { controlUiBaseUrl } : {}),
+      },
+      [],
+    );
   }
 
   private async loadDocument(): Promise<void> {
@@ -370,16 +392,25 @@ export class BoardWidgetSandboxHost {
       return;
     }
     const documentKey = this.documentKey();
-    if (documentKey === this.loadedDocumentKey || documentKey === this.loadingDocumentKey) {
+    if (documentKey === this.loadedDocumentKey || documentKey === this.activeDocumentLoad?.key) {
       return;
     }
-    this.loadingDocumentKey = documentKey;
+    this.cancelDocumentLoad();
     const sourceHref = sourceUrl.href;
     this.options.onFrameUrl(sourceHref);
-    const generation = ++this.loadGeneration;
+    const controller = new AbortController();
+    const load = {
+      controller,
+      key: documentKey,
+      timeout: window.setTimeout(
+        () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+        WIDGET_LOAD_TIMEOUT_MS,
+      ),
+    };
+    this.activeDocumentLoad = load;
     try {
-      const response = await fetch(sourceHref, { cache: "no-store" });
-      if (!this.active || generation !== this.loadGeneration || !frame.isConnected) {
+      const response = await fetch(sourceHref, { cache: "no-store", signal: controller.signal });
+      if (!this.active || this.activeDocumentLoad !== load || !frame.isConnected) {
         return;
       }
       if (response.status === 401) {
@@ -390,7 +421,7 @@ export class BoardWidgetSandboxHost {
         throw new Error(`widget content request failed (${response.status})`);
       }
       const documentHtml = await response.text();
-      if (!this.active || generation !== this.loadGeneration || !frame.isConnected) {
+      if (!this.active || this.activeDocumentLoad !== load || !frame.isConnected) {
         return;
       }
       frame.contentWindow?.postMessage(
@@ -407,12 +438,13 @@ export class BoardWidgetSandboxHost {
       // pending. Complete the handshake once these exact bytes become current.
       this.postHostInit();
     } catch {
-      if (generation === this.loadGeneration) {
+      if (this.activeDocumentLoad === load) {
         this.options.onLoadFailed(widget);
       }
     } finally {
-      if (generation === this.loadGeneration) {
-        this.loadingDocumentKey = "";
+      window.clearTimeout(load.timeout);
+      if (this.activeDocumentLoad === load) {
+        this.activeDocumentLoad = null;
       }
     }
   }

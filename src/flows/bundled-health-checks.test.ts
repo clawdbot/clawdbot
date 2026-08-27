@@ -140,7 +140,7 @@ describe("registerBundledHealthChecks", () => {
 
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "memory-core",
-      artifactBasename: "api.js",
+      artifactBasename: "doctor-health-api.js",
     });
     expect(mocks.loadBundledPluginPublicArtifactModuleSync).not.toHaveBeenCalledWith(
       expect.objectContaining({ dirName: "llama-cpp" }),
@@ -339,6 +339,7 @@ describe("registerBundledHealthChecks", () => {
       artifactCandidates: ["doctor-health-api.js"],
     });
     expect(mocks.registerWorkerProviderDoctorChecks).toHaveBeenCalledWith({
+      getHealthCheck: expect.any(Function),
       registerHealthCheck: expect.any(Function),
     });
   });
@@ -373,6 +374,7 @@ describe("registerBundledHealthChecks", () => {
       artifactBasename: "api.js",
     });
     expect(mocks.registerCodexManagedAppServerDoctorChecks).toHaveBeenCalledWith({
+      getHealthCheck: expect.any(Function),
       registerHealthCheck: expect.any(Function),
     });
   });

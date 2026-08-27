@@ -18,10 +18,16 @@ function turn(overrides: Partial<SessionPlacementTurnParams> = {}): SessionPlace
   } as SessionPlacementTurnParams;
 }
 
-function authority(overrides: Partial<SessionPlacementTurnParams> = {}) {
+function authority(
+  overrides: Partial<SessionPlacementTurnParams> = {},
+  githubPublicationAvailable = false,
+  portalAvailable = false,
+) {
   return resolveWorkerToolAuthority({
     modelRef: { provider: "openai", model: "gpt-test" },
     turn: turn(overrides),
+    githubPublicationAvailable,
+    portalAvailable,
   }).allowedToolNames;
 }
 
@@ -72,6 +78,36 @@ describe("resolveWorkerToolAuthority", () => {
     expect(authority({ toolsAllow: [] })).toEqual([]);
     expect(authority({ toolsAllow: ["web_search"] })).toEqual([]);
     expect(authority({ toolsAllow: ["sessions_send"] })).toEqual(["sessions_send"]);
+    expect(authority({ toolsAllow: ["portal"] })).toEqual([]);
+    expect(authority({ toolsAllow: ["portal"] }, false, true)).toEqual(["portal"]);
+    expect(authority({ toolsAllow: ["github_publish"] })).toEqual([]);
+    expect(authority({ toolsAllow: ["github_publish"] }, true)).toEqual(["github_publish"]);
+  });
+
+  it("adds publication only when the Gateway prepared its capability", () => {
+    expect(authority()).not.toContain("github_publish");
+    expect(authority({}, true)).toContain("github_publish");
+  });
+
+  it("exposes portals only for SSH-backed placements and allowed capability policy", () => {
+    expect(authority()).not.toContain("portal");
+    expect(authority({}, false, true)).toContain("portal");
+    expect(authority({ config: { tools: { deny: ["portal"] } } }, false, true)).not.toContain(
+      "portal",
+    );
+    expect(
+      authority(
+        {
+          sessionKey: "agent:main:worker-sandboxed",
+          config: {
+            agents: { defaults: { sandbox: { mode: "all" } } },
+            tools: { sandbox: { tools: { deny: ["portal"] } } },
+          },
+        },
+        false,
+        true,
+      ),
+    ).not.toContain("portal");
   });
 
   it("uses scheduled owner group policy without reapplying fresh sender overlays", () => {

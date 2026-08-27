@@ -166,6 +166,20 @@ describe("existing-session browser routes", () => {
       .mockResolvedValueOnce(true);
   });
 
+  it.each(["", "  spaced  "])("forwards exact select input %j to Chrome MCP", async (value) => {
+    const handler = getActPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      { params: {}, query: {}, body: { kind: "select", ref: "select-1", values: [value] } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.fillChromeMcpElement).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7", uid: "select-1", value }),
+    );
+  });
+
   it("allows labeled AI snapshots for existing-session profiles", async () => {
     const handler = getSnapshotGetHandler();
     const response = createBrowserRouteResponse();
@@ -347,6 +361,27 @@ describe("existing-session browser routes", () => {
     expect(screenshotParams.format).toBe("jpeg");
     expect(screenshotParams.timeoutMs).toBe(4321);
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+  });
+
+  it("keeps ref semantics for labeled existing-session screenshots", async () => {
+    const handler = getSnapshotPostHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { labels: true, ref: "btn-1", type: "jpeg", timeoutMs: 4321 },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, labels: true });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.takeChromeMcpScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({ uid: "btn-1", format: "jpeg", timeoutMs: 4321 }),
+    );
   });
 
   it("checks existing-session snapshot URL when SSRF policy is configured", async () => {

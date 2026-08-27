@@ -15,7 +15,7 @@ import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { headersToRecord } from "../utils/headers.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { notifyProviderHttpResponse, transportAbortError } from "./transport-stream-shared.js";
 
 export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils/prompt-cache-stability.js";
 
@@ -36,6 +36,23 @@ export const log = {
 };
 
 export type { OpenAICompletionsOptions } from "../provider-options.js";
+
+export function resolveOpenAIClientBaseUrl(
+  model: Pick<Model, "provider" | "baseUrl">,
+  baseUrl: string | undefined = model.baseUrl,
+): string | undefined {
+  if (baseUrl?.trim()) {
+    return baseUrl;
+  }
+  if (model.provider.trim().toLowerCase() === "openai") {
+    return undefined;
+  }
+  // The OpenAI SDK defaults a missing endpoint to api.openai.com. Only OpenAI may
+  // inherit that default; otherwise a third-party bearer token can cross providers.
+  throw new Error(
+    `Provider "${model.provider}" requires an explicit base URL before using an OpenAI-compatible API. Reload provider metadata or configure an endpoint.`,
+  );
+}
 
 export type OpenAICompletionsTextSource = "reasoning_detail" | "refusal";
 
@@ -228,6 +245,14 @@ export function createOpenAIResponseHook(
     ? () =>
         onResponse({ status: response.status, headers: headersToRecord(response.headers) }, model)
     : undefined;
+}
+
+export function createOpenAIProviderAcceptanceHook(
+  options: Pick<BaseOpenAIStreamOptions, "onResponse" | "signal"> | undefined,
+  response: Response,
+  model: Model,
+): () => Promise<void> {
+  return () => notifyProviderHttpResponse({ options, response, model });
 }
 
 type ModelStreamCooperativeScheduler = {

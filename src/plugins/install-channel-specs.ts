@@ -1,6 +1,10 @@
 // Parses channel-oriented plugin install specs from package inputs.
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import {
+  isExactSemverVersion,
+  parseRegistryNpmSpec,
+  resolveOpenClawReleaseCohortVersion,
+} from "../infra/npm-registry-spec.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 
 type ChannelInstallSpecs = {
@@ -56,8 +60,11 @@ export function resolveNpmInstallSpecsForUpdateChannel(params: {
           `${policy} plugin resolution for ${target.name} requires an exact core version.`,
         );
       }
+      const installVersion = params.versionBoundToCore
+        ? resolveOpenClawReleaseCohortVersion(coreVersion)
+        : coreVersion;
       return {
-        installSpec: `${target.name}@${coreVersion}`,
+        installSpec: `${target.name}@${installVersion}`,
         recordSpec: params.spec,
       };
     }
@@ -112,4 +119,27 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
     fallbackSpec: params.spec,
     fallbackLabel: betaSpec,
   };
+}
+
+/**
+ * Installs the channel-resolved spec, widening to the operator's own selector
+ * when that release has no published artifact. The degrade is announced rather
+ * than silent, because it changes which build the operator ends up running.
+ */
+export async function installWithChannelFallback<T>(params: {
+  installSpec: string;
+  fallbackSpec?: string;
+  install: (spec: string) => Promise<T>;
+  isRetryable: (result: T) => boolean;
+  onFallback: (message: string) => void | Promise<void>;
+}): Promise<T> {
+  const result = await params.install(params.installSpec);
+  const { fallbackSpec } = params;
+  if (!fallbackSpec || fallbackSpec === params.installSpec || !params.isRetryable(result)) {
+    return result;
+  }
+  await params.onFallback(
+    `No ${params.installSpec} release is published; installing ${fallbackSpec} instead.`,
+  );
+  return await params.install(fallbackSpec);
 }

@@ -1,8 +1,15 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { resolveCodeModeConfig, toToolSearchConfig } from "./code-mode-runtime.js";
 import {
   activeRuns,
+  createCodeModeBridgeDispatchState,
   disposeAllCodeModeRuns,
   disposeCodeModeRun,
   reserveActiveRunSlot,
@@ -52,8 +59,10 @@ function parkExpiringRun(
     ctx,
     config,
     runtime,
+    catalogProjection: createCodeModeCatalogProjection([]),
     namespaceRuntime: createCodeModeNamespaceRuntime(),
     output: [],
+    bridgeDispatch: createCodeModeBridgeDispatchState(),
   });
   return cancel;
 }
@@ -69,6 +78,87 @@ afterEach(() => {
 });
 
 describe("Code Mode worker lifecycle", () => {
+  it.each(
+    (["exec", "resume"] as const).flatMap((kind) =>
+      [1, -1].map((clockDirection) => ({ kind, clockDirection })),
+    ),
+  )(
+    "keeps $kind guest timeouts independent of a $clockDirection clock jump",
+    async ({ kind, clockDirection }) => {
+      const config = resolveCodeModeConfig({
+        tools: { codeMode: { enabled: true, timeoutMs: clockDirection > 0 ? 1_000 : 250 } },
+      } as never);
+      const source =
+        clockDirection > 0
+          ? "let total = 0; for (let index = 0; index < 100_000; index++) total += index; return total;"
+          : "while (true) {}";
+      let input: Record<string, unknown> = { kind: "exec", source, config, catalog: [] };
+      if (kind === "resume") {
+        const suspended = await runCodeModeWorker(
+          { ...input, source: `await yield_control("clock jump"); ${source}` },
+          10_000,
+        );
+        expect(suspended.status).toBe("waiting");
+        if (suspended.status !== "waiting") {
+          throw new Error("expected a suspended guest before the clock jump");
+        }
+        input = {
+          kind,
+          config,
+          snapshotBytes: suspended.snapshotBytes,
+          settledRequests: suspended.pendingRequests.map(({ id }) => ({
+            id,
+            ok: true,
+            value: null,
+          })),
+        };
+      }
+
+      const fixtureDir = await mkdtemp(path.join(os.tmpdir(), "code-mode-worker-clock-"));
+      try {
+        await writeFile(path.join(fixtureDir, "package.json"), '{"type":"module"}');
+        const workerPath = path.join(fixtureDir, "clock-worker.ts");
+        const quickJsUrl = pathToFileURL(createRequire(import.meta.url).resolve("quickjs-wasi"));
+        const productionWorkerUrl = new URL("./code-mode.worker.ts", import.meta.url);
+        // Change the clock inside the real worker, after its VM deadline starts.
+        // Parent-only clock spies cannot reach this isolated thread.
+        await writeFile(
+          workerPath,
+          `
+        const { QuickJS } = await import(${JSON.stringify(quickJsUrl.href)});
+        const realNow = Date.now;
+        let shifted = false;
+        for (const method of ["create", "restore"]) {
+          const original = QuickJS[method];
+          QuickJS[method] = function (...args) {
+            const optionsIndex = method === "create" ? 0 : 1;
+            const options = args[optionsIndex];
+            const interrupt = options.interruptHandler;
+            args[optionsIndex] = { ...options, interruptHandler: () => {
+              if (!shifted) {
+                shifted = true;
+                Date.now = () => realNow() + ${clockDirection * 60_000};
+              }
+              return interrupt();
+            } };
+            return original.apply(this, args);
+          };
+        }
+        await import(${JSON.stringify(productionWorkerUrl.href)});
+      `,
+        );
+        const result = await runCodeModeWorker(input, 5_000, pathToFileURL(workerPath));
+        expect(result, JSON.stringify(result)).toMatchObject(
+          clockDirection > 0
+            ? { status: "completed", value: 4_999_950_000 }
+            : { status: "failed", code: "timeout", failurePhase: "guest" },
+        );
+      } finally {
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("cancels every suspended run, releases capacity, and clears its expiry timer", () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const firstRunId = `${CAPACITY_RUN_PREFIX}shutdown_first`;

@@ -3,7 +3,7 @@ import path from "node:path";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
-import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
@@ -67,7 +67,7 @@ export function listAuthProfileRepairCandidates(
   // The shared-main default store (undefined agentDir) must stay first so the
   // canonical location wins the per-path dedupe over agent-scoped aliases.
   addCandidate(candidates, undefined);
-  addCandidate(candidates, resolveLegacyInheritedAuthDir(cfg, env));
+  addCandidate(candidates, resolveLegacyInheritedAuthAgentDir(cfg, env));
   const envAgentDir =
     readNonBlankString(env.OPENCLAW_AGENT_DIR) ?? readNonBlankString(env.PI_CODING_AGENT_DIR);
   if (envAgentDir) {

@@ -10,6 +10,8 @@ import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/st
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { FailoverError } from "./failover-error.js";
+import { markFallbackCandidateSkipped } from "./fallback-skip-cache.js";
+import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
@@ -20,8 +22,16 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
+import {
+  captureRoutingDecisionWork,
+  createModelRoutingTestAdmission,
+} from "./test-helpers/model-routing-decision-e2e-fixtures.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
+const observedModelRoutingProvenance: Array<{
+  stage: "initial" | "fallback";
+  fallbackReason?: string;
+}> = [];
 const suspendSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
   computeBackoffMock: vi.fn(
@@ -44,6 +54,14 @@ vi.mock("./models-config.js", async () => {
 const installRunEmbeddedMocks = () => {
   // Install the runner mocks before importing runEmbeddedAgent so the e2e path
   // exercises fallback orchestration without live model/provider calls.
+  vi.doMock("../plugins/runtime.js", () => ({
+    getActivePluginRegistry: () => null,
+    getActivePluginRegistryWorkspaceDir: () => undefined,
+    requireActivePluginRegistry: () => ({}),
+  }));
+  vi.doMock("./harness/runtime-plugin.js", () => ({
+    ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+  }));
   installEmbeddedRunnerBaseE2eMocks();
   installEmbeddedRunnerFastRunE2eMocks({
     runEmbeddedAttempt: (params) => runEmbeddedAttemptMock(params),
@@ -68,18 +86,22 @@ type TestRunEmbeddedAgent = (
   params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
 ) => ReturnType<ProductionRunEmbeddedAgent>;
 let runEmbeddedAgent: TestRunEmbeddedAgent;
+let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
+let runEmbeddedAgentEntry: typeof import("./embedded-agent-runner/run-entry.js").runEmbeddedAgentEntry;
 
 beforeAll(async () => {
-  vi.resetModules();
   installRunEmbeddedMocks();
-  runEmbeddedAgent = wrapRunWithTestAdmission(
-    (await import("./embedded-agent-runner/run.js")).runEmbeddedAgent,
-  );
+  runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
+    .runEmbeddedAgent;
+  runEmbeddedAgent = wrapRunWithTestAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
+  ({ runEmbeddedAgentEntry } = await import("./embedded-agent-runner/run-entry.js"));
 });
 
 beforeEach(() => {
+  resetFallbackSkipCacheForTest();
+  observedModelRoutingProvenance.length = 0;
   runEmbeddedAttemptMock.mockReset();
   suspendSessionMock.mockClear();
   computeBackoffMock.mockClear();
@@ -281,6 +303,75 @@ async function runEmbeddedFallback(params: {
   });
 }
 
+async function runEmbeddedEntryFallback(params: {
+  agentDir: string;
+  workspaceDir: string;
+  sessionKey: string;
+  runId: string;
+}) {
+  const cfg = makeConfig();
+  const sessionId = `session:${params.runId}`;
+  const preparedRunAdmission = createModelRoutingTestAdmission({
+    cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
+    runId: params.runId,
+    boundary: "model-fallback-e2e",
+  });
+  try {
+    return await runEmbeddedAgentEntry({
+      selection: {
+        cfg,
+        provider: "openai",
+        model: "mock-1",
+        agentDir: params.agentDir,
+        manifestPlugins: [],
+      },
+      identity: {
+        runId: params.runId,
+        agentId: "test",
+        sessionId,
+        sessionKey: params.sessionKey,
+      },
+      harness: {
+        workspaceDir: params.workspaceDir,
+        sessionKey: params.sessionKey,
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: () => undefined,
+        resolveContextEngineHost: (provider, model) => ({
+          id: `embedded-e2e:${provider}/${model}`,
+          label: "embedded runner e2e",
+          capabilities: [],
+        }),
+      },
+      behavior: { kind: "maintenance" },
+      sessionOverride: { kind: "preserve" },
+      runCandidate: (provider, model, options) => {
+        observedModelRoutingProvenance.push(options.modelRoutingProvenance);
+        return runEmbeddedAgentWithPreparedAdmission({
+          preparedRunAdmission,
+          sessionId,
+          sessionKey: params.sessionKey,
+          workspaceDir: params.workspaceDir,
+          agentDir: params.agentDir,
+          config: cfg,
+          prompt: "hello",
+          provider,
+          model,
+          modelRoutingProvenance: options.modelRoutingProvenance,
+          authProfileIdSource: "auto",
+          isFinalFallbackAttempt: options.isFinalFallbackAttempt,
+          timeoutMs: 5_000,
+          runId: params.runId,
+          enqueue: async (task) => await task(),
+          contextEngineLogicalTurnLease: options.contextEngineLogicalTurnLease,
+          onContextEngineTurnCandidate: options.onContextEngineTurnCandidate,
+        });
+      },
+    });
+  } finally {
+    preparedRunAdmission.close();
+  }
+}
+
 function mockPrimaryOverloadedThenFallbackSuccess() {
   mockPrimaryErrorThenFallbackSuccess(OVERLOADED_ERROR_PAYLOAD);
 }
@@ -422,6 +513,96 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
 }
 
 describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
+  it("carries failed outer candidates into the winning execution trace", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      await writeAuthStore(agentDir);
+      mockPrimaryOverloadedThenFallbackSuccess();
+      const { decisionWork, result } = await captureRoutingDecisionWork(() =>
+        runEmbeddedEntryFallback({
+          agentDir,
+          workspaceDir,
+          sessionKey: "agent:test:execution-trace-fallback",
+          runId: "run:execution-trace-fallback",
+        }),
+      );
+
+      expect(result.result.meta.executionTrace).toMatchObject({
+        winnerProvider: "groq",
+        winnerModel: "mock-2",
+        fallbackUsed: true,
+        runner: "embedded",
+      });
+      expect(result.result.meta.executionTrace?.attempts).toEqual([
+        expect.objectContaining({
+          provider: "openai",
+          model: "mock-1",
+          result: "candidate_failed",
+          reason: "overloaded",
+        }),
+        expect.objectContaining({
+          provider: "groq",
+          model: "mock-2",
+          result: "success",
+        }),
+      ]);
+      expect(result.result.meta.agentMeta?.terminalReceipt).toMatchObject({
+        requested: { provider: "openai", model: "mock-1" },
+        effective: { provider: "groq", model: "mock-2" },
+        rerouted: true,
+      });
+      expect(result.terminal.metadata.terminalReceipt).toMatchObject({
+        requested: { provider: "openai", model: "mock-1" },
+        effective: { provider: "groq", model: "mock-2" },
+        rerouted: true,
+      });
+      expect(decisionWork).toHaveLength(2);
+      expect(decisionWork.map((work) => work.receipt)).toMatchObject([
+        {
+          action: { summary: "Requested openai/mock-1; selected openai/mock-1." },
+          decision: { reasonCode: "model_route_selected" },
+        },
+        {
+          action: { summary: "Requested openai/mock-1; selected groq/mock-2." },
+          decision: { reasonCode: "overloaded" },
+        },
+      ]);
+      expect(observedModelRoutingProvenance).toMatchObject([
+        { stage: "initial" },
+        { stage: "fallback", fallbackReason: "overloaded" },
+      ]);
+    });
+  });
+
+  it("does not record a receipt for a skipped fallback candidate", async () => {
+    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
+      const runId = "run:execution-trace-skipped-fallback";
+      await writeAuthStore(agentDir);
+      mockAllProvidersOverloaded();
+      markFallbackCandidateSkipped({
+        sessionId: `session:${runId}`,
+        provider: "groq",
+        model: "mock-2",
+        authScope: "groq:p1",
+        reason: "auth",
+        ttlMs: 60_000,
+      });
+
+      const { decisionWork } = await captureRoutingDecisionWork(async () => {
+        await expect(
+          runEmbeddedEntryFallback({
+            agentDir,
+            workspaceDir,
+            sessionKey: "agent:test:execution-trace-skipped-fallback",
+            runId,
+          }),
+        ).rejects.toThrow("All models failed");
+        expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+      });
+      expect(decisionWork).toHaveLength(1);
+      expect(decisionWork[0]?.receipt.decision.reasonCode).toBe("model_route_selected");
+    });
+  });
+
   it("keeps tool summary on incomplete side-effect terminal results", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);

@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
-import { setInternalDiagnosticEventListenerCounts } from "./diagnostic-event-listener-presence.js";
+import {
+  resetInternalDiagnosticEventListenerPresence,
+  setInternalDiagnosticEventListenerCounts,
+  type InternalDiagnosticEventInterest,
+  updateInternalDiagnosticEventInterest,
+} from "./diagnostic-event-listener-presence.js";
 import {
   consumeCoreModelRequestLifecycleDiagnosticEvent,
   CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY,
@@ -943,8 +948,14 @@ type DiagnosticEventsGlobalState = {
   marker: symbol;
   enabled: boolean;
   seq: number;
-  listeners: Set<DiagnosticEventListener>;
-  trustedListeners: Set<TrustedDiagnosticEventListener>;
+  listeners: Map<
+    DiagnosticEventListener,
+    InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined
+  >;
+  trustedListeners: Map<
+    TrustedDiagnosticEventListener,
+    InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined
+  >;
   toolExecutionListeners: Set<TrustedToolExecutionEventListener>;
   toolExecutionSeq: number;
   dispatchDepth: number;
@@ -998,8 +1009,8 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
     marker: DIAGNOSTIC_EVENTS_STATE_KEY,
     enabled: true,
     seq: 0,
-    listeners: new Set<DiagnosticEventListener>(),
-    trustedListeners: new Set<TrustedDiagnosticEventListener>(),
+    listeners: new Map(),
+    trustedListeners: new Map(),
     toolExecutionListeners: new Set<TrustedToolExecutionEventListener>(),
     toolExecutionSeq: 0,
     dispatchDepth: 0,
@@ -1021,8 +1032,8 @@ function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGloba
     candidate.marker === DIAGNOSTIC_EVENTS_STATE_KEY &&
     typeof candidate.enabled === "boolean" &&
     typeof candidate.seq === "number" &&
-    candidate.listeners instanceof Set &&
-    (candidate.trustedListeners === undefined || candidate.trustedListeners instanceof Set) &&
+    candidate.listeners instanceof Map &&
+    candidate.trustedListeners instanceof Map &&
     (candidate.toolExecutionListeners === undefined ||
       candidate.toolExecutionListeners instanceof Set) &&
     typeof candidate.dispatchDepth === "number" &&
@@ -1039,7 +1050,6 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
     existing.asyncDroppedTrustedEvents ??= 0;
     existing.asyncDroppedUntrustedEvents ??= 0;
     existing.asyncDroppedPriorityEvents ??= 0;
-    existing.trustedListeners ??= new Set<TrustedDiagnosticEventListener>();
     existing.toolExecutionListeners ??= new Set<TrustedToolExecutionEventListener>();
     existing.toolExecutionSeq ??= 0;
     return existing;
@@ -1069,6 +1079,15 @@ export function areDiagnosticsEnabledForProcess(): boolean {
   return getDiagnosticEventsState().enabled;
 }
 
+function isDiagnosticEventListenerInterested(
+  interest: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]> | undefined,
+  type: DiagnosticEventPayload["type"],
+): boolean {
+  return (
+    (!interest?.include || interest.include.includes(type)) && !interest?.exclude?.includes(type)
+  );
+}
+
 function dispatchDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,
@@ -1086,7 +1105,10 @@ function dispatchDiagnosticEvent(
   state.dispatchDepth += 1;
   try {
     if (!options.trustedListenersOnly) {
-      for (const listener of state.listeners) {
+      for (const [listener, interest] of state.listeners) {
+        if (!isDiagnosticEventListenerInterested(interest, enriched.type)) {
+          continue;
+        }
         try {
           listener(
             cloneDiagnosticEventForListener(enriched),
@@ -1106,7 +1128,10 @@ function dispatchDiagnosticEvent(
         }
       }
     }
-    for (const listener of state.trustedListeners) {
+    for (const [listener, interest] of state.trustedListeners) {
+      if (!isDiagnosticEventListenerInterested(interest, enriched.type)) {
+        continue;
+      }
       try {
         const eventForListener = cloneDiagnosticEventForListener(enriched);
         const metadataForListener = createDiagnosticMetadataForListener(metadata);
@@ -1516,26 +1541,44 @@ export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "
   });
 }
 
-/** Subscribes to all diagnostic events with dispatcher metadata. */
-export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): () => void {
+/** Subscribes to diagnostic events with dispatcher metadata. */
+export function onInternalDiagnosticEvent(
+  listener: DiagnosticEventListener,
+  filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
+): () => void {
   const state = getDiagnosticEventsState();
-  state.listeners.add(listener);
+  if (state.listeners.has(listener)) {
+    updateInternalDiagnosticEventInterest(state.listeners.get(listener), -1);
+  }
+  state.listeners.set(listener, filter);
+  updateInternalDiagnosticEventInterest(filter, 1);
   setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   return () => {
-    state.listeners.delete(listener);
+    const interest = state.listeners.get(listener);
+    if (state.listeners.delete(listener)) {
+      updateInternalDiagnosticEventInterest(interest, -1);
+    }
     setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   };
 }
 
-/** Subscribes to all diagnostic events plus trusted private payload data. */
+/** Subscribes to diagnostic events plus trusted private payload data. */
 export function onTrustedInternalDiagnosticEvent(
   listener: TrustedDiagnosticEventListener,
+  filter?: InternalDiagnosticEventInterest<DiagnosticEventPayload["type"]>,
 ): () => void {
   const state = getDiagnosticEventsState();
-  state.trustedListeners.add(listener);
+  if (state.trustedListeners.has(listener)) {
+    updateInternalDiagnosticEventInterest(state.trustedListeners.get(listener), -1);
+  }
+  state.trustedListeners.set(listener, filter);
+  updateInternalDiagnosticEventInterest(filter, 1);
   setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   return () => {
-    state.trustedListeners.delete(listener);
+    const interest = state.trustedListeners.get(listener);
+    if (state.trustedListeners.delete(listener)) {
+      updateInternalDiagnosticEventInterest(interest, -1);
+    }
     setInternalDiagnosticEventListenerCounts(state.listeners.size, state.trustedListeners.size);
   };
 }
@@ -1572,12 +1615,15 @@ export function hasPendingInternalDiagnosticEvent(
 
 /** Subscribes to public untrusted diagnostic events only. */
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {
-  return onInternalDiagnosticEvent((event, metadata) => {
-    if (metadata.trusted || event.type === "log.record") {
-      return;
-    }
-    listener(event);
-  });
+  return onInternalDiagnosticEvent(
+    (event, metadata) => {
+      if (metadata.trusted) {
+        return;
+      }
+      listener(event);
+    },
+    { exclude: ["log.record"] },
+  );
 }
 
 /** Returns whether listener metadata marks dispatcher-internal provenance. */
@@ -1592,7 +1638,7 @@ export function resetDiagnosticEventsForTest(): void {
   state.seq = 0;
   state.listeners.clear();
   state.trustedListeners.clear();
-  setInternalDiagnosticEventListenerCounts(0, 0);
+  resetInternalDiagnosticEventListenerPresence();
   state.toolExecutionListeners.clear();
   state.toolExecutionSeq = 0;
   state.dispatchDepth = 0;

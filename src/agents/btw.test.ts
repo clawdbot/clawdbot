@@ -40,7 +40,7 @@ const ensureAuthProfileStoreWithoutExternalProfilesMock = vi.fn();
 const resolveModelAsyncMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
-const resolveSessionAuthProfileOverrideMock = vi.fn();
+const resolveSessionAuthSelectionMock = vi.fn();
 const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const resolveSessionAgentIdMock = vi.fn();
 const resolveSessionAgentIdsMock = vi.fn();
@@ -338,8 +338,7 @@ vi.mock("./embedded-agent-runner/stream-resolution.js", () => ({
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
-  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
-    resolveSessionAuthProfileOverrideMock(...args),
+  resolveSessionAuthSelection: (...args: unknown[]) => resolveSessionAuthSelectionMock(...args),
 }));
 
 vi.mock("../logging/diagnostic.js", () => ({
@@ -702,7 +701,7 @@ describe("runBtwSideQuestion", () => {
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReset();
     getApiKeyForModelMock.mockReset();
     requireApiKeyMock.mockReset();
-    resolveSessionAuthProfileOverrideMock.mockReset();
+    resolveSessionAuthSelectionMock.mockReset();
     getActiveEmbeddedRunSnapshotMock.mockReset();
     resolveSessionAgentIdMock.mockReset();
     resolveSessionAgentIdsMock.mockReset();
@@ -773,7 +772,11 @@ describe("runBtwSideQuestion", () => {
       ...(params.profileId ? { profileId: params.profileId } : {}),
     }));
     requireApiKeyMock.mockReturnValue("secret");
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "profile-1",
+      source: "auto",
+      routeRequirement: undefined,
+    });
     getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("main");
     resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
@@ -996,7 +999,11 @@ describe("runBtwSideQuestion", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai:work");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "openai:work",
+      source: "auto",
+      routeRequirement: "subscription",
+    });
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
@@ -1134,7 +1141,7 @@ describe("runBtwSideQuestion", () => {
     };
     resolveModelWithRegistryMock.mockReturnValue(subscriptionModel);
     resolveModelAsyncMock.mockResolvedValue({ model: subscriptionModel });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
     getApiKeyForModelMock.mockResolvedValue({
@@ -1185,7 +1192,7 @@ describe("runBtwSideQuestion", () => {
     };
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveModelAsyncMock.mockResolvedValue({ model: platformModel });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
     getApiKeyForModelMock.mockResolvedValue({
@@ -1247,7 +1254,7 @@ describe("runBtwSideQuestion", () => {
       baseUrl: "https://api.openai.com/v1",
     };
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
     getApiKeyForModelMock.mockResolvedValue({
       apiKey: undefined,
@@ -1318,7 +1325,7 @@ describe("runBtwSideQuestion", () => {
       },
       order: { openai: ["openai:subscription", "openai:platform"] },
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveModelAsyncMock.mockImplementation(
       async (
@@ -1429,7 +1436,11 @@ describe("runBtwSideQuestion", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "openai-codex:user@example.test",
+      source: "auto",
+      routeRequirement: "subscription",
+    });
     ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
@@ -1505,12 +1516,6 @@ describe("runBtwSideQuestion", () => {
     expect(
       Object.keys(sideQuestionParams.preparedRuntimeAuth?.authProfileStore?.profiles ?? {}),
     ).toEqual(["openai-codex:user@example.test"]);
-    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
-      provider?: string;
-      acceptedProviderIds?: string[];
-    };
-    expect(authArgs.provider).toBe("openai");
-    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
@@ -1811,13 +1816,17 @@ describe("runBtwSideQuestion", () => {
       authProfileOverrideSource: "auto",
     });
     const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
-    resolveSessionAuthProfileOverrideMock.mockImplementation(
+    resolveSessionAuthSelectionMock.mockImplementation(
       async (params: { sessionEntry?: SessionEntry }) => {
         if (params.sessionEntry) {
           params.sessionEntry.authProfileOverride = "anthropic:api";
           params.sessionEntry.authProfileOverrideSource = "auto";
         }
-        return "anthropic:api";
+        return {
+          profileId: "anthropic:api",
+          source: "auto",
+          routeRequirement: "api-key",
+        };
       },
     );
     mockDoneAnswer("Generic fallback answer.");
@@ -1846,7 +1855,7 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
-    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(streamSimpleMock).not.toHaveBeenCalled();
@@ -1879,7 +1888,7 @@ describe("runBtwSideQuestion", () => {
       profileId: "anthropic:claude-cli",
     });
     requireApiKeyMock.mockReturnValueOnce("claude-cli-access");
-    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValueOnce(undefined);
     resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
         provider: DEFAULT_PROVIDER,
@@ -1953,7 +1962,7 @@ describe("runBtwSideQuestion", () => {
       modelRegistry,
     });
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue(authStore);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     getApiKeyForModelMock.mockImplementation(async (authParams: { profileId?: string } = {}) => {
       if (authParams.profileId === "anthropic:primary") {
         throw new Error("primary credential resolution failed");
@@ -2072,7 +2081,7 @@ describe("runBtwSideQuestion", () => {
       }),
     );
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     getApiKeyForModelMock.mockImplementation(async (authParams: { profileId?: string } = {}) => {
       if (authParams.profileId === "openai:subscription") {
         throw new Error("subscription credential resolution failed");
@@ -2148,7 +2157,7 @@ describe("runBtwSideQuestion", () => {
     resolveModelWithRegistryMock.mockReturnValue(platformModel);
     resolveModelAsyncMock.mockResolvedValue({ model: platformModel });
     ensureAuthProfileStoreMock.mockReturnValue(authStore);
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue(undefined);
+    resolveSessionAuthSelectionMock.mockResolvedValue(undefined);
     resolveProviderEntryApiKeyProfileReferenceMock.mockReturnValue({ kind: "literal" });
     getApiKeyForModelMock.mockImplementation(
       async (authParams: { profileId?: string; allowAuthProfileFallback?: boolean }) => {
@@ -2233,7 +2242,11 @@ describe("runBtwSideQuestion", () => {
       profileId: "anthropic:api",
     });
     requireApiKeyMock.mockReturnValueOnce("static-key");
-    resolveSessionAuthProfileOverrideMock.mockResolvedValueOnce("anthropic:api");
+    resolveSessionAuthSelectionMock.mockResolvedValueOnce({
+      profileId: "anthropic:api",
+      source: "user",
+      routeRequirement: "api-key",
+    });
     mockDoneAnswer("Static answer.");
 
     await runSideQuestion({

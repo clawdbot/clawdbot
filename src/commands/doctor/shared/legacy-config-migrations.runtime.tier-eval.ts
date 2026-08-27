@@ -256,6 +256,8 @@ function migrateChannelAliases(raw: Record<string, unknown>, changes: string[]):
 }
 
 const RESPONSE_PREFIX_CHANNELS = new Set([
+  "buzz",
+  "clickclack",
   "discord",
   "feishu",
   "googlechat",
@@ -265,6 +267,7 @@ const RESPONSE_PREFIX_CHANNELS = new Set([
   "mattermost",
   "msteams",
   "nextcloud-talk",
+  "qa-channel",
   "signal",
   "slack",
   "telegram",

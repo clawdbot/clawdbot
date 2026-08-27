@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  deleteSessionEntryLifecycle,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createSessionEventSubscriberRegistry,
@@ -11,9 +17,15 @@ import {
 } from "./server-chat-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
+import {
+  canReceiveSessionEvent as canReceiveSessionEventForClient,
+  invalidateSessionSharingSnapshot,
+  resolveSessionSharingTarget,
+} from "./session-sharing.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 
 type RecordingSocket = {
+  readyState: number;
   bufferedAmount: number;
   close: ReturnType<typeof vi.fn>;
   send: ReturnType<typeof vi.fn>;
@@ -27,6 +39,7 @@ function makeClient(
 ): { client: GatewayWsClient; socket: RecordingSocket } {
   const events: string[] = [];
   const socket: RecordingSocket = {
+    readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
     send: vi.fn((payload: string) => {
@@ -45,24 +58,32 @@ function makeClient(
   };
 }
 
-describe("skills event scope guards", () => {
-  it("delivers skill invalidations only to read-capable operators", () => {
-    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
-    const node = makeClient("node", "node", ["operator.read"]);
-    const read = makeClient("read", "operator", ["operator.read"]);
-    const write = makeClient("write", "operator", ["operator.write"]);
-    const admin = makeClient("admin", "operator", ["operator.admin"]);
-    const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
-    const { broadcast } = createGatewayBroadcaster({ clients });
+describe("read-capable operator event scope guards", () => {
+  it.each(["skills.changed", "users.prefs.changed"] as const)(
+    "delivers %s only to read-capable operators",
+    (event) => {
+      const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+      const node = makeClient("node", "node", ["operator.read"]);
+      const read = makeClient("read", "operator", ["operator.read"]);
+      const write = makeClient("write", "operator", ["operator.write"]);
+      const admin = makeClient("admin", "operator", ["operator.admin"]);
+      const clients = new Set([pairing, node, read, write, admin].map((entry) => entry.client));
+      const { broadcast } = createGatewayBroadcaster({ clients });
 
-    broadcast("skills.changed", { reason: "remote-node" });
+      broadcast(
+        event,
+        event === "users.prefs.changed"
+          ? { profileId: "profile-1", keys: ["ui.accent"] }
+          : { reason: "remote-node" },
+      );
 
-    expect(pairing.socket.events).toEqual([]);
-    expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual(["skills.changed"]);
-    expect(write.socket.events).toEqual(["skills.changed"]);
-    expect(admin.socket.events).toEqual(["skills.changed"]);
-  });
+      expect(pairing.socket.events).toEqual([]);
+      expect(node.socket.events).toEqual([]);
+      expect(read.socket.events).toEqual([event]);
+      expect(write.socket.events).toEqual([event]);
+      expect(admin.socket.events).toEqual([event]);
+    },
+  );
 });
 
 describe("device setup event scope guards", () => {
@@ -138,6 +159,112 @@ describe("board event scope guards", () => {
 });
 
 describe("collaboration event scope guards", () => {
+  it("revalidates an authoritative session-generation creator replacement before socket I/O", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:draft-owner-filter";
+      const ownerActor = { type: "human" as const, id: "profile-owner" };
+      const successorActor = { type: "human" as const, id: "profile-successor" };
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-draft-owner-filter",
+          updatedAt: 1,
+          visibility: "draft",
+          createdActor: ownerActor,
+        },
+      );
+      const owner = makeClient("owner", "operator", ["operator.read"]);
+      const successor = makeClient("successor", "operator", ["operator.read"]);
+      for (const [entry, actor] of [
+        [owner, ownerActor],
+        [successor, successorActor],
+      ] as const) {
+        entry.client.authenticatedUserId = actor.id;
+        entry.client.authenticatedUserProfile = {
+          profileId: actor.id,
+          displayName: null,
+          hasAvatar: false,
+          avatarRevision: "1",
+          updatedAt: 1,
+        };
+      }
+      const cfg: OpenClawConfig = {};
+      const filter = vi.fn(
+        (
+          client: GatewayWsClient,
+          sessionKeys: readonly string[],
+          agentId?: string,
+          event?: string,
+          payload?: unknown,
+        ) => canReceiveSessionEventForClient({ cfg, client, sessionKeys, agentId, event, payload }),
+      );
+      const { broadcastToConnIds } = createGatewayBroadcaster({
+        clients: new Set([owner.client, successor.client]),
+        canReceiveSessionEvent: filter,
+      });
+      const broadcast = () =>
+        broadcastToConnIds(
+          "sessions.changed",
+          { sessionKey, agentId: "main", reason: "updated" },
+          new Set([owner.client.connId, successor.client.connId]),
+          { agentId: "main", sessionKeys: [sessionKey] },
+        );
+
+      broadcast();
+
+      expect(owner.socket.send).toHaveBeenCalledOnce();
+      expect(successor.socket.send).not.toHaveBeenCalled();
+      expect(filter.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER).toBeLessThan(
+        owner.socket.send.mock.invocationCallOrder[0] ?? -1,
+      );
+      expect(JSON.parse(String(owner.socket.send.mock.calls[0]?.[0]))).toMatchObject({
+        event: "sessions.changed",
+        payload: { sessionKey, agentId: "main", reason: "updated" },
+      });
+
+      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+      if (!target) {
+        throw new Error("expected the persisted draft session target");
+      }
+      await expect(
+        deleteSessionEntryLifecycle({
+          agentId: target.agentId,
+          archiveTranscript: false,
+          expectedSessionId: "session-draft-owner-filter",
+          storePath: target.storePath,
+          target: { canonicalKey: target.canonicalKey, storeKeys: target.storeKeys },
+        }),
+      ).resolves.toMatchObject({ deleted: true });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-draft-successor-filter",
+          updatedAt: 2,
+          visibility: "draft",
+          createdActor: successorActor,
+        },
+      );
+      invalidateSessionSharingSnapshot(sessionKey);
+      owner.socket.send.mockClear();
+      successor.socket.send.mockClear();
+      owner.socket.events.length = 0;
+      successor.socket.events.length = 0;
+      filter.mockClear();
+
+      broadcast();
+
+      expect(owner.socket.send).not.toHaveBeenCalled();
+      expect(successor.socket.send).toHaveBeenCalledOnce();
+      expect(filter.mock.invocationCallOrder.at(-1) ?? Number.MAX_SAFE_INTEGER).toBeLessThan(
+        successor.socket.send.mock.invocationCallOrder[0] ?? -1,
+      );
+      expect(JSON.parse(String(successor.socket.send.mock.calls[0]?.[0]))).toMatchObject({
+        event: "sessions.changed",
+        payload: { sessionKey, agentId: "main", reason: "updated" },
+      });
+    });
+  });
+
   it("uses the payload session scope for observer subscription filtering", () => {
     const subscribed = makeClient("subscribed", "operator", ["operator.read"]);
     const otherSession = makeClient("other-session", "operator", ["operator.read"]);
@@ -162,6 +289,32 @@ describe("collaboration event scope guards", () => {
     expect(subscribed.socket.events).toEqual(["session.observer"]);
     expect(otherSession.socket.events).toEqual([]);
     expect(unsubscribed.socket.events).toEqual([]);
+  });
+
+  it("prepares session subscription lookups once per ordinary broadcast", () => {
+    const first = makeClient("first", "operator", ["operator.read"]);
+    const second = makeClient("second", "operator", ["operator.read"]);
+    const unrelated = makeClient("unrelated", "operator", ["operator.read"]);
+    const legacy = makeClient("legacy", "operator", ["operator.read"]);
+    for (const entry of [first, second, unrelated]) {
+      entry.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    const subscribers = createSessionMessageSubscriberRegistry();
+    subscribers.subscribe(first.client.connId, "session-a");
+    subscribers.subscribe(second.client.connId, "session-a");
+    const getSubscribers = vi.spyOn(subscribers, "get");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([first.client, second.client, unrelated.client, legacy.client]),
+      sessionMessageSubscribers: subscribers,
+    });
+
+    broadcast("chat", { sessionKey: "session-a", state: "delta" });
+
+    expect(getSubscribers).toHaveBeenCalledExactlyOnceWith("session-a");
+    expect(first.socket.events).toEqual(["chat"]);
+    expect(second.socket.events).toEqual(["chat"]);
+    expect(unrelated.socket.events).toEqual([]);
+    expect(legacy.socket.events).toEqual(["chat"]);
   });
 
   it("suppresses session.tool mirrors for scoped clients without a matching subscription", () => {

@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -18,14 +19,18 @@ const mocks = vi.hoisted(() => ({
   enforceSessionDiskBudget: vi.fn(),
   resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
+  runLocalSessionsCleanup: vi.fn(),
   serializeSessionCleanupResult: vi.fn(),
   callGateway: vi.fn(),
-  isGatewayTransportError: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+}));
+
+vi.mock("./sessions-cleanup.runtime.js", () => ({
+  runLocalSessionsCleanup: mocks.runLocalSessionsCleanup,
 }));
 
 vi.mock("./session-store-targets.js", () => ({
@@ -47,9 +52,11 @@ vi.mock("../config/sessions.js", () => ({
   serializeSessionCleanupResult: mocks.serializeSessionCleanupResult,
 }));
 
-vi.mock("../gateway/call.js", () => ({
+vi.mock("../gateway/call.js", async () => ({
+  ...(await vi.importActual<typeof import("../gateway/transport-error.js")>(
+    "../gateway/transport-error.js",
+  )),
   callGateway: mocks.callGateway,
-  isGatewayTransportError: mocks.isGatewayTransportError,
 }));
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
@@ -71,9 +78,19 @@ function expectLogsToInclude(logs: readonly string[], text: string): void {
   expect(matches.length).toBeGreaterThan(0);
 }
 
+function gatewayTransportError(kind: "closed" | "timeout", code?: number): GatewayTransportError {
+  return new GatewayTransportError({
+    kind,
+    code,
+    message: `gateway ${kind}`,
+    connectionDetails: { url: "ws://127.0.0.1:1", urlSource: "test", message: "test gateway" },
+  });
+}
+
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
@@ -92,6 +109,7 @@ describe("sessionsCleanupCommand", () => {
     mocks.resolveMaintenanceConfig.mockReturnValue({
       mode: "warn",
       pruneAfterMs: 7 * 24 * 60 * 60 * 1000,
+      archiveDashboardAfterMs: 7 * 24 * 60 * 60 * 1000,
       modelRunPruneAfterMs: 24 * 60 * 60 * 1000,
       maxEntries: 500,
       resetArchiveRetentionMs: 7 * 24 * 60 * 60 * 1000,
@@ -119,7 +137,6 @@ describe("sessionsCleanupCommand", () => {
     mocks.capEntryCount.mockImplementation(() => 0);
     mocks.updateSessionStore.mockResolvedValue(0);
     mocks.callGateway.mockResolvedValue(null);
-    mocks.isGatewayTransportError.mockReturnValue(true);
     mocks.resolveSessionCleanupAction.mockImplementation(
       (params: {
         key: string;
@@ -175,9 +192,7 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
-    mocks.callGateway.mockRejectedValue(
-      Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
-    );
+    mocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "enforce",
       previewResults: [],
@@ -258,6 +273,36 @@ describe("sessionsCleanupCommand", () => {
     ]);
   });
 
+  it.each([
+    { label: "request timeout after dispatch", error: gatewayTransportError("timeout") },
+    { label: "established WebSocket close", error: gatewayTransportError("closed", 1006) },
+    { label: "authentication rejection", error: new Error("unauthorized") },
+    {
+      label: "malformed transport failure",
+      error: Object.assign(new Error("malformed transport failure"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+      }),
+    },
+  ])("surfaces $label without replaying cleanup locally", async ({ error }) => {
+    mocks.callGateway.mockRejectedValue(error);
+
+    const { runtime } = makeRuntime();
+    await expect(sessionsCleanupCommand({ enforce: true }, runtime)).rejects.toBe(error);
+
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+    expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
+  });
+
+  it("keeps explicit offline store cleanup local", async () => {
+    const { runtime } = makeRuntime();
+    await sessionsCleanupCommand({ store: "/explicit/sessions.sqlite", enforce: true }, runtime);
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
+  });
+
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
     const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
     mocks.callGateway.mockResolvedValue({
@@ -292,6 +337,7 @@ describe("sessionsCleanupCommand", () => {
     expect(gatewayCall?.method).toBe("sessions.cleanup");
     expect(gatewayCall?.params.enforce).toBe(true);
     expect(gatewayCall?.requiredMethods).toEqual(["sessions.cleanup"]);
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
@@ -414,6 +460,8 @@ describe("sessionsCleanupCommand", () => {
       wouldMutate: true,
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalled();
+    expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
   });
 

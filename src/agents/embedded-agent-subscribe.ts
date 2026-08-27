@@ -1,3 +1,4 @@
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 /**
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
@@ -34,8 +35,13 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
+import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
 import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  consumeTrustedToolNoStartError,
+  registerTrustedToolNoStartError,
+} from "./tool-result-error.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -429,13 +435,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     messagingToolSentMediaUrls.length = 0;
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
-    state.successfulCronAdds = 0;
     state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolMediaAttachments = [];
     state.pendingToolMediaTrustByUrl.clear();
     state.pendingToolAudioAsVoice = false;
+    state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
     clearDeferredAssistantEvents();
@@ -465,6 +471,42 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       // objects. Final delivery needs the model event owned by this run.
       currentAttemptAssistant = structuredClone(msg) as AssistantMessage;
     }
+  };
+
+  // Re-filter the full raw buffer. Reusing live scanner state would hide the
+  // visible prefix when timeout interrupts an open <think> or <final> block.
+  const finalizeFlushedAssistantText = (text: string) =>
+    stripDowngradedToolCallText(
+      stripBlockTags(
+        text,
+        {
+          thinking: false,
+          final: false,
+          inlineCode: createInlineCodeState(),
+        },
+        { final: true },
+      ),
+    ).trimEnd();
+
+  // Settlement calls this only for the final, failure-free run-budget terminal.
+  // Retain and re-filter the full buffer so queued suffixes keep hidden-tag
+  // context; replace live chunks instead of appending cumulative text twice.
+  const flushPartialAssistantText = () => {
+    const text = state.deltaBuffer;
+    if (!text) {
+      return;
+    }
+    if (state.deltaBufferIsCommentary) {
+      state.hasFlushedPartialText = false;
+      return;
+    }
+    const visibleText = finalizeFlushedAssistantText(text);
+    if (assistantTexts.length > state.assistantTextBaseline || state.hasFlushedPartialText) {
+      replyDelivery.replaceCurrentAssistantText(visibleText);
+    } else if (visibleText) {
+      replyDelivery.pushAssistantText(visibleText);
+    }
+    state.hasFlushedPartialText = Boolean(visibleText);
   };
 
   const ctx: EmbeddedAgentSubscribeContext = {
@@ -569,7 +611,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       args: unknown;
       replaySafe?: boolean;
       hideFromChannelProgress?: boolean;
-      execute: () => Promise<T>;
+      execute: (onImplementationStart: () => void) => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
         type: "tool_execution_start",
@@ -578,29 +620,38 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         args: toolParams.args,
         replaySafe: toolParams.replaySafe,
         hideFromChannelProgress: toolParams.hideFromChannelProgress,
+        lifecycleProvenance: "nested",
       } as never);
+      let executionStarted = false;
+      const onImplementationStart = () => {
+        executionStarted = true;
+      };
       try {
-        const result = await toolParams.execute();
+        const result = await toolParams.execute(onImplementationStart);
         await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: false,
-          executionStarted: true,
+          executionStarted,
           result,
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
         return result;
       } catch (error) {
-        await handleToolExecutionEnd(ctx, {
+        const trustedNoStart = consumeTrustedToolNoStartError(error);
+        const terminal = await handleToolExecutionEnd(ctx, {
           type: "tool_execution_end",
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: true,
-          executionStarted: true,
+          executionStarted,
           result: buildToolLifecycleErrorResult(error),
           hideFromChannelProgress: toolParams.hideFromChannelProgress,
         } as never);
+        if (trustedNoStart && !terminal.executionStarted) {
+          registerTrustedToolNoStartError(error);
+        }
         throw error;
       }
     },
@@ -660,13 +711,13 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }),
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
-    getLastToolRecovery: () => (state.lastToolRecovery ? { ...state.lastToolRecovery } : undefined),
     getUsageTotals,
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     getAssistantTurnCount: () => state.assistantTurnCount,
     waitForPendingEvents: replyDelivery.waitForPendingEvents,
+    flushPartialAssistantText,
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,
       completedCount: state.itemCompletedCount,

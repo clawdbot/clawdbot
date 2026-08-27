@@ -6,9 +6,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   normalizeProgressCardInput,
-  PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
-  PROGRESS_CARD_MAX_STEPS,
-  PROGRESS_CARD_MAX_UTF8_BYTES,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
@@ -17,8 +14,6 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export { PROGRESS_CARD_MAX_STEP_UTF8_BYTES, PROGRESS_CARD_MAX_STEPS, PROGRESS_CARD_MAX_UTF8_BYTES };
 
 function resolveProgressCardSessionKey(
   sessionKey: string,
@@ -71,16 +66,32 @@ export function createProgressCardHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
         return;
       }
+      if (params.expectedRevision !== undefined && (input.markdown || input.steps?.length)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "expectedRevision is only valid when clearing a card",
+          ),
+        );
+        return;
+      }
       const sessionKey = resolveProgressCardSessionKey(params.sessionKey, context, respond);
       if (!sessionKey) {
         return;
       }
       try {
-        const result = store.put(sessionKey, input);
-        context.broadcast("progressCard.changed", {
-          sessionKey,
-          revision: result.card?.revision ?? null,
+        const result = store.put(sessionKey, {
+          ...input,
+          expectedRevision: params.expectedRevision,
         });
+        if (params.expectedRevision === undefined || result.card === null) {
+          context.broadcast("progressCard.changed", {
+            sessionKey,
+            revision: result.card?.revision ?? null,
+          });
+        }
         respond(true, result, undefined);
       } catch (error) {
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(error)));

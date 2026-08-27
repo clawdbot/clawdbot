@@ -434,7 +434,6 @@ type AgentRuntimePreparedMetadataSnapshot = object;
 /** Prepared metadata loader used by tool planning without eager manifest reads. */
 type PreparedOpenClawToolPlanning = {
   metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
-  loadMetadataSnapshot?: () => AgentRuntimePreparedMetadataSnapshot;
 };
 
 /** Tool normalization and diagnostics hooks for one runtime attempt. */

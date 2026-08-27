@@ -3,6 +3,7 @@ import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core
 // trusted proxy modes, and safe header retention.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readResponseWithLimit } from "../http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
@@ -751,6 +752,20 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects HTTPS-to-HTTP redirects when the caller requires HTTPS", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://cdn.example/asset"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/favicon.ico",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        requireHttps: true,
+      }),
+    ).rejects.toThrow(/must use https/i);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   it("does not carry exact-origin trust across private-host redirects to another port", async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://127.0.0.1:11435/"));
 
@@ -818,6 +833,11 @@ describe("fetchWithSsrFGuard hardening", () => {
       family: 6,
     },
     {
+      title: "blocks exact-origin private DNS when it resolves to local-use NAT64 IPs",
+      address: "64:ff9b:1:808:808:808:a9fe:a9fe",
+      family: 6,
+    },
+    {
       title: "blocks exact-origin private DNS when it resolves to non-link-local metadata IPs",
       address: "100.100.100.200",
       family: 4,
@@ -840,6 +860,34 @@ describe("fetchWithSsrFGuard hardening", () => {
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows local-use NAT64 DNS only with explicit private-network opt-in", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "64:ff9b:1:808:808:808:a9fe:a9fe", family: 6 },
+    ]) as unknown as LookupFn;
+    const blockedFetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11434/v1/models",
+        fetchImpl: blockedFetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(blockedFetchImpl).not.toHaveBeenCalled();
+
+    const allowedFetchImpl = vi.fn(async () => okResponse());
+    const result = await fetchWithSsrFGuard({
+      url: "http://model.lan:11434/v1/models",
+      fetchImpl: allowedFetchImpl,
+      lookupFn,
+      policy: { allowedOrigins: ["http://model.lan:11434"], allowPrivateNetwork: true },
+    });
+
+    expect(allowedFetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
   });
 
   it.each([
@@ -968,6 +1016,50 @@ describe("fetchWithSsrFGuard hardening", () => {
       expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
     }
   });
+
+  it.each(["/next", undefined])(
+    "settles redirects before retained capture cancellation (location: %s)",
+    async (location) => {
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        status: 302,
+        headers: location ? { location } : {},
+      });
+      const capture = response.clone();
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(okResponse());
+      const request = fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      }).then(
+        async (result) => {
+          try {
+            return (await readResponseWithLimit(result.response, 32)).toString("utf8");
+          } finally {
+            await result.release();
+          }
+        },
+        (error: unknown) => error,
+      );
+
+      try {
+        const result = await raceWithTimeoutResult(request, 500, undefined);
+        if (location) {
+          expect(result).toBe("ok");
+        } else {
+          expect(result).toBeInstanceOf(Error);
+          expect(result).toMatchObject({ message: "Redirect missing location header (302)" });
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(location ? 2 : 1);
+        expect(response.bodyUsed).toBe(true);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await request;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("strips sensitive headers when redirect crosses origins", async () => {
     const lookupFn = createPublicLookup();

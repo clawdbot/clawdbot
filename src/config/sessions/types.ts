@@ -55,6 +55,7 @@ export type SessionOrigin = {
   to?: string;
   nativeChannelId?: string;
   nativeDirectUserId?: string;
+  avatar?: string;
   accountId?: string;
   threadId?: string | number;
 };
@@ -391,6 +392,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
+    /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
+    sandbox?: "required";
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
     /** Earliest external prompt actors, projected from the participant table. */
@@ -456,6 +459,7 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
     abortCutoffTimestamp?: number;
     chatType?: SessionChatType;
+    contextWindow?: string;
     thinkingLevel?: string;
     /**
      * Exact isolated-cron continuation policy. Only hidden `:run:` session rows
@@ -580,8 +584,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     agentHarnessId?: string;
     fallbackNotice?: FallbackNoticeState;
     contextTokens?: number;
-    /** Origin of the persisted context window; absent on legacy/unproven rows. */
-    contextTokensSource?: "runtime" | "runtime-configured" | "resolved";
+    /** Origin of the persisted context window; `resolved` is legacy/unverified. */
+    contextTokensSource?: "runtime" | "runtime-configured" | "resolved" | "resolved-v1";
     contextBudgetStatus?: SessionContextBudgetStatus;
     compactionCount?: number;
     compactionCheckpoints?: SessionCompactionCheckpoint[];
@@ -623,8 +627,12 @@ export interface SessionEntry extends SessionEntryCore {}
 export type InternalSessionEntryCore = SessionEntryCore & {
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Exact run that produced the latest terminal Gateway lifecycle projection. */
+  lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
   activeWriterRunId?: string;
+  /** Canonical remote repository awaiting preparation by this exact session generation. */
+  pendingProjectGitUrl?: string;
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
   mainRestartRecovery?: MainRestartRecoveryState;
@@ -782,12 +790,17 @@ function mergeSessionEntryWithPolicy(
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
 
-  // Node creation and exact fork ancestry are write-once; patches may only fill absent values.
+  // Node creation and exact fork ancestry are write-once; sandbox policy cannot be added later.
   if (existing.createdVia !== undefined) {
     next.createdVia = existing.createdVia;
   }
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
+  }
+  if (existing.sandbox === "required") {
+    next.sandbox = existing.sandbox;
+  } else {
+    delete next.sandbox;
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;

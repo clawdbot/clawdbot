@@ -28,7 +28,7 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractToolErrorForNamedCall,
-  isHeartbeatPrompt,
+  resolveHeartbeatPromptReply,
   readFirstMediaPath,
 } from "./mock-openai-directives.js";
 import {
@@ -214,8 +214,9 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
   if (/memory unavailable check/i.test(prompt)) {
     return "Protocol note: I checked the available runtime context but could not confirm the hidden memory-only fact, so I will not guess.";
   }
-  if (isHeartbeatPrompt(prompt)) {
-    return "HEARTBEAT_OK";
+  const heartbeatReply = resolveHeartbeatPromptReply(prompt);
+  if (heartbeatReply) {
+    return heartbeatReply;
   }
   if (
     /roundtrip image inspection check/i.test(currentImageRequest.text) &&
@@ -416,6 +417,22 @@ export function buildAssistantText(input: ResponsesInputItem[], body: Record<str
     .filter(Boolean)
     .join(",");
   const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=single\b/i.test(allInputText) &&
+    askUserDeploy
+  ) {
+    return `ASK-USER-SINGLE-OK | deploy=${askUserDeploy}`;
+  }
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    /\bask_user_fixture=multi\b/i.test(allInputText) &&
+    askUserChecks
+  ) {
+    return `ASK-USER-MULTI-OK | checks=${askUserChecks}`;
+  }
   if (
     toolOutput &&
     /"status"\s*:\s*"answered"/.test(askUserResult) &&

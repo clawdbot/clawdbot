@@ -79,6 +79,7 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 import {
   prepareSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
+  resolveSimpleCompletionSelectionForAgent,
 } from "./simple-completion-runtime.js";
 
 beforeEach(() => {
@@ -728,6 +729,41 @@ describe("prepareSimpleCompletionModel", () => {
 });
 
 describe("prepareSimpleCompletionModelForAgent", () => {
+  it("resolves explicit aliases in the selected agent scope", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: {
+            "openai/global-model": { alias: "fast" },
+          },
+        },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/worker-model": { alias: "fast" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "worker",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
+    expect(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "openai", modelId: "global-model" });
+  });
+
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
     const cfg = {
       agents: {

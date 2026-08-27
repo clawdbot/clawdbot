@@ -14,6 +14,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { resolveUserTimezone } from "../../../agents/date-time.js";
+import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
@@ -34,7 +35,11 @@ import { formatHookErrorForLog } from "../../fire-and-forget.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { isSessionAutoResetReason } from "../../session-auto-reset.js";
-import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
+import {
+  countSessionMemoryMessages,
+  getRecentSessionProjectionFromEvents,
+  type SessionMemoryProjection,
+} from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
@@ -42,7 +47,7 @@ const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
 const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
 
 type SessionMemoryTranscript =
-  | { status: "available"; content: string | null }
+  | ({ status: "available" } & (SessionMemoryProjection | { content: null; originClass: "agent" }))
   | { status: "unavailable"; reason: string };
 
 function pickDateTimePart(
@@ -110,7 +115,7 @@ async function getRecentSqliteSessionContent(
   scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
   capturedEvents?: TranscriptEvent[],
-): Promise<string | null> {
+): Promise<SessionMemoryProjection | null> {
   const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
   const latestResetIndex = capturedEvents
     ? -1
@@ -122,7 +127,7 @@ async function getRecentSqliteSessionContent(
           (event as { type?: unknown }).type === "reset",
       );
   const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
-  return getRecentSessionContentFromEvents(
+  return getRecentSessionProjectionFromEvents(
     selectVisibleTranscriptEvents(retiredEvents),
     messageCount,
   );
@@ -278,24 +283,28 @@ async function saveSessionMemoryNow(
         : 15;
 
     let slug: string | null = null;
-    let transcript: SessionMemoryTranscript = { status: "available", content: null };
+    let transcript: SessionMemoryTranscript = {
+      status: "available",
+      content: null,
+      originClass: "agent",
+    };
 
     if (currentSessionId) {
       try {
-        transcript = {
-          status: "available",
-          content: await getRecentSqliteSessionContent(
-            {
-              agentId,
-              sessionId: currentSessionId,
-              sessionKey: event.sessionKey,
-              storePath:
-                contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
-            },
-            messageCount,
-            capturedEvents,
-          ),
-        };
+        const projection = await getRecentSqliteSessionContent(
+          {
+            agentId,
+            sessionId: currentSessionId,
+            sessionKey: event.sessionKey,
+            storePath:
+              contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+          },
+          messageCount,
+          capturedEvents,
+        );
+        transcript = projection
+          ? { status: "available", ...projection }
+          : { status: "available", content: null, originClass: "agent" };
       } catch (error) {
         const reason = formatHookErrorForLog(error);
         transcript = { status: "unavailable", reason };
@@ -374,9 +383,25 @@ async function saveSessionMemoryNow(
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
+    // Reserve provenance before exposing the file. A restricted projection
+    // must never fall back to an untracked artifact that later reads as trusted.
     const memoryRoot = await root(memoryDir);
-    await memoryRoot.write(filename, entry, { encoding: "utf-8" });
+    const provenanceObserver = createMemoryWriteProvenanceObserver({
+      mutationRoot: workspaceDir,
+      workspaceDir,
+      resolveOriginClass: () =>
+        transcript.status === "available" ? transcript.originClass : "agent",
+      sessionId: currentSessionId,
+      sessionKey: event.sessionKey,
+      now: () => now.getTime(),
+    });
+    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
+    await provenanceObserver.write({
+      absolutePath: memoryFilePath,
+      contentBefore: "",
+      contentAfter: entry,
+      commit,
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)

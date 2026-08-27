@@ -1,5 +1,6 @@
 // Normalizes payloads and applies post-send presentation/media effects.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbound/interactive.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
 import {
@@ -175,7 +176,7 @@ export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPa
 }
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
-  return Boolean(result.messageId || result.toJid || result.pollId);
+  return resolveReceiptSourceId(result) !== undefined;
 }
 
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {

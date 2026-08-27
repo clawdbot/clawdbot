@@ -9,13 +9,7 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
-import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
-import { saveExecApprovals } from "../infra/exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import type { CliBackendPlugin } from "../plugins/cli-backend.types.js";
-import type { RunExit } from "../process/supervisor/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 
@@ -79,13 +73,6 @@ export function createTestMcpLoopbackServerConfig(port: number) {
   };
 }
 
-export function createClaudeInputStartedEvent(data: string) {
-  const input = JSON.parse(data) as { type?: string; uuid?: string };
-  return input.type === "user" && typeof input.uuid === "string"
-    ? { type: "command_lifecycle" as const, command_uuid: input.uuid, state: "started" as const }
-    : undefined;
-}
-
 export function createTestMcpLoopbackClientGrant(params: {
   context: McpLoopbackRequestContext;
 }): McpLoopbackClientGrant {
@@ -119,7 +106,7 @@ export function buildDefaultTestCliBackend(
   };
 }
 
-export type PreparedCliRunContextOverrides = {
+type PreparedCliRunContextOverrides = {
   provider?: CliProvider;
   model?: string;
   runId?: string;
@@ -134,6 +121,7 @@ export type PreparedCliRunContextOverrides = {
   toolAvailabilityEnforcement?: PreparedCliRunContext["backendResolved"]["toolAvailabilityEnforcement"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
   mcpDeliveryCapture?: boolean;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
@@ -145,7 +133,6 @@ export type PreparedCliRunContextOverrides = {
   timeoutMs?: number;
   onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
   runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
-  liveSessionRequirement?: PreparedCliRunContext["backendResolved"]["liveSessionRequirement"];
 };
 
 export function buildPreparedCliRunContext(
@@ -241,12 +228,12 @@ export function buildPreparedCliRunContext(
         overrides.toolAvailabilityEnforcement ??
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
-      liveSessionRequirement: overrides.liveSessionRequirement,
     },
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},
       ...(overrides.mcpConfigHash ? { mcpConfigHash: overrides.mcpConfigHash } : {}),
+      ...(overrides.mcpResumeHash ? { mcpResumeHash: overrides.mcpResumeHash } : {}),
     },
     reusableCliSession: { mode: "none" },
     hadSessionFile: false,
@@ -255,38 +242,9 @@ export function buildPreparedCliRunContext(
     normalizedModel: model,
     systemPrompt: overrides.systemPrompt ?? "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
     authEpochVersion: 2,
+    claudeSkillsPluginArgs: [],
     ...(overrides.mcpDeliveryCapture ? { mcpDeliveryCapture: true } : {}),
-  };
-}
-
-export function buildClaudeLiveRunContext(overrides: PreparedCliRunContextOverrides = {}) {
-  return buildPreparedCliRunContext({
-    ...overrides,
-    backend: { ...overrides.backend, liveSession: "claude-stdio" },
-  });
-}
-
-export function createCancelableLiveRunLifecycle() {
-  let resolveExit!: (exit: RunExit) => void;
-  const exited = new Promise<RunExit>((resolve) => {
-    resolveExit = resolve;
-  });
-  return {
-    wait: vi.fn(() => exited),
-    cancel: vi.fn((_reason?: string) => {
-      resolveExit({
-        reason: "manual-cancel",
-        exitCode: null,
-        exitSignal: null,
-        durationMs: 1,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
-    }),
   };
 }
 
@@ -349,34 +307,6 @@ export async function expectPathMissing(targetPath: string) {
     return;
   }
   throw new Error(`expected ${targetPath} to be missing`);
-}
-
-export async function withTempExecApprovalsState(
-  file: Record<string, unknown>,
-  run: () => Promise<void>,
-) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-exec-approvals-"));
-  const stateDir = path.join(home, ".openclaw");
-  try {
-    await withEnvAsync({ HOME: home, OPENCLAW_STATE_DIR: stateDir }, async () => {
-      execApprovalsStoreTesting.reset();
-      saveExecApprovals(file as ExecApprovalsFile);
-      await run();
-    });
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    execApprovalsStoreTesting.reset();
-    await fs.promises.rm(home, { recursive: true, force: true });
-  }
-}
-
-export async function withTempOpenClawHome(run: (home: string) => Promise<void>) {
-  const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-home-"));
-  try {
-    await withEnvAsync({ OPENCLAW_HOME: home }, async () => run(home));
-  } finally {
-    await fs.promises.rm(home, { recursive: true, force: true });
-  }
 }
 
 type PrepareCliRun = (params: RunCliAgentParams) => Promise<PreparedCliRunContext>;
@@ -510,164 +440,4 @@ export function createWeatherSkillFixture(root: string, materialized: boolean) {
       ],
     } satisfies NonNullable<RunCliAgentParams["skillsSnapshot"]>,
   };
-}
-
-type SupervisorSpawnMock = (typeof import("./cli-runner.test-support.js"))["supervisorSpawnMock"];
-
-type ClaudeLiveRunFixture = ReturnType<typeof mockClaudeLiveRun>;
-
-export function mockClaudeLiveRun(
-  spawnMock: SupervisorSpawnMock,
-  options: {
-    cancelable?: boolean;
-    beforeSpawn?: () => Promise<void>;
-    events?: Array<Record<string, unknown> | string>;
-    inputLifecycle?: boolean;
-    exitImmediately?: RunExit;
-    exitOnWrite?: RunExit;
-    onWrite?: (params: {
-      data: string;
-      emit: (events: Array<Record<string, unknown> | string>) => void;
-      writeIndex: number;
-    }) => void;
-    runId?: string;
-    pid?: number;
-  } = {},
-) {
-  let stdoutListener: ((chunk: string) => void) | undefined;
-  let resolveExit: ((exit: RunExit) => void) | undefined;
-  const exited = new Promise<RunExit>((resolve) => {
-    resolveExit = resolve;
-  });
-  let spawnInput: {
-    argv?: string[];
-    env?: Record<string, string>;
-    onStdout?: (chunk: string) => void;
-  } = {};
-  const writes: string[] = [];
-  const emit = (events: Array<Record<string, unknown> | string>) => {
-    stdoutListener?.(
-      `${events.map((event) => (typeof event === "string" ? event : JSON.stringify(event))).join("\n")}\n`,
-    );
-  };
-  const stdin = {
-    write: vi.fn((data: string, callback?: (error?: Error | null) => void) => {
-      writes.push(data);
-      const writeIndex = writes.length - 1;
-      const inputStartedEvent = createClaudeInputStartedEvent(data);
-      if (options.inputLifecycle !== false && inputStartedEvent) {
-        emit([inputStartedEvent]);
-      }
-      if (options.onWrite) {
-        options.onWrite({ data, emit, writeIndex });
-      } else if (writeIndex === 0 && options.events) {
-        emit(options.events);
-      }
-      callback?.();
-      if (options.exitOnWrite) {
-        resolveExit?.(options.exitOnWrite);
-      }
-    }),
-    end: vi.fn(),
-  };
-  const lifecycle = options.cancelable
-    ? createCancelableLiveRunLifecycle()
-    : {
-        wait: vi.fn(() =>
-          options.exitImmediately
-            ? Promise.resolve(options.exitImmediately)
-            : options.exitOnWrite
-              ? exited
-              : new Promise<RunExit>(() => {}),
-        ),
-        cancel: vi.fn(),
-      };
-  spawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-    spawnInput = (args[0] ?? {}) as typeof spawnInput;
-    stdoutListener = spawnInput.onStdout;
-    await options.beforeSpawn?.();
-    return {
-      runId: options.runId ?? "live-run",
-      pid: options.pid ?? 2345,
-      startedAtMs: Date.now(),
-      stdin,
-      ...lifecycle,
-    };
-  });
-  return {
-    emit,
-    get spawnInput() {
-      return spawnInput;
-    },
-    stdin,
-    lifecycle,
-    writes,
-  };
-}
-
-export function buildClaudeControlRequestEvents(params: {
-  requestId: string;
-  toolUseId: string;
-  input: Record<string, unknown>;
-  sessionId?: string;
-  toolName?: string;
-}) {
-  const sessionId = params.sessionId ?? "live-control";
-  return [
-    {
-      type: "control_request",
-      request_id: params.requestId,
-      request: {
-        subtype: "can_use_tool",
-        tool_name: params.toolName ?? "Bash",
-        tool_use_id: params.toolUseId,
-        input: params.input,
-      },
-    },
-    { type: "system", subtype: "init", session_id: sessionId },
-    { type: "result", session_id: sessionId, result: "ok" },
-  ];
-}
-
-export function expectClaudeControlDecision(
-  fixture: ClaudeLiveRunFixture,
-  expected: {
-    behavior: "allow" | "deny";
-    requestId: string;
-    toolUseId?: string;
-    updatedInput?: Record<string, unknown>;
-    messageIncludes?: string;
-  },
-) {
-  const encoded = fixture.writes.find((entry) => entry.includes('"control_response"'));
-  expect(encoded, "control_response written to stdin").toBeDefined();
-  const parsed = JSON.parse((encoded ?? "").trim()) as {
-    type: string;
-    response: {
-      subtype: string;
-      request_id: string;
-      response: {
-        behavior: string;
-        decisionClassification?: string;
-        message?: string;
-        toolUseID?: string;
-        updatedInput?: unknown;
-      };
-    };
-  };
-  expect(parsed.type).toBe("control_response");
-  expect(parsed.response.subtype).toBe("success");
-  expect(parsed.response.request_id).toBe(expected.requestId);
-  expect(parsed.response.response.behavior).toBe(expected.behavior);
-  if (expected.toolUseId) {
-    expect(parsed.response.response.toolUseID).toBe(expected.toolUseId);
-  }
-  if (expected.updatedInput) {
-    expect(parsed.response.response.updatedInput).toEqual(expected.updatedInput);
-  }
-  if (expected.messageIncludes) {
-    expect(parsed.response.response.decisionClassification).toBe("user_reject");
-    expect(parsed.response.response.message).toContain(expected.messageIncludes);
-  }
-  return parsed;
 }

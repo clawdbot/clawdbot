@@ -460,7 +460,7 @@ export async function runIsolatedCompletion(
         },
       ],
     },
-    { catalogMode: "static" },
+    { catalogMode: "static", abortSignal: request.abortSignal },
   );
   const pluginRegistry = lease.snapshot.pluginRegistry;
   try {

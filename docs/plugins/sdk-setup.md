@@ -44,7 +44,7 @@ Your `package.json` needs an `openclaw` field that tells the plugin system what 
       "version": "1.0.0",
       "type": "module",
       "dependencies": {
-        "typebox": "1.1.39"
+        "typebox": "1.3.16"
       },
       "peerDependencies": {
         "openclaw": ">=2026.3.24-beta.2"
@@ -179,7 +179,7 @@ The released `setup`/`ChannelSetupInput` adapter stays available for existing ex
 | `aliases`                              | `string[]` | Extra lookup aliases for channel selection.                                   |
 | `preferOver`                           | `string[]` | Lower-priority plugin/channel ids this channel should outrank.                |
 | `systemImage`                          | `string`   | Optional icon/system-image name for channel UI catalogs.                      |
-| `selectionDocsPrefix`                  | `string`   | Prefix text before docs links in selection surfaces.                          |
+| `selectionDocsPrefix`                  | `string`   | Prefix before docs links; omit for default or use `""` to suppress it.        |
 | `selectionDocsOmitLabel`               | `boolean`  | Show the docs path directly instead of a labeled docs link in selection copy. |
 | `selectionExtras`                      | `string[]` | Extra short strings appended in selection copy.                               |
 | `markdownCapable`                      | `boolean`  | Marks the channel as markdown-capable for outbound formatting decisions.      |

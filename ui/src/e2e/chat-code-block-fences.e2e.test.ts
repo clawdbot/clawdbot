@@ -9,6 +9,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -22,6 +23,10 @@ function fencedJson(lineCount: number): string {
   const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
   values[values.length - 1] = values.at(-1)?.slice(0, -1) ?? "";
   return `\`\`\`json\n[\n${values.join("\n")}\n]\n\`\`\``;
+}
+
+function fencedProse(language: "text" | "md" | "markdown"): string {
+  return `\`\`\`${language}\n${`${language} prose line\n`.repeat(20)}\`\`\``;
 }
 
 const shortFence = `\`\`\`json
@@ -67,6 +72,64 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
   afterAll(async () => {
     await browser?.close();
     await server?.close();
+  });
+
+  it("highlights a streamed code fence only after its closing marker arrives", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.locator(".agent-chat__composer-combobox textarea").fill("show TypeScript");
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      const openFence = "```ts\nconst value = 1 < 2;";
+      const emitDelta = async (text: string, deltaText: string) => {
+        await gateway.emitGatewayEvent("chat", {
+          deltaText,
+          message: {
+            content: [{ text, type: "text" }],
+            role: "assistant",
+            timestamp: Date.now(),
+          },
+          runId,
+          sessionKey: "main",
+          state: "delta",
+        });
+      };
+
+      await emitDelta(openFence, openFence);
+      const streamingCode = page.locator(".chat-bubble.streaming code.language-ts");
+      await expect.poll(() => streamingCode.textContent()).toContain("const value = 1 < 2;");
+      expect(await streamingCode.locator("span").count()).toBe(0);
+      expect(await streamingCode.evaluate((code) => code.classList.contains("hljs"))).toBe(false);
+      expect(await page.locator(".chat-bubble.streaming .code-block-copy").count()).toBe(1);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "stream-open-unhighlighted.png") });
+      }
+
+      const completedFence = `${openFence}\n\`\`\``;
+      await emitDelta(completedFence, "\n```");
+      await expect.poll(() => streamingCode.getAttribute("class")).toContain("hljs");
+      expect(await streamingCode.locator("span").count()).toBeGreaterThan(0);
+      if (captureProof) {
+        await page.screenshot({ path: path.join(artifactDir, "stream-closed-highlighted.png") });
+      }
+
+      await gateway.emitChatFinal({ runId, text: completedFence });
+      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
+    } finally {
+      await context.close();
+    }
   });
 
   it.each(["dark", "light"] as const)(
@@ -120,6 +183,12 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
             timestamp: Date.now() + 5,
             __openclaw: { id: "assistant-fence-wide", seq: 6 },
           },
+          ...(["text", "md", "markdown"] as const).map((language, index) => ({
+            role: "assistant",
+            content: [{ type: "text", text: fencedProse(language) }],
+            timestamp: Date.now() + 6 + index,
+            __openclaw: { id: `assistant-fence-${language}`, seq: 7 + index },
+          })),
         ],
       });
 
@@ -141,6 +210,15 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         expect(await shortBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
         expect(await shortBubble.locator(".code-block-expand").count()).toBe(0);
         expect(await shortBubble.locator("pre code").isVisible()).toBe(true);
+
+        for (const language of ["text", "md", "markdown"] as const) {
+          const proseBubble = page.locator(`[data-entry-id="assistant-fence-${language}"]`);
+          expect(await proseBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
+          expect(await proseBubble.locator(".code-block-expand").count()).toBe(0);
+          expect(await proseBubble.locator("pre code").textContent()).toContain(
+            `${language} prose line`,
+          );
+        }
 
         const longWrapper = longBubble.locator(".code-block-wrapper");
         const expand = longWrapper.locator(".code-block-expand");

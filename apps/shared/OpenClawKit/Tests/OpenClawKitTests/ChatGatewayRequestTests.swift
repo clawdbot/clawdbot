@@ -4,6 +4,15 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatGatewayRequestTests {
+    @Test func `models list scopes worker catalogs and preserves default scope`() {
+        let worker = OpenClawChatGatewayRequests.modelsList(agentID: " worker ")
+        let defaultAgent = OpenClawChatGatewayRequests.modelsList(agentID: nil)
+
+        #expect(worker.method == "models.list")
+        #expect(worker.params["agentId"]?.value as? String == "worker")
+        #expect(defaultAgent.params.isEmpty)
+    }
+
     @Test func `session observation requests encode global subscription and actual visibility`() {
         let subscribe = OpenClawChatGatewayRequests.subscribeSessions()
         let visible = OpenClawChatGatewayRequests.setSessionObserverVisibility(true)
@@ -94,7 +103,7 @@ struct ChatGatewayRequestTests {
             category: .some(nil),
             pinned: true,
             archived: nil,
-            unread: false)
+            unreadPatch: nil)
 
         #expect(request.method == "sessions.patch")
         #expect(request.params["key"]?.value as? String == "global")
@@ -102,8 +111,50 @@ struct ChatGatewayRequestTests {
         #expect(request.params["label"]?.value is NSNull)
         #expect(request.params["category"]?.value is NSNull)
         #expect(request.params["pinned"]?.value as? Bool == true)
-        #expect(request.params["unread"]?.value as? Bool == false)
         #expect(request.params["archived"] == nil)
+    }
+
+    @Test func `session read acknowledgement encodes an absent manual marker as null`() {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "main",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unreadPatch: .automaticRead(expectedMarkedUnreadAt: nil))
+
+        #expect(request.params["expectedMarkedUnreadAt"]?.value is NSNull)
+    }
+
+    @Test func `explicit session read uses the legacy-compatible payload`() {
+        let request = OpenClawChatGatewayRequests.patchSession(
+            sessionKey: "main",
+            agentID: nil,
+            label: nil,
+            category: nil,
+            pinned: nil,
+            archived: nil,
+            unreadPatch: .read)
+
+        #expect(request.params["unread"]?.value as? Bool == false)
+        #expect(request.params["readIntent"] == nil)
+        #expect(request.params["expectedMarkedUnreadAt"] == nil)
+    }
+
+    @Test func `session read routing separates explicit automatic and legacy requests`() {
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: nil,
+            supportsReadContract: true) == .read)
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: .some(nil),
+            supportsReadContract: true) == .automaticRead(expectedMarkedUnreadAt: nil))
+        #expect(OpenClawChatSessionUnreadPatch.routed(
+            unread: false,
+            expectedMarkedUnreadAt: .some(10),
+            supportsReadContract: false) == .read)
     }
 
     @Test func `settings patch request encodes default model as null`() {
@@ -253,7 +304,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: nil,
-            unread: nil)
+            unreadPatch: nil)
         let archive = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -262,7 +313,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: true,
-            unread: nil)
+            unreadPatch: nil)
         let restore = OpenClawChatGatewayRequests.patchSession(
             sessionKey: "agent:main:child",
             agentID: nil,
@@ -271,7 +322,7 @@ struct ChatGatewayRequestTests {
             category: nil,
             pinned: nil,
             archived: false,
-            unread: nil)
+            unreadPatch: nil)
         let fork = OpenClawChatGatewayRequests.forkSession(
             parentSessionKey: "agent:main:child",
             agentID: nil)

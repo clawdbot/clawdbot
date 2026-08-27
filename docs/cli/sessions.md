@@ -215,8 +215,10 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
   transcripts, trajectory rows, and legacy trajectory sidecars. It does not
-  prune cron run history, which automatically keeps the newest 2000 rows per job
-  ([Cron configuration](/automation/cron-jobs#configuration)).
+  prune cron run history. Task maintenance retains terminal cron history for 7
+  days (`lost` rows for 24 hours) and enforces the newest 2000 rows per job and
+  history class as an additional ceiling ([Task maintenance](/automation/tasks#automatic-maintenance),
+  [Cron configuration](/automation/cron-jobs#configuration)).
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
@@ -252,6 +254,12 @@ When a Gateway is reachable, non-dry-run cleanup for configured agent stores is
 sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a legacy store
 selector.
+
+Offline cleanup loads trusted, permitted harness plugins so their session-owned
+resources are reclaimed with the deleted rows, even if the agent now uses a
+different model. Explicitly disabled or untrusted plugins are not run. If their
+resources may remain, cleanup prints a warning on stderr without changing the
+JSON result. Dry runs do not load harness plugins.
 
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
@@ -119,7 +119,9 @@ describe("Signal durable ingress", () => {
       try {
         await recovered.waitForIdle();
         expect(recoveredDispatch).toHaveBeenCalledTimes(1);
-        expect(recoveredDispatch).toHaveBeenCalledWith(event, expect.any(Object));
+        const [recoveredEvent, recoveredLifecycle] = recoveredDispatch.mock.calls[0] ?? [];
+        expect(recoveredEvent).toEqual(event);
+        expect(recoveredLifecycle).toEqual(expect.any(Object));
       } finally {
         await recovered.monitor.stop();
       }

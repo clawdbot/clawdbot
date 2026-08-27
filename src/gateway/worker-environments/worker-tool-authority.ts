@@ -75,6 +75,8 @@ export function resolveWorkerToolAuthority(params: {
   modelRef: { provider: string; model: string };
   turn: SessionPlacementTurnParams;
   availableOptionalToolNames?: readonly WorkerOptionalLocalToolName[];
+  githubPublicationAvailable?: boolean;
+  portalAvailable?: boolean;
 }): WorkerToolAuthority {
   const turn = params.turn;
   if (turn.disableTools === true || turn.modelRun === true || turn.promptMode === "none") {
@@ -84,7 +86,11 @@ export function resolveWorkerToolAuthority(params: {
     [
       ...WORKER_REQUIRED_LOCAL_TOOL_NAMES,
       ...(params.availableOptionalToolNames ?? []),
-      ...WORKER_SESSION_TOOL_NAMES,
+      ...WORKER_SESSION_TOOL_NAMES.filter((name) =>
+        name === "github_publish"
+          ? params.githubPublicationAvailable === true
+          : name !== "portal" || params.portalAvailable === true,
+      ),
     ].map((name) => ({ name })),
     turn.toolsAllow,
   );

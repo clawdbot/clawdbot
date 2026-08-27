@@ -102,6 +102,7 @@ function contextWithGateway(
     },
     runtimeConfig: {
       state: { configForm, configSnapshot: null },
+      ensureLoaded: vi.fn(async () => undefined),
       refresh: vi.fn(async () => undefined),
       removeFormValue: vi.fn(),
       waitForPendingWrites: vi.fn(async () => undefined),
@@ -134,6 +135,40 @@ afterEach(() => {
 });
 
 describe("AgentMemoryPanel gateway lifecycle", () => {
+  it("waits for a committed agent before loading agent-scoped memory", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "doctor.memory.status") {
+        return { dreaming: null };
+      }
+      if (method === "doctor.memory.dreamDiary") {
+        return { found: false, path: "DREAMS.md" };
+      }
+      return {};
+    });
+    const page = document.createElement("openclaw-agent-memory-panel") as TestMemoryPanel;
+    page.context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true);
+
+    document.body.append(page);
+    await page.updateComplete;
+    await page.updateComplete;
+    await Promise.resolve();
+    await expect(page.openWikiPage("unowned.md")).resolves.toBeNull();
+
+    expect(request).not.toHaveBeenCalled();
+
+    page.agentId = "support";
+    await page.updateComplete;
+    await vi.waitFor(() => {
+      expect(request.mock.calls.filter(([method]) => method === "doctor.memory.status")).toEqual([
+        ["doctor.memory.status", { agentId: "support" }],
+      ]);
+      expect(
+        request.mock.calls.filter(([method]) => method === "doctor.memory.dreamDiary"),
+      ).toEqual([["doctor.memory.dreamDiary", { agentId: "support" }]]);
+      expect(request).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("does not run a confirmed dreaming action after the selected agent changes", async () => {
     const confirmation = deferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
@@ -176,6 +211,13 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
     expect(page.dreaming).not.toBe(previousState);
     expect(page.dreaming.selectedAgentId).toBe("support");
+    expect(page.dreaming.dreamDiaryContent).toBeNull();
+
+    page.dreaming.dreamDiaryContent = "support-only";
+    page.agentId = "";
+    await page.updateComplete;
+
+    expect(page.dreaming.selectedAgentId).toBeNull();
     expect(page.dreaming.dreamDiaryContent).toBeNull();
   });
 

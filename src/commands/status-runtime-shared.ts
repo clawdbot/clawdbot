@@ -1,7 +1,11 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import { listAgentIds, resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import {
+  resolveAmbientOwnerAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
@@ -24,9 +28,6 @@ const providerUsageLoader = createLazyImportLoader(() => import("../infra/provid
 const securityAuditModuleLoader = createLazyImportLoader(
   () => import("../security/audit.runtime.js"),
 );
-const readOnlyChannelPluginsModuleLoader = createLazyImportLoader(
-  () => import("../channels/plugins/read-only.js"),
-);
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 function loadProviderUsage() {
@@ -35,10 +36,6 @@ function loadProviderUsage() {
 
 function loadSecurityAuditModule() {
   return securityAuditModuleLoader.load();
-}
-
-function loadReadOnlyChannelPluginsModule() {
-  return readOnlyChannelPluginsModuleLoader.load();
 }
 
 function loadGatewayCallModule() {
@@ -90,11 +87,8 @@ export async function resolveStatusSecurityAudit(params: {
   timeoutMs?: number;
 }) {
   const { runSecurityAudit } = await loadSecurityAuditModule();
-  const { resolveReadOnlyChannelPluginsForConfig } = await loadReadOnlyChannelPluginsModule();
-  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
+  // The audit owns setup-backed capabilities; inventory projections can name
+  // accounts without carrying their channel security adapters.
   return await runSecurityAudit({
     config: params.config,
     sourceConfig: params.sourceConfig,
@@ -103,10 +97,6 @@ export async function resolveStatusSecurityAudit(params: {
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
-    // Missing configured channel plugins make plugin-specific collectors unreliable; omit plugin list then.
-    ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
-      ? { plugins: readOnlyPlugins.plugins }
-      : {}),
   });
 }
 
@@ -125,15 +115,16 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     throw new Error("--agent must not be blank");
   }
   const agentId = rawAgentId ? normalizeAgentId(rawAgentId) : undefined;
-  if (agentId && !listAgentIds(params.config).includes(agentId)) {
-    throw new Error(
-      `Unknown agent id "${agentId}". Run \`openclaw agents list\` to see configured agents.`,
-    );
+  if (agentId) {
+    resolveConfiguredAgentId(params.config, agentId);
   }
   let resolvedAgentId = agentId;
   let agentDir = params.agentDir;
   if (!agentDir) {
-    resolvedAgentId ??= resolveSystemAgentTargetAgentId(params.config);
+    resolvedAgentId ??= resolveAmbientOwnerAgentId(params.config, undefined, {
+      surface: "status usage credentials",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
     agentDir = resolveAgentDir(params.config, resolvedAgentId);
   }
   const usage = await loadProviderUsageSummary({
@@ -205,7 +196,9 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err: unknown) => ({ error: String(err) }));
 }
 
-/** Reads gateway delivery diagnostics when reachable, returning null on failures. */
+export type StatusGatewayDiagnosticsResult = Result<unknown, string>;
+
+/** Reads gateway diagnostics while preserving whether data or an unavailable outcome was observed. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -216,9 +209,9 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
     token?: string;
     password?: string;
   };
-}) {
+}): Promise<StatusGatewayDiagnosticsResult> {
   if (!params.gatewayReachable) {
-    return null;
+    return { ok: false, error: "gateway unreachable" };
   }
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<unknown>({
@@ -227,7 +220,10 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch(() => null);
+  }).then<StatusGatewayDiagnosticsResult, StatusGatewayDiagnosticsResult>(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error: String(error) }),
+  );
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */

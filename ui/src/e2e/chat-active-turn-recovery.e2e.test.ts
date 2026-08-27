@@ -22,6 +22,7 @@ type ActiveRunSnapshotOptions = {
   events?: unknown[];
   messages?: unknown[];
   persistedToolCall?: boolean;
+  sessionAbortable?: boolean;
   startedAt?: number;
 };
 
@@ -44,6 +45,7 @@ function activeRunSnapshot(
       runId,
       text: streamText,
       startedAt: opts?.startedAt,
+      ...(opts?.sessionAbortable ? { sessionAbortable: true } : {}),
       events: opts?.events ?? [
         {
           runId,
@@ -86,7 +88,7 @@ function activeRunSnapshot(
     ],
     sessionId: "active-turn-recovery-session",
     sessionInfo: {
-      activeRunIds: [runId],
+      ...(opts?.sessionAbortable ? {} : { activeRunIds: [runId] }),
       hasActiveRun: true,
       key: "main",
       kind: "direct",
@@ -158,7 +160,9 @@ async function installActiveRunSnapshot(
 }
 
 async function assertActiveTurnVisible(page: Page, streamText: string): Promise<void> {
-  await expect(page.getByText(streamText, { exact: true })).toHaveCount(1, { timeout: 10_000 });
+  await expect(
+    page.locator(".chat-thread-inner").getByText(streamText, { exact: true }),
+  ).toHaveCount(1, { timeout: 10_000 });
   await page.locator(".chat-tool-row--running").waitFor({ timeout: 10_000 });
   await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
   await expect
@@ -250,14 +254,14 @@ async function assertSteeredRecoveryOrder(
   await expect(page.locator(".chat-working-indicator")).toHaveCount(1, { timeout: 10_000 });
 
   const order = await thread.evaluate((element, expected) => {
-    const groups = Array.from(element.querySelectorAll<HTMLElement>(".chat-group"));
-    const groupWithText = (text: string) =>
-      groups.find((group) => (group.textContent ?? "").includes(text));
-    const original = groupWithText(expected.original);
-    const beforeSteer = groupWithText(expected.beforeSteer);
-    const steer = groupWithText(expected.steer);
+    const visibleText = Array.from(element.querySelectorAll<HTMLElement>(".chat-bubble"));
+    const bubbleWithText = (text: string) =>
+      visibleText.find((bubble) => (bubble.textContent ?? "").includes(text));
+    const original = bubbleWithText(expected.original);
+    const beforeSteer = bubbleWithText(expected.beforeSteer);
+    const steer = bubbleWithText(expected.steer);
     const tool = element.querySelector<HTMLElement>(".chat-tool-row--running");
-    const afterSteer = groupWithText(expected.afterSteer);
+    const afterSteer = bubbleWithText(expected.afterSteer);
     const precedes = (upper: Element | undefined | null, lower: Element | undefined | null) =>
       Boolean(
         upper && lower && upper.compareDocumentPosition(lower) & Node.DOCUMENT_POSITION_FOLLOWING,
@@ -358,6 +362,27 @@ suite.define(() => {
       ).not.toHaveCount(0);
       await capture(page, "06-reload-after");
       await finishRecoveredTurn(page, gateway, runId, "Reload delivery complete.");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
+  it("routes recovered embedded-run Stop through the session owner", async () => {
+    const { context, page, gateway } = await openActiveTurn();
+    try {
+      const runId = "run-embedded-reload";
+      const startedAt = Date.now() - 10 * 60_000;
+      await installActiveRunSnapshot(gateway, runId, "channel turn", "", {
+        sessionAbortable: true,
+        startedAt,
+      });
+
+      await page.reload();
+      await page.getByRole("button", { name: "Stop generating" }).click();
+
+      const abortRequest = await gateway.waitForRequest("sessions.abort");
+      expect(abortRequest.params).toMatchObject({ key: "main", runId });
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await suite.closeBrowserContext(context);
     }

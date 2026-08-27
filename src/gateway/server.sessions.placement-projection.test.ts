@@ -76,6 +76,10 @@ test("sessions.list batch-projects durable worker placement", async () => {
       context: {
         workerSessionPlacementService: { getMany },
         workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+        workerPlacementRunnerAvailabilityReader: {
+          read: () => ({ kind: "device", status: "offline" }),
+          version: () => 1,
+        },
       },
     },
   );
@@ -98,6 +102,7 @@ test("sessions.list batch-projects durable worker placement", async () => {
     updatedAtMs: 300,
     stateChangedAtMs: 200,
     diskSpace,
+    runner: { kind: "device", status: "offline" },
   });
   expect(other?.placement).toBeUndefined();
 });
@@ -114,6 +119,7 @@ test("sessions.list projects durable placement move progress", async () => {
       ownerEpoch: placement.activeOwnerEpoch,
     },
     target: { kind: "gateway" },
+    abandonSource: false,
     lastError: "workspace reconciliation is waiting",
     createdAtMs: 320,
     updatedAtMs: 340,
@@ -163,6 +169,10 @@ test("sessions.describe projects durable worker placement", async () => {
       context: {
         workerSessionPlacementService: { getMany },
         workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+        workerPlacementRunnerAvailabilityReader: {
+          read: () => ({ kind: "device", status: "offline" }),
+          version: () => 1,
+        },
       },
     },
   );
@@ -183,6 +193,7 @@ test("sessions.describe projects durable worker placement", async () => {
     updatedAtMs: 300,
     stateChangedAtMs: 200,
     diskSpace,
+    runner: { kind: "device", status: "offline" },
   });
 });
 

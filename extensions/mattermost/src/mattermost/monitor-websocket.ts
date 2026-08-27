@@ -336,15 +336,15 @@ export function createMattermostConnectOnce(
         });
 
         ws.on("message", async (data) => {
+          const raw = rawDataToString(data);
           captureWsEvent({
             url: opts.wsUrl,
             direction: "inbound",
             kind: "ws-frame",
             flowId,
-            payload: Buffer.from(rawDataToString(data)),
+            payload: Buffer.from(raw),
             meta: { subsystem: "mattermost-websocket" },
           });
-          const raw = rawDataToString(data);
           const payload = parseMattermostEventPayload(raw);
           if (!payload) {
             return;

@@ -10,8 +10,6 @@ const mocks = vi.hoisted(() => ({
   openUrl: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
   resolveControlUiLinks: vi.fn(),
-  resolveGatewayAuth: vi.fn(),
-  resolveGatewayAuthToken: vi.fn(),
   resolveGatewayPort: vi.fn(),
   waitForControlUiDocument: vi.fn(),
 }));
@@ -19,15 +17,6 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
   resolveGatewayPort: mocks.resolveGatewayPort,
-}));
-
-vi.mock("../../gateway/auth-token-resolution.js", () => {
-  const { resolveGatewayAuthToken } = mocks;
-  return { resolveGatewayAuthToken };
-});
-
-vi.mock("../../gateway/auth.js", () => ({
-  resolveGatewayAuth: mocks.resolveGatewayAuth,
 }));
 
 vi.mock("../onboard-helpers.js", () => ({
@@ -65,7 +54,6 @@ vi.mock("../control-ui-handoff.js", async (importOriginal) => ({
 // Assembled so secret scanners do not read the fixture as a real credential.
 const fakeToken = ["te", "st"].join("");
 const fakePassword = ["te", "st-password"].join("");
-const authPasswordKey = ["pass", "word"].join("");
 const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
 
 const runtime = {
@@ -83,6 +71,7 @@ function mockReadyDashboard() {
       gateway: {
         bind: "custom",
         customBindHost: "10.0.0.5",
+        auth: { token: fakeToken },
       },
     },
   });
@@ -119,11 +108,6 @@ describe("dashboardCommand --json", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockReadyDashboard();
-    mocks.resolveGatewayAuthToken.mockResolvedValue({
-      secretRefConfigured: false,
-      token: fakeToken,
-    });
-    mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token: fakeToken });
     mocks.issueDeviceBootstrapToken.mockResolvedValue({
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
@@ -222,13 +206,9 @@ describe("dashboardCommand --json", () => {
       sourceConfig: {
         gateway: {
           bind: "loopback",
-          auth: { mode: "password" },
+          auth: { mode: "password", password: fakePassword },
         },
       },
-    });
-    mocks.resolveGatewayAuth.mockReturnValue({
-      mode: "password",
-      [authPasswordKey]: fakePassword,
     });
 
     await dashboardCommand(runtime, { json: true });
@@ -266,9 +246,17 @@ describe("dashboardCommand --json", () => {
   });
 
   it("keeps SecretRef-managed tokens out of the URL", async () => {
-    mocks.resolveGatewayAuthToken.mockResolvedValue({
-      secretRefConfigured: true,
-      token: fakeToken,
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      sourceConfig: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "10.0.0.5",
+          auth: {
+            token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+          },
+        },
+      },
     });
 
     await dashboardCommand(runtime, { json: true });

@@ -102,14 +102,18 @@ const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup"] as const;
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
-  path: Type.Optional(Type.String()),
+  path: Type.Optional(
+    Type.String({
+      description: "Required for config.schema.lookup; optional for config.get.",
+    }),
+  ),
 });
 
 export function createGatewayTool(): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
-    description: "Read gateway config + schema. Writes/restart: use openclaw tool.",
+    description: "Read gateway config + schema. Writes/restart unavailable; ask human.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;

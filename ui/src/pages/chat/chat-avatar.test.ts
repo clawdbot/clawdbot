@@ -154,7 +154,7 @@ describe("refreshChatAvatar", () => {
     );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const host = makeChatHost();
+    const host = makeChatHost({ basePath: "/focus", resourceBasePath: "" });
     const refresh = refreshChatAvatar(host);
     const signal = fetchMock.mock.calls[0]?.[1]?.signal;
     expect(signal?.aborted).toBe(false);

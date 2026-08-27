@@ -142,6 +142,19 @@ vi.mock("../agents/thinking-runtime.js", () => ({
         entry.id === params.model &&
         entry.reasoning !== undefined,
     ) ?? false,
+  needsThinkHydration: (
+    catalog: Array<{ id: string; provider: string; reasoning?: boolean }> | undefined,
+    provider: string,
+    model: string,
+    agentRuntime: string,
+  ) =>
+    agentRuntime !== "openclaw" ||
+    !catalog?.some(
+      (entry) =>
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        entry.id === model &&
+        entry.reasoning !== undefined,
+    ),
   normalizeThinkingCatalogProviders: <T extends { provider: string }>(catalog: T[]) =>
     catalog.map((entry) => ({ ...entry, provider: entry.provider.toLowerCase() })),
   resolveCandidateThinkingLevel: ({ level }: { level?: string }) => level,
@@ -849,6 +862,7 @@ describe("agentCommand", () => {
             agentId: "main",
             runId: "public-ingress-run",
             allowModelOverride: false,
+            senderIsOwner: true,
             mainRestartRecoveryAdmitted: true,
             mainRestartRecoveryAttempt: 1,
             mainRestartRecoveryOwnerLease: {
@@ -877,6 +891,9 @@ describe("agentCommand", () => {
         expect(prepare).toHaveBeenCalledWith(
           expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
         );
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].opts,
+        ).toMatchObject({ senderIsOwner: false });
       } finally {
         prepare.mockRestore();
         if (priorDescriptor) {

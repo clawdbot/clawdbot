@@ -59,6 +59,7 @@ describe("Skill Workshop SQLite store", () => {
       commitPendingSkillProposalTransition({
         expected: proposal.record,
         record: applied,
+        event,
         operationLabel: "skill-workshop.test.conflict",
       }),
     ).toMatchObject({ state: "conflict", current: { status: "applied" } });
@@ -71,7 +72,6 @@ describe("Skill Workshop SQLite store", () => {
     const existing = new DatabaseSync(databasePath);
     existing.exec(`
       DROP TABLE skill_workshop_proposal_events;
-      DROP TABLE skill_workshop_proposal_origin_runs;
       DROP TABLE skill_workshop_proposal_rollbacks;
       DROP TABLE skill_workshop_proposals;
       DROP TABLE skill_workshop_collection_reviews;

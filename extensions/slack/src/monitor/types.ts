@@ -86,12 +86,17 @@ export type SlackPinEvent = {
   event_ts?: string;
 };
 
+type SlackMessageSubtypeMessage = Pick<
+  SlackMessageEvent,
+  "ts" | "thread_ts" | "parent_user_id" | "user" | "bot_id"
+>;
+
 export type SlackMessageChangedEvent = {
   type: "message";
   subtype: "message_changed";
   channel?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  message?: SlackMessageSubtypeMessage;
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };
 
@@ -100,6 +105,6 @@ export type SlackMessageDeletedEvent = {
   subtype: "message_deleted";
   channel?: string;
   deleted_ts?: string;
-  previous_message?: { ts?: string; user?: string; bot_id?: string };
+  previous_message?: SlackMessageSubtypeMessage;
   event_ts?: string;
 };

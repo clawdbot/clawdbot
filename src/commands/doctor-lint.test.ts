@@ -6,6 +6,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as bundledHealthChecks from "../flows/bundled-health-checks.js";
+import { CORE_HEALTH_CHECKS } from "../flows/doctor-core-checks.js";
 import { clearHealthChecksForTest, registerHealthCheck } from "../flows/health-check-registry.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-record-cache.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
@@ -17,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   actualOpenNodeSqliteDatabase: vi.fn(),
   actualPrepareSqliteReadOnlyLocationSync: vi.fn(),
   actualReadConfigFileSnapshot: vi.fn(),
+  buildGatewayProbeConnectionDetails: vi.fn(),
+  callGateway: vi.fn(),
   openNodeSqliteDatabase: vi.fn(),
   prepareSqliteReadOnlyLocationSync: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
@@ -66,7 +70,14 @@ vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => {
       mocks.resolveDoctorContributionHealthChecks(...args),
   };
 });
-
+vi.mock("../gateway/call.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/call.js")>();
+  return {
+    ...actual,
+    buildGatewayProbeConnectionDetails: mocks.buildGatewayProbeConnectionDetails,
+    callGateway: mocks.callGateway,
+  };
+});
 const runtime = {
   log: vi.fn(),
   error: vi.fn(),
@@ -79,6 +90,10 @@ describe("runDoctorLintCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockReset();
+    mocks.buildGatewayProbeConnectionDetails.mockReset().mockResolvedValue({
+      url: "ws://127.0.0.1:18789",
+    });
+    mocks.callGateway.mockReset().mockResolvedValue({ degradedSecretOwners: [] });
     mocks.openNodeSqliteDatabase.mockImplementation((...args: unknown[]) =>
       mocks.actualOpenNodeSqliteDatabase(...args),
     );
@@ -113,29 +128,115 @@ describe("runDoctorLintCli", () => {
     }
   });
 
-  it("reports the visible finding count in human output", async () => {
+  it.each([
+    { label: "--only JSON", selection: "only", json: true },
+    { label: "--only human text", selection: "only", json: false },
+    { label: "--all JSON", selection: "all", json: true },
+    { label: "--all human text", selection: "all", json: false },
+    { label: "default JSON", selection: "default", json: true },
+    { label: "default human text", selection: "default", json: false },
+  ] as const)("keeps Gateway-owned secret degradation observable through $label", async (entry) => {
+    const gatewayCheck = CORE_HEALTH_CHECKS.find(
+      (check) => check.id === "core/doctor/gateway-health",
+    );
+    expect(gatewayCheck).toBeDefined();
+    const previousResolveChecks =
+      mocks.resolveDoctorContributionHealthChecks.getMockImplementation();
+    mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([gatewayCheck]);
+    const registerChecks = vi
+      .spyOn(bundledHealthChecks, "registerBundledHealthChecks")
+      .mockImplementation(() => {});
+    const resolveStateMode = vi
+      .spyOn(bundledHealthChecks, "resolveBundledHealthCheckPluginStateMode")
+      .mockReturnValue("direct");
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
       valid: true,
-      config: {},
+      config: {
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "SYNTHETIC_GATEWAY_SECRET" },
+        },
+      },
       path: "/tmp/openclaw.json",
     });
-
+    mocks.callGateway.mockResolvedValue({
+      degradedSecretOwners: [
+        {
+          ownerKind: "account",
+          ownerId: "discord:ops",
+          state: "unavailable",
+          paths: ["channels.discord.accounts.ops.token"],
+          reason:
+            "secret reference was not found (env:default:PRIVATE_REF_ID=SYNTHETIC_OWNER_SECRET)",
+        },
+      ],
+    });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const originalIsTTY = process.stdout.isTTY;
-    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+    Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: !entry.json });
+
     try {
       const exitCode = await runDoctorLintCli(runtime, {
-        severityMin: "error",
-        onlyIds: ["core/doctor/final-config-validation"],
+        ...(entry.json ? { json: true } : {}),
+        ...(entry.selection === "only"
+          ? { onlyIds: ["core/doctor/gateway-health"] }
+          : entry.selection === "all"
+            ? { includeAllChecks: true }
+            : {}),
       });
+      const output = stdout.mock.calls.map(([line]) => String(line)).join("");
 
-      expect(exitCode).toBe(0);
-      expect(String(stdout.mock.calls[0]?.[0])).toContain("0 finding(s)");
-      expect(String(stdout.mock.calls[1]?.[0])).toBe("  no findings\n");
+      if (entry.selection === "default") {
+        expect(exitCode).toBe(0);
+        if (entry.json) {
+          expect(JSON.parse(output)).toMatchObject({
+            checksRun: 0,
+            checksSkipped: 1,
+            findings: [],
+          });
+        } else {
+          expect(output).toContain("0 finding(s)");
+          expect(output).toContain("  no findings\n");
+        }
+        expect(mocks.buildGatewayProbeConnectionDetails).not.toHaveBeenCalled();
+        expect(mocks.callGateway).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(exitCode).toBe(1);
+      expect(output).toContain("core/doctor/gateway-health");
+      expect(output).toContain("cold account:discord:ops");
+      expect(output).toContain("channels.discord.accounts.ops.token");
+      expect(output).toContain("openclaw secrets reload");
+      expect(output).not.toContain("SYNTHETIC_GATEWAY_SECRET");
+      expect(output).not.toContain("SYNTHETIC_OWNER_SECRET");
+      expect(output).not.toContain("PRIVATE_REF_ID");
+      expect(mocks.callGateway).toHaveBeenCalledOnce();
+      if (entry.json) {
+        expect(JSON.parse(output)).toMatchObject({
+          ok: false,
+          checksRun: 1,
+          findings: [
+            {
+              checkId: "core/doctor/gateway-health",
+              severity: "warning",
+              path: "channels.discord.accounts.ops.token",
+              target: "account:discord:ops",
+            },
+          ],
+        });
+      } else {
+        expect(output).toContain("[warning] core/doctor/gateway-health");
+      }
     } finally {
       Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTTY });
       stdout.mockRestore();
+      registerChecks.mockRestore();
+      resolveStateMode.mockRestore();
+      if (previousResolveChecks) {
+        mocks.resolveDoctorContributionHealthChecks.mockImplementation(previousResolveChecks);
+      }
     }
   });
 
@@ -350,12 +451,13 @@ describe("runDoctorLintCli", () => {
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
-      });
-
-      expect(exitCode).toBe(1);
+      for (let run = 0; run < 2; run++) {
+        const exitCode = await runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
+        });
+        expect(exitCode).toBe(1);
+      }
       const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
       expect(payload).toMatchObject({
         ok: false,

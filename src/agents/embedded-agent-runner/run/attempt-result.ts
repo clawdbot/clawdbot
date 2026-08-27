@@ -3,6 +3,7 @@
  */
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
+import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -73,6 +74,7 @@ type EmbeddedAttemptResultState = Pick<
   | "lastAssistant"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
+  | "codeModeReconciliationCandidate"
   | "successfulNestedToolNames"
   | "attemptUsage"
   | "promptCache"
@@ -105,22 +107,47 @@ type CompleteEmbeddedAttemptResultInput = {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
 };
 
+/**
+ * Captures the settled transcript the tool-free finalizer needs when a settled
+ * post-tool turn dies on its final provider call. The consumer fails closed
+ * without this context, so the attempt-result owner has to supply it; the codex
+ * app-server harness already does the same for its own attempts.
+ */
+function resolveSettledTurnFinalizationContext(params: {
+  assistantTexts: readonly string[];
+  messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"];
+  terminal: EmbeddedRunAttemptResult["terminal"];
+}): EmbeddedRunAttemptResult["settledTurnFinalizationContext"] {
+  // Only a transient final provider call can safely recover an already settled tool turn.
+  if (
+    params.terminal.kind !== "failed" ||
+    params.terminal.source !== "prompt" ||
+    params.terminal.timeoutObservation ||
+    !isTransientNetworkError(params.terminal.error)
+  ) {
+    return undefined;
+  }
+  // A turn that already produced visible text has nothing to finalize, and a
+  // turn without a tool result never settled one.
+  if (!params.assistantTexts.every((text) => !text.trim())) {
+    return undefined;
+  }
+  if (!params.messagesSnapshot.some((message) => message.role === "toolResult")) {
+    return undefined;
+  }
+  return {
+    source: "openclaw-transcript",
+    messages: Object.freeze([...params.messagesSnapshot]),
+  };
+}
+
 function normalizeEmbeddedAttemptToolMetas(
   entries: EmbeddedAttemptSubscription["toolMetas"],
 ): EmbeddedRunAttemptResult["toolMetas"] {
   return entries
     .filter(
-      (
-        entry,
-      ): entry is {
-        toolName: string;
-        meta?: string;
-        replaySafe?: boolean;
-        isError?: boolean;
-        asyncStarted?: boolean;
-        asyncTaskRunId?: string;
-        asyncTaskId?: string;
-      } => typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
+      (entry): entry is EmbeddedAttemptSubscription["toolMetas"][number] & { toolName: string } =>
+        typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
     )
     .map((entry) => {
       const normalized: EmbeddedRunAttemptResult["toolMetas"][number] = {
@@ -128,8 +155,14 @@ function normalizeEmbeddedAttemptToolMetas(
         meta: entry.meta,
         replaySafe: entry.replaySafe === true,
       };
+      if (entry.toolCallId) {
+        normalized.toolCallId = entry.toolCallId;
+      }
       if (typeof entry.isError === "boolean") {
         normalized.isError = entry.isError;
+      }
+      if (entry.terminate === true) {
+        normalized.terminate = true;
       }
       if (entry.asyncStarted === true) {
         normalized.asyncStarted = true;
@@ -139,6 +172,9 @@ function normalizeEmbeddedAttemptToolMetas(
       }
       if (entry.asyncTaskId) {
         normalized.asyncTaskId = entry.asyncTaskId;
+      }
+      if (entry.codeModeSuspended === true) {
+        normalized.codeModeSuspended = true;
       }
       return normalized;
     });
@@ -179,7 +215,6 @@ export function completeEmbeddedAttemptResult(
     getLastAssistantTextMessageIndex,
     getLastCompactionTokensAfter,
     getLastToolError,
-    getLastToolRecovery,
     getLatestMcpAppChannelView,
     getLatestMcpConnectAction,
     getMessagingToolSentMediaUrls,
@@ -325,7 +360,6 @@ export function completeEmbeddedAttemptResult(
     completedClientToolCalls.length > 0 ? completedClientToolCalls : undefined;
   const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
   const lastToolError = getLastToolError();
-  const lastToolRecovery = getLastToolRecovery();
   const heartbeatToolResponse = getHeartbeatToolResponse();
   const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
   const hasToolMediaBlockReplyNow = hasToolMediaBlockReply();
@@ -335,7 +369,6 @@ export function completeEmbeddedAttemptResult(
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     heartbeatToolResponse,
     lastToolError,
-    lastToolRecovery,
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,
@@ -398,10 +431,17 @@ export function completeEmbeddedAttemptResult(
       terminal: state.terminal,
     },
   });
+  const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
+    assistantTexts,
+    messagesSnapshot: state.messagesSnapshot,
+    terminal: state.terminal,
+  });
   const result: EmbeddedRunAttemptWithReceiptEvidence = {
     ...state,
+    ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     replayMetadata,
     currentAttemptReplayMetadata,
+    codeModeReconciliationCandidate: state.codeModeReconciliationCandidate,
     itemLifecycle: getItemLifecycle(),
     assistantTurns: getAssistantTurnCount(),
     setTerminalLifecycleMeta,
@@ -415,7 +455,6 @@ export function completeEmbeddedAttemptResult(
     successfulNestedToolNames: state.successfulNestedToolNames,
     acceptedSessionSpawns,
     lastToolError,
-    lastToolRecovery,
     didSendViaMessagingTool: didSendViaMessagingTool(),
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     messagingToolSentTexts: getMessagingToolSentTexts(),

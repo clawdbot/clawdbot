@@ -18,7 +18,11 @@ import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
 import { clearActiveEmbeddedRun } from "../runs.js";
-import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import {
+  isOpenClawAbortableWrapper,
+  joinWithRunLivenessDeadline,
+  RUN_LIVENESS_JOIN_TIMEOUT_MS,
+} from "./abortable.js";
 import type {
   EmbeddedAttemptExecutionPhaseInput,
   EmbeddedAttemptExecutionState,
@@ -125,8 +129,11 @@ export async function runEmbeddedAttemptSettledPhase(
     agentSession: {
       activeSession,
       clientToolCallSlots,
+      coreReadAuthorized,
+      getCodeModeReconciliationCandidate,
       hasDeliveredSourceReply,
       hookRunner,
+      setCodeModeReconciliationReadAuthorized,
       setActiveSessionSystemPrompt,
       settingsManager,
     },
@@ -275,6 +282,7 @@ export async function runEmbeddedAttemptSettledPhase(
         uncompactedEffectiveTools,
         tools,
         codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
+        coreReadAuthorized,
         toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
         forceToolNames: [
           ...(toolBase.forceDirectMessageTool ? ["message"] : []),
@@ -322,6 +330,7 @@ export async function runEmbeddedAttemptSettledPhase(
         setPromptCacheChangesForTurn: (changes) => {
           promptCacheChangesForTurn = changes;
         },
+        setCodeModeReconciliationReadAuthorized,
         setFinalPromptText: (prompt) => {
           finalPromptText = prompt;
         },
@@ -335,28 +344,60 @@ export async function runEmbeddedAttemptSettledPhase(
             source: "yield_cleanup",
           });
         },
+        isRunBudgetTimeoutAbort: (error) =>
+          readTerminal().timedOutByRunBudget &&
+          isOpenClawAbortableWrapper(error) &&
+          error instanceof Error &&
+          error.cause === input.runAbortController.signal.reason,
         readYieldState: input.lifecycle.readYieldState,
         stopAcceptingSteerMessages,
         takePendingMidTurnPrecheckRequest: contextGuards.takePendingMidTurnPrecheckRequest,
       },
     });
 
-    // Queued subscription handlers (block-reply delivery, tool events) are
-    // fire-and-forget during the turn; the pending-events join below is the only
-    // place the run waits for them. One hung handler (e.g. a stuck delivery
-    // dispatch lane) must not dead-end the turn until the run budget — 48h by
-    // default — so the join is bounded and settlement proceeds with a recorded
-    // warning instead of producing no visible outcome at all.
-    await joinWithRunLivenessDeadline({
-      joinWork: waitForPendingEvents,
-      runAbortSignal: input.runAbortController.signal,
-      onTimeout: () => {
-        log.warn(
-          `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
-            `proceeding to stream settlement: runId=${attempt.runId}`,
-        );
-      },
-    });
+    // Only a failure-free run-budget terminal may publish buffered text.
+    const isFailureFreeRunBudgetTimeout = (): boolean => {
+      const terminal = readTerminal();
+      return terminal.timedOutByRunBudget && !terminal.failed;
+    };
+    const runBudgetTimeoutTerminal = isFailureFreeRunBudgetTimeout();
+    const drainPendingEventsBounded = () =>
+      joinWithRunLivenessDeadline({
+        // Partial-reply callbacks cannot mutate the buffer and may be stalled
+        // on transport; timeout salvage needs only the serialized event chain.
+        joinWork: () => waitForPendingEvents({ includePartialReplies: false }),
+        onTimeout: () => {
+          log.warn(
+            `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+              `proceeding to stream settlement: runId=${attempt.runId}`,
+          );
+        },
+      });
+    if (runBudgetTimeoutTerminal) {
+      // The timeout already aborted the signal; drain without racing it.
+      await drainPendingEventsBounded();
+    } else {
+      await joinWithRunLivenessDeadline({
+        joinWork: waitForPendingEvents,
+        runAbortSignal: input.runAbortController.signal,
+        onTimeout: () => {
+          log.warn(
+            `pending subscription events did not settle within ${RUN_LIVENESS_JOIN_TIMEOUT_MS}ms; ` +
+              `proceeding to stream settlement: runId=${attempt.runId}`,
+          );
+        },
+      });
+      // A timeout can fire during the abort-aware join and resolve it before
+      // its queue drains. Re-read terminal ownership, then drain if eligible.
+      if (isFailureFreeRunBudgetTimeout()) {
+        await drainPendingEventsBounded();
+      }
+    }
+    // Ownership can change during the drain; publish only after the final read.
+    const salvageTerminal = readTerminal();
+    if (salvageTerminal.timedOutByRunBudget && !salvageTerminal.failed) {
+      subscription.flushPartialAssistantText();
+    }
     const beforeAgentFinalizeRevisionReason = getBeforeAgentFinalizeRevisionReason();
     const beforeAgentFinalizeRevisionEntryId = getBeforeAgentFinalizeRevisionEntryId();
     let rewoundBeforeAgentFinalizeRevision = false;
@@ -584,6 +625,7 @@ export async function runEmbeddedAttemptSettledPhase(
       lastAssistant,
       currentAttemptAssistant,
       currentAttemptCompletedAssistant,
+      codeModeReconciliationCandidate: getCodeModeReconciliationCandidate(),
       successfulNestedToolNames,
       attemptUsage,
       promptCache: sessionRuntimeState.promptCache,

@@ -9,7 +9,11 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { parseWorkerWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest.js";
+import {
+  parseWorkerWorkspaceManifest,
+  type WorkerWorkspaceManifestEntry,
+} from "../gateway/worker-environments/workspace-manifest.js";
+import { absoluteEntryMatches } from "../gateway/worker-environments/workspace-reconcile-fs.js";
 import { workerWorkspaceTransferPaths } from "../gateway/worker-environments/workspace-result-staging.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -169,6 +173,7 @@ async function captureManifest(params: {
   workspaceDir: string;
   manifestHome: string;
   baseCommit: string | null;
+  referenceManifestRef: string;
   signal?: AbortSignal;
 }): Promise<string> {
   return (
@@ -181,7 +186,14 @@ async function captureManifest(params: {
         REMOTE_WORKSPACE_MANIFEST_JS,
         params.workspaceDir,
         params.baseCommit ?? "",
-        ...(params.baseCommit ? ["eligible"] : []),
+        ...(process.platform === "win32"
+          ? [
+              params.baseCommit ? "eligible" : "all",
+              params.referenceManifestRef.slice("sha256:".length),
+            ]
+          : params.baseCommit
+            ? ["eligible"]
+            : []),
       ],
       signal: params.signal,
     })
@@ -193,6 +205,7 @@ async function initializeGitWorkspace(params: {
   manifestHome: string;
   packPath: string;
   baseCommit: string;
+  entries: WorkerWorkspaceManifestEntry[];
   signal?: AbortSignal;
 }): Promise<void> {
   const objectFormat = params.baseCommit.length === 40 ? "sha1" : "sha256";
@@ -234,16 +247,31 @@ async function initializeGitWorkspace(params: {
   const index = await git(["ls-files", "--stage", "-z"], {
     maxOutputBytes: MAX_WORKSPACE_MANIFEST_BYTES,
   });
-  const gitlinks = index
-    .split("\0")
-    .filter(Boolean)
-    .flatMap((record) => {
-      const separator = record.indexOf("\t");
-      return separator >= 0 && record.startsWith("160000 ") ? [record.slice(separator + 1)] : [];
-    });
+  const gitlinks: string[] = [];
+  const basePaths = new Set<string>();
+  for (const record of index.split("\0").filter(Boolean)) {
+    const separator = record.indexOf("\t");
+    if (separator < 0) {
+      continue;
+    }
+    const indexedPath = record.slice(separator + 1);
+    if (record.startsWith("160000 ")) {
+      gitlinks.push(indexedPath);
+    } else {
+      basePaths.add(indexedPath);
+    }
+  }
   if (gitlinks.length > 0) {
     await git(["update-index", "--skip-worktree", "-z", "--stdin"], {
       input: `${gitlinks.join("\0")}\0`,
+    });
+  }
+  const checkoutPaths = params.entries
+    .map((entry) => entry.path)
+    .filter((entryPath) => basePaths.has(entryPath));
+  if (checkoutPaths.length > 0) {
+    await git(["checkout-index", "-z", "--stdin"], {
+      input: `${checkoutPaths.join("\0")}\0`,
     });
   }
   await fsp.rm(params.packPath, { force: true });
@@ -391,14 +419,32 @@ async function downloadWorkspace(params: {
     MAX_WORKSPACE_MANIFEST_BYTES,
   );
   const manifest = parseWorkerWorkspaceManifest(raw.toString("utf8"), params.transfer.manifestRef);
-  const parent = path.dirname(params.workspaceDir);
-  const workspaceName = path.basename(params.workspaceDir);
   const stagingWorkspace = await tempWorkspace({
-    rootDir: parent,
-    prefix: `.${workspaceName}.workspace-transfer-`,
+    rootDir: path.dirname(params.workspaceDir),
+    prefix: `.${path.basename(params.workspaceDir)}.workspace-transfer-`,
   });
   const staging = stagingWorkspace.dir;
   try {
+    if (process.platform === "win32") {
+      const published = await runWorkspaceCommand({
+        workspaceDir: staging,
+        homeDir: params.manifestHome,
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_MANIFEST_JS,
+          staging,
+          manifest.baseCommit ?? "",
+          "publish",
+          params.transfer.manifestRef.slice("sha256:".length),
+        ],
+        input: raw,
+        signal: params.signal,
+      });
+      if (published.trim() !== params.transfer.manifestRef) {
+        throw new Error("workspace transfer manifest publication acknowledgement is invalid");
+      }
+    }
     if (manifest.baseCommit) {
       const packPath = path.join(staging, ".openclaw-base.pack");
       const packStartedAt = performance.now();
@@ -423,6 +469,7 @@ async function downloadWorkspace(params: {
         manifestHome: params.manifestHome,
         packPath,
         baseCommit: manifest.baseCommit,
+        entries: manifest.entries,
         signal: params.signal,
       });
     }
@@ -432,6 +479,13 @@ async function downloadWorkspace(params: {
     }
     for (const entry of manifest.entries) {
       const destination = workspacePath(staging, entry.path);
+      const materializedEntry =
+        process.platform === "win32" && entry.type === "file" && entry.mode === 0o755
+          ? { ...entry, mode: 0o644 }
+          : entry;
+      if (manifest.baseCommit && (await absoluteEntryMatches(destination, materializedEntry))) {
+        continue;
+      }
       await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
       await fsp.rm(destination, { recursive: true, force: true });
       if (entry.type === "symlink") {
@@ -459,6 +513,7 @@ async function downloadWorkspace(params: {
       workspaceDir: staging,
       manifestHome: params.manifestHome,
       baseCommit: manifest.baseCommit,
+      referenceManifestRef: params.transfer.manifestRef,
       signal: params.signal,
     });
     if (observed !== params.transfer.manifestRef) {
@@ -518,6 +573,7 @@ async function uploadWorkspace(params: {
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
+    referenceManifestRef: params.transfer.baseManifestRef,
     signal: params.signal,
   });
   const currentRaw = await fsp.readFile(

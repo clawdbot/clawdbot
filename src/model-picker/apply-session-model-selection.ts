@@ -2,7 +2,7 @@ import {
   isDefaultAgentRuntimeId,
   normalizeOptionalAgentRuntimeId,
 } from "../agents/agent-runtime-id.js";
-import { resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentDir, type AgentModelPrimaryWriteTarget } from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { modelKey, normalizeProviderId } from "../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../agents/openai-routing.js";
@@ -27,7 +27,7 @@ import {
   SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
   sessionModelOverrideChangesApplied,
 } from "../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -62,6 +62,7 @@ export type ApplySessionModelSelectionParams = {
   modelCatalog: readonly ModelCatalogEntry[];
   thinkingCatalog?: readonly ModelCatalogEntry[];
   canPersistStickyModelSelection?: boolean;
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -269,7 +270,6 @@ export async function applySessionModelSelection(
       };
     }
   }
-
   // An explicit selection retains the existing persistence and conflict semantics even when idempotent.
   nextEntry.updatedAt = Date.now();
   let persistedEntry: SessionEntry;
@@ -318,10 +318,14 @@ export async function applySessionModelSelection(
   const effectiveModelRef = `${provider}/${model}`;
   const changed = applied.changed || thinkingRemap !== undefined;
   const configuredDefaultUpdate =
-    params.canPersistStickyModelSelection === true && !request.isDefault
+    params.canPersistStickyModelSelection === true &&
+    (!request.isDefault || params.stickyModelSelectionTarget)
       ? persistStickyModelSelectionBestEffort({
           agentId: params.agentId,
           model: effectiveModelRef,
+          ...(params.stickyModelSelectionTarget
+            ? { target: params.stickyModelSelectionTarget }
+            : {}),
         })
       : undefined;
   if (changed) {

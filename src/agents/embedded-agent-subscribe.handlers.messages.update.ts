@@ -252,14 +252,13 @@ export function handleMessageUpdate(
     if (isResponsesCommentary && chunk) {
       // Keep cumulative end events monotonic without feeding commentary into reply buffers.
       ctx.state.deltaBuffer += chunk;
+      ctx.state.deltaBufferIsCommentary = true;
     }
-    const commentaryText =
-      !chunk && (!isResponsesCommentary || !hadResponsesCommentaryText)
-        ? coerceChatContentText(extractAssistantCommentaryText(streamAssistant))
-        : undefined;
-    const commentaryData = chunk
-      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: deliveryItemId })
-      : commentaryText
+    const commentaryText = isResponsesCommentary
+      ? ctx.state.deltaBuffer
+      : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
+    const commentaryData =
+      commentaryText && (chunk || !hadResponsesCommentaryText)
         ? buildAssistantStreamData({
             text: commentaryText,
             replace: true,
@@ -289,6 +288,7 @@ export function handleMessageUpdate(
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
+    ctx.state.deltaBufferIsCommentary = false;
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
       if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
         appendBlockReplyChunk(ctx, chunk);

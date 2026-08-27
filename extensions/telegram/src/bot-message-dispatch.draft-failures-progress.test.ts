@@ -1,14 +1,11 @@
 import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { expect, it, vi } from "vitest";
+import { expectWindowRetiredAfterFinal } from "./bot-message-dispatch.progress-window.test-helpers.js";
 import {
-  expectWindowRetiredAfterFinal,
-  expectWindowRetiredWithoutSummary,
-} from "./bot-message-dispatch.progress-window.test-helpers.js";
-import {
+  allDeliveredReplyTexts,
   describeTelegramDispatch,
   createContext,
   createDirectSessionPayload,
-  createReasoningStreamContext,
   createStatusReactionController,
   createTelegramDraftStream,
   deliverReplies,
@@ -592,7 +589,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     // A tool-only window retires by repositioning in place (not delete + repost
     // — Discord parity), so clear() is never called on it.
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectDeliveredReply(0, { text: "Branch is up to date" });
     expectDeliverRepliesParams({ replyToMode: "off" });
     // The final answer is SENT before the window retires: sending first keeps
@@ -619,7 +615,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     });
 
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Terminal block answer");
-    expect(answerDraftStream.finalizeToPreview).not.toHaveBeenCalled();
     expectDeliveredReply(0, { text: "Terminal block answer" });
   });
 
@@ -646,22 +641,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       expect.objectContaining({ text: expect.stringContaining("Exec") }),
     );
     expectDeliveredReply(0, { text: "Terminal block after tool" });
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
-  function allDeliveredReplyTexts(): string[] {
-    return deliverReplies.mock.calls.flatMap((call: unknown[]) =>
-      ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(
-        (reply) => reply.text ?? "",
-      ),
-    );
-  }
-
   it("sends the final answer before retiring the progress window", async () => {
-    // Edit-shrink anchor loss: shrinking the tall window to a one-line bar BEFORE
-    // the final is sent breaks the client's at-bottom follow and drops the final
-    // off screen. The final must be sent FIRST, then the window edited down.
+    // Deliver first so removing the progress window cannot move the final off screen.
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -677,15 +661,11 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // Final delivered first, then the window retires behind it.
     expectDeliveredReply(0, { text: "All done" });
-    expectWindowRetiredWithoutSummary(answerDraftStream);
     expectWindowRetiredAfterFinal(answerDraftStream, deliverReplies);
   });
 
-  it("still collapses the window when the final answer send is skipped", async () => {
-    // Failure path: if the final send skips/fails, the window must not be left
-    // stale — it still collapses to the bar (once-guard already consumed).
+  it("retires the progress window when the final answer send is skipped", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     deliverReplies.mockResolvedValue({ delivered: false });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -702,42 +682,12 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    // The bar still edits the window in place even though the final send failed.
-    expectWindowRetiredWithoutSummary(answerDraftStream);
+    expect(answerDraftStream.rotateToNewMessageDeferringDelete).toHaveBeenCalledTimes(1);
   });
 
-  it("tallies reasoning bursts and tool calls into the collapse summary", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        // burst 1 → tool → burst 2 → tool, then a trailing burst flushed at the
-        // summary: 3 thoughts, 2 tool calls.
-        await replyOptions?.onReasoningStream?.({ text: "thinking a" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await replyOptions?.onReasoningStream?.({ text: "thinking b" });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await replyOptions?.onReasoningStream?.({ text: "thinking c" });
-        await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      // Reasoning must resolve to "stream" so thoughts route into the progress
-      // window — only window-streamed reasoning feeds the collapse summary.
-      context: createReasoningStreamContext(),
-      streamMode: "progress",
-      telegramCfg: { streaming: { mode: "progress" } },
-    });
-
-    expectWindowRetiredWithoutSummary(answerDraftStream);
-    expectDeliveredReply(0, { text: "Done" });
-  });
-
-  it("does not post a collapse summary when no progress draft started", async () => {
+  it("delivers only the final answer when no progress draft started", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      // No tools, thoughts, or notes — nothing collapses; just a final answer.
       await dispatcherOptions.deliver({ text: "Just an answer" }, { kind: "final" });
       return { queuedFinal: true };
     });
@@ -748,12 +698,10 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    const texts = allDeliveredReplyTexts();
-    expect(texts.some((text) => text.includes("⏱️"))).toBe(false);
-    expect(texts).toContain("Just an answer");
+    expect(allDeliveredReplyTexts()).toEqual(["Just an answer"]);
   });
 
-  it("does not post a collapse summary before an error final", async () => {
+  it("delivers only the error final after tool progress", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
@@ -772,7 +720,6 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    const texts = allDeliveredReplyTexts();
-    expect(texts.some((text) => text.includes("tool call · ⏱️"))).toBe(false);
+    expect(allDeliveredReplyTexts()).toEqual(["Something went wrong"]);
   });
 });

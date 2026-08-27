@@ -27,6 +27,14 @@ import {
   type AbortAndDrainEmbeddedAgentRunResult,
   type EmbeddedAgentQueueMessageOptions,
 } from "../agents/embedded-agent-runner/runs.js";
+import { runStructuredInput } from "../agents/harness/structured-input-execution.js";
+import {
+  compileStructuredInputForm,
+  compileStructuredInputQuestions,
+  compileStructuredInputUrl,
+  isStructuredInputRecord,
+  snapshotStructuredInput,
+} from "../agents/harness/structured-input.js";
 import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { inferToolMetaFromArgsCore } from "../agents/tool-display.js";
 import {
@@ -91,6 +99,8 @@ export type {
   AgentHarnessSideQuestionResult,
   AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
+  AgentHarnessSessionDeletionParams,
+  AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionForkFailureCode,
   AgentHarnessSessionForkParams,
   AgentHarnessSessionForkResult,
@@ -198,6 +208,7 @@ export { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.j
 export { isHostScopedAgentToolActive } from "../agents/agent-tools.ring-zero-context.js";
 export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
+export { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 export { classifyEmbeddedAgentRunResultForModelFallback } from "../agents/embedded-agent-runner/result-fallback-classifier.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
@@ -254,10 +265,24 @@ export {
   claimPendingAgentQuestionAnswer,
   runAgentHarnessGatewayQuestion,
 } from "../agents/harness/gateway-question.js";
+/** Bounded structured-input compilation and execution for native agent harnesses. */
+export const agentHarnessStructuredInput = Object.freeze({
+  compileForm: compileStructuredInputForm,
+  compileQuestions: compileStructuredInputQuestions,
+  compileUrl: compileStructuredInputUrl,
+  isRecord: isStructuredInputRecord,
+  run: runStructuredInput,
+  snapshot: snapshotStructuredInput,
+});
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
 } from "../agents/skill-workshop-prompt.js";
+export {
+  buildDelegationGuidanceSection,
+  resolveMainSessionDelegationMode,
+} from "../agents/delegation-guidance.js";
+export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
 export { TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT } from "../agents/transcript-credential-safety.js";
 export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt-prompt-helpers.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt-thread-helpers.js";
@@ -516,6 +541,8 @@ export {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "../agents/harness/agent-end-side-effects.js";
+export { buildEmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/agent-end-context.js";
+export type { EmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/params.js";
 export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,

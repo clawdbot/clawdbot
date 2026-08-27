@@ -18,6 +18,8 @@ export type DurableDeliveryCompletion =
       agentId: string;
       operationId: string;
       storePath?: string;
+      /** Present on Gateway-owned conversation intents created with route authorization. */
+      routeFingerprint?: string;
     }
   | {
       kind: "pending-final";

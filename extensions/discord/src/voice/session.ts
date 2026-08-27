@@ -12,7 +12,6 @@ export const CAPTURE_FINALIZE_GRACE_MS = 2_000;
 export const VOICE_CONNECT_READY_TIMEOUT_MS = 30_000;
 export const VOICE_RECONNECT_GRACE_MS = 15_000;
 export const PLAYBACK_READY_TIMEOUT_MS = 60_000;
-export const SPEAKING_READY_TIMEOUT_MS = 60_000;
 
 export function resolveVoiceTimeoutMs(value: number | undefined, fallbackMs: number): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -30,6 +29,7 @@ export type VoiceOperationResult = {
 
 export type VoiceJoinOptions = {
   preserveFollowState?: boolean;
+  autoJoinWhenOccupied?: boolean;
   transcripts?: VoiceSessionEntry["transcripts"];
 };
 
@@ -91,6 +91,7 @@ type VoiceRealtimeLifecycle =
 
 export type VoiceSessionEntry = {
   generation: number;
+  autoJoinWhenOccupied: boolean;
   sessionLifecycle: { status: "active" } | { status: "stopped"; reason: string };
   guildId: string;
   guildName?: string;

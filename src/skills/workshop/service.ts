@@ -15,6 +15,7 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { nextProposalVersion, prepareSkillProposalDraft } from "./proposal-draft.js";
+import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertExpectedRevisionHash,
@@ -29,7 +30,6 @@ import {
 import { readRequiredProposal } from "./service-query.js";
 import {
   hashSkillProposalContent,
-  readProposalSupportFiles,
   readSkillProposalRecord,
   replaceSkillProposalDraft,
   updateSkillProposalRecord,
@@ -45,6 +45,7 @@ import type {
 export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 export {
   composeSkillBodyPatch,
+  findUniqueSkillPatchSpan,
   proposeCreateSkill,
   proposeUpdateSkill,
   SkillProposalStaleTargetError,
@@ -66,7 +67,6 @@ const APPLY_TRANSITION_DEPENDENCIES = {
   evaluateSkillProposal,
   isCreateTargetConflict: (error: unknown) =>
     error instanceof SkillProposalCreateTargetConflictError,
-  readProposalSupportFiles,
   readRequiredProposal,
 } satisfies SkillProposalApplyTransitionDependencies;
 
@@ -118,9 +118,7 @@ export async function reviseSkillProposal(
     }
 
     const supportFiles =
-      input.supportFiles === undefined
-        ? await readProposalSupportFiles(record, proposalStoreOptions(input.env))
-        : input.supportFiles;
+      input.supportFiles === undefined ? (read.supportFiles ?? []) : input.supportFiles;
     const requestedContent = input.content ?? read.content;
     const nextVersion = nextProposalVersion(record.proposedVersion);
     const description = normalizeOptionalString(input.description) ?? record.description;
@@ -157,12 +155,12 @@ export async function reviseSkillProposal(
         : [];
     const origin = normalizeProposalOrigin(input.origin);
     const originRunProvenance = mergeProposalOriginRunProvenance(record, origin);
-    const previousSupportFiles = record.supportFiles;
     const revised: SkillProposalRecord = {
       ...record,
       description,
       updatedAt: now,
       proposedVersion: nextVersion,
+      draftFile: createSkillProposalGenerationDraftFile(),
       draftHash,
       scan,
       ...(origin ? { origin } : {}),
@@ -185,8 +183,8 @@ export async function reviseSkillProposal(
       delete revised.evidence;
     }
     const event = await replaceSkillProposalDraft({
+      expected: record,
       record: revised,
-      previousSupportFiles,
       content: proposalContent,
       supportFiles: preparedSupportFiles,
       event: createSkillProposalEvent({
@@ -208,14 +206,12 @@ export async function reviseSkillProposal(
     };
   });
   const revisedResult = await withSkillProposalLifecycleDispatch(input, revision);
-  if (revisedResult.event) {
-    await dispatchSkillProposalChanged({
-      event: revisedResult.event,
-      record: revisedResult.read.record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
-    });
-  }
+  await dispatchSkillProposalChanged({
+    event: revisedResult.event,
+    record: revisedResult.read.record,
+    workspaceDir: input.workspaceDir,
+    ...(input.agentId ? { agentId: input.agentId } : {}),
+  });
   return revisedResult.read;
 }
 

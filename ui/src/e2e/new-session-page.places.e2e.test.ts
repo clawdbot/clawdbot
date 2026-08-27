@@ -1,18 +1,17 @@
 import { expect, it } from "vitest";
 import {
-  EXEC_ONLY_PICKED,
-  NODE_HOME,
-  NODE_PICKED,
-  NODE_UNC,
   PICKED,
   WORKSPACE,
+  captureNewSessionComposerUiProof,
   captureProjectUiProof,
   captureUiProofEnabled,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  newSessionComposerProofArtifactDir,
   pollLocatorText,
+  prepareNewSessionComposerUiProof,
   prepareProjectUiProof,
   projectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
@@ -21,10 +20,19 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it("keeps the pre-submit draft on the composer and creates exactly one session", async () => {
+    await prepareNewSessionComposerUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: newSessionComposerProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -53,6 +61,14 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
+      await message.fill("/");
+      const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
+      await pollLocatorText(slashMenu).toContain("/status");
+      expect(await slashMenu.textContent()).not.toContain("/clear");
+      await captureNewSessionComposerUiProof(page, "slash-menu-open.png");
+      if (captureUiProofEnabled) {
+        await page.waitForTimeout(750);
+      }
       await message.fill("fix the flaky draft test");
 
       // Owner boundary: the New Session page (new-session-page.ts:228) keeps
@@ -94,10 +110,19 @@ suite.define(() => {
   });
 
   it("drafts a session with a browsed folder and creates it on first message", async () => {
+    await prepareProjectUiProof();
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? {
+            recordVideo: {
+              dir: projectProofArtifactDir,
+              size: { height: 900, width: 1280 },
+            },
+          }
+        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -110,6 +135,13 @@ suite.define(() => {
               identity: { name: "Main" },
               name: "Main",
               workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
               workspaceGit: true,
             },
           ],
@@ -190,6 +222,9 @@ suite.define(() => {
       const footerBox = await page
         .locator(".new-session-page__composer .agent-chat__composer-footer")
         .boundingBox();
+      const actionsBox = await page
+        .locator(".new-session-page__composer .agent-chat__composer-actions")
+        .boundingBox();
       const attachmentButton = page.getByRole("button", { name: "Add attachment" });
       const attachmentBox = await attachmentButton.boundingBox();
       expect(heroBox).not.toBeNull();
@@ -198,6 +233,7 @@ suite.define(() => {
       expect(modelBox).not.toBeNull();
       expect(modelWrapperBox).not.toBeNull();
       expect(footerBox).not.toBeNull();
+      expect(actionsBox).not.toBeNull();
       expect(attachmentBox).not.toBeNull();
       expect((heroBox?.y ?? 0) + (heroBox?.height ?? 0)).toBeLessThanOrEqual(
         (triggersBox?.y ?? 0) + 1,
@@ -228,15 +264,99 @@ suite.define(() => {
         (footerBox?.x ?? 0) + (footerBox?.width ?? 0) / 2,
       );
       expect(
-        (footerBox?.x ?? 0) +
-          (footerBox?.width ?? 0) -
-          ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
+        (actionsBox?.x ?? 0) - ((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)),
       ).toBeLessThanOrEqual(12);
+      expect((modelWrapperBox?.x ?? 0) + (modelWrapperBox?.width ?? 0)).toBeLessThanOrEqual(
+        actionsBox?.x ?? 0,
+      );
+      expect((actionsBox?.x ?? 0) + (actionsBox?.width ?? 0)).toBeLessThanOrEqual(
+        (footerBox?.x ?? 0) + (footerBox?.width ?? 0) + 1,
+      );
       expect(triggersBox?.x).toBeCloseTo(composerBox?.x ?? 0, 0);
       expect(triggersBox?.width).toBeCloseTo(composerBox?.width ?? 0, 0);
       expect(composerBox?.width).toBeCloseTo(48 * 16, 0);
       expect(await page.locator(".new-session-page__message").getAttribute("rows")).toBe("1");
       await captureProjectUiProof(page, "new-session-control-layout.png");
+
+      await page.setViewportSize({ width: 393, height: 852 });
+      const mobileModelSettings = page.locator(
+        '.new-session-page__composer [data-chat-model-select="true"]',
+      );
+      const mobilePermission = page.locator(
+        '.new-session-page__composer [data-chat-permission-select="true"]',
+      );
+      const mobilePermissionIcon = mobilePermission.locator(".chat-controls__permission-icon svg");
+      const permissionIconCenterError = async () => {
+        const [triggerBox, iconBox] = await Promise.all([
+          mobilePermission.boundingBox(),
+          mobilePermissionIcon.boundingBox(),
+        ]);
+        if (!triggerBox || !iconBox) {
+          return Number.POSITIVE_INFINITY;
+        }
+        const x = iconBox.x + iconBox.width / 2 - (triggerBox.x + triggerBox.width / 2);
+        const y = iconBox.y + iconBox.height / 2 - (triggerBox.y + triggerBox.height / 2);
+        return Math.max(Math.abs(x), Math.abs(y));
+      };
+      await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
+      await expect.poll(permissionIconCenterError).toBeLessThanOrEqual(1);
+      const [mobileFooterBox, mobileModelSettingsBox] = await Promise.all([
+        page.locator(".new-session-page__composer .agent-chat__composer-footer").boundingBox(),
+        mobileModelSettings.boundingBox(),
+      ]);
+      expect(mobileFooterBox).not.toBeNull();
+      expect(mobileModelSettingsBox).not.toBeNull();
+      if (!mobileFooterBox || !mobileModelSettingsBox) {
+        throw new Error("expected mobile new-session composer controls");
+      }
+      expect(mobileModelSettingsBox.width).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.height).toBeGreaterThanOrEqual(44);
+      expect(mobileModelSettingsBox.x).toBeGreaterThanOrEqual(mobileFooterBox.x);
+      expect(mobileModelSettingsBox.x + mobileModelSettingsBox.width).toBeLessThanOrEqual(
+        mobileFooterBox.x + mobileFooterBox.width,
+      );
+      await captureProjectUiProof(page, "mobile-new-session-idle.png");
+      await mobilePermission.click();
+      await page.locator('[data-chat-permission-option="workspace"]').click();
+      await expect
+        .poll(() => mobilePermission.getAttribute("data-chat-select-value"))
+        .toBe("workspace");
+      await mobilePermission.click();
+      await expect
+        .poll(() => page.locator(".chat-controls__permission-option").first().isVisible())
+        .toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-permissions-open.png");
+      await page.keyboard.press("Escape");
+      await mobileModelSettings.click();
+      await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-model-open.png");
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
+      await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
+      await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1280, height: 900 });
+
+      const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+      await agentPicker.locator(".agent-select__trigger").click();
+      await pollLocatorText(agentPicker.locator(".agent-select__menu-title")).toBe("Agents");
+      await captureProjectUiProof(page, "new-session-agent-menu-label.png");
+      await page.keyboard.press("Escape");
+
+      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
+      const whereTrigger = page.locator("#new-session-where-trigger");
+      await whereTrigger.click();
+      await pollLocatorText(whereSelect.locator(".new-session-page__menu-title").first()).toBe(
+        "Environments",
+      );
+      await captureProjectUiProof(page, "new-session-environment-menu-label.png");
+      await page.keyboard.press("Escape");
 
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
@@ -248,6 +368,10 @@ suite.define(() => {
 
       // Browse from the workspace, descend one level, then adopt the folder.
       await projectTrigger.click();
+      await pollLocatorText(projectSelect.locator(".new-session-page__menu-title").first()).toBe(
+        "Projects",
+      );
+      await captureProjectUiProof(page, "new-session-project-menu-label.png");
       await projectSelect.getByRole("button", { name: "Browse folders" }).click();
       await page.locator(".new-session-page__browser-entry", { hasText: "packages" }).click();
       await expect
@@ -268,6 +392,10 @@ suite.define(() => {
       await expect.poll(() => detailTrigger.getAttribute("data-worktree")).toBe("false");
       await detailTrigger.click();
       await expect.poll(() => detailTrigger.getAttribute("aria-expanded")).toBe("true");
+      await pollLocatorText(detailSelect.locator(".new-session-page__menu-title").first()).toBe(
+        "Branches",
+      );
+      await captureProjectUiProof(page, "new-session-branch-menu-label.png");
       const worktreeItem = detailSelect.getByRole("button", { name: "Worktree" });
       await expect.poll(() => worktreeItem.getAttribute("aria-pressed")).toBe("false");
       expect(await worktreeItem.isEnabled()).toBe(true);
@@ -339,7 +467,6 @@ suite.define(() => {
         "sessions.dispatch",
         "projects.list",
         "environments.list",
-        "node.list",
         "worktrees.branches",
       ],
       methodResponses: {
@@ -360,18 +487,8 @@ suite.define(() => {
             },
           ],
         },
-        "node.list": {
-          nodes: [
-            {
-              nodeId: "macbook",
-              displayName: "MacBook",
-              connected: true,
-              commands: ["system.run", "fs.listDir"],
-            },
-          ],
-        },
         "environments.list": {
-          environments: [{ id: "node:macbook", type: "node", status: "available" }],
+          environments: [],
           profiles: [],
         },
         "worktrees.branches": {
@@ -386,19 +503,6 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("projects.list");
-      const whereTrigger = page.locator("#new-session-where-trigger");
-      const where = page.locator("wa-popover.new-session-page__where-popover");
-      await whereTrigger.click();
-      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("true");
-      await where.getByRole("button", { name: "MacBook" }).click();
-      await expect.poll(() => whereTrigger.getAttribute("aria-expanded")).toBe("false");
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-      await expect
-        .poll(() => page.evaluate(() => document.activeElement?.id))
-        .toBe("new-session-where-trigger");
-      await whereTrigger.click();
-      await where.getByRole("button", { name: "Local" }).click();
-
       const trigger = page.locator("#new-session-project-trigger");
       const place = page.locator("wa-popover.new-session-page__project-popover");
       await trigger.click();
@@ -471,208 +575,6 @@ suite.define(() => {
       await page.locator("input.new-session-page__browser-path").press("Escape");
       await place.getByRole("button", { name: "Browse folders" }).waitFor();
       expect(await place.getAttribute("open")).not.toBeNull();
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("browses capable nodes and accepts manual paths for exec-only nodes", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      workspaceGit: true,
-      methodResponses: {
-        "agents.list": {
-          agents: [
-            {
-              id: "main",
-              identity: { name: "Main" },
-              name: "Main",
-              workspace: WORKSPACE,
-              workspaceGit: true,
-            },
-            {
-              id: "research",
-              identity: { name: "Research" },
-              name: "Research",
-              workspace: "/home/peter/research",
-              workspaceGit: true,
-            },
-          ],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
-        "node.list": {
-          nodes: [
-            {
-              nodeId: "macbook",
-              displayName: "MacBook",
-              connected: true,
-              commands: ["system.run", "fs.listDir"],
-            },
-            {
-              nodeId: "old-node",
-              displayName: "Old node",
-              connected: true,
-              commands: ["system.run"],
-            },
-            {
-              nodeId: "offline-node",
-              displayName: "Offline node",
-              connected: false,
-              commands: ["system.run", "fs.listDir"],
-            },
-          ],
-        },
-        "fs.listDir": {
-          cases: [
-            {
-              match: { nodeId: "macbook", path: NODE_UNC },
-              response: {
-                path: NODE_UNC,
-                parent: "\\\\server\\share",
-                home: "C:\\Users\\peter",
-                entries: [],
-              },
-            },
-            {
-              match: { nodeId: "macbook", path: NODE_PICKED },
-              response: {
-                path: NODE_PICKED,
-                parent: NODE_HOME,
-                home: NODE_HOME,
-                entries: [],
-              },
-            },
-            {
-              match: { nodeId: "macbook" },
-              response: {
-                path: NODE_HOME,
-                home: NODE_HOME,
-                entries: [{ name: "Projects", path: NODE_PICKED }],
-              },
-            },
-          ],
-        },
-        "sessions.create": { key: "agent:main:node-draft-e2e" },
-        "sessions.list": createdSessionListResult("agent:main:node-draft-e2e"),
-      },
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").waitFor();
-      const whereSelect = page.locator("wa-popover.new-session-page__where-popover");
-      const whereTrigger = page.locator("#new-session-where-trigger");
-      const whereLabel = whereTrigger.locator(".new-session-page__trigger-label");
-      const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
-      const projectTrigger = page.locator("#new-session-project-trigger");
-      const projectLabel = projectTrigger.locator(".new-session-page__trigger-label");
-      const browserEntries = page.locator(".new-session-page__browser-list");
-
-      // Pick the node from Your devices.
-      await whereTrigger.click();
-      await whereSelect.getByRole("button", { name: "MacBook" }).click();
-      await pollLocatorText(whereLabel).toBe("MacBook");
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-
-      // Manual path entry in the browser head preserves UNC paths; these
-      // cannot be rediscovered by starting at the node home directory.
-      await projectTrigger.click();
-      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
-      const pathInput = page.locator("input.new-session-page__browser-path");
-      await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
-      await pathInput.fill(NODE_UNC);
-      await pathInput.press("Enter");
-      await expect.poll(() => pathInput.inputValue()).toBe(NODE_UNC);
-      // Escape returns to the picker root without applying or closing it.
-      await page.keyboard.press("Escape");
-      await expect
-        .poll(() =>
-          projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
-        )
-        .toBe(true);
-      await projectSelect.getByRole("button", { name: "Browse folders" }).waitFor();
-
-      // Destination selection stays in Where; browsing remains fixed to the selected target.
-      await page.keyboard.press("Escape");
-      await whereTrigger.click();
-      await whereSelect.getByRole("button", { name: "Local" }).click();
-      await pollLocatorText(whereLabel).toBe("Local");
-      await whereTrigger.click();
-      expect(await whereSelect.getByRole("button", { name: "Offline node" }).count()).toBe(0);
-      await whereSelect.getByRole("button", { name: "MacBook" }).click();
-      await projectTrigger.click();
-      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
-      await browserEntries.getByRole("button", { name: "Projects" }).click();
-      await page.getByRole("button", { name: "Use this folder" }).click();
-
-      // Using a node folder retargets the draft to that node.
-      await pollLocatorText(whereLabel).toBe("MacBook");
-      await pollLocatorText(projectLabel).toBe("Projects");
-
-      // A node cwd belongs to the selected agent's draft and must not leak
-      // across an agent change, even though the execution node stays selected.
-      const agentPicker = page.locator(".new-session-page__select--agent openclaw-agent-select");
-      await agentPicker.locator(".agent-select__trigger").click();
-      await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
-        .filter({ hasText: "Research" })
-        .click();
-      await page.getByRole("heading", { name: "Research" }).waitFor();
-      await pollLocatorText(whereLabel).toBe("MacBook");
-      await pollLocatorText(projectLabel).toBe("research");
-
-      // Clearing the path applies the node's default directory (empty folder),
-      // the state the replaced clearable folder textbox could express.
-      await projectTrigger.click();
-      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
-      await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
-      await pathInput.fill("");
-      await page.getByRole("button", { name: "Use this folder" }).click();
-      await pollLocatorText(projectLabel).toBe("research");
-
-      // Browse back to the custom folder, then retarget to the exec-only node
-      // with a manual absolute path for the final create assertion.
-      await projectTrigger.click();
-      await projectSelect.getByRole("button", { name: "Browse folders" }).click();
-      await browserEntries.getByRole("button", { name: "Projects" }).click();
-      await page.getByRole("button", { name: "Use this folder" }).click();
-      await pollLocatorText(projectLabel).toBe("Projects");
-
-      await whereTrigger.click();
-      await whereSelect.getByRole("button", { name: "Old node" }).click();
-      expect(await page.locator("#new-session-detail-trigger").count()).toBe(0);
-      await projectTrigger.click();
-      const nodeCwd = projectSelect.getByLabel("Working directory");
-      await expect.poll(() => nodeCwd.inputValue()).toBe("");
-      await nodeCwd.fill(EXEC_ONLY_PICKED);
-      await captureProjectUiProof(page, "node-path-picker.png");
-      await nodeCwd.press("Enter");
-      expect(
-        (await gateway.getRequests("fs.listDir")).filter(
-          (request) => (request.params as { nodeId?: string } | undefined)?.nodeId === "old-node",
-        ),
-      ).toHaveLength(0);
-      await page.keyboard.press("Escape");
-      await pollLocatorText(whereLabel).toBe("Old node");
-      await pollLocatorText(projectLabel).toBe("repo");
-
-      await page.locator(".new-session-page__message").fill("inspect the remote checkout");
-      await page.getByRole("button", { name: "Start session" }).click();
-      const createRequest = await gateway.waitForRequest("sessions.create");
-      expect(createRequest.params).toMatchObject({
-        agentId: "research",
-        message: "inspect the remote checkout",
-        execNode: "old-node",
-        cwd: EXEC_ONLY_PICKED,
-      });
-      expect(createRequest.params).not.toHaveProperty("worktree");
     } finally {
       await context.close();
     }

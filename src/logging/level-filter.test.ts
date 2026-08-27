@@ -2,10 +2,13 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readLoggingConfigMock } = vi.hoisted(() => ({
-  readLoggingConfigMock: vi.fn(() => undefined),
+  readLoggingConfigMock: vi.fn<() => { level: "silent" } | { consoleLevel: "silent" } | undefined>(
+    () => undefined,
+  ),
 }));
 
 vi.mock("./config.js", () => ({
+  invalidateLoggingConfigCache: vi.fn(),
   readLoggingConfig: readLoggingConfigMock,
 }));
 
@@ -17,6 +20,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   delete process.env.OPENCLAW_TEST_FILE_LOG;
+  delete process.env.OPENCLAW_TEST_CONSOLE;
   delete process.env.OPENCLAW_LOG_LEVEL;
   readLoggingConfigMock.mockClear();
   logging.resetLogger();
@@ -25,10 +29,64 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.OPENCLAW_TEST_FILE_LOG;
+  delete process.env.OPENCLAW_TEST_CONSOLE;
   delete process.env.OPENCLAW_LOG_LEVEL;
   logging.resetLogger();
   logging.setLoggerOverride(null);
   vi.restoreAllMocks();
+});
+
+describe("resolved logging settings cache", () => {
+  it("loads file settings once per logger generation", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    readLoggingConfigMock.mockReturnValue({ level: "silent" });
+    logging.setLoggerConfigLoaderForTests(readLoggingConfigMock);
+
+    logging.getLogger();
+    logging.getLogger();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride({ level: "silent" });
+    logging.getLogger();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride(null);
+    logging.getLogger();
+    logging.getLogger();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses settings resolved by the file-level admission check when building the logger", () => {
+    process.env.OPENCLAW_TEST_FILE_LOG = "1";
+    readLoggingConfigMock.mockReturnValue({ level: "silent" });
+    logging.setLoggerConfigLoaderForTests(readLoggingConfigMock);
+
+    expect(logging.isFileLogLevelEnabled("info")).toBe(false);
+    logging.getLogger();
+
+    expect(readLoggingConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("loads console settings once per logger generation", () => {
+    process.env.OPENCLAW_TEST_CONSOLE = "1";
+    readLoggingConfigMock.mockReturnValue({ consoleLevel: "silent" });
+    logging.setLoggerConfigLoaderForTests(readLoggingConfigMock);
+    logging.setLoggerOverride(null);
+    readLoggingConfigMock.mockClear();
+
+    logging.getConsoleSettings();
+    logging.getConsoleSettings();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride({ consoleLevel: "silent" });
+    logging.getConsoleSettings();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(1);
+
+    logging.setLoggerOverride(null);
+    logging.getConsoleSettings();
+    logging.getConsoleSettings();
+    expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {

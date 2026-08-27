@@ -17,6 +17,17 @@ export function renderDevices(props: DevicesProps) {
   const approvalsState = resolveExecApprovalsState(props);
   return renderSettingsPage(
     html`
+      ${!props.canManagePairing || !props.canAdmin
+        ? html`<div class="callout info" role="note">
+            ${t(
+              !props.canManagePairing && !props.canAdmin
+                ? "devices.readOnly.pairingAndAdminRequired"
+                : !props.canManagePairing
+                  ? "devices.readOnly.pairingRequired"
+                  : "devices.readOnly.adminRequired",
+            )}
+          </div>`
+        : nothing}
       ${renderDeviceInventory(props)} ${renderExecApprovals(approvalsState)}
       ${renderBindings(bindingState)}
     `,
@@ -47,6 +58,7 @@ type BindingState = {
   onSave: () => void;
   onLoadConfig: () => void;
   formMode: "form" | "raw";
+  canAdmin: boolean;
 };
 
 function resolveBindingsState(props: DevicesProps): BindingState {
@@ -54,7 +66,7 @@ function resolveBindingsState(props: DevicesProps): BindingState {
   const nodes = resolveExecNodes(props.nodes);
   const { defaultBinding, agents } = resolveAgentBindings(config);
   const ready = Boolean(config);
-  const disabled = props.configSaving || props.configFormMode === "raw";
+  const disabled = !props.canAdmin || props.configSaving || props.configFormMode === "raw";
   return {
     ready,
     disabled,
@@ -69,6 +81,7 @@ function resolveBindingsState(props: DevicesProps): BindingState {
     onSave: props.onSaveBindings,
     onLoadConfig: props.onLoadConfig,
     formMode: props.configFormMode,
+    canAdmin: props.canAdmin,
   };
 }
 
@@ -80,6 +93,7 @@ function renderBindings(state: BindingState) {
     </button>
   `;
   const rows = html`
+    ${!state.canAdmin ? renderSettingsRow({ title: t("devices.readOnly.adminRequired") }) : nothing}
     ${state.formMode === "raw"
       ? renderSettingsRow({ title: t("devices.binding.formModeHint") })
       : nothing}

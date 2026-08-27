@@ -100,6 +100,7 @@ function currentMinimaxTestEnv(): NodeJS.ProcessEnv {
 async function ensureMinimaxApiKey(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
+  workspaceDir?: string;
   confirm: WizardPrompter["confirm"];
   note?: WizardPrompter["note"];
   select?: WizardPrompter["select"];
@@ -110,6 +111,7 @@ async function ensureMinimaxApiKey(params: {
   return await ensureMinimaxApiKeyInternal({
     config: params.config,
     env: params.env ?? currentMinimaxTestEnv(),
+    workspaceDir: params.workspaceDir,
     prompter: createPrompter({
       confirm: params.confirm,
       note: params.note,
@@ -124,6 +126,7 @@ async function ensureMinimaxApiKey(params: {
 async function ensureMinimaxApiKeyInternal(params: {
   config?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["config"];
   env?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["env"];
+  workspaceDir?: string;
   prompter: WizardPrompter;
   secretInputMode?: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["secretInputMode"];
   setCredential: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]["setCredential"];
@@ -131,6 +134,7 @@ async function ensureMinimaxApiKeyInternal(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config ?? {},
     env: params.env,
+    workspaceDir: params.workspaceDir,
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -250,10 +254,10 @@ describe("validateApiKeyInput", () => {
 });
 
 describe("ensureApiKeyFromEnvOrPrompt", () => {
-  it("resolves environment auth using the same config and workspace as provider runtime", async () => {
+  it("uses the prepared workspace when staged config has no default agent", async () => {
     const workspaceDir = "/tmp/openclaw-provider-workspace";
     const config: OpenClawConfig = {
-      agents: { defaults: { workspace: workspaceDir } },
+      agents: { entries: { main: {}, work: { workspace: workspaceDir } } },
       plugins: { entries: { minimax: { enabled: true } } },
     };
     const env = { MINIMAX_API_KEY: "workspace-env-key" } as NodeJS.ProcessEnv;
@@ -262,6 +266,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const result = await ensureMinimaxApiKey({
       config,
       env,
+      workspaceDir,
       confirm,
       text,
       setCredential,

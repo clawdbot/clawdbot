@@ -5,6 +5,7 @@ import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/fi
 import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   readChunkWithIdleTimeout,
@@ -81,6 +82,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Require HTTPS for the initial URL and every redirect target. */
+  requireHttps?: boolean;
   /** Abort the complete guarded fetch and body operation after this deadline (ms). */
   timeoutMs?: number;
   /** Abort if final response headers have not arrived by this deadline (ms). */
@@ -280,6 +283,14 @@ function redactMediaUrl(url: string): string {
   return redactSensitiveText(url);
 }
 
+function createMediaFetchFailure(sourceUrl: string, cause: unknown): MediaFetchError {
+  return new MediaFetchError(
+    "fetch_failed",
+    `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(cause)}`,
+    { cause },
+  );
+}
+
 async function fetchGuardedMediaResponse(
   options: FetchMediaOptions,
 ): Promise<GuardedMediaResponse> {
@@ -288,6 +299,7 @@ async function fetchGuardedMediaResponse(
     fetchImpl,
     requestInit,
     maxRedirects,
+    requireHttps,
     timeoutMs,
     responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
@@ -320,6 +332,7 @@ async function fetchGuardedMediaResponse(
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        ...(requireHttps !== undefined ? { requireHttps } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         ...(requestSignal ? { signal: requestSignal } : {}),
         policy: ssrfPolicy,
@@ -375,13 +388,7 @@ async function fetchGuardedMediaResponse(
     };
   } catch (err) {
     responseHeaderDeadline.cleanup();
-    throw new MediaFetchError(
-      "fetch_failed",
-      `Failed to fetch media from ${sourceUrl}: ${formatErrorMessage(err)}`,
-      {
-        cause: err,
-      },
-    );
+    throw createMediaFetchFailure(sourceUrl, err);
   }
 }
 
@@ -594,11 +601,7 @@ async function saveOkMediaResponse(params: {
         { cause: err },
       );
     }
-    throw new MediaFetchError(
-      "fetch_failed",
-      `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
-      { cause: err },
-    );
+    throw createMediaFetchFailure(params.sourceUrl, err);
   }
 }
 
@@ -629,12 +632,17 @@ async function withMediaFetchRetry<T>(
   if (!retry) {
     return await fn();
   }
-  const callerShouldRetry = retry.shouldRetry;
   return await retryAsync(fn, {
     label: "media:fetch",
     ...retry,
     shouldRetry: (err, attempt) =>
-      callerShouldRetry ? callerShouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    sleep:
+      retry.sleep ??
+      ((delay) =>
+        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
+          throw createMediaFetchFailure(redactMediaUrl(options.url), cause);
+        })),
   });
 }
 
@@ -734,11 +742,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       if (err instanceof MediaFetchError) {
         throw err;
       }
-      throw new MediaFetchError(
-        "fetch_failed",
-        `Failed to fetch media from ${redactMediaUrl(res.url || options.url)}: ${formatErrorMessage(err)}`,
-        { cause: err },
-      );
+      throw createMediaFetchFailure(redactMediaUrl(res.url || options.url), err);
     }
     let fileName = resolveRemoteFileName({
       res,

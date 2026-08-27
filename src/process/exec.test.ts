@@ -494,6 +494,25 @@ describe("runCommandBuffered", () => {
     expect(result.stdout.byteLength).toBeLessThanOrEqual(16);
   });
 
+  it("caps stdout and stderr under one aggregate output budget", async () => {
+    const result = await runCommandBuffered(
+      [
+        process.execPath,
+        "-e",
+        "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
+      ],
+      {
+        maxCombinedOutputBytes: 6,
+        maxOutputBytes: 8,
+        timeoutMs: 3_000,
+      },
+    );
+
+    expect(result.termination).toBe("output-limit");
+    expect(result.outputLimitStream).toBe("stderr");
+    expect(result.stdout.byteLength + result.stderr.byteLength).toBe(6);
+  });
+
   it("maps timeout and pre-aborted signals without throwing", async () => {
     const timedOut = await runCommandBuffered(
       [process.execPath, "-e", "setInterval(() => {}, 1_000)"],

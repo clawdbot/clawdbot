@@ -43,7 +43,6 @@ import {
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
 import {
   listPluginSdkDistArtifacts,
-  listPackagedPrivatePluginSdkRuntimeArtifacts,
   listUnpackagedPrivatePluginSdkDistArtifacts,
 } from "./lib/plugin-sdk-entries.mts";
 import {
@@ -63,9 +62,6 @@ import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-
 type ReleaseCheckExecOptions = ExecFileSyncOptions & {
   windowsVerbatimArguments?: boolean;
 };
-
-export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mts";
 
 export const RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV =
   "OPENCLAW_RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR";
@@ -89,7 +85,6 @@ const requiredPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
-  ...listPackagedPrivatePluginSdkRuntimeArtifacts(),
   ...listBundledPluginPackArtifacts(),
   ...listStaticExtensionAssetOutputs().filter((relativePath: string) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
@@ -113,7 +108,7 @@ const requiredPathGroups = [
   "dist/agents/compaction-planning.worker.js",
   "dist/agents/model-provider-auth.worker.js",
   "dist/agents/prepared-model-catalog.worker.js",
-  "dist/audit/audit-event-writer.worker.js",
+  "dist/extensions/memory-core/memory-search-knn.child.js",
   "dist/config/sessions/session-accessor.sqlite-archive.worker.js",
   "dist/config/sessions/session-transcript-reconcile.worker.js",
   "dist/state/openclaw-database-verify.worker.js",
@@ -1158,8 +1153,6 @@ export function collectForbiddenPackContentPaths(
     })
     .toSorted((left, right) => left.localeCompare(right));
 }
-
-export { collectPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mts";
 
 function extractTag(item: string, tag: string): string | null {
   const escapedTag = escapeRegExp(tag);

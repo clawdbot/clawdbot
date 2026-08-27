@@ -15,6 +15,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import {
+  SIDEBAR_GEOMETRY_COMMIT_EVENT,
   SIDEBAR_MIN_HEIGHT_PX,
   SIDEBAR_MIN_WIDTH_PX,
   sidebarDock,
@@ -274,7 +275,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   }
 
   private renderBody(column?: SidebarColumn) {
-    if (!column) {
+    if (!column || column.panels.length === 0) {
       return html`<div id="chat-side-panel-content" class="side-panel__body">
         ${this.renderEmpty()}
       </div>`;
@@ -358,7 +359,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         style=${styleMap({ width, height })}
         aria-label=${t("chat.sidePanel.label")}
       >
-        ${column
+        ${column?.panels.length
           ? this.renderHeader(column)
           : html`<header class="rail-header side-panel__header side-panel__header--empty">
               <strong class="side-panel__empty-header-title">${t("chat.sidePanel.label")}</strong>
@@ -371,7 +372,19 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   protected override updated() {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
+      const previousWidth = root.querySelector<HTMLElement>(".side-panel")?.style.width;
       renderTemplate(this.renderPanel(), root);
+      const panel = root.querySelector<HTMLElement>(".side-panel");
+      // The manual panel render is the commit boundary for its transcript.
+      // Width changes additionally invalidate every transcript row measurement.
+      panel?.dispatchEvent(
+        new CustomEvent(SIDEBAR_GEOMETRY_COMMIT_EVENT, {
+          bubbles: true,
+          detail: {
+            widthChanged: previousWidth !== undefined && panel.style.width !== previousWidth,
+          },
+        }),
+      );
     }
   }
 

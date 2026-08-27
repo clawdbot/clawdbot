@@ -11,6 +11,16 @@ read_when:
 
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
+## Adoption
+
+OpenClaw adds a short progress-card reminder only for non-main sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
+
+The reminder says:
+
+> During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.
+
+The reminder does not override tool policy. `tools.updatePlan: false` or a matching `tools.deny` entry still removes `progress_card` from the run entirely.
+
 ## Update a card
 
 Both input fields are optional:
@@ -73,12 +83,12 @@ An empty plan plus empty or whitespace-only Markdown also clears it. A successfu
 
 ## Where the card appears
 
-The current chat shows exactly one live card:
+The current chat keeps exactly one live card in the main conversation:
 
-- When the session rail is visible, the card appears in the rail.
-- At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
+- The card appears in the collapsible surface inside the composer at every width.
 
-The two placements are mutually exclusive. Other sessions can show their latest card in the sidebar hovercard. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Each placement shows the local time of the last progress update, including seconds.
 
 ## Pin the card to the dashboard
 

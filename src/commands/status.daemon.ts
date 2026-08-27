@@ -9,7 +9,8 @@ import { readServiceStatusSummary } from "./status.service-summary.js";
 type DaemonStatusSummary = {
   label: string;
   installed: boolean | null;
-  loaded: boolean;
+  loaded: boolean | null;
+  loadState: Awaited<ReturnType<typeof readServiceStatusSummary>>["loadState"];
   managedByOpenClaw: boolean;
   externallyManaged: boolean;
   loadedText: string;
@@ -26,10 +27,13 @@ async function buildDaemonStatusSummary(
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
   const summary = await readServiceStatusSummary(service, fallbackLabel, timeoutMs);
+  const loaded =
+    summary.loadState.status === "unknown" ? null : summary.loadState.status === "loaded";
   return {
     label: summary.label,
     installed: summary.installed,
-    loaded: summary.loaded,
+    loaded,
+    loadState: summary.loadState,
     managedByOpenClaw: summary.managedByOpenClaw,
     externallyManaged: summary.externallyManaged,
     loadedText: summary.loadedText,

@@ -8,20 +8,45 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import type { SessionCreatedActor, SessionParticipantSource } from "./session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  type SessionCreatedActor,
+  type SessionParticipantSource,
+} from "./session-entry-provenance.js";
 import type { SessionEntry } from "./types.js";
 
 export type SessionParticipantRecord = {
   actor: SessionCreatedActor & { id: string };
+  contributionCount: number;
   firstPromptedAt: number;
   lastPromptedAt: number;
   source?: SessionParticipantSource;
 };
 
+export function resolveBoundedProfileParticipantSnapshot(
+  records: readonly SessionParticipantRecord[],
+  currentProfileId?: string,
+): { profileIds: string[]; incomplete: boolean } {
+  const profileIds = new Set(
+    records.flatMap((record) =>
+      record.actor.type === "human" && record.source === "profile" ? [record.actor.id] : [],
+    ),
+  );
+  const current = currentProfileId?.trim();
+  if (current && !profileIds.has(current) && records.length < MAX_SESSION_PARTICIPANTS) {
+    profileIds.add(current);
+  }
+  return {
+    profileIds: [...profileIds],
+    incomplete: records.length >= MAX_SESSION_PARTICIPANTS,
+  };
+}
+
 function projectParticipantRow(row: {
   actor_id: string;
   actor_source?: string | null;
   actor_type: string;
+  contribution_count?: number | null;
   first_prompted_at: number;
   last_prompted_at: number;
 }): SessionParticipantRecord | null {
@@ -30,6 +55,7 @@ function projectParticipantRow(row: {
   }
   return {
     actor: { type: row.actor_type, id: row.actor_id },
+    contributionCount: row.contribution_count ?? 1,
     firstPromptedAt: row.first_prompted_at,
     lastPromptedAt: row.last_prompted_at,
     ...(row.actor_source === "profile" ||
@@ -47,6 +73,11 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
   // Lazy-ensured column: pre-feature databases lack actor_source, so select it
   // only when present; projection treats the absent field as unknown/legacy.
   const hasActorSource = tableHasColumn(database, SESSION_PARTICIPANTS_TABLE, "actor_source");
+  const hasContributionCount = tableHasColumn(
+    database,
+    SESSION_PARTICIPANTS_TABLE,
+    "contribution_count",
+  );
   let query = getSessionKysely(database)
     .selectFrom("session_participants")
     .select([
@@ -54,6 +85,7 @@ function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly stri
       "actor_type",
       "actor_id",
       ...(hasActorSource ? (["actor_source"] as const) : []),
+      ...(hasContributionCount ? (["contribution_count"] as const) : []),
       "first_prompted_at",
       "last_prompted_at",
     ]);
@@ -135,11 +167,16 @@ export function projectSqliteSessionParticipantsBatch(
 export function listSessionParticipantsReadOnly(scope: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  sessionKey?: string;
   storePath?: string;
 }): Map<string, SessionParticipantRecord[]> {
   const resolved = resolveSqliteReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => participantRecordsBySessionKey(database.db),
+    (database) =>
+      participantRecordsBySessionKey(
+        database.db,
+        scope.sessionKey ? [scope.sessionKey] : undefined,
+      ),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : new Map();

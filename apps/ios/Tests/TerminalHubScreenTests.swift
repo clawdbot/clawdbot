@@ -37,12 +37,12 @@ struct TerminalHubScreenTests {
 
     @Test func `terminal URL flips scheme and preserves the Control UI base path`() throws {
         let config = try Self.makeConfig(
-            url: #require(URL(string: "wss://gateway.example.com:8443/openclaw")),
+            url: #require(URL(string: "wss://gateway.example.com:8443/openclaw/")),
             token: "secret-token")
 
         let url = TerminalHubScreen.terminalURL(config: config)
 
-        #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/?view=terminal")
+        #expect(url?.absoluteString == "https://gateway.example.com:8443/openclaw/focus/terminal")
         // Credentials must never ride in the page URL; they travel via the
         // document-start auth user script instead.
         #expect(url?.absoluteString.contains("secret-token") == false)
@@ -53,7 +53,7 @@ struct TerminalHubScreenTests {
 
         let url = TerminalHubScreen.terminalURL(config: config)
 
-        #expect(url?.absoluteString == "http://192.168.1.10:18789/?view=terminal")
+        #expect(url?.absoluteString == "http://192.168.1.10:18789/focus/terminal")
     }
 
     @Test func `auth user script carries credentials gated to the page origin`() throws {

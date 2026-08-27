@@ -22,6 +22,7 @@ defineDiscordVoiceTests(
     createClient,
     createManager,
     makeVoiceConfig,
+    configureVoiceStateGateway,
     createAgentProxyManager,
     createFollowManager,
     expectConnectedStatus,
@@ -623,6 +624,42 @@ defineDiscordVoiceTests(
         expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2);
       });
       await updateVoiceState(manager, "u-owner", null);
+
+      expect(manager.status()).toEqual([]);
+    });
+
+    it("preserves occupied auto-join ownership through DAVE receive recovery", async () => {
+      const firstConnection = createConnectionMock();
+      joinVoiceChannelMock
+        .mockReturnValueOnce(firstConnection)
+        .mockReturnValueOnce(createConnectionMock());
+      const client = createClient();
+      const humanState = {
+        guild_id: "g1",
+        user_id: "u-owner",
+        channel_id: "1001",
+        member: { user: { id: "u-owner", bot: false } },
+      };
+      let voiceStates: Array<Record<string, unknown>> = [humanState];
+      configureVoiceStateGateway(client, () => voiceStates);
+      const manager = createManager(
+        makeVoiceConfig({
+          autoJoin: [{ guildId: "g1", channelId: "1001", whenOccupied: true }],
+        }),
+        client,
+        {},
+        "default",
+        "bot-user",
+      );
+      await manager.autoJoin();
+
+      emitDecryptFailure(manager);
+      emitDecryptFailure(manager);
+      emitDecryptFailure(manager);
+      await vi.waitFor(() => expect(joinVoiceChannelMock).toHaveBeenCalledTimes(2));
+
+      voiceStates = [];
+      await updateVoiceState(manager, "u-owner", null, humanState.member);
 
       expect(manager.status()).toEqual([]);
     });

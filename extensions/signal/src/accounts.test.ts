@@ -37,6 +37,11 @@ describe("resolveSignalAccount", () => {
       expected: { baseUrl: "http://[::1]:8181", httpHost: "::1", httpPort: 8181 },
     },
     {
+      name: "canonicalizes a bracketed IPv6 managed native bind",
+      transport: { kind: "managed-native", httpHost: "[::1]", httpPort: 8181 },
+      expected: { baseUrl: "http://[::1]:8181", httpHost: "::1", httpPort: 8181 },
+    },
+    {
       name: "does not reserve a managed transport's own implicit connection endpoint",
       transport: {
         kind: "managed-native",

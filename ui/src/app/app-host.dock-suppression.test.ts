@@ -7,9 +7,12 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import type { RouteId } from "../app-routes.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
+// This test owns shell panel routing, not lazy sidebar loading; settle that module at setup.
+import "../components/app-sidebar.ts";
 import "./app-host.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
+import { loadSettings } from "./settings.ts";
 
 type ShellRenderState = {
   runtime: ApplicationRuntime;
@@ -104,14 +107,13 @@ describe("OpenClaw shell dock suppression", () => {
           approvalQueue: [],
           approvalBusy: false,
           approvalErrors: new Map(),
-          approvalNowMs: 0,
           devicePairSetupOpen: false,
           devicePairSetupLifecycle: { phase: "selection", access: "full" },
           devicePairPendingCount: 0,
         },
         runUpdate: vi.fn(),
       },
-      theme: { mode: "dark" },
+      theme: { mode: "dark", settings: loadSettings() },
       preload: vi.fn(),
     } as unknown as ApplicationContext;
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellRenderState;
@@ -166,10 +168,10 @@ describe("OpenClaw shell dock suppression", () => {
     expect(
       (
         container.querySelector("openclaw-terminal-panel") as HTMLElement & {
-          sessionBottomOnly: boolean;
+          sessionKey: string | null;
         }
-      ).sessionBottomOnly,
-    ).toBe(true);
+      ).sessionKey,
+    ).toBe("agent:main:main");
     expect(container.querySelector("openclaw-browser-panel")).toBeNull();
     expect(container.querySelector("openclaw-desktop-panel")).toBeNull();
 

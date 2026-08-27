@@ -16,7 +16,7 @@ Adds agent-callable tools.
 
 ## Surface
 
-contracts: `tools`; skills
+CLI commands: `openclaw browser`; contracts: `tools`; skills
 
 ## Related docs
 

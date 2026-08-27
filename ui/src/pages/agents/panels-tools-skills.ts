@@ -9,17 +9,12 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveEntry,
   ToolsEffectiveResult,
-  ToolsGitHubStatusResult,
 } from "../../api/types.ts";
 import {
   renderSettingsEmpty,
   renderSettingsRow,
-  renderSettingsSecretInput,
   renderSettingsSection,
-  renderSettingsSegmented,
-  renderSettingsStatus,
   renderSettingsToggle,
-  renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -28,11 +23,13 @@ import {
   isAllowedByPolicy,
   matchesList,
   resolveAgentConfig,
+  resolveAgentSkillsFilter,
   resolveToolProfileOptions,
   resolveToolProfile,
   resolveToolSections,
 } from "../../lib/agents/display.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { SkillGroup } from "../../lib/skills-grouping.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
@@ -41,6 +38,7 @@ import {
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import type { GitHubIdentityController } from "./github-identity-controller.ts";
+import { renderGitHubIdentity } from "./github-identity-view.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {
@@ -175,12 +173,9 @@ function handleRuntimeToolJump(event: Event, anchorId: string) {
   window.history.replaceState(null, "", nextUrl);
 
   requestAnimationFrame(() => {
-    const reducedMotion =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     target.scrollIntoView?.({
       block: "center",
-      behavior: reducedMotion ? "auto" : "smooth",
+      behavior: resolveScrollBehavior(),
     });
     target.querySelector<HTMLElement>("summary")?.focus();
   });
@@ -226,194 +221,6 @@ function renderEffectiveToolBadge(tool: {
     return "MCP";
   }
   return t("agentTools.builtIn");
-}
-
-function githubSourceLabel(source: ToolsGitHubStatusResult["source"]) {
-  switch (source) {
-    case "system-configured":
-      return t("agentTools.githubSourceSystem");
-    case "agent-override":
-      return t("agentTools.githubSourceAgent");
-    default:
-      return t("agentTools.githubSourceDetected");
-  }
-}
-
-const GITHUB_CREDENTIAL_STATUS = {
-  available: { kind: "ok", label: "agentTools.githubStateVerified" },
-  unverified: { kind: "warn", label: "agentTools.githubStateUnverified" },
-  rate_limited: { kind: "warn", label: "agentTools.githubStateRateLimited" },
-  unavailable: { kind: "danger", label: "agentTools.githubStateUnavailable" },
-  configured_unavailable: { kind: "danger", label: "agentTools.githubStateConfiguredUnavailable" },
-} as const;
-
-function githubEvidenceDetail(status: ToolsGitHubStatusResult) {
-  switch (status.evidence) {
-    case "github-api":
-      return t("agentTools.githubEvidenceApi");
-    case "rate-limited":
-      return t("agentTools.githubEvidenceRateLimited");
-    case "unverified":
-      return t("agentTools.githubEvidenceUnverified");
-    default:
-      return undefined;
-  }
-}
-
-function renderGitHubIdentity(controller: GitHubIdentityController) {
-  const status = controller.status;
-  const draft = controller.draft;
-  const disabled = controller.busy || !controller.configurable;
-  const renderAuthorRow = (field: "name" | "email", label: string) =>
-    renderSettingsRow({
-      title: label,
-      control: html`
-        <input
-          class="settings-input"
-          aria-label=${label}
-          autocomplete="off"
-          .value=${draft[field]}
-          ?disabled=${disabled}
-          @input=${(event: Event) => {
-            if (event.currentTarget instanceof HTMLInputElement) {
-              controller.setDraft(field, event.currentTarget.value);
-            }
-          }}
-        />
-      `,
-    });
-  const credentialStatus = status ? GITHUB_CREDENTIAL_STATUS[status.credentialState] : null;
-  const authorParts = status
-    ? [status.gitAuthor.name, status.gitAuthor.email].filter(
-        (part): part is string => typeof part === "string" && part.length > 0,
-      )
-    : [];
-  const statusRows = !status
-    ? renderSettingsRow({
-        title: t("agentTools.githubAccount"),
-        description: controller.loading ? t("agentTools.githubVerifying") : undefined,
-        control: renderSettingsValue(t("agentTools.githubNoAccount")),
-      })
-    : html`
-        ${renderSettingsRow({
-          title: t("agentTools.githubAccount"),
-          description: githubSourceLabel(status.source),
-          control: status.account
-            ? html`
-                <span class="settings-account">
-                  ${status.account.avatarUrl
-                    ? html`<img
-                        class="settings-account__avatar"
-                        src=${status.account.avatarUrl}
-                        alt=""
-                      />`
-                    : nothing}
-                  <span class="settings-row__value settings-row__value--mono"
-                    >@${status.account.login}</span
-                  >
-                </span>
-              `
-            : renderSettingsValue(t("agentTools.githubNoAccount")),
-        })}
-        ${credentialStatus
-          ? renderSettingsRow({
-              title: t("agentTools.status"),
-              description: githubEvidenceDetail(status),
-              control: renderSettingsStatus({
-                kind: credentialStatus.kind,
-                label: t(credentialStatus.label),
-              }),
-            })
-          : nothing}
-        ${renderSettingsRow({
-          title: t("agentTools.githubAuthor"),
-          control: renderSettingsValue(
-            authorParts.length > 0 ? authorParts.join(" · ") : t("agentTools.githubAuthorUnset"),
-          ),
-        })}
-      `;
-  return renderSettingsSection(
-    {
-      title: t("agentTools.githubTitle"),
-      description: t("agentTools.githubSubtitle"),
-      actions: controller.supported
-        ? html`<button
-            class="btn btn--sm"
-            ?disabled=${controller.loading}
-            @click=${() => void controller.verify()}
-          >
-            ${controller.loading ? t("agentTools.githubVerifying") : t("agentTools.githubVerify")}
-          </button>`
-        : undefined,
-    },
-    !controller.supported
-      ? renderSettingsEmpty(t("agentTools.githubOlderGateway"))
-      : html`
-          ${controller.error
-            ? renderSettingsRow({
-                title: renderSettingsStatus({
-                  kind: "danger",
-                  label: t("agentTools.githubErrorTitle"),
-                }),
-                description: formatUiExternalText(controller.error),
-              })
-            : nothing}
-          ${statusRows}
-          ${renderSettingsRow({
-            title: t("agentTools.githubScope"),
-            description:
-              controller.scope === "agent"
-                ? t("agentTools.githubScopeAgentDesc")
-                : t("agentTools.githubScopeSystemDesc"),
-            control: renderSettingsSegmented({
-              value: controller.scope,
-              options: [
-                { value: "system", label: t("agentTools.githubSystem") },
-                { value: "agent", label: t("agentTools.githubAgentOverride") },
-              ],
-              disabled: controller.busy,
-              ariaLabel: t("agentTools.githubScope"),
-              onChange: (scope) => controller.selectScope(scope),
-            }),
-          })}
-          ${renderSettingsRow({
-            title: t("agentTools.githubToken"),
-            description: t("agentTools.githubTokenDesc"),
-            control: renderSettingsSecretInput({
-              ariaLabel: t("agentTools.githubToken"),
-              value: draft.token,
-              visible: controller.tokenRevealed,
-              disabled,
-              showLabel: t("configForm.revealValue"),
-              hideLabel: t("configForm.hideValue"),
-              toggleLabel: t("agentTools.githubTokenToggle"),
-              onInput: (value) => controller.setDraft("token", value),
-              onToggle: () => controller.toggleTokenVisibility(),
-            }),
-          })}
-          ${renderAuthorRow("name", t("agentTools.githubAuthorName"))}
-          ${renderAuthorRow("email", t("agentTools.githubAuthorEmail"))}
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__desc">${t("agentTools.githubCloudNote")}</span>
-            </div>
-            <div class="settings-row__control">
-              <button class="btn" ?disabled=${disabled} @click=${() => void controller.inherit()}>
-                ${controller.scope === "agent"
-                  ? t("agentTools.githubUseSystem")
-                  : t("agentTools.githubUseNative")}
-              </button>
-              <button
-                class="btn primary"
-                ?disabled=${disabled}
-                @click=${() => void controller.configure()}
-              >
-                ${controller.busy ? t("common.saving") : t("agentTools.githubConfigure")}
-              </button>
-            </div>
-          </div>
-        `,
-  );
 }
 
 export function renderAgentTools(params: {
@@ -922,12 +729,16 @@ export function renderAgentSkills(params: {
     !params.configLoading &&
     !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
-  const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
-  const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
+  const explicitAllowlist = Array.isArray(config.entry?.skills)
+    ? normalizeStringEntries(config.entry.skills)
+    : undefined;
+  const allowlist = resolveAgentSkillsFilter(params.configForm, params.agentId);
+  const allowSet = new Set(allowlist ?? []);
   const usingAllowlist = allowlist !== undefined;
+  const inheritedAllowlist = explicitAllowlist === undefined && usingAllowlist;
   const canClear =
     params.canPatchConfig &&
-    usingAllowlist &&
+    explicitAllowlist !== undefined &&
     Boolean(params.configForm) &&
     !params.configLoading &&
     !params.configSaving;
@@ -952,7 +763,13 @@ export function renderAgentSkills(params: {
       ? html`<div class="callout info">${t("agents.skillsPanel.loadConfig")}</div>`
       : nothing}
     ${usingAllowlist
-      ? html`<div class="callout info">${t("agents.skillsPanel.customAllowlist")}</div>`
+      ? html`<div class="callout info">
+          ${t(
+            inheritedAllowlist
+              ? "agents.skillsPanel.inheritedAllowlist"
+              : "agents.skillsPanel.customAllowlist",
+          )}
+        </div>`
       : html`<div class="callout info">${t("agents.skillsPanel.allEnabled")}</div>`}
     ${!reportReady && !params.loading
       ? html`<div class="callout info">${t("agents.skillsPanel.loadAgent")}</div>`
@@ -964,13 +781,6 @@ export function renderAgentSkills(params: {
         description: html`${t("agents.skillsPanel.subtitle")}
         ${totalCount > 0 ? html`<span class="mono">${enabledCount}/${totalCount}</span>` : nothing}`,
         actions: html`
-          <button
-            class="btn btn--sm"
-            ?disabled=${!canClear}
-            @click=${() => params.onClear(params.agentId)}
-          >
-            ${t("agentTools.enableAll")}
-          </button>
           <button
             class="btn btn--sm"
             ?disabled=${!editable}
@@ -1029,6 +839,7 @@ export function renderAgentSkills(params: {
                     allowSet,
                     usingAllowlist,
                     editable,
+                    filterActive: Boolean(filter),
                     onToggle: params.onToggle,
                   }),
                 )}
@@ -1046,10 +857,12 @@ function renderAgentSkillGroup(
     allowSet: Set<string>;
     usingAllowlist: boolean;
     editable: boolean;
+    filterActive: boolean;
     onToggle: (agentId: string, skillName: string, enabled: boolean) => void;
   },
 ) {
-  const collapsedByDefault = group.id === "workspace" || group.id === "built-in";
+  const collapsedByDefault =
+    !params.filterActive && (group.id === "workspace" || group.id === "built-in");
   return html`
     <details class="agent-skills-group" ?open=${!collapsedByDefault}>
       <summary class="agent-skills-header">

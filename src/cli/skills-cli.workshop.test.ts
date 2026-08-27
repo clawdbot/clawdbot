@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayTransportError } from "../gateway/transport-error.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -50,10 +51,21 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => {
-    throw Object.assign(new Error("gateway unavailable"), { kind: "closed", code: 1006 });
+    throw new GatewayTransportError({
+      kind: "closed",
+      code: 1006,
+      reason: "abnormal closure",
+      message: "gateway closed (1006): abnormal closure",
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        message: "",
+      },
+    });
   }),
-  isGatewayCredentialsRequiredError: () => false,
-  isGatewayTransportError: () => true,
+  isGatewayCredentialsRequiredError: (error: unknown) =>
+    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+  isImplicitLocalGatewayTarget: async () => !process.env.OPENCLAW_GATEWAY_URL,
 }));
 
 vi.mock("../infra/gateway-lock.js", () => ({
@@ -83,6 +95,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveConfiguredAgentId: (_config: unknown, agentId: string) => agentId,
   resolveAgentIdByWorkspacePath: () => undefined,
   resolveDefaultAgentId: () => "main",
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) => {

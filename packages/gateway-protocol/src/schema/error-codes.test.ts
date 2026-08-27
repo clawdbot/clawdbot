@@ -8,8 +8,11 @@ import {
   isMcpAppViewExpiredError,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,
+  SkillProposalRevisionChangedErrorDetailsSchema,
   missingScopeErrorShape,
+  readSkillProposalRevisionChangedError,
   readMissingScopeError,
   readMissingScopeErrorDetails,
   readCronJobNotFoundError,
@@ -52,6 +55,15 @@ describe("gateway error details", () => {
     expect(isMcpAppViewExpiredError(new Error("upstream token expired"))).toBe(false);
   });
 
+  it("validates queued outbound delivery details", () => {
+    const details = { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED };
+    expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(OutboundDeliveryQueuedErrorDetailsSchema, { ...details, retry: true })).toBe(
+      false,
+    );
+  });
+
   it("validates unknown-agent details", () => {
     const details = { code: GatewayErrorDetailCodes.UNKNOWN_AGENT_ID, agentId: "retired" };
     expect(Value.Check(UnknownAgentIdErrorDetailsSchema, details)).toBe(true);
@@ -78,6 +90,23 @@ describe("gateway error details", () => {
     expect(Value.Check(ProjectCloneErrorDetailsSchema, { ...details, cause: "unknown" })).toBe(
       false,
     );
+  });
+
+  it("validates and reads changed skill proposal revisions", () => {
+    const details = {
+      code: GatewayErrorDetailCodes.SKILL_PROPOSAL_REVISION_CHANGED,
+      expectedRevisionHash: "A".repeat(64),
+      currentRevisionHash: "b".repeat(64),
+    };
+
+    expect(Value.Check(SkillProposalRevisionChangedErrorDetailsSchema, details)).toBe(true);
+    expect(Value.Check(GatewayErrorDetailsSchema, details)).toBe(true);
+    expect(readSkillProposalRevisionChangedError({ details })).toEqual(details);
+    expect(
+      readSkillProposalRevisionChangedError({
+        details: { ...details, currentRevisionHash: "not-a-sha256" },
+      }),
+    ).toBeNull();
   });
 
   it("builds a distinct forbidden missing-scope response", () => {

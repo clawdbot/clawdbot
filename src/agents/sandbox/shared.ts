@@ -63,14 +63,24 @@ function resolveSandboxScopeKey(
   sessionKey: string,
   workspaceDir: string,
   agentId?: string,
+  sandboxPrincipalId?: string,
 ) {
   const trimmed = sessionKey.trim() || "main";
-  if (scope === "shared") {
+  if (scope === "shared" && !sandboxPrincipalId) {
     return "shared";
   }
   // Co-hosted workspaces may reuse agent and session keys, but must never
   // converge on one runtime, registry entry, or materialized skills workspace.
   const workspaceSuffix = `:workspace:${hashTextSha256(resolveUserPath(workspaceDir)).slice(0, 32)}`;
+  if (sandboxPrincipalId) {
+    const resolvedAgentId = agentId
+      ? normalizeAgentId(agentId)
+      : resolveAgentIdFromSessionKey(trimmed);
+    const principalHash = hashTextSha256(sandboxPrincipalId).slice(0, 32);
+    // Creator ownership outlives any one session; hash it to keep principal ids
+    // out of container names, registry rows, and sandbox workspace paths.
+    return `agent:${resolvedAgentId}:principal:${principalHash}${workspaceSuffix}`;
+  }
   if (scope === "session") {
     return `${trimmed}${workspaceSuffix}`;
   }
@@ -98,6 +108,7 @@ export function resolveSandboxWorkspaceLayoutPaths(params: {
   cfg: Pick<SandboxConfig, "scope" | "workspaceAccess" | "workspaceRoot">;
   rawSessionKey: string;
   agentId?: string;
+  sandboxPrincipalId?: string;
   workspaceDir?: string;
 }) {
   const agentWorkspaceDir = resolveUserPath(
@@ -109,9 +120,10 @@ export function resolveSandboxWorkspaceLayoutPaths(params: {
     params.rawSessionKey,
     agentWorkspaceDir,
     params.agentId,
+    params.sandboxPrincipalId,
   );
   const sandboxWorkspaceDir =
-    params.cfg.scope === "shared"
+    params.cfg.scope === "shared" && !params.sandboxPrincipalId
       ? workspaceRoot
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const workspaceDir =

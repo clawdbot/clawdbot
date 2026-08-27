@@ -1230,6 +1230,79 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("medium");
   });
 
+  test("validates context-window selections against the effective model catalog", async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "claude-cli/claude-fable-5" } } },
+    } as OpenClawConfig;
+    const loadGatewayModelCatalog = async () => [
+      {
+        provider: "claude-cli",
+        id: "claude-fable-5",
+        name: "Claude Fable 5",
+        contextWindow: 1_000_000,
+        contextWindows: [
+          { id: "200k", label: "200K", contextWindow: 200_000 },
+          { id: "1m", label: "1M", contextWindow: 1_000_000 },
+        ],
+        contextWindowDefault: "1m",
+      },
+    ];
+
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg,
+        patch: { key: MAIN_SESSION_KEY, contextWindow: "200k" },
+        loadGatewayModelCatalog,
+      }),
+    );
+    expect(entry.contextWindow).toBe("200k");
+    expect(entry.liveModelSwitchPending).toBe(true);
+
+    const invalid = await runPatch({
+      cfg,
+      patch: { key: MAIN_SESSION_KEY, contextWindow: "2m" },
+      loadGatewayModelCatalog,
+    });
+    expectPatchError(invalid, 'contextWindow "2m" is not supported');
+  });
+
+  test("rejects thinking levels forbidden by the concrete runtime policy", async () => {
+    providerThinkingMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "claude-cli"
+        ? { levels: [{ id: "off" }], defaultLevel: "off" }
+        : {
+            levels: [{ id: "minimal" }, { id: "medium" }, { id: "adaptive" }],
+            defaultLevel: "adaptive",
+            preserveWhenCatalogReasoningFalse: true,
+          },
+    );
+
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-mythos-5" },
+          },
+        },
+      } as OpenClawConfig,
+      patch: {
+        key: MAIN_SESSION_KEY,
+        thinkingLevel: "medium",
+      },
+      loadGatewayModelCatalog: async () => [
+        {
+          provider: "anthropic",
+          id: "claude-mythos-5",
+          name: "Claude Mythos 5",
+          reasoning: false,
+          thinkingPolicyProvider: "claude-cli",
+        },
+      ],
+    });
+
+    expectPatchError(result, 'thinkingLevel "medium" is not supported');
+  });
+
   test("accepts xhigh thinking patches from configured catalog compat", async () => {
     const entry = expectPatchOk(
       await runPatch({
@@ -1582,6 +1655,27 @@ describe("gateway sessions patch", () => {
     expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
+  test("stores and clears a session permission mode without a recorded root", async () => {
+    const store = mainStoreEntry({});
+    const stored = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: "workspace" },
+      }),
+    );
+    expect(stored.permissionMode).toBe("workspace");
+    expect(stored.sessionRoot).toBeUndefined();
+
+    const cleared = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, permissionMode: null },
+      }),
+    );
+    expect(cleared.permissionMode).toBeUndefined();
+    expect(cleared.sessionRoot).toBeUndefined();
+  });
+
   test("clears a node cwd when changing or clearing the node binding", async () => {
     const store = mainStoreEntry({
       execHost: "node",
@@ -1593,6 +1687,7 @@ describe("gateway sessions patch", () => {
     );
     expect(changed.execNode).toBe("worker-2");
     expect(changed.execCwd).toBeUndefined();
+    expect(changed.execHost).toBe("node");
 
     const cleared = expectPatchOk(
       await runPatch({
@@ -1606,7 +1701,28 @@ describe("gateway sessions patch", () => {
     );
     expect(cleared.execNode).toBeUndefined();
     expect(cleared.execCwd).toBeUndefined();
+    expect(cleared.execHost).toBeUndefined();
   });
+
+  test.each(["auto", "gateway", "sandbox"] as const)(
+    "preserves explicit %s exec hosting when clearing a stale node binding",
+    async (execHost) => {
+      const cleared = expectPatchOk(
+        await runPatch({
+          store: mainStoreEntry({
+            execHost,
+            execNode: "worker-1",
+            execCwd: "/workspace/on-worker-1",
+          }),
+          patch: { key: MAIN_SESSION_KEY, execNode: null },
+        }),
+      );
+
+      expect(cleared.execHost).toBe(execHost);
+      expect(cleared.execNode).toBeUndefined();
+      expect(cleared.execCwd).toBeUndefined();
+    },
+  );
 
   test("rejects invalid execHost values", async () => {
     const result = await runPatch({

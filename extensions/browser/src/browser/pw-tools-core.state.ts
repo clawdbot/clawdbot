@@ -3,11 +3,9 @@
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
-import { playwrightCore } from "./playwright-core.runtime.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-
-const { devices: playwrightDevices } = playwrightCore;
 
 type DeviceSize = { width: number; height: number };
 type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -252,7 +250,7 @@ export async function setDeviceViaPlaywright(opts: {
   if (!name) {
     throw new Error("device name is required");
   }
-  const descriptor = (playwrightDevices as Record<string, unknown>)[name] as
+  const descriptor = (getPlaywrightCore().devices as Record<string, unknown>)[name] as
     | PlaywrightDeviceDescriptor
     | undefined;
   if (!descriptor) {

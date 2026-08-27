@@ -61,7 +61,8 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
     openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi

@@ -125,6 +125,7 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       nixMode: false,
       preservesWorkspace: false,
       serviceChecks: 1,
+      aggregatesFailure: false,
       run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
         resetCommand(runtime, { scope: "full", yes: true, nonInteractive: true }),
     },
@@ -133,6 +134,7 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       nixMode: true,
       preservesWorkspace: false,
       serviceChecks: 0,
+      aggregatesFailure: false,
       run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
         resetCommand(runtime, { scope: "full", yes: true, nonInteractive: true }),
     },
@@ -141,12 +143,13 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       nixMode: false,
       preservesWorkspace: true,
       serviceChecks: 0,
+      aggregatesFailure: true,
       run: (runtime: ReturnType<typeof createNonExitingRuntime>) =>
         uninstallCommand(runtime, { state: true, yes: true, nonInteractive: true }),
     },
   ])(
     "refuses $command until the SQLite owner exits",
-    async ({ nixMode, preservesWorkspace, run, serviceChecks }) => {
+    async ({ aggregatesFailure, nixMode, preservesWorkspace, run, serviceChecks }) => {
       const state = await createOpenClawTestState({
         prefix: "openclaw-cleanup-live-state-",
         layout: "split",
@@ -173,7 +176,14 @@ describe("destructive cleanup with a live unmanaged state owner", () => {
       const blockedRuntime = createNonExitingRuntime();
       vi.spyOn(blockedRuntime, "log").mockImplementation(() => {});
       vi.spyOn(blockedRuntime, "error").mockImplementation(() => {});
-      await expect(run(blockedRuntime)).rejects.toThrow(/Gateway|state directory/i);
+      if (aggregatesFailure) {
+        await expect(run(blockedRuntime)).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        expect(blockedRuntime.error).toHaveBeenCalledWith(
+          expect.stringMatching(/Gateway|state directory/i),
+        );
+      } else {
+        await expect(run(blockedRuntime)).rejects.toThrow(/Gateway|state directory/i);
+      }
       expect(gatewayService.isLoaded).toHaveBeenCalledTimes(serviceChecks);
       expect(owner.exitCode).toBeNull();
       await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("preserved");

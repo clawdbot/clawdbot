@@ -140,7 +140,7 @@ private final class UnreadTestTransport: @unchecked Sendable, OpenClawChatTransp
         true
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         []
     }
 
@@ -398,6 +398,66 @@ struct ChatViewModelUnreadTests {
         #expect(attempts.map(\.1) == [true, false])
     }
 
+    @Test func `manual unread from another client survives refresh until reactivation`() async throws {
+        let transport = UnreadTestTransport(sessions: [
+            self.entry(key: "a", unread: false),
+            self.entry(key: "b", unread: false),
+        ])
+        let viewModel = self.viewModel(sessionKey: "a", transport: transport)
+
+        viewModel.load()
+        try await self.waitForUnreadState("initial read session loaded") {
+            !viewModel.isLoading && viewModel.sessionId == "session-a"
+        }
+        await transport.setSessions([
+            self.entry(key: "a", unread: true, markedUnreadAt: 100),
+            self.entry(key: "b", unread: false),
+        ])
+        viewModel.refresh()
+        try await self.waitForUnreadState("manual unread refresh settled") {
+            await transport.historyCallCount() >= 2 && !viewModel.isLoading
+        }
+        #expect(await transport.unreadPatchAttempts().isEmpty)
+
+        viewModel.switchSession(to: "b")
+        try await self.waitForUnreadState("other session activated") {
+            viewModel.sessionId == "session-b"
+        }
+        viewModel.switchSession(to: "a")
+        try await self.waitForUnreadState("manual unread acknowledged on reactivation") {
+            await transport.unreadPatchAttempts().count == 1
+        }
+
+        let attempts = await transport.unreadPatchAttempts()
+        #expect(attempts.map(\.0) == ["a"])
+        #expect(attempts.map(\.1) == [false])
+    }
+
+    @Test func `newer manual unread remains visible when activation acknowledgement loses race`() async throws {
+        let patchGate = UnreadPatchGate()
+        let transport = UnreadTestTransport(
+            sessions: [self.entry(key: "a", unread: true, markedUnreadAt: 100)],
+            patchGate: patchGate)
+        let viewModel = self.viewModel(sessionKey: "a", transport: transport)
+
+        viewModel.load()
+        try await self.waitForUnreadState("activation acknowledgement started") {
+            await transport.unreadPatchStartCount() == 1
+        }
+        await transport.setSessions([
+            self.entry(key: "a", unread: true, markedUnreadAt: 101),
+        ])
+        await patchGate.release()
+        try await self.waitForUnreadState("authoritative unread refresh applied") {
+            await transport.listCallCount() >= 2 &&
+                viewModel.sessions.first(where: { $0.key == "a" })?.markedUnreadAt == 101
+        }
+
+        let session = try #require(viewModel.sessions.first(where: { $0.key == "a" }))
+        #expect(session.unread == true)
+        #expect(session.markedUnreadAt == 101)
+    }
+
     @Test func `successful off-list mark read records read confirmation`() async throws {
         let transport = UnreadTestTransport(sessions: [])
         let viewModel = self.viewModel(sessionKey: "a", transport: transport)
@@ -413,12 +473,12 @@ struct ChatViewModelUnreadTests {
     @Test func `failed route lease preserves mutation queue ordering`() async throws {
         let recorder = UnreadMutationRecorder()
         let queue = ChatSessionUnreadMutationQueue()
-        let firstLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _, _ in
+        let firstLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _, _, _ in
             await recorder.append("first-start")
             try await Task.sleep(for: .milliseconds(100))
             await recorder.append("first-end")
         }
-        let thirdLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _, _ in
+        let thirdLease = OpenClawChatSessionMutationRouteLease { _, _, _, _, _, _, _, _ in
             await recorder.append("third")
         }
 
@@ -609,6 +669,7 @@ struct ChatViewModelUnreadTests {
         key: String,
         unread: Bool,
         updatedAt: Double = 1,
+        markedUnreadAt: Double? = nil,
         lastInteractionAt: Double? = nil,
         lastActivityAt: Double? = nil,
         pinned: Bool? = nil) -> OpenClawChatSessionEntry
@@ -635,6 +696,7 @@ struct ChatViewModelUnreadTests {
             contextTokens: nil,
             pinned: pinned,
             unread: unread,
+            markedUnreadAt: markedUnreadAt,
             lastInteractionAt: lastInteractionAt,
             lastActivityAt: lastActivityAt)
     }

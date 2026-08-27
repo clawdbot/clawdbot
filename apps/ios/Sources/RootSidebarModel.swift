@@ -5,8 +5,87 @@ import OpenClawKit
 import OpenClawProtocol
 
 struct ChatSessionRosterSnapshot: Sendable {
+    private static let maximumPageCount = 50
+    private static let maximumSessionCount = 10000
+
     let sessions: [OpenClawChatSessionEntry]
     let isCached: Bool
+    let totalCount: Int?
+    let isComplete: Bool
+
+    init(
+        sessions: [OpenClawChatSessionEntry],
+        isCached: Bool,
+        totalCount: Int? = nil,
+        isComplete: Bool = true)
+    {
+        self.sessions = sessions
+        self.isCached = isCached
+        self.totalCount = totalCount
+        self.isComplete = isComplete
+    }
+
+    @MainActor
+    static func collect(
+        fetchPage: @MainActor (Int) async throws -> OpenClawChatSessionsListResponse) async throws -> Self
+    {
+        var sessions: [OpenClawChatSessionEntry] = []
+        var rowIndices: [String: Int] = [:]
+        var totalCount: Int?
+        var offset = 0
+        var pageCount = 0
+
+        while true {
+            try Task.checkCancellation()
+            // Match sessions.list's bounded scan so a changing Gateway snapshot
+            // cannot keep a sidebar refresh alive forever.
+            guard pageCount < Self.maximumPageCount, sessions.count < Self.maximumSessionCount else {
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            pageCount += 1
+            let response: OpenClawChatSessionsListResponse
+            do {
+                response = try await fetchPage(offset)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard !sessions.isEmpty else { throw error }
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            try Task.checkCancellation()
+
+            if let count = response.totalCount {
+                totalCount = count
+            }
+            for session in response.sessions {
+                if let index = rowIndices[session.key] {
+                    sessions[index] = session
+                } else {
+                    guard sessions.count < Self.maximumSessionCount else {
+                        return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+                    }
+                    rowIndices[session.key] = sessions.count
+                    sessions.append(session)
+                }
+            }
+
+            let advancedOffset = offset + response.sessions.count
+            let hasMore = response.hasMore ?? totalCount.map { advancedOffset < $0 } ?? false
+            guard hasMore else {
+                let isComplete = totalCount.map { sessions.count >= $0 } ?? true
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: isComplete)
+            }
+
+            let nextOffset = response.nextOffset ?? advancedOffset
+            guard !response.sessions.isEmpty,
+                  nextOffset > offset,
+                  totalCount.map({ nextOffset < $0 }) ?? true
+            else {
+                return Self(sessions: sessions, isCached: false, totalCount: totalCount, isComplete: false)
+            }
+            offset = nextOffset
+        }
+    }
 }
 
 extension NodeAppModel {
@@ -19,21 +98,60 @@ extension NodeAppModel {
             guard allowCachedFallback else { throw URLError(.notConnectedToInternet) }
             return await ChatSessionRosterSnapshot(
                 sessions: archived ? [] : self.loadCachedChatSessions(),
-                isCached: true)
+                isCached: true,
+                isComplete: false)
         }
 
         do {
-            let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
-            if !archived {
-                self.reconcileChatSessionReadState(response.sessions)
-                await self.storeCachedChatSessions(response.sessions)
+            let sourceGatewayID = self.chatTranscriptCacheGatewayID
+            let snapshot: ChatSessionRosterSnapshot
+            if self.isLocalChatFixtureEnabled {
+                let response = try await self.makeChatTransport().listSessions(limit: limit, archived: archived)
+                snapshot = ChatSessionRosterSnapshot(
+                    sessions: response.sessions,
+                    isCached: false,
+                    totalCount: response.totalCount,
+                    isComplete: response.hasMore != true)
+            } else {
+                guard let sourceGatewayID,
+                      let route = await self.operatorSession.currentRoute(ifGatewayID: sourceGatewayID)
+                else { throw URLError(.notConnectedToInternet) }
+
+                // Every page belongs to one physical authenticated Gateway route;
+                // reconnects and gateway switches must never splice two rosters.
+                snapshot = try await ChatSessionRosterSnapshot.collect { offset in
+                    let request = OpenClawChatGatewayRequests.sessionsList(
+                        limit: limit,
+                        search: nil,
+                        archived: archived,
+                        offset: offset)
+                    let data = try await self.operatorSession.request(request, ifCurrentRoute: route)
+                    return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+                }
+                guard GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID) else {
+                    throw CancellationError()
+                }
             }
-            return ChatSessionRosterSnapshot(sessions: response.sessions, isCached: false)
+
+            if !archived {
+                // An interrupted page must not replace a more complete offline roster.
+                if snapshot.isComplete {
+                    await self.storeCachedChatSessions(snapshot.sessions)
+                    if let sourceGatewayID,
+                       !GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
+                    {
+                        throw CancellationError()
+                    }
+                }
+            }
+            return snapshot
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             guard allowCachedFallback, !archived else { throw error }
             let cached = await self.loadCachedChatSessions()
             guard !cached.isEmpty else { throw error }
-            return ChatSessionRosterSnapshot(sessions: cached, isCached: true)
+            return ChatSessionRosterSnapshot(sessions: cached, isCached: true, isComplete: false)
         }
     }
 }
@@ -59,6 +177,7 @@ final class RootSidebarModel {
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
     private(set) var sessionErrorText: String?
+    private(set) var isSessionRosterComplete = true
     private var rosterGeneration = 0
     private var dashboardGeneration = 0
     private var sessionObserverVisibility = false
@@ -113,8 +232,7 @@ final class RootSidebarModel {
         if rosterGeneration == self.rosterGeneration {
             switch loadedRoster {
             case let .success(loadedRoster):
-                self.sessions = loadedRoster.sessions
-                self.sessionErrorText = nil
+                self.applyRoster(loadedRoster)
             case let .failure(message):
                 self.sessionErrorText = message
             case .cancelled:
@@ -147,8 +265,7 @@ final class RootSidebarModel {
         guard !Task.isCancelled, rosterGeneration == self.rosterGeneration else { return }
         switch loadedRoster {
         case let .success(roster):
-            self.sessions = roster.sessions
-            self.sessionErrorText = nil
+            self.applyRoster(roster)
         case let .failure(message):
             self.sessionErrorText = message
         case .cancelled:
@@ -357,11 +474,32 @@ final class RootSidebarModel {
         self.sessionErrorText = error.localizedDescription
     }
 
-    static func tokenUsageSummary(for sessions: [OpenClawChatSessionEntry]) -> TokenUsageSummary {
+    static func tokenUsageSummary(
+        for sessions: [OpenClawChatSessionEntry],
+        rosterIsComplete: Bool = true) -> TokenUsageSummary
+    {
         let knownTotals = sessions.compactMap(\.totalTokens)
         return TokenUsageSummary(
             total: knownTotals.isEmpty ? nil : knownTotals.reduce(0, +),
-            isPartial: knownTotals.count < sessions.count || sessions.contains { $0.totalTokensFresh == false })
+            isPartial: !rosterIsComplete || knownTotals.count < sessions.count ||
+                sessions.contains { $0.totalTokensFresh == false })
+    }
+
+    private func applyRoster(_ roster: ChatSessionRosterSnapshot) {
+        self.sessions = roster.sessions
+        self.isSessionRosterComplete = roster.isComplete
+        guard !roster.isComplete, !roster.isCached else {
+            self.sessionErrorText = nil
+            return
+        }
+        if let totalCount = roster.totalCount {
+            self.sessionErrorText = String(
+                format: String(localized: "Showing %lld of %lld sessions. Refresh to load the rest."),
+                roster.sessions.count,
+                totalCount)
+        } else {
+            self.sessionErrorText = String(localized: "Some sessions could not be loaded. Refresh to try again.")
+        }
     }
 
     private func loadRoster(
@@ -387,7 +525,7 @@ final class RootSidebarModel {
             CostUsageSummaryLite.self,
             appModel: appModel,
             method: "usage.cost",
-            paramsJSON: "{\"days\":31}")
+            paramsJSON: CostUsageRequest.monthParamsJSON())
         async let cronJobs = self.loadCronJobs(appModel: appModel)
         let loadedUsage = await usage
         let loadedCronJobs = await cronJobs

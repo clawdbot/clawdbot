@@ -53,6 +53,36 @@ function writeChannelCatalog(
 }
 
 describe("channel plugin catalog", () => {
+  it.each([
+    ["omitted", undefined, undefined],
+    ["empty", "", ""],
+    ["spaced", "  See docs:  ", "  See docs:  "],
+  ] as const)("preserves %s selection docs prefixes", (_label, prefix, expected) => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        pluginId: "workspace-chat",
+        origin: "workspace",
+        rootDir: "/tmp/workspace-chat",
+        packageName: "@workspace/chat",
+        channel: {
+          id: "custom-chat",
+          label: "Custom Chat",
+          selectionLabel: "Custom Chat",
+          docsPath: "/channels/custom-chat",
+          blurb: "workspace",
+          ...(prefix !== undefined ? { selectionDocsPrefix: prefix } : {}),
+        },
+        install: { localPath: "/tmp/workspace-chat" },
+      },
+    ] satisfies PluginChannelCatalogEntry[]);
+
+    const entry = getChannelPluginCatalogEntry("custom-chat", {
+      workspaceDir: "/tmp",
+    });
+
+    expect(entry?.meta.selectionDocsPrefix).toBe(expected);
+  });
+
   it("keeps third-party channel ids mapped with catalog install trust", () => {
     const options = {
       workspaceDir: "/tmp/openclaw-channel-catalog-empty-workspace",
@@ -63,13 +93,13 @@ describe("channel plugin catalog", () => {
     expect(wecom?.id).toBe("wecom");
     expect(wecom?.pluginId).toBe("wecom-openclaw-plugin");
     expect(wecom?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(wecom?.install?.npmSpec).toBe("@wecom/wecom-openclaw-plugin@2026.5.7");
+    expect(wecom?.install?.npmSpec).toBe("@wecom/wecom-openclaw-plugin@2026.7.2");
 
     const yuanbao = getChannelPluginCatalogEntry("yuanbao", options);
     expect(yuanbao?.id).toBe("yuanbao");
     expect(yuanbao?.pluginId).toBe("openclaw-plugin-yuanbao");
     expect(yuanbao?.trustedSourceLinkedOfficialInstall).toBe(true);
-    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.15.0");
+    expect(yuanbao?.install?.npmSpec).toBe("openclaw-plugin-yuanbao@2.18.2");
   });
 
   it("excludes only the rejected origin/plugin pair when resolving fallback copies", () => {

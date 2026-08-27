@@ -77,7 +77,9 @@ export type AgentEventRuntimePayload = AgentEventPayload & {
   readonly controlUiVisible?: boolean;
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
+  readonly mainSessionRestartRecovery?: true;
   readonly projectSessionLifecycle?: boolean;
+  readonly projectSessionMessages?: boolean;
 };
 
 type AgentEventState = {
@@ -297,6 +299,18 @@ function enrichAgentEvent(
   if (context?.projectSessionLifecycle !== undefined) {
     Object.defineProperty(enriched, "projectSessionLifecycle", {
       value: context.projectSessionLifecycle,
+      enumerable: false,
+    });
+  }
+  if (context?.projectSessionMessages !== undefined) {
+    Object.defineProperty(enriched, "projectSessionMessages", {
+      value: context.projectSessionMessages,
+      enumerable: false,
+    });
+  }
+  if (context?.mainSessionRestartRecovery === true) {
+    Object.defineProperty(enriched, "mainSessionRestartRecovery", {
+      value: true,
       enumerable: false,
     });
   }

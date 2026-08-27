@@ -56,7 +56,7 @@ export async function modelsAuthLogoutCommand(
   }
 
   const cfg = await loadModelsConfig({ commandName: "models auth logout", runtime });
-  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent, { kind: "mutation" });
   // External CLI overlays (Claude/Codex CLI) are not ours to delete, so the
   // removable set is exactly the persisted store.
   const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);

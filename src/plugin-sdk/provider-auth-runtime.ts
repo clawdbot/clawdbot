@@ -13,6 +13,8 @@ import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callba
 import { escapeHtml } from "../shared/html-escape.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
+export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,

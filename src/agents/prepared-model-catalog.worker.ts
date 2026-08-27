@@ -1,6 +1,8 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
+import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
+import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -20,6 +22,7 @@ import {
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
+import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 function refreshAuthStore(params: {
@@ -61,7 +64,6 @@ function refreshAuthStore(params: {
       config: params.config,
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
-      workspaceDir: params.pluginGeneration.pluginMetadataSnapshot.workspaceDir,
     },
     () =>
       overlayExternalAuthProfiles(prepared, {
@@ -76,7 +78,17 @@ function refreshAuthStore(params: {
 
 async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
   const { prepareWorkspaceBuildGroup } = await import("./prepared-model-runtime.facts.js");
-  const prepared = await prepareWorkspaceBuildGroup([value.input], "live");
+  // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
+  // metadata generation. Transfer its facts and restore only process-local behavior.
+  const metadata = restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
+  const prepared = await prepareWorkspaceBuildGroup(
+    [value.input],
+    "live",
+    {},
+    undefined,
+    undefined,
+    metadata,
+  );
   const agentFacts = prepared.agentFacts[0];
   if (!agentFacts) {
     throw new Error("prepared model catalog worker produced no agent facts");
@@ -122,8 +134,8 @@ export async function runPreparedModelCatalogWorkerRequest(
         ),
       };
     }
-    const { prepareAgentCatalogSource, prepareFullCatalogFacts } =
-      await import("./prepared-model-runtime.facts.js");
+    const { prepareAgentCatalogSource } = await import("./prepared-model-runtime.facts.js");
+    const { prepareFullCatalogFacts } = await import("./prepared-model-runtime.full-catalog.js");
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
     const authStore = refreshAuthStore({
@@ -141,12 +153,15 @@ export async function runPreparedModelCatalogWorkerRequest(
         config: value.input.config,
         metadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
         pluginRegistry: prepared.pluginGeneration.pluginRegistry,
-        workspaceDir: value.input.workspaceDir,
       },
       () =>
         resolveAmbientAgentCredentialsForDiscovery({
           config: value.input.config,
           env: value.input.env,
+          syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
+            resolveRuntimeSyntheticAuthProviderRefs(),
+            value.providerIds,
+          ),
           ...(value.input.workspaceDir ? { workspaceDir: value.input.workspaceDir } : {}),
         }),
     );

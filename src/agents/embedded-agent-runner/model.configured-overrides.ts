@@ -13,7 +13,7 @@ import {
 } from "../model-suppression.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
-  attachModelProviderMetadataOwners,
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -327,7 +327,7 @@ export function applyConfiguredProviderOverrides(params: {
   workspaceDir?: string;
 }): ProviderRuntimeModel {
   const { providerConfig, modelId } = params;
-  const discoveredModel = attachModelProviderMetadataOwners(
+  const discoveredModel = attachModelProviderRequestRouteFacts(
     markDiscoveredMaxTokensSource(params.discoveredModel),
     params.providerMetadataOwners,
   );
@@ -563,7 +563,7 @@ export function applyConfiguredProviderOverrides(params: {
     capability: "llm",
     transport: "stream",
   });
-  return attachModelProviderMetadataOwners(
+  return attachModelProviderRequestRouteFacts(
     attachModelProviderLocalService(
       attachModelProviderRequestTransport(
         {

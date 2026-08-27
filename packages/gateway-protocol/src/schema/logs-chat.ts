@@ -45,6 +45,7 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   deltaCursor: Type.String(),
   sessionInfo: Type.Unknown(),
   agentsList: Type.Optional(Type.Unknown()),
+  inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
 });
 
@@ -164,12 +165,10 @@ export const ChatSendParamsSchema = closedObject({
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
   suppressCommandInterpretation: Type.Optional(Type.Boolean()),
-  // Client's believed active-branch leaf entry id. Legacy targetless steering
-  // requires this immutable fence and may reject; null means an authoritative empty transcript.
+  // Transcript-branch CAS for non-steer interactive sends: the client's displayed
+  // branch leaf (null = authoritative empty transcript). Steer sends ignore it;
+  // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  // Optional for wire compatibility. Modern/durable steer clients should always
-  // send this exact run precondition so a retry cannot move to a successor run.
-  expectedRunId: Type.Optional(NonEmptyString),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
   idempotencyKey: NonEmptyString,
 });
@@ -274,6 +273,10 @@ export const ChatEventSchema = Type.Union([
 
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
+export type ChatHistoryParams = Static<typeof ChatHistoryParamsSchema>;
+export type ChatHistoryDeltaResult = Static<typeof ChatHistoryDeltaResultSchema>;
+export type ChatHistoryResetResult = Static<typeof ChatHistoryResetResultSchema>;
+export type ChatHistoryCursorResult = Static<typeof ChatHistoryCursorResultSchema>;
 export type ChatMetadataParams = Static<typeof ChatMetadataParamsSchema>;
 export type ChatToolTitlesParams = Static<typeof ChatToolTitlesParamsSchema>;
 export type LogsTailParams = Static<typeof LogsTailParamsSchema>;

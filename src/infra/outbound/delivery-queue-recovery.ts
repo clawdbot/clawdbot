@@ -94,7 +94,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /chat_id is empty/i,
   /recipient is not a valid/i,
-  /outbound not configured for channel/i,
   /ambiguous .* recipient/i,
   /User .* not in room/i,
 ];
@@ -285,6 +284,8 @@ function buildRecoveryDeliverParams(
   stateDir?: string,
   producerClaimId?: string,
 ) {
+  const conversationCompletion =
+    entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
   return {
     cfg,
     channel: entry.channel,
@@ -298,8 +299,7 @@ function buildRecoveryDeliverParams(
     preparedBatch: entry.preparedBatch,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
-    replyToId: entry.replyToId,
-    replyToMode: entry.replyToMode,
+    reply: entry.reply,
     formatting: entry.formatting,
     identity: entry.identity,
     bestEffort: entry.bestEffort,
@@ -312,6 +312,20 @@ function buildRecoveryDeliverParams(
     preparedMessageId: entry.preparedMessageId,
     // Recovery owns terminal completion because nested delivery only reports
     // process-local evidence that cannot survive another restart.
+    ...(conversationCompletion
+      ? {
+          conversationDeliveryAttemptAuthority: {
+            agentId: conversationCompletion.agentId,
+            operationId: conversationCompletion.operationId,
+            ...(conversationCompletion.storePath
+              ? { storePath: conversationCompletion.storePath }
+              : {}),
+            ...(conversationCompletion.routeFingerprint
+              ? { routeFingerprint: conversationCompletion.routeFingerprint }
+              : {}),
+          },
+        }
+      : {}),
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     ...(producerClaimId ? { deliveryProducerClaimId: producerClaimId } : {}),
@@ -461,8 +475,8 @@ function buildReconciledCommitContext(params: {
     replyToId:
       params.entry.effectiveReplyToId !== undefined
         ? params.entry.effectiveReplyToId
-        : params.entry.replyToId,
-    replyToMode: params.entry.replyToMode,
+        : params.entry.reply?.replyToId,
+    replyToMode: params.entry.reply?.source === "implicit" ? params.entry.reply.mode : undefined,
     threadId: params.entry.threadId,
     silent: params.entry.silent,
     result,
@@ -1339,7 +1353,8 @@ export async function drainPendingDeliveriesCore(opts: {
 }
 
 /**
- * On gateway startup, scan the delivery queue and retry any pending entries.
+ * Scan the canonical delivery queue and retry any pending entries.
+ * The gateway startup owner runs legacy migration before invoking this recovery pass.
  * Uses exponential backoff and moves entries that exhaust their retry budget to failed/.
  */
 export async function recoverPendingDeliveries(opts: {
@@ -1350,12 +1365,6 @@ export async function recoverPendingDeliveries(opts: {
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
 }): Promise<DeliveryRecoverySummary> {
-  const { migrateLegacyPendingOutboundDeliveries } = await import("./delivery-queue-migration.js");
-  await migrateLegacyPendingOutboundDeliveries({
-    cfg: opts.cfg,
-    log: opts.log,
-    stateDir: opts.stateDir,
-  });
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
     return createEmptyDeliveryRecoverySummary();

@@ -6,7 +6,10 @@ const EXPECTED_LIVE_THREAD_IDLE_TIMEOUT_MS = 30 * 60_000;
 const EXPECTED_MAX_IDLE_LIVE_THREADS = 64;
 
 const mocks = vi.hoisted(() => ({
-  refreshAuth: vi.fn(async () => ({ accessToken: "refreshed", chatgptAccountId: "account" })),
+  refreshAuth: vi.fn(async (_params?: { authProfileStore?: unknown }) => ({
+    accessToken: "refreshed",
+    chatgptAccountId: "account",
+  })),
   mergeRateLimitUpdate: vi.fn(),
 }));
 
@@ -22,6 +25,7 @@ const {
   claimCodexAppServerLiveThread,
   consumeCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
+  hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
   protectCodexAppServerLiveThread,
   releaseCodexAppServerLiveThread,
@@ -77,7 +81,10 @@ describe("Codex app-server client runtime", () => {
 
     await vi.waitFor(() => expect(mocks.mergeRateLimitUpdate).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(mocks.refreshAuth).toHaveBeenCalledTimes(1));
-    expect(mocks.refreshAuth).toHaveBeenCalledWith(updatedContext);
+    expect(mocks.refreshAuth).toHaveBeenCalledWith({
+      ...context,
+      config: updatedContext.config,
+    });
     expect(mocks.mergeRateLimitUpdate).toHaveBeenCalledWith(harness.client, {
       rateLimits: { primary: { usedPercent: 12 } },
     });
@@ -111,6 +118,83 @@ describe("Codex app-server client runtime", () => {
         message: "ChatGPT token refresh is unavailable for prepared Codex API-key auth.",
       },
     });
+  });
+
+  it("bounds token refresh at the Codex external-auth request boundary", async () => {
+    vi.useFakeTimers();
+    mocks.refreshAuth.mockImplementationOnce(() => new Promise(() => {}));
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+
+    harness.send({
+      id: "refresh-timed-out",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "expired" },
+    });
+
+    await vi.advanceTimersByTimeAsync(8_999);
+    expect(harness.writes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
+      id: "refresh-timed-out",
+      error: { message: expect.stringContaining("token refresh timed out") },
+    });
+  });
+
+  it("rejects a refreshed token from a different ChatGPT workspace", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, {
+      agentDir: "/tmp/agent",
+      authProfileId: "openai:default",
+    });
+
+    harness.send({
+      id: "refresh-other-workspace",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "original-workspace" },
+    });
+
+    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(0));
+    expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
+      id: "refresh-other-workspace",
+      error: { message: expect.stringContaining("ChatGPT workspace changed") },
+    });
+  });
+
+  it("keeps the physical client's original auth store across later leases", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const originalStore = { version: 1 as const, profiles: {} };
+    const replacementStore = { version: 1 as const, profiles: {} };
+    ensureCodexAppServerClientRuntime(harness.client, {
+      agentDir: "/tmp/agent",
+      authProfileId: "openai:default",
+      authProfileStore: originalStore,
+    });
+    ensureCodexAppServerClientRuntime(harness.client, {
+      agentDir: "/tmp/agent",
+      authProfileId: "openai:default",
+      authProfileStore: replacementStore,
+      config: { models: { mode: "merge" } },
+    });
+
+    harness.send({
+      id: "refresh-original-owner",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { reason: "unauthorized", previousAccountId: "account" },
+    });
+
+    await vi.waitFor(() => expect(mocks.refreshAuth).toHaveBeenCalledOnce());
+    expect(mocks.refreshAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProfileStore: originalStore,
+        previousAccountId: "account",
+      }),
+    );
+    expect(mocks.refreshAuth.mock.calls[0]?.[0]?.authProfileStore).toBe(originalStore);
   });
 
   it("retains independently subscribed conversations on the same physical client", async () => {
@@ -249,99 +333,125 @@ describe("Codex app-server client runtime", () => {
     expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
   });
 
-  it("blocks same-thread replacement until its claimed unsubscribe is acknowledged", async () => {
-    let acknowledgeUnsubscribe: (() => void) | undefined;
-    const unsubscribeAcknowledged = new Promise<void>((resolve) => {
-      acknowledgeUnsubscribe = resolve;
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/unsubscribe") {
-        await unsubscribeAcknowledged;
+  it.each([
+    { claimed: true, unpinDuringRelease: false },
+    { claimed: false, unpinDuringRelease: false },
+    { claimed: false, unpinDuringRelease: true },
+  ])(
+    "blocks same-thread replacement until unsubscribe is acknowledged (claimed: $claimed, unpin: $unpinDuringRelease)",
+    async ({ claimed, unpinDuringRelease }) => {
+      let acknowledgeUnsubscribe: (() => void) | undefined;
+      const unsubscribeAcknowledged = new Promise<void>((resolve) => {
+        acknowledgeUnsubscribe = resolve;
+      });
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/unsubscribe") {
+          await unsubscribeAcknowledged;
+        }
+        return {};
+      });
+      const client = {
+        request,
+        addCloseHandler: vi.fn(),
+        addNotificationHandler: vi.fn(),
+        addRequestHandler: vi.fn(),
+      } as unknown as CodexAppServerClient;
+      ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
+      const unprotect = unpinDuringRelease
+        ? protectCodexAppServerLiveThread(client, "thread-transition")
+        : undefined;
+      await retainCodexAppServerLiveThread(client, "thread-transition");
+      const previous = claimed
+        ? await consumeCodexAppServerLiveThread(client, "thread-transition")
+        : undefined;
+      const release = () =>
+        previous
+          ? previous.release("thread-transition")
+          : unsubscribeCodexAppServerLiveThread(client, "thread-transition", 5_000);
+      const releasing = release();
+      const duplicateRelease = release();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      unprotect?.();
+      const overlappingPhysicalRelease = unsubscribeCodexAppServerLiveThread(
+        client,
+        "thread-transition",
+        5_000,
+      );
+      await Promise.resolve();
+      expect(request).toHaveBeenCalledOnce();
+      const replacement = retainCodexAppServerLiveThread(
+        client,
+        "thread-transition",
+        previous?.release,
+      );
+      const blockedClaim = consumeCodexAppServerLiveThread(client, "thread-transition");
+      let replacementPublished = false;
+      void replacement.then(() => {
+        replacementPublished = true;
+      });
+      await Promise.resolve();
+
+      expect(replacementPublished).toBe(false);
+      expect(isCodexAppServerLiveThreadClaimed(client, "thread-transition")).toBe(claimed);
+      acknowledgeUnsubscribe?.();
+
+      await expect(releasing).resolves.toBeUndefined();
+      await expect(duplicateRelease).resolves.toBeUndefined();
+      await expect(overlappingPhysicalRelease).resolves.toBeUndefined();
+      await expect(replacement).resolves.toBe(false);
+      await expect(blockedClaim).resolves.toBeUndefined();
+      await client.request(
+        "thread/resume",
+        { threadId: "thread-transition" },
+        { timeoutMs: 5_000 },
+      );
+      await expect(
+        retainCodexAppServerLiveThread(client, "thread-transition", previous?.release),
+      ).resolves.toBe(true);
+      const successor = await consumeCodexAppServerLiveThread(client, "thread-transition");
+      await successor?.release("thread-transition");
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "thread/unsubscribe",
+        "thread/resume",
+        "thread/unsubscribe",
+      ]);
+    },
+  );
+
+  it.each([false, true])(
+    "finishes a thread when its direct physical unsubscribe succeeds (claimed: %s)",
+    async (claimed) => {
+      const request = vi.fn(async () => ({}));
+      request.mockRejectedValueOnce(new Error("unsubscribe unavailable"));
+      const client = {
+        request,
+        addCloseHandler: vi.fn(),
+        addNotificationHandler: vi.fn(),
+        addRequestHandler: vi.fn(),
+      } as unknown as CodexAppServerClient;
+      ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
+      await retainCodexAppServerLiveThread(client, "thread-direct");
+      if (claimed) {
+        await consumeCodexAppServerLiveThread(client, "thread-direct");
       }
-      return {};
-    });
-    const client = {
-      request,
-      addCloseHandler: vi.fn(),
-      addNotificationHandler: vi.fn(),
-      addRequestHandler: vi.fn(),
-    } as unknown as CodexAppServerClient;
-    ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
-    await retainCodexAppServerLiveThread(client, "thread-transition");
-    const previous = await consumeCodexAppServerLiveThread(client, "thread-transition");
-    const releasing = previous?.release("thread-transition");
-    const duplicateRelease = previous?.release("thread-transition");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    const overlappingPhysicalRelease = unsubscribeCodexAppServerLiveThread(
-      client,
-      "thread-transition",
-      5_000,
-    );
-    await Promise.resolve();
-    expect(request).toHaveBeenCalledOnce();
-    const replacement = retainCodexAppServerLiveThread(
-      client,
-      "thread-transition",
-      previous?.release,
-    );
-    const blockedClaim = consumeCodexAppServerLiveThread(client, "thread-transition");
-    let replacementPublished = false;
-    void replacement.then(() => {
-      replacementPublished = true;
-    });
-    await Promise.resolve();
 
-    expect(replacementPublished).toBe(false);
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-transition")).toBe(true);
-    acknowledgeUnsubscribe?.();
+      const failedRelease = unsubscribeCodexAppServerLiveThread(client, "thread-direct", 5_000);
+      const failedJoin = unsubscribeCodexAppServerLiveThread(client, "thread-direct", 5_000);
+      await expect(Promise.all([failedRelease, failedJoin])).rejects.toThrow(
+        "unsubscribe unavailable",
+      );
+      expect(request).toHaveBeenCalledOnce();
+      expect(hasCodexAppServerLiveThread(client, "thread-direct")).toBe(true);
+      await unsubscribeCodexAppServerLiveThread(client, "thread-direct", 5_000);
 
-    await expect(releasing).resolves.toBeUndefined();
-    await expect(duplicateRelease).resolves.toBeUndefined();
-    await expect(overlappingPhysicalRelease).resolves.toBeUndefined();
-    await expect(replacement).resolves.toBe(false);
-    await expect(blockedClaim).resolves.toBeUndefined();
-    await client.request("thread/resume", { threadId: "thread-transition" }, { timeoutMs: 5_000 });
-    await expect(
-      retainCodexAppServerLiveThread(client, "thread-transition", previous?.release),
-    ).resolves.toBe(true);
-    const successor = await consumeCodexAppServerLiveThread(client, "thread-transition");
-    await successor?.release("thread-transition");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/unsubscribe",
-      "thread/resume",
-      "thread/unsubscribe",
-    ]);
-  });
-
-  it("finishes a claimed thread when its direct physical unsubscribe succeeds", async () => {
-    const request = vi.fn(async () => ({}));
-    request.mockRejectedValueOnce(new Error("unsubscribe unavailable"));
-    const client = {
-      request,
-      addCloseHandler: vi.fn(),
-      addNotificationHandler: vi.fn(),
-      addRequestHandler: vi.fn(),
-    } as unknown as CodexAppServerClient;
-    ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
-    await retainCodexAppServerLiveThread(client, "thread-direct");
-    await consumeCodexAppServerLiveThread(client, "thread-direct");
-
-    const failedRelease = unsubscribeCodexAppServerLiveThread(client, "thread-direct", 5_000);
-    const failedJoin = unsubscribeCodexAppServerLiveThread(client, "thread-direct", 5_000);
-    await expect(Promise.all([failedRelease, failedJoin])).rejects.toThrow(
-      "unsubscribe unavailable",
-    );
-    expect(request).toHaveBeenCalledOnce();
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-direct")).toBe(true);
-    await unsubscribeCodexAppServerLiveThread(client, "thread-direct", 5_000);
-
-    expect(request).toHaveBeenLastCalledWith(
-      "thread/unsubscribe",
-      { threadId: "thread-direct" },
-      { timeoutMs: 5_000 },
-    );
-    expect(isCodexAppServerLiveThreadClaimed(client, "thread-direct")).toBe(false);
-  });
+      expect(request).toHaveBeenLastCalledWith(
+        "thread/unsubscribe",
+        { threadId: "thread-direct" },
+        { timeoutMs: 5_000 },
+      );
+      expect(hasCodexAppServerLiveThread(client, "thread-direct")).toBe(false);
+    },
+  );
 
   it("clears claimed ownership when Codex closes the thread or its physical client", async () => {
     const harness = createClientHarness();
@@ -404,6 +514,26 @@ describe("Codex app-server client runtime", () => {
     await expect(consumeCodexAppServerLiveThread(harness.client, "thread-b")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
     );
+  });
+
+  it("rechecks deletion authority before sending the physical unsubscribe", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    await retainCodexAppServerLiveThread(harness.client, "thread-deleted");
+    const request = vi.spyOn(harness.client, "request");
+    let current = true;
+    const release = releaseCodexAppServerLiveThread(harness.client, "thread-deleted", () => {
+      if (!current) {
+        throw new Error("deletion owner closed");
+      }
+    });
+    current = false;
+    await expect(release).rejects.toThrow("deletion owner closed");
+    expect(request).not.toHaveBeenCalled();
+    await expect(
+      consumeCodexAppServerLiveThread(harness.client, "thread-deleted"),
+    ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));
   });
 
   it("transfers ownership only for the exact immutable thread fingerprint", async () => {

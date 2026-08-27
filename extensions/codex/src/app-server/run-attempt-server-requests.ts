@@ -18,7 +18,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import { recordCodexDynamicToolResult } from "./dynamic-tool-result-projection.js";
-import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { shouldEmitTranscriptToolProgress } from "./event-projector.js";
 import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
@@ -34,6 +34,12 @@ import {
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
+
+const DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES = [
+  "tool.execution.completed",
+  "tool.execution.error",
+  "tool.execution.blocked",
+] as const;
 
 export function createCodexAttemptServerRequestController(
   resources: CodexAttemptResources,
@@ -97,7 +103,7 @@ export function createCodexAttemptServerRequestController(
           armCompletionWatchOnResponse = true;
           markCurrentTurnRequestProgress();
         }
-        return await handleCodexAppServerElicitationRequest({
+        const approvalResult = await routeCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
           threadId: resourceState.thread.threadId,
@@ -107,6 +113,13 @@ export function createCodexAttemptServerRequestController(
             ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
             : {}),
           signal,
+        });
+        if (approvalResult.kind === "handled") {
+          return approvalResult.response;
+        }
+        return await userInputBridgeRef.current?.handleElicitationRequest({
+          id: request.id,
+          params: request.params,
         });
       }
       if (request.method === "item/tool/requestUserInput") {
@@ -196,20 +209,23 @@ export function createCodexAttemptServerRequestController(
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
       const toolStartedAt = Date.now();
       let terminalDiagnosticObserved = false;
-      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent((event) => {
-        if (
-          isDynamicToolTerminalDiagnosticEvent(event) &&
-          isMatchingDynamicToolTerminalDiagnostic({
-            event,
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
-        ) {
-          terminalDiagnosticObserved = true;
-        }
-      });
+      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            isDynamicToolTerminalDiagnosticEvent(event) &&
+            isMatchingDynamicToolTerminalDiagnostic({
+              event,
+              call,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            })
+          ) {
+            terminalDiagnosticObserved = true;
+          }
+        },
+        { include: DYNAMIC_TOOL_TERMINAL_DIAGNOSTIC_TYPES },
+      );
       try {
         const { execution } = openClawDynamicToolExecutions.claim(call, () => {
           emitDynamicToolStartedDiagnostic({

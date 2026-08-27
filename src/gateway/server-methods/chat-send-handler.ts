@@ -3,9 +3,13 @@ import { performance } from "node:perf_hooks";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { emitDiagnosticsTimelineEvent } from "../../infra/diagnostics-timeline.js";
+import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
-import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
+import {
+  terminalizeRestartSafeChatAdmission,
+  type RestartSafeChatTerminalState,
+} from "./chat-restart-recovery.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
@@ -25,11 +29,17 @@ import {
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+type ChatSendInternalOptions = {
+  trustedSystemInput?: boolean;
+  toolsAllow?: string[];
+  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+};
+
 async function handleChatSendWithOptions(
   { params, respond, context, client }: GatewayRequestHandlerOptions,
   onAdmissionOwned?: () => Promise<boolean>,
   externalAuthorityAdmission?: ChatSendExternalAuthorityAdmission,
-  options?: { trustedSystemInput?: boolean; toolsAllow?: string[] },
+  options?: ChatSendInternalOptions,
 ): Promise<void> {
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client },
@@ -57,6 +67,7 @@ async function handleChatSendWithOptions(
     admittedSessionId,
     chatSendTraceAttributes,
     finishAbortedChatSend,
+    interruptedActiveRun,
     lifecycleGeneration,
     messageInjectionTarget,
     restartSafeAdmission,
@@ -110,10 +121,9 @@ async function handleChatSendWithOptions(
   });
 
   const admissionStartedAt = Date.now();
-  const terminalizeRestartSafeAdmission = async (terminalState: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }): Promise<boolean> =>
+  const terminalizeRestartSafeAdmission = async (
+    terminalState: RestartSafeChatTerminalState,
+  ): Promise<boolean> =>
     await terminalizeRestartSafeChatAdmission({
       admittedSessionId,
       clientRunId,
@@ -212,7 +222,6 @@ async function handleChatSendWithOptions(
       attempt: messageInjectionAttempt,
       isAborted: () => activeRunAbort.controller.signal.aborted,
       sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
-      onActiveLeafChanged: admitted.value.rejectActiveLeafChanged,
       onAborted: finishAbortedChatSend,
       onSessionRoutingChanged: admitted.value.rejectSessionRoutingChanged,
     });
@@ -244,6 +253,7 @@ async function handleChatSendWithOptions(
     const ackPayload = {
       runId: clientRunId,
       status: "started" as const,
+      ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
       ...(serverTiming ? { serverTiming } : {}),
     };
     emitDiagnosticsTimelineEvent(
@@ -264,6 +274,7 @@ async function handleChatSendWithOptions(
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
     admitted.value.setDiscardAbandonedPreparedMedia(undefined);
     respond(true, ackPayload, undefined, { runId: clientRunId });
+    context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     startChatDispatch({
       admissionStartedAt,
@@ -272,6 +283,7 @@ async function handleChatSendWithOptions(
       client,
       context,
       toolsAllow: options?.toolsAllow,
+      skillWorkshopProposalRevision: options?.skillWorkshopProposalRevision,
       cronCreatorAuthority,
       externalAuthorityAdmission,
       injection: {
@@ -316,6 +328,17 @@ export async function handleChatSendWithRuntimeTools(
   toolsAllow: string[],
 ): Promise<void> {
   await handleChatSendWithOptions(options, undefined, undefined, { toolsAllow });
+}
+
+/** Dispatches an operator-requested proposal revision with its reviewed revision bound to the run. */
+export async function handleChatSendWithSkillWorkshopProposalRevision(
+  options: GatewayRequestHandlerOptions,
+  proposalRevision: SkillWorkshopProposalRevisionConstraint,
+): Promise<void> {
+  await handleChatSendWithOptions(options, undefined, undefined, {
+    toolsAllow: ["skill_workshop"],
+    skillWorkshopProposalRevision: { ...proposalRevision },
+  });
 }
 
 /** Dispatches Gateway-authored system input without widening the public chat-send contract. */

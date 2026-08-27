@@ -123,6 +123,7 @@ describe("registerDirectoryCli", () => {
     const installArgs = firstRecordArg(mocks.resolveInstallableChannelPlugin);
     expect(installArgs.rawChannel).toBe("demo-directory");
     expect(installArgs.allowInstall).toBe(true);
+    expect(installArgs.preferRegisteredPlugin).toBe(true);
     expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
     const replaceArgs = firstRecordArg(mocks.replaceConfigFile);
     expect(replaceArgs.nextConfig).toEqual({

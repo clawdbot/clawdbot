@@ -264,17 +264,25 @@ describe("registerQrCli", () => {
     );
   });
 
-  it("rejects combining --limited with --voice-node", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        bind: "custom",
-        customBindHost: "127.0.0.1",
-        auth: { mode: "token", token: "tok" },
-      },
-    });
+  const conflictingQrOptions = [
+    {
+      name: "access profiles",
+      args: ["--limited", "--voice-node"],
+      message: "Use either --limited or --voice-node, not both.",
+    },
+    {
+      name: "authentication overrides",
+      args: ["--token", "test-token", "--password", "test-password"],
+      message: "Use either --token or --password, not both.",
+    },
+  ];
 
-    await expect(runQr(["--setup-code-only", "--limited", "--voice-node"])).rejects.toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith("Use either --limited or --voice-node, not both.");
+  it.each(conflictingQrOptions)("rejects conflicting $name in human mode", async (testCase) => {
+    await expect(runQr(["--setup-code-only", ...testCase.args])).rejects.toThrow("exit");
+
+    expect(runtimeError).toHaveBeenCalledExactlyOnceWith(testCase.message);
+    expect(runtimeExit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 
   it("renders ASCII QR by default", async () => {

@@ -31,7 +31,10 @@ const mocks = vi.hoisted(() => ({
   runtimeSteps: [] as string[],
   useFakeRuntime: false,
   fakeRuntimeWorkerHosting: false,
-  runnerAvailabilityChanged: undefined as ((available: boolean) => void) | undefined,
+  fakeRuntimeWorkerHostingDisabledReason: undefined as string | undefined,
+  runnerCapacityChanged: undefined as
+    | ((capacity: { total: number; available: number }) => void)
+    | undefined,
   nodeHostCommands: [] as string[],
   nodeHostCaps: [] as string[],
   availabilityOnWatch: undefined as { caps: string[]; commands: string[] } | undefined,
@@ -193,10 +196,11 @@ vi.mock("./runtime.js", async (importOriginal) => {
           pathEnv: process.env.PATH ?? "",
         },
         workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
+        workerHostingDisabledReason: mocks.fakeRuntimeWorkerHostingDisabledReason,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
           mocks.runtimeClient = params.client;
-          mocks.runnerAvailabilityChanged = params.onRunnerAvailabilityChanged;
+          mocks.runnerCapacityChanged = params.onRunnerCapacityChanged;
           return mocks.activeRuntime;
         },
       };
@@ -205,8 +209,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
 });
 
 function lastCapturedOptions(): GatewayClientOptions | undefined {
-  const list = mocks.capturedGatewayClientOptions;
-  return list[list.length - 1];
+  return mocks.capturedGatewayClientOptions.at(-1);
 }
 
 describe("runNodeHost", () => {
@@ -229,7 +232,8 @@ describe("runNodeHost", () => {
     mocks.runtimeSteps = [];
     mocks.useFakeRuntime = false;
     mocks.fakeRuntimeWorkerHosting = false;
-    mocks.runnerAvailabilityChanged = undefined;
+    mocks.fakeRuntimeWorkerHostingDisabledReason = undefined;
+    mocks.runnerCapacityChanged = undefined;
     mocks.nodeHostCommands = [];
     mocks.nodeHostCaps = [];
     mocks.availabilityOnWatch = undefined;
@@ -622,17 +626,24 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
   });
 
-  it("keeps runner consent out of the connection handshake", async () => {
+  it("keeps unavailable worker hosting out of the handshake and reports the reason", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
       nodeHost: { workerRuns: { enabled: true } },
     } as never);
+    mocks.useFakeRuntime = true;
+    mocks.fakeRuntimeWorkerHostingDisabledReason = "Docker or Podman is unavailable";
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
     );
 
     expect(lastCapturedOptions()?.workerRuns).toBeUndefined();
+    expect(stderr).toHaveBeenCalledWith(
+      "node host worker hosting disabled: Docker or Podman is unavailable\n",
+    );
+    stderr.mockRestore();
   });
 
   it("advertises Claude agent runs only after node-local opt-in and binary resolution", async () => {
@@ -689,7 +700,7 @@ describe("runNodeHost", () => {
   it("publishes opt-in consent and capacity in the atomic runner inventory", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       gateway: { handshakeTimeoutMs: 1_000 },
-      nodeHost: { workerRuns: { enabled: true } },
+      nodeHost: { workerRuns: { enabled: true, capacity: 5 } },
     } as never);
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
       "event loop readiness timeout",
@@ -706,13 +717,13 @@ describe("runNodeHost", () => {
       protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
       workerHost: {
         enabled: true,
-        capacity: "available",
+        capacity: { total: 5, available: 5 },
         bundlePrewarm: 1,
       },
     });
   });
 
-  it("withdraws and restores worker launch eligibility without reconnecting", async () => {
+  it("publishes each exact worker slot transition without reconnecting", async () => {
     mocks.useFakeRuntime = true;
     mocks.fakeRuntimeWorkerHosting = true;
     await expect(runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 })).rejects.toThrow(
@@ -722,7 +733,7 @@ describe("runNodeHost", () => {
     const client = mocks.capturedGatewayClients[0];
     expect(options?.workerRuns).toBeUndefined();
 
-    mocks.runnerAvailabilityChanged?.(true);
+    mocks.runnerCapacityChanged?.({ total: 2, available: 2 });
     options?.onHelloOk?.({
       protocol: 4,
       features: {
@@ -736,13 +747,22 @@ describe("runNodeHost", () => {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
         workerHost: {
           enabled: true,
-          capacity: "available",
+          capacity: { total: 2, available: 2 },
           bundlePrewarm: 1,
           bundleRetention: 1,
         },
       });
     });
 
+    const negotiatedWorkerHost = {
+      enabled: true,
+      capacity: { total: 2, available: 2 },
+      bundlePrewarm: 1,
+      bundleRetention: 1,
+      bundleStatus: 1,
+      portalStream: 1,
+      environmentSession: 1,
+    };
     options?.onHelloOk?.({
       protocol: 4,
       features: {
@@ -751,49 +771,33 @@ describe("runNodeHost", () => {
         capabilities: [
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
           GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
+          GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         ],
       },
     } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
     await vi.waitFor(() => {
       expect(client?.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
         protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: "available",
-          bundlePrewarm: 1,
-          bundleRetention: 1,
-          bundleStatus: 1,
-        },
+        workerHost: negotiatedWorkerHost,
       });
     });
 
-    mocks.runnerAvailabilityChanged?.(false);
-    await vi.waitFor(() => {
-      expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: "full",
-          bundlePrewarm: 1,
-          bundleRetention: 1,
-          bundleStatus: 1,
-        },
+    const expectPublishedSlots = async (available: number) => {
+      mocks.runnerCapacityChanged?.({ total: 2, available });
+      await vi.waitFor(() => {
+        expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
+          protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+          workerHost: {
+            ...negotiatedWorkerHost,
+            capacity: { total: 2, available },
+          },
+        });
       });
-    });
-
-    mocks.runnerAvailabilityChanged?.(true);
-    await vi.waitFor(() => {
-      expect(client?.request).toHaveBeenLastCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: "available",
-          bundlePrewarm: 1,
-          bundleRetention: 1,
-          bundleStatus: 1,
-        },
-      });
-    });
+    };
+    for (const available of [1, 0, 2]) {
+      await expectPublishedSlots(available);
+    }
     expect(client?.updateNodeManifest).not.toHaveBeenCalled();
   });
 
@@ -1005,52 +1009,22 @@ describe("runNodeHost", () => {
     }
   });
 
-  it("appends context path to the Gateway WebSocket URL", async () => {
+  it.each([
+    ["/gws", "ws://127.0.0.1:18789/gws"],
+    ["/gws/", "ws://127.0.0.1:18789/gws/"],
+    ["gws", "ws://127.0.0.1:18789/gws"],
+    ["", "ws://127.0.0.1:18789"],
+    [undefined, "ws://127.0.0.1:18789"],
+  ])("builds the Gateway URL for context path %s", async (gatewayContextPath, expectedUrl) => {
     await expect(
       runNodeHost({
         gatewayHost: "127.0.0.1",
         gatewayPort: 18789,
-        gatewayContextPath: "/gws",
+        gatewayContextPath,
       }),
     ).rejects.toThrow("event loop readiness timeout");
 
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws");
-  });
-
-  it("preserves trailing slash in context path as-is", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "/gws/",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws/");
-  });
-
-  it("prepends leading slash when context path is missing one", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "gws",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws");
-  });
-
-  it("omits context path when empty or undefined", async () => {
-    await expect(
-      runNodeHost({
-        gatewayHost: "127.0.0.1",
-        gatewayPort: 18789,
-        gatewayContextPath: "",
-      }),
-    ).rejects.toThrow("event loop readiness timeout");
-
-    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastCapturedOptions()?.url).toBe(expectedUrl);
   });
 
   it("configures the SQLite gateway snapshot with contextPath", async () => {

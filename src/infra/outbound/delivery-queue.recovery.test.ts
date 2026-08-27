@@ -351,6 +351,7 @@ describe("delivery-queue recovery", () => {
           agentId: "main",
           operationId,
           storePath,
+          routeFingerprint: "route-recovery",
         },
       },
       operationId,
@@ -421,7 +422,14 @@ describe("delivery-queue recovery", () => {
   it("finalizes a persisted conversation operation during queue recovery", async () => {
     const scope = await createConversationRecoveryFixture("operation-recovery");
     const deliveryResult = { channel: "reef" as const, messageId: "reef-platform" };
-    const deliver = vi.fn(async (params: { onDeliveryResult?: (result: unknown) => unknown }) => {
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      expect(params.deliveryCompletion).toBeUndefined();
+      expect(params.conversationDeliveryAttemptAuthority).toEqual({
+        agentId: "main",
+        operationId: "operation-recovery",
+        storePath: scope.storePath,
+        routeFingerprint: "route-recovery",
+      });
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
     });
@@ -755,6 +763,36 @@ describe("delivery-queue recovery", () => {
     expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
     expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
   });
+  it("keeps a partially sent batch unknown when a later send has a permanent rejection", async () => {
+    const id = await enqueueDemoRecoveryDelivery(["first", "second"]);
+    const rejection = new PlatformMessageNotDispatchedError(
+      "Slack outbound delivery rejected: messages_tab_disabled",
+      { cause: new Error("messages_tab_disabled"), retryable: false },
+    );
+    const partialFailure = new OutboundDeliveryError("second send failed", {
+      cause: rejection,
+      results: [{ channel: "demo-channel-c", messageId: "m1" }],
+      payloadOutcomes: [
+        { index: 0, status: "sent", results: [{ channel: "demo-channel-c", messageId: "m1" }] },
+        {
+          index: 1,
+          status: "failed",
+          error: rejection,
+          sentBeforeError: false,
+          stage: "platform_send",
+        },
+      ],
+      stage: "platform_send",
+    });
+
+    const { result } = await runRecovery({
+      deliver: vi.fn().mockRejectedValue(partialFailure),
+    });
+
+    expect(result).toMatchObject({ recovered: 0, failed: 1 });
+    await expectPendingEntry({ id, recoveryState: "unknown_after_send", retryCount: 0 });
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("pending");
+  });
   it("keeps a best-effort recovery failure retryable when no payload was sent", async () => {
     await enqueueDemoRecoveryDelivery(["first"], { bestEffort: true });
     const deliver = vi.fn(async (params: PayloadOutcomeSink) => {
@@ -1087,7 +1125,7 @@ describe("delivery-queue recovery", () => {
     const id = await enqueueRecoveryDelivery({
       accountId: "acct-1",
       payloads: [{ text: "maybe sent" }],
-      replyToId: "root-message",
+      reply: { source: "implicit", replyToId: "root-message", mode: "all" },
       threadId: "thread-1",
       silent: true,
       maxRetries: 1,
@@ -1260,6 +1298,57 @@ describe("delivery-queue recovery", () => {
     const typedRejection = error instanceof PlatformMessageNotDispatchedError;
     await runIf(typedRejection, () => expect(deliver).toHaveBeenCalledOnce());
     await runIf(!typedRejection, () => expectMockMessageContaining(log.warn, "permanent error"));
+  });
+  it("persists a nested channel rejection as the only terminal across recovery restart", async () => {
+    const operationId = "operation-channel-permanent-rejection";
+    const scope = await createConversationRecoveryFixture(operationId);
+    const rejection = new PlatformMessageNotDispatchedError(
+      "Slack chat.postMessage rejected: messages_tab_disabled",
+      {
+        cause: new Error("messages_tab_disabled"),
+        retryable: false,
+      },
+    );
+    const deliver = vi.fn().mockRejectedValue(
+      new OutboundDeliveryError("Slack delivery failed", {
+        cause: rejection,
+        payloadOutcomes: [
+          {
+            index: 0,
+            status: "failed",
+            error: rejection,
+            sentBeforeError: false,
+            stage: "platform_send",
+          },
+        ],
+        stage: "platform_send",
+      }),
+    );
+
+    try {
+      const first = await runRecovery({ deliver });
+      expect(first.result).toEqual(RECOVERY_SUMMARY.failed);
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "rejected",
+        rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
+      });
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+      expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
+
+      closeOpenClawAgentDatabasesForTest();
+      const replay = vi.fn();
+      const second = await runRecovery({ deliver: replay });
+      expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
+      expect(replay).not.toHaveBeenCalled();
+      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "rejected",
+        rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
+      });
+      expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+    }
   });
   it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
     await enqueueRecoveryDelivery();
@@ -1461,8 +1550,7 @@ describe("delivery-queue recovery", () => {
   });
   it("replays stored delivery options during recovery", async () => {
     const storedOptions = {
-      replyToId: "root-message",
-      replyToMode: "first",
+      reply: { replyToId: "root-message", source: "implicit", mode: "first" } as const,
       formatting: {
         textLimit: 1234,
         maxLinesPerMessage: 7,

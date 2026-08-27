@@ -1,7 +1,6 @@
 // QA Lab Slack Web API and stored-message observations.
 import { isDeepStrictEqual } from "node:util";
 import { createSlackWebClient, sendSlackMessage } from "@openclaw/slack/api.js";
-import type { WebClient } from "@slack/web-api";
 import {
   asPlainRecord,
   countSlackNativeDataBlocks,
@@ -23,6 +22,7 @@ import {
   type SlackMessage,
   slackHistorySchema,
   slackRepliesSchema,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import { buildSlackInvalidBlocksTableProbe } from "./slack-live.invalid-blocks.js";
 

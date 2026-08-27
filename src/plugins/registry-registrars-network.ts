@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { GatewayMethodProfileAccess } from "../gateway/methods/descriptor.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
@@ -50,7 +51,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -82,6 +83,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         name: trimmed,
         handler: wrappedHandler,
         scope: normalizedScope.scope,
+        ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
       }),
     );
   };

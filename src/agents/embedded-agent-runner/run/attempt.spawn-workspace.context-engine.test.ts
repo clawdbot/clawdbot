@@ -199,6 +199,23 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("carries the resolved context budget into OpenClaw tool construction", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        contextTokenBudget: 1_000_000,
+        disableTools: false,
+      },
+    });
+
+    expect(
+      mockParams(hoisted.createOpenClawCodingToolsMock, 0, "tool construction params")
+        .modelContextWindowTokens,
+    ).toBe(1_000_000);
+  });
+
   it("keeps client tool names out of context engine capability guidance", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();
 

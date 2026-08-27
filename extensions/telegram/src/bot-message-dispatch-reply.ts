@@ -6,6 +6,7 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import {
   isFastModeAutoProgressPayload,
   isReplyPayloadNonTerminalToolErrorWarning,
+  resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -14,8 +15,9 @@ import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   applyTextToPayload,
   deliverFinalAnswerText,
-  emitPreviewFinalizedHook,
+  handlePreviewFinalizedResult,
   normalizeDeliveryPayload,
+  registerTelegramQuestionDeliveryForMessage,
   sendPayload,
 } from "./bot-message-dispatch-delivery.js";
 import {
@@ -43,7 +45,6 @@ import type {
 import {
   appendTelegramDroppedControlFallback,
   resolveTelegramInlineButtons,
-  resolveTelegramQuestionOptionIndices,
   type TelegramDroppedControl,
   type TelegramInlineButtons,
 } from "./button-types.js";
@@ -107,7 +108,7 @@ function resolvePayloadTelegramControls(
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
       onDroppedControl: (control) => droppedControls.push(control),
-      questionOptionIndices: resolveTelegramQuestionOptionIndices(payload),
+      questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
   );
   const text = appendTelegramDroppedControlFallback(payload.text ?? "", droppedControls);
@@ -328,6 +329,7 @@ export async function deliverReply(
       const canRepresentAsTransientProgress =
         !reply.hasMedia &&
         telegramButtons === undefined &&
+        effectivePayload.channelData?.askUser === undefined &&
         !hasExecApprovalPayload(effectivePayload);
       const isFastModeProgressPayload = isFastModeAutoProgressPayload(effectivePayload);
       if (turn.streamMode === "progress") {
@@ -371,8 +373,7 @@ export async function deliverReply(
       turn.streamMode === "progress" &&
       info.kind === "block" &&
       effectivePayload.isCommentary === true;
-    // CLI finals exclude separately classified commentary. Send that block outside
-    // the disposable progress stream or its collapse summary erases the text.
+    // CLI finals exclude separately classified commentary, so it must outlive the progress draft.
     const suppressProgressAnswerBlock =
       turn.streamMode === "progress" &&
       info.kind === "block" &&
@@ -407,6 +408,7 @@ export async function deliverReply(
       turn.activeAnswerDraftIsToolProgressOnly = false;
       turn.progressCompositor.reset();
     }
+    const isAskUserPayload = effectivePayload.channelData?.askUser !== undefined;
     const result =
       segment.lane === "answer" && info.kind === "final"
         ? await deliverFinalAnswerText(
@@ -423,12 +425,23 @@ export async function deliverReply(
             payload: lanePayload,
             infoKind: info.kind,
             buttons: telegramButtons,
+            ...(isAskUserPayload ? { finalizePreview: true } : {}),
             allowStream: !isDurableProgressCommentary,
             onPlatformSendDispatch: info.onPlatformSendDispatch,
             bindPendingFinalDelivery: info.bindPendingFinalDelivery,
           });
-    if (segment.lane === "answer" && info.kind !== "final" && result.kind === "preview-finalized") {
-      await emitPreviewFinalizedHook(turn, result);
+    const finalizedPreview =
+      segment.lane === "answer" &&
+      info.kind !== "final" &&
+      (result.kind === "preview-finalized" || result.kind === "preview-finalized-partial");
+    if (finalizedPreview) {
+      await handlePreviewFinalizedResult(turn, result);
+      if (isAskUserPayload && result.kind === "preview-finalized") {
+        registerTelegramQuestionDeliveryForMessage(turn, effectivePayload, {
+          messageId: result.delivery.messageId,
+          text: result.delivery.content,
+        });
+      }
     }
     if (segment.lane === "answer" && info.kind === "block" && result.kind === "preview-updated") {
       turn.activeAnswerBlockDelivery = {
@@ -539,7 +552,7 @@ export function handleReplyError(
       scopeKey: buildTelegramErrorScopeKey({
         accountId: turn.context.route.accountId,
         chatId: turn.context.chatId,
-        threadId: turn.context.threadSpec.id,
+        threadSpec: turn.context.threadSpec,
       }),
       cooldownMs: errorPolicy.cooldownMs,
       errorMessage: String(err),

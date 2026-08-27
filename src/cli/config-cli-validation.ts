@@ -1,6 +1,6 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot } from "../config/config.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -14,6 +14,7 @@ import {
 import { validateConfigObjectRawWithPlugins } from "../config/validation.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -42,6 +43,31 @@ function formatInvalidConfigRepairHint(
     : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
 }
 
+export function ensureValidConfigSnapshotForCli(
+  snapshot: ConfigFileSnapshot,
+  runtime: RuntimeEnv,
+  options: { json?: boolean } = {},
+): boolean {
+  if (snapshot.valid) {
+    return true;
+  }
+  if (options.json) {
+    writeRuntimeJson(runtime, {
+      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
+      issues: normalizeConfigIssues(snapshot.issues),
+    });
+    runtime.exit(1);
+    return false;
+  }
+  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
+  for (const line of renderConfigValidationIssueLines(snapshot)) {
+    runtime.error(line);
+  }
+  runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
+  runtime.exit(1);
+  return false;
+}
+
 export async function loadValidConfig(
   runtime: RuntimeEnv = defaultRuntime,
   options: { observe?: boolean; json?: boolean } = {},
@@ -50,27 +76,31 @@ export async function loadValidConfig(
     options.observe === false
       ? await readConfigFileSnapshot({ observe: false })
       : await readConfigFileSnapshot();
-  if (snapshot.valid) {
-    return snapshot;
-  }
-  if (options.json) {
-    writeRuntimeJson(runtime, {
-      ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
-      issues: normalizeConfigIssues(snapshot.issues),
-    });
-    runtime.exit(1);
-    return snapshot;
-  }
-  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
-  for (const line of renderConfigValidationIssueLines(snapshot)) {
-    runtime.error(line);
-  }
-  runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
-  runtime.exit(1);
+  ensureValidConfigSnapshotForCli(snapshot, runtime, options);
   return snapshot;
 }
 
+export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
+  const prepared = await readConfigFileSnapshotForWrite();
+  ensureValidConfigSnapshotForCli(prepared.snapshot, runtime);
+  return prepared;
+}
+
 export { formatInvalidConfigRepairHint };
+
+export function strictlyValidateConfigSnapshotForCli(
+  snapshot: ConfigFileSnapshot,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): ConfigFileSnapshot {
+  if (!snapshot.valid) {
+    return snapshot;
+  }
+  const validated = validateConfigObjectRawWithPlugins(snapshot.sourceConfig, {
+    semanticValidation: "strict",
+    pluginMetadataSnapshot,
+  });
+  return validated.ok ? snapshot : { ...snapshot, valid: false, issues: validated.issues };
+}
 
 function collectSecretRefsFromUnknown(value: unknown): SecretRef[] {
   const refs: SecretRef[] = [];
@@ -215,8 +245,14 @@ export function selectDryRunRefsForResolution(params: {
   return { refsToResolve, skippedExecRefs };
 }
 
-export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRawWithPlugins(config);
+function collectStrictConfigErrors(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRawWithPlugins(config, {
+    semanticValidation: "strict",
+    pluginMetadataSnapshot,
+  });
   if (validated.ok) {
     return [];
   }
@@ -224,6 +260,26 @@ export function collectDryRunSchemaErrors(config: OpenClawConfig): ConfigSetDryR
     kind: "schema",
     message,
   }));
+}
+
+export function assertStrictConfigForMutation(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): void {
+  const errors = collectStrictConfigErrors(config, pluginMetadataSnapshot);
+  if (errors.length === 0) {
+    return;
+  }
+  throw new Error(
+    ["Config validation failed.", ...errors.map((error) => `- ${error.message}`)].join("\n"),
+  );
+}
+
+export function collectDryRunSchemaErrors(
+  config: OpenClawConfig,
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+): ConfigSetDryRunError[] {
+  return collectStrictConfigErrors(config, pluginMetadataSnapshot);
 }
 
 function touchesSecretProviderCollection(path: readonly string[]): boolean {

@@ -6,7 +6,6 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  approveDevicePairing,
   createInitialDevicesState,
   loadDevices,
   loadNodes,
@@ -266,12 +265,15 @@ describe("DevicesPage gateway lifecycle", () => {
     page.remove();
   });
 
-  it("coalesces a device refresh requested while an older list is loading", async () => {
+  it("refetches a changed device label after an older list response", async () => {
     const stale = deferred<{
-      paired: [];
-      pending: Array<{ requestId: string; deviceId: string }>;
+      paired: Array<{ deviceId: string; displayName: string }>;
+      pending: [];
     }>();
-    const refreshed = deferred<{ paired: []; pending: [] }>();
+    const refreshed = deferred<{
+      paired: Array<{ deviceId: string; displayName: string; operatorLabel: string }>;
+      pending: [];
+    }>();
     let listCalls = 0;
     const request = vi.fn((method: string) => {
       if (method === "device.pair.list") {
@@ -281,23 +283,55 @@ describe("DevicesPage gateway lifecycle", () => {
       return Promise.resolve({});
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const state = createInitialDevicesState({ client, connected: true });
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+        features: { methods: ["device.pair.list"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, snapshot);
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    page.pageState = createInitialDevicesState({ client, connected: true });
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
 
-    const initialLoad = loadDevices(state);
+    const initialLoad = loadDevices(page.pageState);
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("device.pair.list", {}));
-    const approval = approveDevicePairing(state, "request-1");
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("device.pair.approve", { requestId: "request-1" }),
-    );
+    onEvent?.({ event: "device.pair.changed", payload: {} });
 
-    stale.resolve({ paired: [], pending: [{ requestId: "request-1", deviceId: "device-1" }] });
+    stale.resolve({
+      paired: [{ deviceId: "device-1", displayName: "Kitchen Mac" }],
+      pending: [],
+    });
     await vi.waitFor(() => expect(listCalls).toBe(2));
-    expect(state.devicesLoading).toBe(true);
+    expect(page.pageState.devicesLoading).toBe(true);
 
-    refreshed.resolve({ paired: [], pending: [] });
-    await Promise.all([initialLoad, approval]);
-    expect(state.devicesList).toEqual({ paired: [], pending: [] });
-    expect(state.devicesLoading).toBe(false);
+    refreshed.resolve({
+      paired: [{ deviceId: "device-1", displayName: "Kitchen Mac", operatorLabel: "Studio Mac" }],
+      pending: [],
+    });
+    await initialLoad;
+    expect(page.pageState.devicesList).toEqual({
+      paired: [{ deviceId: "device-1", displayName: "Kitchen Mac", operatorLabel: "Studio Mac" }],
+      pending: [],
+    });
+    expect(page.pageState.devicesLoading).toBe(false);
+    page.remove();
   });
 
   it("coalesces a node refresh requested while an older list is loading", async () => {
@@ -320,6 +354,250 @@ describe("DevicesPage gateway lifecycle", () => {
     await initialLoad;
     expect(state.nodes).toEqual([{ id: "new" }]);
     expect(state.nodesLoading).toBe(false);
+  });
+
+  it("does not load pairing or exec approvals without their scopes", async () => {
+    const request = vi.fn(async (method: string) => (method === "node.list" ? { nodes: [] } : {}));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["node.list", "device.pair.list", "exec.approvals.get"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    const currentGateway = gateway(client, snapshot);
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    page.routeData = {
+      gateway: currentGateway,
+      gatewaySnapshot: snapshot,
+      devices: createInitialDevicesState({ client, connected: true }),
+    };
+    page.willUpdate(new Map([["routeData", undefined]]));
+    applyGatewaySnapshot(page, snapshot);
+    page.ensureInitialData();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("exec.approvals.get");
+  });
+
+  it("keeps event-driven device reloads gated on pairing access", async () => {
+    const request = vi.fn(async (method: string) => (method === "node.list" ? { nodes: [] } : {}));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["node.list", "device.pair.list", "exec.approvals.get"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, snapshot);
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+    const nodeListCallsBefore = request.mock.calls.filter(([method]) => method === "node.list");
+
+    onEvent?.({
+      event: "presence",
+      payload: { presence: [{ instanceId: "browser-1", ts: 2_000, reason: "connect" }] },
+    });
+
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "node.list").length,
+      ).toBeGreaterThan(nodeListCallsBefore.length),
+    );
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+
+    onEvent?.({ event: "device.pair.changed", payload: {} });
+    await Promise.resolve();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("device.pair.list");
+    page.remove();
+  });
+
+  it.each([
+    {
+      name: "node disconnects while its operator stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "node reconnects while its operator stays connected",
+      role: "node",
+      previousReason: "disconnect",
+      nextReason: "connect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "merged node-role presence disconnects while its operator stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      nodeRoles: ["operator", "node"],
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "operator disconnects while its node stays connected",
+      role: "operator",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "operator reconnects while its node stays connected",
+      role: "operator",
+      previousReason: "disconnect",
+      nextReason: "connect",
+      operatorRoles: ["operator"],
+    },
+    {
+      name: "node disconnects while a roleless device stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: undefined,
+    },
+    {
+      name: "node disconnects while a device with empty roles stays connected",
+      role: "node",
+      previousReason: "connect",
+      nextReason: "disconnect",
+      operatorRoles: [],
+    },
+  ])("reloads mixed-role inventory when $name", async (scenario) => {
+    const request = vi.fn(async (method: string) =>
+      method === "node.list" ? { nodes: [] } : { paired: [], pending: [] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      ...gatewaySnapshot(client, true),
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read", "operator.pairing"] },
+        features: { methods: ["node.list", "device.pair.list"] },
+      },
+    } as ApplicationGatewaySnapshot;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, snapshot);
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+
+    const nodePresence: PresenceEntry = {
+      deviceId: "mixed-role-device",
+      instanceId: "mixed-role-device",
+      roles: "nodeRoles" in scenario ? scenario.nodeRoles : ["node"],
+      reason: scenario.role === "node" ? scenario.previousReason : "connect",
+      ts: 2_000,
+    };
+    const operatorPresence: PresenceEntry = {
+      deviceId: "mixed-role-device",
+      instanceId: "operator-session",
+      ...(scenario.operatorRoles ? { roles: scenario.operatorRoles } : {}),
+      reason: scenario.role === "operator" ? scenario.previousReason : "connect",
+      ts: 1_000,
+    };
+    page.presence = [nodePresence, operatorPresence];
+    request.mockClear();
+
+    onEvent?.({
+      event: "presence",
+      payload: {
+        presence: [
+          scenario.role === "node"
+            ? { ...nodePresence, reason: scenario.nextReason }
+            : nodePresence,
+          scenario.role === "operator"
+            ? { ...operatorPresence, reason: scenario.nextReason }
+            : operatorPresence,
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("node.list", {}));
+    expect(request).toHaveBeenCalledWith("device.pair.list", {});
+    page.remove();
+  });
+
+  it("does not reload mixed-role inventory for presence activity updates", async () => {
+    const request = vi.fn(async (method: string) =>
+      method === "node.list" ? { nodes: [] } : { paired: [], pending: [] },
+    );
+    const client = { request } as unknown as GatewayBrowserClient;
+    let onEvent: ((event: { event: string; payload?: unknown }) => void) | undefined;
+    const currentGateway = gateway(client, gatewaySnapshot(client, true));
+    currentGateway.subscribeEvents = vi.fn((listener) => {
+      onEvent = listener as typeof onEvent;
+      return () => undefined;
+    });
+    const page = document.createElement("openclaw-devices-page") as TestDevicesPage;
+    page.context = {
+      gateway: currentGateway,
+      runtimeConfig: {
+        state: { configSnapshot: {}, configLoading: false },
+        subscribe: vi.fn(() => () => undefined),
+      },
+    } as unknown as ApplicationContext;
+    document.body.append(page);
+    await vi.waitFor(() => expect(onEvent).toBeDefined());
+
+    const presence: PresenceEntry[] = [
+      { deviceId: "mixed-role-device", roles: ["node"], reason: "connect", ts: 2_000 },
+      { deviceId: "mixed-role-device", roles: ["operator"], reason: "connect", ts: 1_000 },
+    ];
+    page.presence = presence;
+    request.mockClear();
+
+    onEvent?.({
+      event: "presence",
+      payload: {
+        presence: presence.map((entry) =>
+          Object.assign({}, entry, { lastInputSeconds: 3, ts: entry.ts + 100 }),
+        ),
+      },
+    });
+    await Promise.resolve();
+
+    expect(request).not.toHaveBeenCalled();
+    page.remove();
   });
 
   it("retries a node load after a same-client disconnect", async () => {
@@ -487,6 +765,34 @@ describe("DevicesPage gateway lifecycle", () => {
     await pending;
 
     expect(request).not.toHaveBeenCalled();
+    applyGatewaySnapshot(page, gatewaySnapshot(client, false));
+  });
+
+  it("drops a confirmed token revoke when pairing access is lost", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = createConnectedPage(client);
+
+    const pending = page.confirmTokenRevoke("device-1", "operator");
+    await waitForRenderedModalDialog(document.body);
+    const generation = page.requestGeneration;
+    const downgraded = gatewaySnapshot(client, true);
+    downgraded.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      features: { methods: ["device.token.revoke"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    applyGatewaySnapshot(page, downgraded);
+    expect(page.requestGeneration).toBe(generation);
+
+    clickDialogButton(t("devices.inventory.revoke"));
+    await pending;
+
+    expect(request).not.toHaveBeenCalledWith("device.token.revoke", {
+      deviceId: "device-1",
+      role: "operator",
+    });
     applyGatewaySnapshot(page, gatewaySnapshot(client, false));
   });
 

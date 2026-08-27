@@ -51,6 +51,7 @@ The lists below are generated from the source target registry and checked agains
 - `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.google.config.webSearch.headers.*`
+- `plugins.entries.imap.config.accounts.*.password`
 - `plugins.entries.xai.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
@@ -90,9 +91,11 @@ The lists below are generated from the source target registry and checked agains
 - `channels.clickclack.accounts.*.token`
 - `channels.discord.token`
 - `channels.discord.pluralkit.token`
+- `channels.discord.voice.realtime.providers.*.apiKey`
 - `channels.discord.voice.tts.providers.*.apiKey`
 - `channels.discord.accounts.*.token`
 - `channels.discord.accounts.*.pluralkit.token`
+- `channels.discord.accounts.*.voice.realtime.providers.*.apiKey`
 - `channels.discord.accounts.*.voice.tts.providers.*.apiKey`
 - `channels.irc.password`
 - `channels.irc.nickserv.password`
@@ -117,6 +120,7 @@ The lists below are generated from the source target registry and checked agains
 - `channels.nextcloud-talk.apiPassword`
 - `channels.nextcloud-talk.accounts.*.botSecret`
 - `channels.nextcloud-talk.accounts.*.apiPassword`
+- `channels.nostr.privateKey`
 - `channels.zalo.botToken`
 - `channels.zalo.webhookSecret`
 - `channels.zalo.accounts.*.botToken`
@@ -136,7 +140,8 @@ The lists below are generated from the source target registry and checked agains
 - `gateway.cloudflareAccess.clientId`
 - `gateway.cloudflareAccess.clientSecret`
 
-These fields live in the node host's canonical `node_host_config` SQLite row,
+These fields live in the node host's canonical `nodeHost.config` SQLite
+machine-state value,
 not `openclaw.json`. They accept the same SecretInput forms and resolve through
 the configured SecretRef providers when the node starts. The conventional
 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` fallback persists env refs for

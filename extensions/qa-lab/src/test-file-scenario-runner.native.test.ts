@@ -123,11 +123,14 @@ describe("qa test file scenario runner", () => {
     });
   });
 
-  it("can return aggregate evidence without writing a duplicate evidence file", async () => {
+  it("can return aggregate evidence without retaining a duplicate evidence file", async () => {
     const repoRoot = await makeTempRepo("qa-playwright-memory-evidence-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.writeFile(path.join(outputDir, "qa-evidence.json"), "stale evidence\n", "utf8");
     const result = await runQaTestFileScenarios({
       repoRoot,
-      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
+      outputDir,
       ...QA_TEST_RUNNER_DEFAULTS,
       scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,

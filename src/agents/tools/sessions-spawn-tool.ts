@@ -52,6 +52,7 @@ import {
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithScopedSessionAccess } from "./scoped-session-access.js";
 import {
+  recordSessionToolActionFact,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-helpers.js";
@@ -93,6 +94,26 @@ function addRoleToFailureResult<T extends { status: string }>(
     return result;
   }
   return { ...result, role };
+}
+
+function recordAcceptedSessionSpawn(
+  result: Record<string, unknown>,
+  context: "fork" | "isolated" | undefined,
+): void {
+  const childSessionKey =
+    typeof result.childSessionKey === "string" ? result.childSessionKey.trim() : "";
+  const targetAgentId = childSessionKey
+    ? parseAgentSessionKey(childSessionKey)?.agentId
+    : undefined;
+  if (result.status !== "accepted" || !childSessionKey || !targetAgentId) {
+    return;
+  }
+  recordSessionToolActionFact({
+    operation: context === "fork" ? "fork" : "create",
+    fact: "committed",
+    targetAgentId,
+    targetSessionKey: childSessionKey,
+  });
 }
 
 type SessionsSpawnThreadAvailability = {
@@ -204,7 +225,7 @@ function createSessionsSpawnToolSchema(params: {
       ? {
           collect: Type.Optional(
             Type.Boolean({
-              description: "Swarm collector child for parallel fan-out; await via agents_wait.",
+              description: "Swarm collector child for parallel fan-out.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -370,7 +391,7 @@ export function createSessionsSpawnTool(
       );
       if (unsupportedParam) {
         throw new ToolInputError(
-          `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
+          `sessions_spawn does not support "${unsupportedParam}"; remove channel-delivery parameters.`,
         );
       }
       const unsupportedTimeoutParam = resolveSnakeCaseParamKey(params, "timeoutSeconds");
@@ -443,6 +464,7 @@ export function createSessionsSpawnTool(
           })
         : await spawnVisible();
       if (visibleResult) {
+        recordAcceptedSessionSpawn(visibleResult, context);
         return jsonResult(
           addRoleToFailureResult(visibleResult as { status: string }, requestedAgentId),
         );
@@ -548,6 +570,7 @@ export function createSessionsSpawnTool(
             parentExecutionIdentityToken,
           ),
         );
+        recordAcceptedSessionSpawn(result, context);
         return jsonResult(addRoleToFailureResult(result, requestedAgentId));
       }
 
@@ -610,6 +633,7 @@ export function createSessionsSpawnTool(
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             requesterAgentIdOverride: opts?.requesterAgentIdOverride,
             workspaceDir: opts?.workspaceDir,
+            sessionPermissionPolicy: opts?.sessionPermissionPolicy,
             inheritedToolAllowlist: opts?.inheritedToolAllowlist,
             inheritedToolDenylist: opts?.inheritedToolDenylist,
             requesterRunId: opts?.requesterRunId,
@@ -618,6 +642,7 @@ export function createSessionsSpawnTool(
         ),
       );
 
+      recordAcceptedSessionSpawn(result, context);
       return jsonResult(addRoleToFailureResult(result, requestedAgentId));
     },
   };

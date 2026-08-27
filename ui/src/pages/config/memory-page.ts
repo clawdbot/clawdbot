@@ -668,6 +668,7 @@ class MemorySettingsPage extends OpenClawLightDomElement {
       onAddonChange: (pluginId, enabled) => void this.changeAddon(pluginId, enabled),
       pluginsHref: this.pluginsHref,
       memoryImportHref: this.memoryImportHref,
+      canImportMemory: readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin,
       agentId,
       agents: this.agentOptions(),
       onAgentChange: (next) => this.selectAgent(next),

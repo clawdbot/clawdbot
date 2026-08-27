@@ -49,8 +49,18 @@ export type OffloadedRef = {
 };
 
 /** Deletes prepared inbound files that never reached a durable owner. */
-export async function discardPreparedInboundMedia(refs: readonly OffloadedRef[]): Promise<void> {
-  await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+export async function discardPreparedInboundMedia(
+  refs: readonly OffloadedRef[],
+  log?: { warn: (message: string) => void },
+): Promise<void> {
+  const results = await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  for (const [index, result] of results.entries()) {
+    if (result.status === "rejected" && log) {
+      log.warn(
+        `failed to discard prepared inbound media ${refs[index]?.id}: ${formatErrorMessage(result.reason)}`,
+      );
+    }
+  }
 }
 
 type ParsedMessageWithImages = {
