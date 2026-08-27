@@ -1,4 +1,4 @@
-import { createReadStream } from "node:fs";
+import { constants as fsConstants, createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
@@ -14,6 +14,11 @@ const MAX_DISCOVERY_FILES = 10_000;
 const SUMMARY_SCAN_BATCH_SIZE = 100;
 const MAX_SUMMARY_CACHE_ENTRIES = 256;
 const MAX_SESSION_BYTES = 32 * 1024 * 1024;
+const FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK = fsConstants as typeof fsConstants & {
+  O_NONBLOCK?: number;
+};
+const PI_SESSION_OPEN_FLAGS =
+  fsConstants.O_RDONLY | (FS_CONSTANTS_WITH_OPTIONAL_NONBLOCK.O_NONBLOCK ?? 0);
 const MAX_SUMMARY_LINE_BYTES = 1024 * 1024;
 const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
@@ -343,7 +348,7 @@ async function readAppendProof(
 }
 
 async function readPiSessionFileWithinLimit(file: string): Promise<string> {
-  const handle = await fs.open(file, "r");
+  const handle = await fs.open(file, PI_SESSION_OPEN_FLAGS);
   try {
     const stats = await handle.stat();
     if (!stats.isFile()) {
