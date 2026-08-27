@@ -3032,7 +3032,7 @@ src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	7
 src/gateway/server.auth.control-ui.owner-bootstrap.suite.ts	5
 src/gateway/server.auth.control-ui.pairing.suite.ts	6
 src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	5
-src/gateway/server.auth.default-token.suite.ts	11
+src/gateway/server.auth.default-token.suite.ts	10
 src/gateway/server.auth.modes.suite.ts	1
 src/gateway/server/hooks-request-handler.ts	4
 src/gateway/server/http-listen.ts	1

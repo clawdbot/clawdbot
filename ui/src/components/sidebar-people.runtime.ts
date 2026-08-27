@@ -15,6 +15,7 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
+import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import {
   hovercardBootstrapIntentActive,
   remainingHovercardOpenDelay,
@@ -22,7 +23,6 @@ import {
 import { renderPersonActivityCard } from "./person-activity-card.ts";
 import { personActivityRouting } from "./person-activity-link.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
-import type { SidebarPeopleHost } from "./sidebar-people-controller.ts";
 
 let nextCardId = 0;
 
@@ -41,7 +41,7 @@ export class SidebarPeopleRuntime {
   private lastOpenAt = -Infinity;
   private readonly stopLocale: () => void;
 
-  constructor(private readonly host: SidebarPeopleHost) {
+  constructor(private readonly host: AppSidebarSessionNavigationElement) {
     this.stopLocale = i18n.subscribe(() => this.sync());
   }
 

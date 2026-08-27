@@ -4,8 +4,6 @@ import { showToast } from "../lib/toast.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
 
-export type SidebarPeopleHost = AppSidebarSessionNavigationElement;
-
 const EVENTS = ["pointerover", "pointerout", "focusin", "focusout", "click", "keydown"] as const;
 
 /** One lazy interaction owner per sidebar; the data stays in SessionDataController. */
@@ -15,7 +13,7 @@ export class SidebarPeopleController implements ReactiveController {
   private generation = 0;
   private pendingTarget: HTMLElement | null = null;
 
-  constructor(private readonly host: SidebarPeopleHost) {
+  constructor(private readonly host: AppSidebarSessionNavigationElement) {
     host.addController(this);
   }
 
