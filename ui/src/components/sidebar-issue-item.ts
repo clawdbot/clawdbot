@@ -172,10 +172,6 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
   return state satisfies never;
 }
 
-function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return t("connection.scopeUpgrade.inboxState");
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: ScopeUpgradeState;
   onCancel: () => void;
@@ -187,7 +183,7 @@ export function renderSidebarScopeUpgradeItem(params: {
     return nothing;
   }
   const text = scopeUpgradeText(params.state);
-  const summary = scopeUpgradeSummaryText(params.state);
+  const summary = t("connection.scopeUpgrade.inboxState");
   const retryable =
     params.state.phase === "error"
       ? params.state.retryable
