@@ -171,11 +171,7 @@ export function buildGatewayAuthConfig(params: {
   mode: GatewayAuthChoice;
   token?: SecretInput;
   password?: string;
-  trustedProxy?: {
-    userHeader: string;
-    requiredHeaders?: string[];
-    allowUsers?: string[];
-  };
+  trustedProxy?: GatewayAuthConfig["trustedProxy"];
 }): GatewayAuthConfig | undefined {
   const base: GatewayAuthConfig = { ...params.existing };
   delete base.token;
