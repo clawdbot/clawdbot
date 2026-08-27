@@ -1,4 +1,5 @@
 // Covers safety timeouts around embedded-agent compaction calls.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompactResult, ContextEngine } from "../context-engine/types.js";
 import {
@@ -178,6 +179,39 @@ describe("compactWithSafetyTimeout", () => {
     // …the absolute ceiling fires at 10x regardless.
     await vi.advanceTimersByTimeAsync(1);
     await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clamps the absolute ceiling to the Node-safe timer maximum", async () => {
+    // A stall budget already at the shared timer maximum makes the 10x ceiling
+    // overflow setTimeout's delay bound (Node fires overflowing delays after
+    // ~1ms). The multiplied deadline must re-clamp, so a valid maximum
+    // configuration aborts at the ceiling — not immediately, and not never.
+    vi.useFakeTimers();
+    let pulse: (() => void) | undefined;
+    let rejected = false;
+    const compactPromise = compactWithSafetyTimeout(
+      (_signal, onProgress) =>
+        new Promise<never>(() => {
+          pulse = onProgress;
+        }),
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    compactPromise.catch(() => {
+      rejected = true;
+    });
+
+    // Progress keeps the stall timer alive; nothing may fire early — an
+    // un-clamped 10x MAX delay overflows and would abort within ~1ms.
+    await vi.advanceTimersByTimeAsync(10_000);
+    pulse?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(rejected).toBe(false);
+
+    // The clamped ceiling equals the timer maximum and fires there while the
+    // re-armed stall timer (10_000 + MAX) is still in the future.
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    expect(rejected).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
   });
 

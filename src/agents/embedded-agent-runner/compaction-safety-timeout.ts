@@ -94,11 +94,14 @@ export async function compactWithSafetyTimeout<T>(
   // Independent absolute ceiling the stall timer can never re-arm: a faulty
   // engine that reports progress forever must not defer the bound indefinitely
   // (the stall budget's documented inverse risk). 10x the stall budget keeps
-  // the ceiling generous without a new configuration surface.
-  const absoluteTimer = setTimeout(
-    () => timeoutAbortCtrl.abort(timeoutError),
+  // the ceiling generous without a new configuration surface. The product is
+  // re-clamped: a stall budget already at the Node-safe timer maximum would
+  // otherwise hand setTimeout an overflowing delay that fires immediately.
+  const absoluteCeilingMs = resolveTimerTimeoutMs(
     resolvedTimeoutMs * ABSOLUTE_COMPACTION_BUDGET_MULTIPLIER,
+    1,
   );
+  const absoluteTimer = setTimeout(() => timeoutAbortCtrl.abort(timeoutError), absoluteCeilingMs);
   absoluteTimer.unref?.();
 
   const timeoutListener: () => void = () => {
