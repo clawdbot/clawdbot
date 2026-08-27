@@ -28,19 +28,19 @@ import { VERSION } from "../version.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
-  computeDeclaredSurfaceHash,
   prepareManagedPluginArtifactConsentHandler,
-  formatPluginCapabilityConsentRequired,
-  resolveAcceptedSurfaceCurrent,
   resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
-  resolvePluginInstallRecordIntegrity,
   resolvePluginInstallRecordTrust,
   type PluginCapabilityConsentAcknowledgment,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
 import {
   buildPluginCapabilitySummary,
+  computeDeclaredSurfaceHash,
+  formatPluginCapabilityConsentRequired,
+  resolveAcceptedSurfaceCurrent,
+  resolvePluginInstallRecordIntegrity,
   resolvePluginPackageDeclaredSurface,
 } from "./capability-summary.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";

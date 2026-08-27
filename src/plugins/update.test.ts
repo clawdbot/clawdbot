@@ -7,10 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import {
-  computeDeclaredSurfaceHash,
-  resolvePluginArtifactDeclaredSurface,
-} from "./capability-consent.js";
+import { resolvePluginArtifactDeclaredSurface } from "./capability-consent.js";
+import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
