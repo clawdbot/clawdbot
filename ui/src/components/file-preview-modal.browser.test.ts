@@ -245,7 +245,9 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     modal.show();
     await modal.updateComplete;
     await webAwesomeDialog?.updateComplete;
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
     const animation = dialog!.getAnimations()[0];
 
     expect(animation?.effect).toBeInstanceOf(KeyframeEffect);
