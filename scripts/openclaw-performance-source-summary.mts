@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { collectSqliteQueryPlanEvidence } from "./lib/sqlite-query-plan-evidence.js";
 
 type JsonObject = { [key: string]: JsonValue };
 type JsonValue = boolean | number | string | null | JsonObject | JsonValue[];
@@ -49,6 +50,16 @@ function stringArray(value: JsonValue | undefined): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : [];
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 31 || codePoint === 127)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function readOptionValue(argv: string[], index: number, optionName: string): string {
@@ -379,7 +390,9 @@ function isNormalizedStringArray(
   const strings = value.filter((entry): entry is string => typeof entry === "string");
   return (
     strings.length === value.length &&
-    strings.every((entry) => entry.length > 0 && entry.trim() === entry) &&
+    strings.every(
+      (entry) => entry.length > 0 && entry.trim() === entry && !hasControlCharacters(entry),
+    ) &&
     (!unique || new Set(strings).size === strings.length)
   );
 }
@@ -403,6 +416,7 @@ function validateSqlitePerfV2Artifact(sqlitePerf: JsonValue, filePath: string) {
     typeof sqliteVersion !== "string" ||
     sqliteVersion.length === 0 ||
     sqliteVersion.trim() !== sqliteVersion ||
+    hasControlCharacters(sqliteVersion) ||
     !isNonNegativeInteger(stateSchemaVersion) ||
     stateSchemaVersion <= 0 ||
     !isNonNegativeInteger(agentSchemaVersion) ||
@@ -416,7 +430,13 @@ function validateSqlitePerfV2Artifact(sqlitePerf: JsonValue, filePath: string) {
   const ids = new Set<string>();
   for (const entry of queries) {
     const id = entry.id;
-    if (typeof id !== "string" || id.length === 0 || id.trim() !== id || ids.has(id)) {
+    if (
+      typeof id !== "string" ||
+      id.length === 0 ||
+      id.trim() !== id ||
+      hasControlCharacters(id) ||
+      ids.has(id)
+    ) {
       throw new Error(`[source-performance] invalid SQLite scenario ID: ${filePath}`);
     }
     ids.add(id);
@@ -446,10 +466,11 @@ function validateSqlitePerfV2Artifact(sqlitePerf: JsonValue, filePath: string) {
     ) {
       throw new Error(`[source-performance] invalid SQLite scenario plan: ${filePath}`);
     }
-    const rawDetails = new Set(plan.raw as string[]);
+    const expectedPlan = collectSqliteQueryPlanEvidence(plan.raw as string[]);
     if (
-      !(plan.fullTableScans as string[]).every((detail) => rawDetails.has(detail)) ||
-      !(plan.tempSorts as string[]).every((detail) => rawDetails.has(detail))
+      JSON.stringify(plan.indexes) !== JSON.stringify(expectedPlan.indexes) ||
+      JSON.stringify(plan.fullTableScans) !== JSON.stringify(expectedPlan.fullTableScans) ||
+      JSON.stringify(plan.tempSorts) !== JSON.stringify(expectedPlan.tempSorts)
     ) {
       throw new Error(`[source-performance] invalid SQLite scenario plan: ${filePath}`);
     }
@@ -782,6 +803,8 @@ function buildSqliteScenarioRows(current: JsonValue, baseline: JsonValue) {
   return objectArray(valueAt(current, "queries")).map((entry, index) => {
     const id = currentIsV2 ? entry.id : `legacy query ${index + 1}`;
     const before = currentIsV2 ? baselineById.get(entry.id) : undefined;
+    const comparable =
+      before !== undefined && before.rows === entry.rows && before.runs === entry.runs;
     return [
       id ?? "unknown",
       currentIsV2 ? (entry.database ?? "unknown") : "unknown",
@@ -789,8 +812,14 @@ function buildSqliteScenarioRows(current: JsonValue, baseline: JsonValue) {
       currentIsV2 ? (entry.runs ?? "n/a") : "n/a",
       formatMs(entry.p50Ms),
       formatMs(entry.p95Ms),
+      before?.rows ?? "n/a",
+      before?.runs ?? "n/a",
       formatMs(before?.p95Ms),
-      formatPercentDelta(before?.p95Ms, entry.p95Ms),
+      comparable
+        ? formatPercentDelta(before.p95Ms, entry.p95Ms)
+        : before
+          ? "n/a (workload differs)"
+          : "n/a",
       formatSqlitePlan(entry.plan),
     ];
   });
@@ -931,7 +960,19 @@ export function buildMarkdown(sourceDir: string, baselineSourceDir: string | nul
       buildSqliteRunRows(current.sqlitePerf, baseline?.sqlitePerf ?? null),
     ),
     ...table(
-      ["scenario", "database", "rows", "runs", "p50", "p95", "baseline p95", "delta", "plan/index"],
+      [
+        "scenario",
+        "database",
+        "rows",
+        "runs",
+        "p50",
+        "p95",
+        "baseline rows",
+        "baseline runs",
+        "baseline p95",
+        "delta",
+        "plan/index",
+      ],
       buildSqliteScenarioRows(current.sqlitePerf, baseline?.sqlitePerf ?? null),
     ),
     "## Observations",

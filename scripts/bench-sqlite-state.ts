@@ -17,6 +17,10 @@ import {
 } from "../src/state/openclaw-state-db.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import {
+  collectSqliteQueryPlanEvidence,
+  type SqliteQueryPlanEvidence,
+} from "./lib/sqlite-query-plan-evidence.js";
+import {
   CliUsageError,
   parseSqliteStateBenchmarkCli,
   type ProfileId,
@@ -33,19 +37,12 @@ type ProfileConfig = {
   queryRuns: number;
 };
 
-type QueryPlanEvidence = {
-  fullTableScans: string[];
-  indexes: string[];
-  raw: string[];
-  tempSorts: string[];
-};
-
 type TimedQuery = {
   database: "agent" | "state";
   id: string;
   p50Ms: number;
   p95Ms: number;
-  plan: QueryPlanEvidence;
+  plan: SqliteQueryPlanEvidence;
   runs: number;
   rows: number;
   sql: string;
@@ -104,7 +101,7 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
     cronTaskRuns: 1_000,
     deliveryQueueEntries: 1_000,
     pluginStateEntries: 1_000,
-    queryRuns: 12,
+    queryRuns: 20,
   },
   default: {
     agentCacheEntries: 20_000,
@@ -128,7 +125,10 @@ const PROFILES: Record<ProfileId, ProfileConfig> = {
   },
 };
 
-const SQLITE_PERF_TRANSCRIPT_EVENTS = 128;
+const SQLITE_PERF_FULL_LOAD_RUNS = 20;
+const SQLITE_PERF_TRANSCRIPT_EVENTS = 256;
+const SQLITE_PERF_TRANSCRIPT_MESSAGE_BYTES = 4_096;
+const SQLITE_PERF_TRANSCRIPT_PAGE_MESSAGES = 256;
 const SQLITE_PERF_TRANSCRIPT_SESSION_ID = "perf-history";
 const SQLITE_PERF_INGRESS_QUEUE = JSON.stringify(["telegram", "bench-account"]);
 const SQLITE_PERF_PLUGIN_ID = "benchmark-plugin";
@@ -487,9 +487,14 @@ function seedTranscriptHistory(db: DatabaseSync): void {
        (session_id, active_position, event_seq, message_position)
      VALUES (?, ?, ?, ?)`,
   );
+  const messageContent = "x".repeat(SQLITE_PERF_TRANSCRIPT_MESSAGE_BYTES);
   for (let seq = 1; seq <= SQLITE_PERF_TRANSCRIPT_EVENTS; seq += 1) {
     const eventId = `history-${seq}`;
-    const message = { type: "message", id: eventId, message: { role: "user", content: eventId } };
+    const message = {
+      type: "message",
+      id: eventId,
+      message: { role: "user", content: messageContent },
+    };
     insertEvent.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq, JSON.stringify(message), seq);
     insertIdentity.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, eventId, seq, seq);
     insertActive.run(SQLITE_PERF_TRANSCRIPT_SESSION_ID, seq - 1, seq, seq - 1);
@@ -531,26 +536,15 @@ function percentile(values: number[], pct: number): number {
   return Number(expectDefined(sorted[index], `SQLite benchmark percentile ${pct}`).toFixed(3));
 }
 
-function readQueryPlan(db: DatabaseSync, sql: string, params: SQLInputValue[]): QueryPlanEvidence {
+function readQueryPlan(
+  db: DatabaseSync,
+  sql: string,
+  params: SQLInputValue[],
+): SqliteQueryPlanEvidence {
   const raw = (
     db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail?: unknown }>
   ).map((row) => (typeof row.detail === "string" ? row.detail : JSON.stringify(row.detail ?? "")));
-  const indexes = [
-    ...new Set(
-      raw.flatMap((detail) => {
-        const match = /\bUSING (?:COVERING )?INDEX ([^\s(]+)/iu.exec(detail);
-        return match?.[1] ? [match[1]] : [];
-      }),
-    ),
-  ];
-  return {
-    fullTableScans: raw.filter(
-      (detail) => /\bSCAN \S+/iu.test(detail) && !/\bUSING (?:COVERING )?INDEX\b/iu.test(detail),
-    ),
-    indexes,
-    raw,
-    tempSorts: raw.filter((detail) => detail.includes("USE TEMP B-TREE")),
-  };
+  return collectSqliteQueryPlanEvidence(raw);
 }
 
 function runTimedQuery(params: {
@@ -562,7 +556,9 @@ function runTimedQuery(params: {
   requestedRuns: number;
   sql: string;
 }): TimedQuery {
-  const runs = params.fullLoad ? Math.min(params.requestedRuns, 12) : params.requestedRuns;
+  const runs = params.fullLoad
+    ? Math.min(params.requestedRuns, SQLITE_PERF_FULL_LOAD_RUNS)
+    : params.requestedRuns;
   const statement = params.db.prepare(params.sql);
   const samples: number[] = [];
   let rows = statement.all(...params.queryParams).length;
@@ -601,8 +597,8 @@ function runHotQueries(params: {
   stateDb: DatabaseSync;
 }): TimedQuery[] {
   const transcriptPositions = Array.from(
-    { length: 32 },
-    (_, index) => SQLITE_PERF_TRANSCRIPT_EVENTS - 32 + index,
+    { length: SQLITE_PERF_TRANSCRIPT_PAGE_MESSAGES },
+    (_, index) => SQLITE_PERF_TRANSCRIPT_EVENTS - SQLITE_PERF_TRANSCRIPT_PAGE_MESSAGES + index,
   );
   const transcriptPlaceholders = transcriptPositions.map(() => "?").join(", ");
   return [
@@ -678,6 +674,30 @@ function runHotQueries(params: {
         WHERE queue_name = ? AND status = ?
           AND (received_at > ? OR (received_at = ? AND event_id > ?))
         ORDER BY received_at ASC, event_id ASC
+        LIMIT ?`,
+    }),
+    runTimedQuery({
+      database: "state",
+      db: params.stateDb,
+      id: "ingress.pending.id-page",
+      queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", SQLITE_PERF_PAGE_SIZE],
+      requestedRuns: params.config.queryRuns,
+      sql: `SELECT *
+         FROM channel_ingress_events
+        WHERE queue_name = ? AND status = ?
+        ORDER BY event_id ASC
+        LIMIT ?`,
+    }),
+    runTimedQuery({
+      database: "state",
+      db: params.stateDb,
+      id: "ingress.pending.id-seek-page",
+      queryParams: [SQLITE_PERF_INGRESS_QUEUE, "pending", "event-00000500", SQLITE_PERF_PAGE_SIZE],
+      requestedRuns: params.config.queryRuns,
+      sql: `SELECT *
+         FROM channel_ingress_events
+        WHERE queue_name = ? AND status = ? AND event_id > ?
+        ORDER BY event_id ASC
         LIMIT ?`,
     }),
     runTimedQuery({

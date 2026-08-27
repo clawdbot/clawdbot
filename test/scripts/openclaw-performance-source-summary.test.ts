@@ -257,7 +257,7 @@ describe("buildMarkdown", () => {
         plan: {
           fullTableScans: [],
           indexes: ["sqlite_autoindex_cache_entries_1"],
-          raw: ["SEARCH cache_entries USING PRIMARY KEY"],
+          raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
           tempSorts: [],
         },
         rows: 100,
@@ -274,7 +274,7 @@ describe("buildMarkdown", () => {
         plan: {
           fullTableScans: [],
           indexes: ["sqlite_autoindex_cache_entries_1"],
-          raw: ["SEARCH cache_entries USING PRIMARY KEY"],
+          raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
           tempSorts: [],
         },
         rows: 100,
@@ -302,12 +302,41 @@ describe("buildMarkdown", () => {
 
     expect(markdown).toContain("| current | v2 | smoke | 3.53.4 | 13 | 16 |");
     expect(markdown).toContain(
-      "| delivery.pending.load | state | 1000 | 12 | 10.0ms | 15.0ms | 20.0ms | -25.0% |",
+      "| delivery.pending.load | state | 1000 | 12 | 10.0ms | 15.0ms | 1000 | 12 | 20.0ms | -25.0% |",
     );
     expect(markdown).toContain(
-      "| agent-cache.plugin-model-catalog.list | agent | 100 | 12 | 1.0ms | 2.0ms | n/a | n/a |",
+      "| agent-cache.plugin-model-catalog.list | agent | 100 | 12 | 1.0ms | 2.0ms | n/a | n/a | n/a | n/a |",
     );
     expect(markdown).not.toContain("| baseline-only |");
+  });
+
+  it("does not compare v2 SQLite scenarios with different workloads", () => {
+    const sourceDir = mkTmpRoot();
+    const baselineDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeSourceFixture(baselineDir);
+    writeSqliteV2Fixture(sourceDir);
+    writeSqliteV2Fixture(baselineDir, [
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 18,
+        p95Ms: 20,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_delivery_queue_pending"],
+          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+          tempSorts: [],
+        },
+        rows: 999,
+        runs: 20,
+        sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
+      },
+    ]);
+
+    expect(buildMarkdown(sourceDir, baselineDir)).toContain(
+      "| delivery.pending.load | state | 1000 | 12 | 10.0ms | 12.0ms | 999 | 20 | 20.0ms | n/a (workload differs) |",
+    );
   });
 
   it("rejects duplicate and empty v2 SQLite scenario IDs", () => {
@@ -374,6 +403,21 @@ describe("buildMarkdown", () => {
         runs: 12,
         sql: "SELECT id FROM delivery_queue_entries",
       },
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 10,
+        p95Ms: 12,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_fake"],
+          raw: ["SCAN delivery_queue_entries"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries",
+      },
     ];
 
     for (const query of invalidQueries) {
@@ -387,6 +431,32 @@ describe("buildMarkdown", () => {
     }
   });
 
+  it("rejects control characters in v2 SQLite display fields", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeSqliteV2Fixture(sourceDir, [
+      {
+        database: "state",
+        id: "delivery.pending\nload",
+        p50Ms: 10,
+        p95Ms: 12,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_delivery_queue_pending"],
+          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries",
+      },
+    ]);
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] invalid SQLite scenario ID:",
+    );
+  });
+
   it("renders legacy SQLite artifacts without manufacturing baseline matches", () => {
     const sourceDir = mkTmpRoot();
     const baselineDir = mkTmpRoot();
@@ -397,7 +467,7 @@ describe("buildMarkdown", () => {
 
     expect(markdown).toContain("| current | legacy | smoke | n/a | n/a | n/a |");
     expect(markdown).toContain(
-      "| legacy query 1 | unknown | 1 | n/a | 0.1ms | 0.2ms | n/a | n/a |",
+      "| legacy query 1 | unknown | 1 | n/a | 0.1ms | 0.2ms | n/a | n/a | n/a | n/a |",
     );
   });
 
