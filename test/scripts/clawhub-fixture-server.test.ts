@@ -6,7 +6,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureClawHubPackageTrustAcknowledged } from "../../src/infra/clawhub-install-trust.js";
+import { checkClawHubPackageTrust } from "../../src/infra/clawhub-install-trust.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = path.resolve("scripts/e2e/lib/clawhub-fixture-server.cjs");
@@ -224,11 +224,13 @@ describe("ClawHub fixture server", () => {
       }
       return response;
     });
-    const trust = await ensureClawHubPackageTrustAcknowledged({
+    const auditMessages: string[] = [];
+    const trust = await checkClawHubPackageTrust({
       subject: { kind: "plugin", packageName: "@openclaw/whatsapp" },
       version,
       baseUrl,
       mode: "update",
+      logger: { info: (message) => auditMessages.push(message) },
     });
     expect(security).toEqual({
       package: {
@@ -246,6 +248,8 @@ describe("ClawHub fixture server", () => {
         npmTarballName: tarball,
         createdAt: 0,
       },
+      overview: "No security concerns found in the fixture release.",
+      securityAuditUrl: securityUrl,
       trust: {
         scanStatus: "clean",
         moderationState: null,
@@ -255,6 +259,12 @@ describe("ClawHub fixture server", () => {
         stale: false,
       },
     });
+    expect(auditMessages).toHaveLength(1);
+    expect(auditMessages[0]).toContain("ClawHub Security Audit");
+    expect(auditMessages[0]).toContain("Outcome: Safe");
+    expect(auditMessages[0]).toContain("No security concerns found in the fixture release.");
+    expect(auditMessages[0]).toContain("Details:");
+    expect(auditMessages[0]).toContain(securityUrl);
     expect(trust).toEqual({
       ok: true,
       trustInstallRecordFields: {
