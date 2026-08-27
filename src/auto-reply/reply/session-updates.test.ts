@@ -179,6 +179,7 @@ describe("ensureSkillSnapshot", () => {
         sessionKey,
       },
       expect.any(Function),
+      { preserveOwnerProjection: true },
     );
     expect(result.sessionEntry).toBeUndefined();
     expect(result.systemSent).toBe(false);

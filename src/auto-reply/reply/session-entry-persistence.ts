@@ -78,6 +78,7 @@ export async function persistReplySessionEntry(
     },
     {
       fallbackEntry: params.entry,
+      preserveOwnerProjection: true,
       replaceEntry: true,
       skipMaintenance: params.skipMaintenance,
     },

@@ -1,8 +1,4 @@
-import type {
-  SessionOwner,
-  SessionsAssignOwnerParams,
-  SessionsAssignOwnerResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsAssignOwnerParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
   GatewaySessionRow,
   SessionsListResult,
@@ -31,9 +27,11 @@ import type {
   SessionResetResult,
   SessionState,
 } from "./session-capability.ts";
+import { createSessionOwnerAssignmentOverlay } from "./session-owner-assignment-overlay.ts";
 import {
   confirmsSessionDeletion,
   requestSessionDelete,
+  requestSessionOwnerAssignment as assignSessionOwner,
   requestSessionPatch,
   requestSessionReset,
 } from "./session-requests.ts";
@@ -47,7 +45,8 @@ type SessionMutationsHost = {
   connection: SessionConnectionOwner;
   readState: () => SessionState;
   publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
-  refreshReplacement: (agentId?: string | null) => Promise<void>;
+  refreshReplacement: (agentId?: string | null, ownerKey?: string) => Promise<void>;
+  ownerAssignmentScopeRevisions: (key: string) => ReadonlyMap<string, number>;
   publishedRow: (key: string) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
   notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
@@ -69,6 +68,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     { token: symbol; previous: SessionPinFields; next: SessionPinFields }
   >();
   const confirmedArchives = new Map<string, ConfirmedArchiveState>();
+  const ownerAssignments = createSessionOwnerAssignmentOverlay();
   const archiveVisibility = createSessionArchiveVisibility(() =>
     host.publish({ ...host.readState() }),
   );
@@ -113,21 +113,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
 
   const patchRowLocal = (key: string, patch: Partial<GatewaySessionRow>) => {
     const state = host.readState();
-    const normalizedKey = key.trim();
-    if (!state.result || !normalizedKey) {
+    const row = state.result?.sessions.find((candidate) => candidate.key === key.trim());
+    if (!state.result || !row) {
       return;
     }
-    let changed = false;
-    const sessions = state.result.sessions.map((row) => {
-      if (row.key !== normalizedKey) {
-        return row;
-      }
-      changed = true;
-      return { ...row, ...patch };
-    });
-    if (changed) {
-      host.publish({ ...state, result: { ...state.result, sessions } });
-    }
+    const sessions = [...state.result.sessions];
+    sessions[sessions.indexOf(row)] = { ...row, ...patch };
+    const owners = Object.hasOwn(patch, "owner") ? undefined : state.result.owners;
+    host.publish({ ...state, result: { ...state.result, sessions, owners } });
   };
 
   // The Gateway derives `pinned` from `pinnedAt` and both row comparators order
@@ -474,6 +467,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       const retireBeforeRevision = Date.now();
       host.retirePullRequestSummary(key);
       confirmedArchives.delete(key.trim());
+      ownerAssignments.retire(key.trim());
       archiveVisibility.clear(key);
       preparedWorkSessionKeys.delete(key.trim());
       host.publish({
@@ -560,6 +554,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       for (const key of deleted) {
         host.retirePullRequestSummary(key);
         confirmedArchives.delete(key.trim());
+        ownerAssignments.retire(key.trim());
         archiveVisibility.clear(key);
         preparedWorkSessionKeys.delete(key.trim());
       }
@@ -600,32 +595,47 @@ export function createSessionMutations(host: SessionMutationsHost) {
     }
   };
 
-  const assignOwner = async (
+  const assignOwner = (
     key: string,
     owner: SessionsAssignOwnerParams["owner"],
     options: { agentId?: string | null } = {},
-  ): Promise<SessionOwner | null> => {
-    const scope = host.connection.capture();
-    if (!scope) {
-      return null;
-    }
-    try {
-      const result = await scope.client.request<SessionsAssignOwnerResult>("sessions.assignOwner", {
-        key,
-        owner,
-        ...(options.agentId ? { agentId: options.agentId } : {}),
-      });
-      if (!host.connection.isCurrent(scope)) {
+  ) =>
+    ownerAssignments.enqueue(key, async () => {
+      const scope = host.connection.capture();
+      if (!scope) {
         return null;
       }
-      patchRowLocal(result.key, { owner: result.owner });
-      return result.owner;
-    } catch (error) {
-      if (host.connection.isCurrent(scope)) {
-        host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+      try {
+        const result = await assignSessionOwner(scope.client, key, owner, options.agentId);
+        if (!host.connection.isCurrent(scope)) {
+          return null;
+        }
+        const ownerClaim = ownerAssignments.confirm(
+          result.key,
+          result.owner,
+          host.ownerAssignmentScopeRevisions(result.key),
+          host.publishedRow(result.key)?.sessionId,
+        );
+        patchRowLocal(result.key, { owner: ownerClaim.owner });
+        host.redecorateLists();
+        ownerAssignments.settleOn(host.refreshReplacement(options.agentId, result.key), ownerClaim);
+        return ownerClaim.owner;
+      } catch (error) {
+        if (host.connection.isCurrent(scope)) {
+          host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+        }
+        return null;
       }
-      return null;
-    }
+    });
+
+  const clearMutationState = () => {
+    pendingCreatedModelOverrides.clear();
+    pendingModelPatches.clear();
+    pendingPinPatches.clear();
+    confirmedArchives.clear();
+    ownerAssignments.clear();
+    archiveVisibility.clearAll();
+    preparedWorkSessionKeys.clear();
   };
 
   return {
@@ -690,6 +700,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       });
       return changed ? { ...result, sessions } : result;
     },
+    applyConfirmedOwners: ownerAssignments.decorate,
+    observeCanonicalOwners: ownerAssignments.observeCanonical,
+    retireCanonicalOwnerScope: ownerAssignments.retireScope,
     observeArchiveState(key: string, archived: boolean | null, row?: GatewaySessionRow): void {
       const normalizedKey = key.trim();
       if (!normalizedKey || archived === null) {
@@ -737,25 +750,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
     },
     retireConnection() {
-      pendingCreatedModelOverrides.clear();
-      pendingModelPatches.clear();
+      clearMutationState();
       // Pin intents live inside `result`, which the replacement connection
       // rehydrates wholesale; only the model-override side map outlives that
       // replacement, so it is the one that needs an explicit rollback below.
-      pendingPinPatches.clear();
-      confirmedArchives.clear();
-      archiveVisibility.clearAll();
-      preparedWorkSessionKeys.clear();
       const state = host.readState();
       host.publish({ ...state, modelOverrides: {} });
     },
-    dispose() {
-      pendingCreatedModelOverrides.clear();
-      pendingModelPatches.clear();
-      pendingPinPatches.clear();
-      confirmedArchives.clear();
-      archiveVisibility.clearAll();
-      preparedWorkSessionKeys.clear();
-    },
+    dispose: clearMutationState,
   };
 }

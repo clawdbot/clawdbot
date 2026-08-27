@@ -1,4 +1,7 @@
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -59,18 +62,30 @@ export function assignSessionOwner(
 ): SessionOwnerAssignment | null {
   const resolved = resolveSqliteScope(scope);
   const options = toDatabaseOptions(resolved);
-  const owner: SessionOwnerAssignment = {
-    actor: params.owner,
-    assignedBy: params.assignedBy,
-    assignedAt: params.assignedAt ?? Date.now(),
-  };
-  const updated = runOpenClawAgentWriteTransaction(
+  return runOpenClawAgentWriteTransaction(
     (database) => {
       params.assertCurrent?.();
-      return replaceSessionOwnerInTransaction(database, resolved.sessionKey, owner);
+      const currentAssignedAt = hasSqliteSessionOwnerColumns(database.db)
+        ? executeSqliteQueryTakeFirstSync(
+            database.db,
+            getSessionKysely(database.db)
+              .selectFrom("session_nodes")
+              .select("owner_assigned_at")
+              .where("session_key", "=", resolved.sessionKey),
+          )?.owner_assigned_at
+        : undefined;
+      const requestedAssignedAt = params.assignedAt ?? Date.now();
+      const owner: SessionOwnerAssignment = {
+        actor: params.owner,
+        assignedBy: params.assignedBy,
+        assignedAt:
+          typeof currentAssignedAt === "number"
+            ? Math.max(requestedAssignedAt, currentAssignedAt + 1)
+            : requestedAssignedAt,
+      };
+      return replaceSessionOwnerInTransaction(database, resolved.sessionKey, owner) ? owner : null;
     },
     options,
     { operationLabel: "sessions.assign-owner" },
   );
-  return updated ? owner : null;
 }

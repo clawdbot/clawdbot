@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  assignSessionOwner,
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -7,6 +11,84 @@ import type { AgentSessionPatchBuild } from "../server-methods/agent-session-pat
 import { persistAgentSessionPhase } from "./agent-session-persist.js";
 
 describe("persistAgentSessionPhase", () => {
+  it("rejects admission persistence when ownership changes during target projection", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionKey = "agent:main:owner-race";
+      const sessionId = "owner-race-session";
+      const runId = "owner-race-run";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      const entry = { sessionId, updatedAt: 1 };
+      await upsertSessionEntryCore(scope, entry);
+      const patchBuild: AgentSessionPatchBuild = {
+        patch: { label: "stale admission", sessionId, updatedAt: 3 },
+        spawnedBy: undefined,
+        groupId: undefined,
+        groupChannel: undefined,
+        groupSpace: undefined,
+        freshSessionRotatedSinceLoad: false,
+        isNewSession: false,
+        rotatedSessionId: false,
+        usableRequestedSessionId: sessionId,
+        freshness: undefined,
+      };
+      let assigned = false;
+
+      await expect(
+        persistAgentSessionPhase({
+          request: { message: "owner race", idempotencyKey: runId },
+          cfg: {},
+          storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+          canonicalSessionKey: sessionKey,
+          sessionAgentId: "main",
+          mainSessionKey: "agent:main:main",
+          creation: { via: "run" },
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          isRestartRecoveryResumeRun: false,
+          runId,
+          agentId: "main",
+          suppressVisibleSessionEffects: false,
+          initialPatchBuild: patchBuild,
+          buildSessionPatch: () => {
+            if (!assigned) {
+              assigned = true;
+              assignSessionOwner(scope, {
+                owner: { type: "human", id: "profile-owner" },
+                assignedBy: { type: "human", id: "profile-assigner" },
+                assignedAt: 2,
+              });
+            }
+            return patchBuild;
+          },
+          initialSessionEntry: entry,
+          initialResolvedSessionId: sessionId,
+          initialSessionPersistedBeforeGatewayAdmission: true,
+          touchInteraction: false,
+          bestEffortDeliver: false,
+          expectedSession: undefined,
+          maintenanceConfig: undefined,
+          abortForLifecycleRotation: () => false,
+          assertGatewayWorkAdmissionAllowed: vi.fn(),
+          respondToGatewayAdmissionOutcome: () => false,
+          updateAdmissionState: vi.fn(),
+          getAdmittedSessionId: () => sessionId,
+          setCronContinuationClaim: vi.fn(),
+          setMainRestartRecoveryOwnerLease: vi.fn(),
+          respond: vi.fn(),
+        }),
+      ).rejects.toThrow("SQLite session state changed while preparing session-entry-target.patch");
+
+      expect(loadSessionEntry(scope)).toMatchObject({
+        owner: {
+          actor: { type: "human", id: "profile-owner" },
+          assignedBy: { type: "human", id: "profile-assigner" },
+          assignedAt: 2,
+        },
+        sessionId,
+      });
+      expect(loadSessionEntry(scope)).not.toHaveProperty("label");
+    });
+  });
+
   it("sandboxes a new synthetic run using its host-minted operator identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("synthetic-sandbox-creator@example.com");

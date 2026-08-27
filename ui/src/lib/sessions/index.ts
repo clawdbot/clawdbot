@@ -161,9 +161,17 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   // Canonical Gateway rows are the source of truth for everything except the
   // UI-owned facts the capability keeps beside them, so every published result
-  // passes through the same overlay: swarm notes, then in-flight pin intents.
-  const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
-    mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
+  // passes through the same overlay: swarm notes, then confirmed mutations.
+  const decorateRows = (
+    result: SessionsListResult | null,
+    scope?: string,
+    requestRevision?: number,
+  ): SessionsListResult | null =>
+    mutations.applyConfirmedOwners(
+      mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result))),
+      scope,
+      requestRevision,
+    );
 
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => connection.isCurrent(scope),
@@ -195,6 +203,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     observerError: () => sessionEventSubscriptionError,
     bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
     decorate: decorateRows,
+    observeCanonicalRows(result, requestRevision, scope) {
+      mutations.observeCanonicalOwners(result, requestRevision, scope);
+    },
+    retireCanonicalScope: (scope) => mutations.retireCanonicalOwnerScope(scope),
     onCanonicalList(result, requestRevision, agentId, observed) {
       mutations.settlePrepared(result);
       for (const row of observed?.sessions ?? []) {
@@ -229,7 +241,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connection,
     readState: () => state,
     publish,
-    refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    refreshReplacement: (agentId, ownerKey) =>
+      ownerKey
+        ? roster.refreshOwnerAssignmentScopes(ownerKey, agentId)
+        : roster.refreshReplacement(agentId),
+    ownerAssignmentScopeRevisions: (key) => roster.ownerAssignmentScopeRevisions(key),
     publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
     notifyCreated,

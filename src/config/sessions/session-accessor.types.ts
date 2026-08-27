@@ -453,6 +453,8 @@ export type SessionTranscriptManualTrimPreflightResult =
     };
 
 export type SessionEntryUpdateOptions = {
+  /** Ignore separately persisted owner projection changes while committing this update. */
+  preserveOwnerProjection?: boolean;
   /** Skip prune/cap/rotation maintenance for specialized internal updates. */
   skipMaintenance?: boolean;
   /** Let the writer cache retain the updated object without cloning. */
@@ -520,6 +522,8 @@ export type SessionEntryPatchOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
+  /** Ignore separately persisted owner projection changes while committing this patch. */
+  preserveOwnerProjection?: boolean;
   /** Throw when best-effort store recovery cannot confirm the requested write. */
   requireWriteSuccess?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */

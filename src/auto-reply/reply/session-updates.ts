@@ -60,6 +60,7 @@ async function persistSessionEntryUpdate(params: {
       sessionKey: params.sessionKey,
     },
     (entry) => (entry.sessionId === params.expectedSessionId ? params.updates : null),
+    { preserveOwnerProjection: true },
   );
   if (persistedEntry) {
     if (params.sessionEntryHandle) {

@@ -10,6 +10,11 @@ type SqliteSessionEntrySelectionSnapshot = {
   selectedRows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
 
+type SessionEntryComparator = (
+  left: SessionEntry | undefined,
+  right: SessionEntry | undefined,
+) => boolean;
+
 class SqliteSessionMutationConflictError extends Error {
   constructor(operationLabel: string) {
     super(`SQLite session state changed while preparing ${operationLabel}`);
@@ -39,16 +44,30 @@ export function sqliteSessionEntriesEqual(
   return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
 }
 
+export function sqliteLifecycleSessionEntriesEqual(
+  left: SessionEntry | undefined,
+  right: SessionEntry | undefined,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  const { owner: _leftOwner, ...leftEntry } = left;
+  const { owner: _rightOwner, ...rightEntry } = right;
+  // Owner is stored in dedicated columns and same-session lifecycle/reply
+  // writes preserve that projection instead of replacing it.
+  return sqliteSessionEntriesEqual(leftEntry, rightEntry);
+}
+
 function sqliteSessionSnapshotRowsEqual(
   left: Array<{ entry: SessionEntry; sessionKey: string }>,
   right: Array<{ entry: SessionEntry; sessionKey: string }>,
+  entriesEqual: SessionEntryComparator = sqliteSessionEntriesEqual,
 ): boolean {
   return (
     left.length === right.length &&
     left.every(
       (row, index) =>
-        row.sessionKey === right[index]?.sessionKey &&
-        sqliteSessionEntriesEqual(row.entry, right[index]?.entry),
+        row.sessionKey === right[index]?.sessionKey && entriesEqual(row.entry, right[index]?.entry),
     )
   );
 }
@@ -68,13 +87,17 @@ export function assertSessionEntrySelectionUnchanged(
   expected: SqliteSessionEntrySelectionSnapshot,
   current: SqliteSessionEntrySelectionSnapshot,
   operationLabel: string,
+  preserveOwnerProjection = false,
 ): void {
+  const entriesEqual = preserveOwnerProjection
+    ? sqliteLifecycleSessionEntriesEqual
+    : sqliteSessionEntriesEqual;
   const selectedMatches =
     expected.selected?.row.session_key === current.selected?.row.session_key &&
-    sqliteSessionEntriesEqual(expected.selected?.entry, current.selected?.entry);
+    entriesEqual(expected.selected?.entry, current.selected?.entry);
   if (
     !selectedMatches ||
-    !sqliteSessionSnapshotRowsEqual(expected.selectedRows, current.selectedRows)
+    !sqliteSessionSnapshotRowsEqual(expected.selectedRows, current.selectedRows, entriesEqual)
   ) {
     throw new SqliteSessionMutationConflictError(operationLabel);
   }

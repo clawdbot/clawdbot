@@ -173,6 +173,7 @@ export type SessionEntryPatchOptions = {
   fallbackEntry?: SessionEntry;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   preserveActivity?: boolean;
+  preserveOwnerProjection?: boolean;
   requireWriteSuccess?: boolean;
   replaceEntry?: boolean;
   skipMaintenance?: boolean;

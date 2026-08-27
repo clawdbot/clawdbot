@@ -37,7 +37,10 @@ import {
   runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
-import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  sqliteLifecycleSessionEntriesEqual,
+  sqliteSessionEntriesEqual,
+} from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteLegacySessionEntryRows,
   deleteSessionEntryRows,
@@ -384,7 +387,11 @@ export async function applySessionEntryLifecycleMutation(params: {
               : readExactSessionEntryRow(transactionDb, sessionKey)
             )?.entry;
         const expectedCurrentEntry = expectedEntry ?? sameKeyRemoval?.expectedEntry;
-        if (!sqliteSessionEntriesEqual(currentEntry, expectedCurrentEntry)) {
+        const entriesEqual =
+          entry.sessionId === expectedCurrentEntry?.sessionId
+            ? sqliteLifecycleSessionEntriesEqual
+            : sqliteSessionEntriesEqual;
+        if (!entriesEqual(currentEntry, expectedCurrentEntry)) {
           if (sameKeyRemoval) {
             throw new Error(`SQLite session entry has stale lifecycle state for ${sessionKey}`);
           }
