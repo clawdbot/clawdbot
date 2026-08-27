@@ -2,35 +2,18 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WebSocket, type ClientOptions, type RawData } from "ws";
+import { WebSocket, type ClientOptions } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
 import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
-import { buildDeviceAuthPayloadV3 } from "../../../../packages/gateway-client/src/device-auth.js";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  MIN_CLIENT_PROTOCOL_VERSION,
-  PROTOCOL_VERSION,
-} from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-  signDevicePayload,
-  type DeviceIdentity,
-} from "../../../../src/infra/device-identity.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
@@ -57,12 +40,6 @@ const IDENTITY_FIELDS = [
   "Assurance",
 ] as const;
 const FRAME_TIMEOUT_MS = 20_000;
-const GATEWAY_SCOPES = [
-  "operator.admin",
-  "operator.pairing",
-  "operator.read",
-  "operator.write",
-] as const;
 
 type ProducerOptions = {
   artifactBase: string;
@@ -76,209 +53,32 @@ type ProofResult = {
   status: QaScriptEvidenceStatus;
 };
 
-type RawGatewayClient = {
-  frames: unknown[];
-  socket: WebSocket;
-};
-
-function rawDataText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8");
-  }
-  return Buffer.isBuffer(data) ? data.toString("utf8") : Buffer.from(data).toString("utf8");
-}
-
-async function openRawGatewayClient(
+async function assertUntrustedProxyHeadersRejected(
   url: string,
-  headers?: Record<string, string>,
-): Promise<RawGatewayClient> {
-  const socket = new WebSocket(url, headers ? ({ headers } satisfies ClientOptions) : undefined);
-  const frames: unknown[] = [];
-  socket.on("message", (data) => frames.push(parseJson(rawDataText(data), "Gateway frame")));
-  await new Promise<void>((resolve, reject) => {
-    socket.once("open", resolve);
-    socket.once("error", reject);
-  });
-  return { frames, socket };
-}
-
-async function waitForFrame(
-  client: RawGatewayClient,
-  predicate: (frame: unknown) => boolean,
-  startIndex = 0,
-): Promise<Record<string, unknown>> {
-  const deadline = Date.now() + FRAME_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const frame = client.frames.slice(startIndex).find(predicate);
-    if (isRecord(frame)) {
-      return frame;
-    }
-    await sleep(20);
-  }
-  throw new Error(`timed out waiting for Gateway frame: ${JSON.stringify(client.frames)}`);
-}
-
-function responseFor(id: string) {
-  return (frame: unknown) => isRecord(frame) && frame.type === "res" && frame.id === id;
-}
-
-async function closeRawGatewayClient(client: RawGatewayClient): Promise<void> {
-  if (client.socket.readyState === WebSocket.CLOSED) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    client.socket.once("close", () => resolve());
-    client.socket.close();
-    setTimeout(resolve, 1_000).unref();
-  });
-}
-
-async function connectRawDevice(params: {
-  device: DeviceIdentity;
-  headers?: Record<string, string>;
-  token?: string;
-  wsUrl: string;
-}): Promise<{ client: RawGatewayClient; connected: boolean }> {
-  const client = await openRawGatewayClient(params.wsUrl, params.headers);
-  const challenge = await waitForFrame(
-    client,
-    (frame) => isRecord(frame) && frame.type === "event" && frame.event === "connect.challenge",
-  );
-  const challengePayload = challenge.payload;
-  if (!isRecord(challengePayload) || typeof challengePayload.nonce !== "string") {
-    throw new Error("Gateway connect challenge omitted its nonce");
-  }
-  const clientInfo = {
-    id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    platform: "linux",
-    version: "qa-local-user-ingress",
-  } as const;
-  const signedAt = Date.now();
-  const devicePayload = buildDeviceAuthPayloadV3({
-    deviceId: params.device.deviceId,
-    clientId: clientInfo.id,
-    clientMode: clientInfo.mode,
-    role: "operator",
-    scopes: [...GATEWAY_SCOPES],
-    signedAtMs: signedAt,
-    token: params.token,
-    nonce: challengePayload.nonce,
-    platform: clientInfo.platform,
-  });
-  const requestId = `connect-${randomUUID()}`;
-  const startIndex = client.frames.length;
-  client.socket.send(
-    JSON.stringify({
-      type: "req",
-      id: requestId,
-      method: "connect",
-      params: {
-        minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: clientInfo,
-        role: "operator",
-        scopes: [...GATEWAY_SCOPES],
-        caps: [],
-        ...(params.token ? { auth: { token: params.token } } : {}),
-        device: {
-          id: params.device.deviceId,
-          publicKey: publicKeyRawBase64UrlFromPem(params.device.publicKeyPem),
-          signature: signDevicePayload(params.device.privateKeyPem, devicePayload),
-          signedAt,
-          nonce: challengePayload.nonce,
-        },
-      },
-    }),
-  );
-  const response = await waitForFrame(client, responseFor(requestId), startIndex);
-  return { client, connected: response.ok === true };
-}
-
-async function rawGatewayRequest<T>(
-  client: RawGatewayClient,
-  method: string,
-  params: unknown,
-): Promise<T> {
-  const requestId = `request-${randomUUID()}`;
-  const startIndex = client.frames.length;
-  client.socket.send(JSON.stringify({ type: "req", id: requestId, method, params }));
-  const response = await waitForFrame(client, responseFor(requestId), startIndex);
-  if (response.ok !== true) {
-    throw new Error(`${method} failed: ${JSON.stringify(response.error)}`);
-  }
-  return response.payload as T;
-}
-
-async function approveDeviceIfNeeded(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  deviceId: string,
+  headers: Record<string, string>,
 ): Promise<void> {
-  const deadline = Date.now() + FRAME_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const pairings = (await gateway.call("device.pair.list", {})) as {
-      pending?: Array<{ deviceId?: string; requestId?: string }>;
-    };
-    const pending = pairings.pending?.find((candidate) => candidate.deviceId === deviceId);
-    if (pending?.requestId) {
-      await gateway.call("device.pair.approve", { requestId: pending.requestId });
-      return;
-    }
-    await sleep(50);
-  }
-  throw new Error(`device pairing request was not visible for ${deviceId}`);
-}
-
-async function createFakeTailscaleBinary(): Promise<{
-  binaryDir: string;
-  cleanup: () => Promise<void>;
-}> {
-  const binaryDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-i1-tailscale-"));
-  try {
-    const binaryPath = path.join(binaryDir, "tailscale");
-    await fs.writeFile(
-      binaryPath,
-      `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "qa-tailscale 1.0"
-  exit 0
-fi
-echo '{"UserProfile":{"LoginName":"operator@example.com","DisplayName":"Operator"}}'
-`,
-      { encoding: "utf8", mode: 0o755 },
-    );
-    return {
-      binaryDir,
-      cleanup: async () => await fs.rm(binaryDir, { force: true, recursive: true }),
-    };
-  } catch (error) {
-    await fs.rm(binaryDir, { force: true, recursive: true });
-    throw error;
-  }
-}
-
-async function runGatewayTurn(
-  client: RawGatewayClient,
-  message: string,
-  sessionKey: string,
-): Promise<string> {
-  const started = await rawGatewayRequest<{ runId?: unknown; status?: unknown }>(client, "agent", {
-    sessionKey,
-    message,
-    deliver: false,
-    idempotencyKey: randomUUID(),
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(url, { headers } satisfies ClientOptions);
+    const timeout = setTimeout(() => {
+      socket.terminate();
+      reject(new Error("timed out waiting for spoofed proxy-header rejection"));
+    }, FRAME_TIMEOUT_MS);
+    socket.once("open", () => {
+      clearTimeout(timeout);
+      socket.terminate();
+      reject(new Error("Gateway accepted proxy-shaped headers from an untrusted peer"));
+    });
+    socket.once("unexpected-response", (_request, response) => {
+      clearTimeout(timeout);
+      response.resume();
+      if (response.statusCode === 403) {
+        resolve();
+      } else {
+        reject(new Error(`spoofed proxy headers returned HTTP ${response.statusCode}`));
+      }
+    });
+    socket.once("error", () => undefined);
   });
-  if (started.status !== "accepted" || typeof started.runId !== "string") {
-    throw new Error(`profiled Gateway run did not start: ${JSON.stringify(started)}`);
-  }
-  const terminal = await rawGatewayRequest<{ status?: unknown }>(client, "agent.wait", {
-    runId: started.runId,
-    timeoutMs: 60_000,
-  });
-  if (terminal.status !== "ok") {
-    throw new Error(`profiled Gateway run did not finish: ${JSON.stringify(terminal)}`);
-  }
-  return started.runId;
 }
 
 async function updateExecutionIdentityConfig(
@@ -352,8 +152,15 @@ function assertTextProjection(text: string) {
 
 function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   const context = requireIdentityContext(result);
-  if (result.run.runId !== runId || result.coverage.state !== context.coverageState) {
-    throw new Error(`audit JSON projection did not preserve exact-run coverage: ${runId}`);
+  if (result.run.runId !== runId) {
+    throw new Error(`audit JSON projection selected the wrong run: ${runId}`);
+  }
+  if (
+    result.coverage.state !== "unknown" ||
+    !result.coverage.missingEvidence.includes("decision.display_provenance") ||
+    !result.decisionDisplays.some((receipt) => receipt.provenance.state === "unverified")
+  ) {
+    throw new Error(`audit JSON projection overstated generic decision coverage: ${runId}`);
   }
   if (
     context.ingress.kind !== "local-cli" ||
@@ -375,10 +182,7 @@ function assertJsonProjection(result: AuditRunInspectResult, runId: string) {
   }
 }
 
-function assertGatewayIdentityProjection(
-  result: AuditRunInspectResult,
-  expected: { coverage: "attribution-only" | "unattributed"; invoker: "absent" | "present" },
-) {
+function assertProfilelessGatewayIdentityProjection(result: AuditRunInspectResult) {
   const context = requireIdentityContext(result);
   if (
     context.ingress.kind !== "gateway-client" ||
@@ -388,24 +192,15 @@ function assertGatewayIdentityProjection(
     throw new Error("Gateway run did not retain its authenticated connection ingress");
   }
   if (
-    context.invoker.state !== expected.invoker ||
-    context.coverageState !== expected.coverage ||
+    context.invoker.state !== "absent" ||
+    context.coverageState !== "unattributed" ||
     context.representedSubject !== undefined
   ) {
     throw new Error(
       `Gateway identity projection fabricated or lost a subject: ${JSON.stringify(context)}`,
     );
   }
-  if (expected.invoker === "present") {
-    if (
-      context.invoker.principal?.kind !== "person" ||
-      context.invoker.principal.displayLabel !== "Operator" ||
-      !context.assurance.some((item) => item.kind === "durable-profile") ||
-      !context.assurance.some((item) => item.kind === "tailscale-whois")
-    ) {
-      throw new Error("profiled Gateway run omitted its durable Tailscale attribution");
-    }
-  } else if (context.assurance.some((item) => item.kind === "durable-profile")) {
+  if (context.assurance.some((item) => item.kind === "durable-profile")) {
     throw new Error("profileless Gateway run fabricated durable profile assurance");
   }
 }
@@ -605,10 +400,8 @@ async function runRepeatedIngressTurns(
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let fakeTailscale: Awaited<ReturnType<typeof createFakeTailscaleBinary>> | undefined;
   let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
   try {
-    fakeTailscale = await createFakeTailscaleBinary();
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
       useRepoCli: true,
@@ -623,9 +416,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
           auth: { ...cfg.gateway?.auth, allowTailscale: true },
         },
       }),
-      runtimeEnvPatch: {
-        PATH: `${fakeTailscale.binaryDir}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
     });
     await gateway.restartAfterStateMutation(async () => {
       await runLocalTurn(gateway!, "Reply exactly: IDENTITY-DISABLED-FRESH");
@@ -677,47 +467,16 @@ async function runProof(options: ProducerOptions): Promise<string> {
     }
     const profilelessRunId = profilelessStarted.runId;
 
-    const device = loadOrCreateDeviceIdentity({
-      path: path.join(gateway.tempRoot, "i1-profiled-device.sqlite"),
-    });
-    const tailscaleHeaders = {
+    await assertUntrustedProxyHeadersRejected(gateway.wsUrl, {
       "tailscale-user-login": "operator@example.com",
       "tailscale-user-name": "Operator",
       "x-forwarded-for": "100.64.0.11",
       "x-forwarded-host": "gateway.qa.test",
       "x-forwarded-proto": "https",
-    };
-    let profiled = await connectRawDevice({
-      device,
-      headers: tailscaleHeaders,
-      wsUrl: gateway.wsUrl,
     });
-    if (!profiled.connected) {
-      await approveDeviceIfNeeded(gateway, device.deviceId);
-      await closeRawGatewayClient(profiled.client);
-      profiled = await connectRawDevice({
-        device,
-        headers: tailscaleHeaders,
-        wsUrl: gateway.wsUrl,
-      });
-    }
-    if (!profiled.connected) {
-      throw new Error(
-        `Tailscale-profiled Gateway client failed: ${JSON.stringify(profiled.client.frames)}`,
-      );
-    }
-    const profiledSessionKey = `agent:qa:i1-profiled-${randomUUID()}`;
-    const profiledRunId = await runGatewayTurn(
-      profiled.client,
-      "Reply exactly: I1-PROFILED",
-      profiledSessionKey,
-    );
-    await closeRawGatewayClient(profiled.client);
 
     const profilelessText = await gateway.runCli(["audit", "--run", profilelessRunId, "--explain"]);
-    const profiledText = await gateway.runCli(["audit", "--run", profiledRunId, "--explain"]);
     assertTextProjection(profilelessText);
-    assertTextProjection(profiledText);
     if (
       !profilelessText.includes("Invoker [absent]") ||
       !profilelessText.includes("Represented subject [absent]") ||
@@ -725,34 +484,13 @@ async function runProof(options: ProducerOptions): Promise<string> {
     ) {
       throw new Error("profileless text inspection fabricated an operator subject");
     }
-    if (
-      !profiledText.includes("Invoker [present]") ||
-      !profiledText.includes("Represented subject [absent]")
-    ) {
-      throw new Error(
-        `profiled text inspection omitted durable operator attribution: ${profiledText}`,
-      );
-    }
     const profilelessBefore = parseJson(
       await gateway.runCli(["audit", "--run", profilelessRunId, "--explain", "--json"]),
       "profileless Gateway inspection",
     ) as AuditRunInspectResult;
-    const profiledBefore = parseJson(
-      await gateway.runCli(["audit", "--run", profiledRunId, "--explain", "--json"]),
-      "profiled Gateway inspection",
-    ) as AuditRunInspectResult;
-    assertGatewayIdentityProjection(profilelessBefore, {
-      coverage: "unattributed",
-      invoker: "absent",
-    });
-    assertGatewayIdentityProjection(profiledBefore, {
-      coverage: "attribution-only",
-      invoker: "present",
-    });
+    assertProfilelessGatewayIdentityProjection(profilelessBefore);
     const profilelessContext = normalizedContextJson(profilelessBefore);
-    const profiledContext = normalizedContextJson(profiledBefore);
     assertPersistedContextBytes(gateway, profilelessRunId, profilelessContext);
-    assertPersistedContextBytes(gateway, profiledRunId, profiledContext);
 
     const listed = (await gateway.call("sessions.list", {})) as {
       sessions?: Array<{
@@ -763,7 +501,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
     const profilelessSession = listed.sessions?.find(
       (session) => session.key === profilelessSessionKey,
     );
-    const profiledSession = listed.sessions?.find((session) => session.key === profiledSessionKey);
     if (profilelessSession?.createdActor !== undefined) {
       throw new Error("profileless Gateway session fabricated a human creator");
     }
@@ -774,21 +511,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
       profilelessCreator.labelPersisted
     ) {
       throw new Error("profileless Gateway session persisted a fabricated creator");
-    }
-    if (
-      profiledSession?.createdActor?.type !== "human" ||
-      !profiledSession.createdActor.id ||
-      profiledSession.createdActor.label !== "Operator"
-    ) {
-      throw new Error("profiled Gateway session lost its current profile display projection");
-    }
-    const profiledCreator = inspectPersistedSessionCreator(gateway, profiledSessionKey);
-    if (
-      profiledCreator.type !== "human" ||
-      profiledCreator.id !== profiledSession.createdActor.id ||
-      profiledCreator.labelPersisted
-    ) {
-      throw new Error("profiled Gateway session did not persist only its authenticated profile id");
     }
 
     const repeatedRunId = `identity-repeated-${randomUUID()}`;
@@ -857,18 +579,13 @@ async function runProof(options: ProducerOptions): Promise<string> {
     if (afterContext !== beforeContext) {
       throw new Error("normalized execution identity context bytes changed across Gateway restart");
     }
-    for (const [gatewayRunId, expectedContext, expectedIdentity] of [
-      [profilelessRunId, profilelessContext, { coverage: "unattributed", invoker: "absent" }],
-      [profiledRunId, profiledContext, { coverage: "attribution-only", invoker: "present" }],
-    ] as const) {
-      const afterGateway = parseJson(
-        await gateway.runCli(["audit", "--run", gatewayRunId, "--explain", "--json"]),
-        `post-restart Gateway run ${gatewayRunId}`,
-      ) as AuditRunInspectResult;
-      assertGatewayIdentityProjection(afterGateway, expectedIdentity);
-      if (normalizedContextJson(afterGateway) !== expectedContext) {
-        throw new Error(`Gateway execution changed across restart: ${gatewayRunId}`);
-      }
+    const profilelessAfter = parseJson(
+      await gateway.runCli(["audit", "--run", profilelessRunId, "--explain", "--json"]),
+      `post-restart Gateway run ${profilelessRunId}`,
+    ) as AuditRunInspectResult;
+    assertProfilelessGatewayIdentityProjection(profilelessAfter);
+    if (normalizedContextJson(profilelessAfter) !== profilelessContext) {
+      throw new Error(`Gateway execution changed across restart: ${profilelessRunId}`);
     }
     for (const [executionId, expectedContext] of repeatedBeforeRestart) {
       const afterExact = parseJson(
@@ -906,11 +623,11 @@ async function runProof(options: ProducerOptions): Promise<string> {
         {
           runId,
           gatewayRuns: {
-            profiled: { runId: profiledRunId, contextSha256: sha256(profiledContext) },
             profileless: {
               runId: profilelessRunId,
               contextSha256: sha256(profilelessContext),
             },
+            spoofedProxyHeadersRejected: true,
           },
           repeatedRunId,
           repeatedExecutions: repeatedRows.map((row) => ({
@@ -939,11 +656,10 @@ async function runProof(options: ProducerOptions): Promise<string> {
       "utf8",
     );
     const repeatedDetails = `repeated run=${repeatedRunId} executions=${repeatedRows.map((row) => row.execution_id).join(",")}; exact selection passed`;
-    return `local run=${runId}; profiled Gateway run=${profiledRunId}; profileless Gateway run=${profilelessRunId}; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
+    return `local run=${runId}; profileless Gateway run=${profilelessRunId}; spoofed proxy headers rejected; ${repeatedDetails}; Gateway pid=${gateway.pid ?? "unknown"}; text+JSON and persisted bytes passed before/after replacement; normalized context sha256=${sha256(beforeContext)}`;
   } finally {
     await gateway?.stop().catch(() => undefined);
     await mock.stop();
-    await fakeTailscale?.cleanup();
   }
 }
 
