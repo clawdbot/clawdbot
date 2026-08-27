@@ -40,6 +40,7 @@ type OpenAICompatibleEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  maxBatchItems?: number;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
@@ -49,6 +50,7 @@ type ConfiguredEmbeddingProvider = {
   baseUrl?: string;
   apiKey?: unknown;
   headers?: Record<string, unknown>;
+  params?: Record<string, unknown>;
   localService?: ModelProviderLocalServiceConfig;
 };
 
@@ -108,6 +110,22 @@ function normalizeDimensions(value: number | undefined): number | undefined {
 function normalizeOptionalInputType(value: string | undefined): string | undefined {
   const inputType = value?.trim();
   return inputType ? inputType : undefined;
+}
+
+// Some OpenAI-compatible embedding servers cap the number of `input` array
+// items per request (for example DashScope text-embedding-v4 at 10). The limit
+// is provider-specific, so it is opt-in via the configured provider's params.
+function resolveMaxBatchItems(provider: ConfiguredEmbeddingProvider): number | undefined {
+  const value = provider.params?.maxBatchItems;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      "openai-compatible embeddings: models.providers.<id>.params.maxBatchItems must be a positive integer.",
+    );
+  }
+  return value;
 }
 
 function resolveRequestInputType(
@@ -366,6 +384,7 @@ async function createOpenAICompatibleEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
     model,
+    maxBatchItems: resolveMaxBatchItems(configuredProvider ?? {}),
     ...(configuredProvider?.localService && !remoteBaseUrl
       ? {
           localServiceTarget: {
@@ -397,12 +416,31 @@ async function createOpenAICompatibleEmbeddingProvider(
     if (inputs.length === 0) {
       return [];
     }
-    return await postEmbeddingRequest({
-      client,
-      input: inputs.map(embeddingInputToText),
-      signal: callOptions?.signal,
-      inputType: callOptions?.inputType,
-    });
+    const input = inputs.map(embeddingInputToText);
+    if (!client.maxBatchItems || input.length <= client.maxBatchItems) {
+      return await postEmbeddingRequest({
+        client,
+        input,
+        signal: callOptions?.signal,
+        inputType: callOptions?.inputType,
+      });
+    }
+    // Sub-batches are posted sequentially and concatenated so the returned
+    // embeddings keep the original input order; parallel posts could trip
+    // provider rate limits on the very servers that cap batch size.
+    const embeddings: number[][] = [];
+    for (let start = 0; start < input.length; start += client.maxBatchItems) {
+      const chunk = input.slice(start, start + client.maxBatchItems);
+      embeddings.push(
+        ...(await postEmbeddingRequest({
+          client,
+          input: chunk,
+          signal: callOptions?.signal,
+          inputType: callOptions?.inputType,
+        })),
+      );
+    }
+    return embeddings;
   };
   return {
     provider: {
