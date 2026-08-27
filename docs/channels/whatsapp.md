@@ -509,6 +509,9 @@ opt-in status surface described above.
 <AccordionGroup>
   <Accordion title="Account selection and defaults">
     Account ids come from `channels.whatsapp.accounts`. Default account selection is `default` if present, otherwise the first configured account id (alphabetically sorted). Account ids are normalized internally for lookup.
+
+    Named accounts resolve shared settings in this order: the account, `accounts.default`, then the channel root. This includes `dmPolicy` and `groupPolicy`: omission inherits, while an explicit value wins. With no policy configured, DMs use `pairing` and groups use `allowlist`. The default account's `authDir`, `enabled`, `name`, and `selfChatMode` are not shared with named accounts.
+
   </Accordion>
 
   <Accordion title="Credential paths and legacy compatibility">

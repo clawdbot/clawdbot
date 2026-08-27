@@ -1229,7 +1229,6 @@ extensions/synology-chat/src/webhook-handler.ts	2
 extensions/talk-voice/index.ts	1
 extensions/tavily/src/config.ts	1
 extensions/teams-meetings/src/transports/teams-meetings-urls.ts	1
-extensions/telegram/src/account-config.ts	3
 extensions/telegram/src/account-selection.ts	1
 extensions/telegram/src/account-throttler.ts	4
 extensions/telegram/src/action-runtime.ts	6
@@ -1377,7 +1376,7 @@ extensions/voyage/embedding-batch.ts	1
 extensions/vydra/shared.ts	2
 extensions/web-readability/web-content-extractor.ts	2
 extensions/webhooks/src/http.ts	5
-extensions/whatsapp/src/account-config.ts	3
+extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
 extensions/whatsapp/src/approval-handler.runtime.ts	1
@@ -2279,7 +2278,7 @@ src/channels/message/outbound-bridge.ts	2
 src/channels/message/outbound-echo-state.ts	2
 src/channels/model-overrides.ts	1
 src/channels/plugins/account-config-mutation.ts	1
-src/channels/plugins/account-helpers.ts	13
+src/channels/plugins/account-helpers.ts	6
 src/channels/plugins/acp-configured-binding-consumer.ts	1
 src/channels/plugins/bootstrap-registry.ts	4
 src/channels/plugins/bundled-setup-policy.ts	2
@@ -2554,7 +2553,7 @@ src/commands/doctor/cron/store-migration.ts	9
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/active-tool-schema-warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
-src/commands/doctor/shared/allowlist-policy-repair.ts	8
+src/commands/doctor/shared/allowlist-policy-repair.ts	3
 src/commands/doctor/shared/channel-doctor.ts	4
 src/commands/doctor/shared/channel-legacy-config-migrate.ts	3
 src/commands/doctor/shared/codex-native-assets.ts	1
