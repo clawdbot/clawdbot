@@ -27,7 +27,6 @@ import {
 } from "../../scripts/ci-changed-scope.mjs";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
-import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const CHECKOUT_V6 = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -2210,11 +2209,12 @@ NODE
       "${{ github.event_name == 'workflow_dispatch' && inputs.token_preflight_only && format('control-ui-locale-token-preflight-{0}', github.ref) || 'control-ui-locale-refresh' }}",
     );
     expect(controlUiWorkflow.jobs.plan).toBeUndefined();
+    expect(controlUiResolveBase.outputs.locales).toBe("${{ steps.base.outputs.locales }}");
     expect(controlUiWorkflow.jobs.refresh.if).toBe(
       "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
     );
-    expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toEqual(
-      SUPPORTED_LOCALES.filter((locale) => locale !== "en"),
+    expect(controlUiWorkflow.jobs.refresh.strategy.matrix.locale).toBe(
+      "${{ fromJSON(needs.resolve-base.outputs.locales) }}",
     );
     expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
     expect(workflow.concurrency.group).toBe("native-app-locale-refresh");
@@ -2382,6 +2382,10 @@ NODE
       'if [[ "${TOKEN_PREFLIGHT_ONLY}" == "true" ]]; then',
     );
     expect(controlUiResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
+    expect(controlUiResolveStep.run).toContain(
+      "contents/scripts/lib/control-ui-i18n-config.json?ref=${sha}",
+    );
+    expect(controlUiResolveStep.run).toContain("jq -ce '[.[].locale]");
 
     for (const preflight of [controlUiPreflight, nativePreflight]) {
       expect(preflight.needs).toBe("resolve-base");
