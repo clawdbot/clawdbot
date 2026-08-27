@@ -117,23 +117,11 @@ export async function loadPreparedModelRuntimeSnapshot(
         throw error;
       }
     }
-    const activationGate = pendingModelRuntimeReplacement;
-    if (activationGate) {
-      await activationGate.promise;
-      if (pendingModelRuntimeReplacement) {
-        continue;
-      }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+    if (pendingModelRuntimeReplacement) {
       continue;
     }
     const activated = await activateStandalonePreparedModelRuntime(input);
-    const replacementAfterActivation = pendingModelRuntimeReplacement;
-    if (replacementAfterActivation) {
-      await replacementAfterActivation.promise;
-      if (pendingModelRuntimeReplacement) {
-        continue;
-      }
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
+    if (pendingModelRuntimeReplacement) {
       continue;
     }
     if (!activated) {
@@ -185,29 +173,21 @@ export async function publishPreparedModelRuntimeSnapshot(
     if (!options.force && hasSameLifecycleInput(existing.input, input)) {
       return await existing.pending;
     }
-    return await publishModelRuntimeSnapshot(
-      input,
-      owners,
-      agentBuildCompletions,
-      modelRuntimeBuildTimeoutMs,
-      existing,
-      options.provenance,
-      options.catalogMode,
-    );
-  }
-  if (existing?.buildCompletion) {
-    throw (
-      existing.refreshError ??
-      new Error(`prepared model runtime build is still settling for ${input.agentDir}`)
-    );
-  }
-  if (
-    existing?.snapshot &&
-    !existing.needsRefresh &&
-    !options.force &&
-    hasSameLifecycleInput(existing.input, input)
-  ) {
-    return existing.snapshot;
+  } else {
+    if (existing?.buildCompletion) {
+      throw (
+        existing.refreshError ??
+        new Error(`prepared model runtime build is still settling for ${input.agentDir}`)
+      );
+    }
+    if (
+      existing?.snapshot &&
+      !existing.needsRefresh &&
+      !options.force &&
+      hasSameLifecycleInput(existing.input, input)
+    ) {
+      return existing.snapshot;
+    }
   }
   return await publishModelRuntimeSnapshot(
     input,
