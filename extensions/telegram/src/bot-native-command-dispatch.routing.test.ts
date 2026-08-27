@@ -29,6 +29,17 @@ const { persistentBindingMocks, replyMocks, sessionBindingMocks, sessionMocks } 
 describe("Telegram native command dispatch routing", () => {
   beforeEach(resetSessionMetaMocks);
 
+  it("keeps the owning Gateway dispatcher on a native slash turn", async () => {
+    const dispatchReplyFromConfig = vi.fn();
+    const { handler } = registerAndResolveStatusHandler({ cfg: {}, dispatchReplyFromConfig });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(dispatchChannelInboundTurnMock.mock.calls[0]?.[0].dispatchReplyFromConfig).toBe(
+      dispatchReplyFromConfig,
+    );
+  });
+
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
     const shadowHandler = vi.fn(async () => ({ text: "wrong plugin" }));
     activePluginRegistry.commands.push({

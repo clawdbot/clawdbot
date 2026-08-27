@@ -26,6 +26,7 @@ export type GatewayReloadPlan = {
   restartGmailWatcher: boolean;
   restartCron: boolean;
   restartHeartbeat: boolean;
+  reconcileSkillReviewJobs?: boolean;
   restartHealthMonitor: boolean;
   reloadPlugins: boolean;
   restartChannels: Set<ChannelKind>;
@@ -44,6 +45,7 @@ export function isNoopGatewayReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartGmailWatcher &&
     !plan.restartCron &&
     !plan.restartHeartbeat &&
+    !plan.reconcileSkillReviewJobs &&
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
@@ -69,6 +71,7 @@ type ReloadAction =
   | "restart-gmail-watcher"
   | "restart-cron"
   | "restart-heartbeat"
+  | "reconcile-skill-review-jobs"
   | "restart-health-monitor"
   | "reload-plugins"
   | "dispose-mcp-runtimes"
@@ -132,6 +135,11 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   },
   { prefix: "agents.ownership", kind: "hot", actions: ["refresh-hooks-policy"] },
   { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  {
+    prefix: "skills.workshop.autonomous.mode",
+    kind: "hot",
+    actions: ["reconcile-skill-review-jobs"],
+  },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   // The dedicated Apps listener and origin are created once during Gateway
   // startup; disposing MCP runtimes cannot move or create that HTTP server.
@@ -412,6 +420,7 @@ export function buildGatewayReloadPlan(
     restartGmailWatcher: false,
     restartCron: false,
     restartHeartbeat: false,
+    reconcileSkillReviewJobs: false,
     restartHealthMonitor: false,
     reloadPlugins: false,
     restartChannels: new Set(),
@@ -471,6 +480,9 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-heartbeat":
         plan.restartHeartbeat = true;
+        break;
+      case "reconcile-skill-review-jobs":
+        plan.reconcileSkillReviewJobs = true;
         break;
       case "restart-health-monitor":
         plan.restartHealthMonitor = true;

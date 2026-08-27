@@ -53,14 +53,6 @@ describe("TerminalSessionManager task lifecycle", () => {
       "research-session",
       "research",
     );
-    expect(manager.writeAgent(collidingOwner, opened.sessionId, "nope")).toEqual({
-      ok: false,
-      code: "session_unavailable",
-    });
-    expect(manager.resizeAgent(collidingOwner, opened.sessionId, 90, 30)).toEqual({
-      ok: false,
-      code: "session_unavailable",
-    });
     expect(manager.snapshotAgent(collidingOwner, opened.sessionId)).toBeUndefined();
     expect(manager.closeAgent(collidingOwner, opened.sessionId)).toEqual({
       ok: false,

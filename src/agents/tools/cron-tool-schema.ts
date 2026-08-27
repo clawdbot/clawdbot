@@ -46,6 +46,7 @@ const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
 type CronToolSchemaOptions = {
+  agentSessionKey?: string;
   /**
    * Whether cron.triggers.enabled is on for this deployment. When false, the
    * trigger-gated surfaces (job trigger, script payloads, stream
@@ -278,8 +279,10 @@ function createCronFailureAlertSchema(): TSchema {
   );
 }
 
-function createCronJobObjectSchema(params: { triggersEnabled: boolean }): TSchema {
-  return Type.Optional(
+// Flattened schema: runtime validates per-action requirements.
+export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
+  const triggersEnabled = options?.triggersEnabled !== false;
+  const job = Type.Optional(
     Type.Object(
       {
         name: Type.Optional(Type.String({ description: "Job name" })),
@@ -304,18 +307,21 @@ function createCronJobObjectSchema(params: { triggersEnabled: boolean }): TSchem
             { additionalProperties: false },
           ),
         ),
-        schedule: createCronScheduleSchema({ triggersEnabled: params.triggersEnabled }),
+        schedule: createCronScheduleSchema({ triggersEnabled }),
         pacing: createCronPacingSchema(),
-        ...(params.triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
+        ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
             description: "main | isolated | current (agentTurn default) | session:<id>",
           }),
         ),
         wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
-        payload: createCronPayloadSchema({ triggersEnabled: params.triggersEnabled }),
+        payload: createCronPayloadSchema({ triggersEnabled }),
         delivery: createCronDeliverySchema(),
-        agentId: nullableStringSchema("Agent id, or null to clear it"),
+        // Session-scoped updates reject retargeting; do not advertise it to the model.
+        ...(!options?.agentSessionKey?.trim()
+          ? { agentId: nullableStringSchema("Agent id, or null to clear it") }
+          : {}),
         description: Type.Optional(Type.String({ description: "Human description" })),
         enabled: Type.Optional(Type.Boolean()),
         deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
@@ -329,11 +335,6 @@ function createCronJobObjectSchema(params: { triggersEnabled: boolean }): TSchem
       },
     ),
   );
-}
-
-// Flattened schema: runtime validates per-action requirements.
-export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
-  const triggersEnabled = options?.triggersEnabled !== false;
   return Type.Object(
     {
       action: stringEnum(CRON_ACTIONS),
@@ -346,7 +347,7 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       offset: optionalNonNegativeIntegerSchema({
         description: 'Job offset for action="list"; use nextOffset to load the next page',
       }),
-      job: createCronJobObjectSchema({ triggersEnabled }),
+      job,
       jobId: Type.Optional(Type.String()),
       id: Type.Optional(Type.String()),
       in: Type.Optional(

@@ -10,7 +10,6 @@ import { modelKey } from "../model-ref-shared.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { buildSuppressedBuiltInModelError } from "../model-suppression.js";
 import {
-  PreparedModelRuntimeOwnerNotPublishedError,
   getPreparedModelRuntimeSnapshot,
   loadPreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
@@ -109,107 +108,6 @@ function resolvePreparedAgentSnapshot(
   // Standalone runs publish an exact workspace owner. Gateway owners may instead carry an
   // authoritative launch workspace, which the workspace-free lookup above resolves by agent.
   return getPreparedModelRuntimeSnapshot({ ...base, workspaceDir: derivedWorkspaceDir });
-}
-
-export function resolveModel(
-  provider: string,
-  modelId: string,
-  agentDir?: string,
-  cfg?: OpenClawConfig,
-  options?: CommonModelResolutionOptions,
-): {
-  model?: Model;
-  error?: string;
-  authStorage: AuthStorage;
-  modelRegistry: ModelRegistry;
-} {
-  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
-  const derivedWorkspaceDir = resolveModelWorkspaceDir(
-    cfg,
-    options?.workspaceDir,
-    options?.agentId,
-  );
-  const preparedSnapshot =
-    !options?.authStorage || !options?.modelRegistry
-      ? resolvePreparedAgentSnapshot(
-          resolvedAgentDir,
-          cfg,
-          options?.workspaceDir,
-          derivedWorkspaceDir,
-          options?.agentId,
-        )
-      : undefined;
-  if ((!options?.authStorage || !options?.modelRegistry) && !preparedSnapshot) {
-    // Synchronous callers must enter through a lifecycle that already published discovery.
-    // Falling back to an empty registry turns a stale/pending generation into a false model miss.
-    throw new PreparedModelRuntimeOwnerNotPublishedError(
-      `prepared model runtime is not published for synchronous model resolution (${resolvedAgentDir}); use resolveModelAsync before lifecycle publication`,
-    );
-  }
-  const preparedModelRuntime = preparedSnapshot;
-  const resolve = () => {
-    const workspaceDir =
-      options?.workspaceDir ?? preparedModelRuntime?.workspaceDir ?? derivedWorkspaceDir;
-    const normalizedRef = normalizeProviderModelRef({ provider, modelId, cfg, workspaceDir });
-    const preparedStores =
-      !options?.authStorage || !options?.modelRegistry
-        ? preparedModelRuntime?.createStores()
-        : undefined;
-    const authStorage = options?.authStorage ?? preparedStores!.authStorage;
-    const modelRegistry =
-      options?.modelRegistry ??
-      (options?.authStorage
-        ? preparedStores!.modelRegistry.fork(authStorage)
-        : preparedStores!.modelRegistry);
-    const runtimeHooks = resolveRuntimeHooks(options);
-    let staticCatalogResolved = false;
-    let staticCatalogModel: StaticCatalogFallbackModel | undefined;
-    const getStaticCatalogModel = () => {
-      if (!staticCatalogResolved) {
-        staticCatalogResolved = true;
-        staticCatalogModel = resolveBundledStaticCatalogModel({
-          provider: normalizedRef.provider,
-          modelId: normalizedRef.model,
-          cfg,
-          workspaceDir,
-          includeRuntimeDiscovery: true,
-        });
-      }
-      return staticCatalogModel;
-    };
-    const model = resolveModelWithPreparedRegistry({
-      provider: normalizedRef.provider,
-      modelId: normalizedRef.model,
-      modelRegistry,
-      cfg,
-      agentDir: resolvedAgentDir,
-      manifestAlias: normalizedRef.manifestAlias,
-      workspaceDir,
-      authProfileId: options?.authProfileId,
-      authProfileMode: options?.authProfileMode,
-      preferredProfile: options?.preferredProfile,
-      runtimeHooks,
-      getStaticCatalogModel,
-    });
-    if (model) {
-      return { model, authStorage, modelRegistry };
-    }
-    return {
-      error: buildUnknownModelError({
-        provider: normalizedRef.provider,
-        modelId: normalizedRef.model,
-        cfg,
-        agentDir: resolvedAgentDir,
-        workspaceDir,
-        runtimeHooks,
-      }),
-      authStorage,
-      modelRegistry,
-    };
-  };
-  return preparedModelRuntime
-    ? withPluginRuntimeGenerationScope(preparedModelRuntime, resolve)
-    : resolve();
 }
 
 export async function resolveModelAsync(

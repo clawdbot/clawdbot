@@ -152,6 +152,7 @@ function importSqliteSessionRowsInTransaction(
         );
       }
       transcriptEvents = exactTranscriptRows.length;
+      // Doctor imports run outside gateway requests and must finish with a complete projection.
       reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
       publishSessionEntryCacheInvalidation(database);
     }
@@ -180,6 +181,7 @@ function importSqliteSessionRowsInTransaction(
         transcriptEvents += 1;
       }
     }
+    // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
     publishSessionEntryCacheInvalidation(database);
   }

@@ -7,7 +7,6 @@ import {
   nextWebSearchToolOverrides,
   readOwnEntry,
   resolveToolOverrideState,
-  sessionToolOverrideNames,
 } from "./tool-overrides.ts";
 
 describe("session tool overrides", () => {
@@ -105,7 +104,7 @@ describe("session tool overrides", () => {
     });
   });
 
-  it("counts override categories and returns deterministic tooltip names", () => {
+  it("counts override categories", () => {
     const overrides = {
       mcpServers: { zeta: false, alpha: true },
       mcpToolsDeny: { tools: ["danger"] },
@@ -113,12 +112,5 @@ describe("session tool overrides", () => {
       webSearch: false,
     };
     expect(countSessionToolOverrides(overrides)).toBe(5);
-    expect(sessionToolOverrideNames(overrides, "Web search")).toEqual([
-      "alpha",
-      "beta",
-      "tools",
-      "Web search",
-      "zeta",
-    ]);
   });
 });

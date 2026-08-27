@@ -17,9 +17,7 @@ export function registerMessageReactionsCommands(message: Command, helpers: Mess
     .option("--from-me", "WhatsApp reaction fromMe", false)
     .option("--target-author <id>", "Signal reaction target author (uuid or phone)")
     .option("--target-author-uuid <uuid>", "Signal reaction target author uuid")
-    .action(async (opts) => {
-      await helpers.runMessageAction("react", opts);
-    });
+    .action((opts) => helpers.runMessageAction("react", opts));
 
   helpers
     .withMessageBase(
@@ -29,7 +27,5 @@ export function registerMessageReactionsCommands(message: Command, helpers: Mess
     )
     .requiredOption("--message-id <id>", "Message id")
     .option("--limit <n>", "Result limit")
-    .action(async (opts) => {
-      await helpers.runMessageAction("reactions", opts);
-    });
+    .action((opts) => helpers.runMessageAction("reactions", opts));
 }

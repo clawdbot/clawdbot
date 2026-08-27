@@ -1,10 +1,18 @@
 import { chmod, mkdtemp, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import {
+  WORKER_PORTAL_PROTOCOL_FEATURE,
+  type WorkerHelloOk,
+} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  WorkerAdmissionDeadlineExceededError,
+  type WorkerAdmissionDeadlineResult,
+} from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import {
   WorkerInferenceProxyClient,
@@ -15,6 +23,7 @@ import {
 // Cross-process contract: serialized to stdout by runWorkerCommand and parsed by the
 // gateway worker turn launcher.
 export type WorkerRuntimeResult =
+  | WorkerAdmissionDeadlineResult
   | { status: "completed"; transcriptLeafId: string | null; transcriptNextSeq: number }
   | {
       status: "failed";
@@ -91,7 +100,9 @@ export async function runWorkerDescriptor(
   const connection = createWorkerConnection({
     endpoint: descriptor.connectionEndpoint,
     connectParams: buildWorkerConnectParams(descriptor),
-    onConnectionFailure: (error) => options.onConnectionFailure?.(error?.message),
+    onConnectionFailure: (error) => {
+      options.onConnectionFailure?.(error?.message);
+    },
   });
   const abortFromCaller = () => {
     abortController.abort(options.signal?.reason);
@@ -127,12 +138,22 @@ export async function runWorkerDescriptor(
   });
 
   try {
+    let hello: WorkerHelloOk;
     try {
-      await connection.start();
+      hello = await connection.start();
     } catch (error) {
       const fenced = fencedResult(connection.state);
       if (fenced) {
         return fenced;
+      }
+      if (error instanceof WorkerAdmissionDeadlineExceededError && !options.signal?.aborted) {
+        return {
+          status: "not-started",
+          reason: "admission-deadline",
+          // The deadline error message already carries the formatted, redacted
+          // last-failure diagnosis (see WorkerConnection.failAdmissionDeadline).
+          errorText: error.message,
+        };
       }
       throw error;
     }
@@ -171,7 +192,10 @@ export async function runWorkerDescriptor(
           ? {}
           : { systemPrompt: descriptor.assignment.systemPrompt }),
         inferenceOptions: descriptor.assignment.inferenceOptions,
-        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames,
+        allowedToolNames: descriptor.assignment.toolAuthority.allowedToolNames.filter(
+          (name) =>
+            name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
+        ),
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(options.browserRuntime ? { browserRuntime: options.browserRuntime } : {}),
         inference: { stream },

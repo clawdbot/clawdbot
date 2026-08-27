@@ -579,6 +579,13 @@ export class SqliteBoardStore implements BoardStore {
           instanceId,
         );
         upsertTabs(transactionDatabase, previous, next);
+        const widget = next.widgets.find((candidate) => candidate.name === name)!;
+        if (!widget.contentOwner) {
+          throw new BoardValidationError(
+            "invalid_operation",
+            `board widget ${name} content ownership is unavailable`,
+          );
+        }
         const row = previous.widgetRows.find((candidate) => candidate.name === name)!;
         const manifest = parseManifest(row.manifest);
         const declared = manifest.declared;
@@ -591,6 +598,12 @@ export class SqliteBoardStore implements BoardStore {
               grant_state: decision,
               granted_sha: decision === "granted" ? row.sha256 : null,
               manifest: serializeManifest(
+                {
+                  contentOwner: widget.contentOwner,
+                  ...(widget.registeredContentKind
+                    ? { registeredContentKind: widget.registeredContentKind }
+                    : {}),
+                },
                 declared,
                 decision,
                 manifest.mcpAppInteractive !== undefined && manifest.mcpAppInstanceId

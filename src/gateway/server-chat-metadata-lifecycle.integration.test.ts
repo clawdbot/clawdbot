@@ -310,6 +310,62 @@ describe("gateway chat metadata lifecycle composition", () => {
     await vi.waitFor(async () => await expectAvailable(lifecycle, false));
   });
 
+  it("publishes a successful prepared API-key route before the next metadata read", async () => {
+    configureAuthFixture("unresolved-secret-ref");
+    await publishOwner();
+    const lifecycle = await createLifecycle();
+    await lifecycle.attachContext(context, sidecars);
+    await expectAvailable(lifecycle, false);
+    const profileStore = mocks.preparedAuthStore;
+    if (!profileStore) {
+      throw new Error("expected unresolved prepared auth store");
+    }
+
+    reportEmbeddedRunSuccessfulAuthBinding({
+      profileId: "openai:default",
+      profileStore,
+      apiKeyInfo: {
+        apiKey: "resolved-at-runtime",
+        source: "profile:openai:default",
+        mode: "api-key",
+        profileId: "openai:default",
+      },
+      attempt: {} as EmbeddedRunAttemptResult,
+      provider: "openai",
+      agentDir: "/tmp/configured-main",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      requestTransportOverrides: "none",
+      config,
+      agentHarnessId: "codex",
+      pluginHarnessOwnsTransport: true,
+      pluginHarnessOwnsAuthBootstrap: true,
+    });
+
+    expect(mocks.preparedAuthMaterializations).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        modelBaseUrl: "https://api.openai.com/v1",
+        requestTransportOverrides: "none",
+        authMode: "api-key",
+        runtimeOwnerId: "codex",
+        authProfileId: "openai:default",
+      }),
+    ]);
+
+    await vi.waitFor(async () => await expectAvailable(lifecycle));
+
+    revokeRuntimeAuthMaterializations({
+      agentDir: "/tmp/configured-main",
+      provider: "openai",
+      runtimeOwnerId: "codex",
+    });
+    await vi.waitFor(async () => await expectAvailable(lifecycle, false));
+  });
+
   it("recovers a failed catch-up when the prepared owner publishes after attachment", async () => {
     const lifecycle = await createLifecycle();
     await lifecycle.attachContext(context, sidecars);

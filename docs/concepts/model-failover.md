@@ -117,6 +117,9 @@ Profiles live in the per-agent `openclaw-agent.sqlite` auth profile store.
 When a provider has multiple profiles, OpenClaw chooses an order like this:
 
 <Steps>
+  <Step title="Stored order override">
+    The per-agent order set with `openclaw models auth order set --provider <id> <profileIds...>`.
+  </Step>
   <Step title="Explicit config">
     `auth.order[provider]` (if set).
   </Step>
@@ -287,7 +290,7 @@ OpenClaw builds the candidate list from the currently requested `provider/model`
     - overloaded/provider-busy errors
     - timeout-shaped failover errors
     - billing disables
-    - `LiveSessionModelSwitchError`, which is normalized into a failover path so a stale persisted model does not create an outer retry loop
+    - `LiveSessionModelSwitchError` for a stale current or earlier candidate; later configured targets redirect directly, while targets outside the chain return to the bounded session-model retry owner
     - other unrecognized errors when there are still remaining candidates
 
   </Tab>
@@ -330,6 +333,7 @@ Live model switching follows these rules:
 - `/status` shows the selected model and, when fallback state differs, the active fallback model and reason.
 - Live-session reconciliation prefers persisted session overrides over stale runtime model fields.
 - If a live-switch error points at a later candidate in the active fallback chain, OpenClaw jumps directly to that selected model instead of walking unrelated candidates first.
+- If a live switch selects a model outside the active fallback chain, OpenClaw returns the original switch to the agent, reply, or isolated-cron retry owner so the selected model can complete the same turn.
 
 The active run carries its chosen candidate directly. Live reconciliation changes that candidate only for an explicit pending user switch, so no temporary fallback override or rollback is needed.
 

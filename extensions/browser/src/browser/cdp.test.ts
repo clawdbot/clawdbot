@@ -354,10 +354,15 @@ describe("cdp", () => {
     ).rejects.toBe(reason);
   });
 
-  it("does not create a target when cancellation arrives during endpoint discovery", async () => {
+  it("cancels hanging endpoint discovery without creating a target", async () => {
     const controller = new AbortController();
     const reason = new Error("cancel during endpoint discovery");
     const methods: string[] = [];
+    let releaseDiscovery: (() => void) | undefined;
+    let markDiscoveryStarted: (() => void) | undefined;
+    const discoveryStarted = new Promise<void>((resolve) => {
+      markDiscoveryStarted = resolve;
+    });
     const wsPort = await startWsServerWithMessages((msg) => {
       if (msg.method) {
         methods.push(msg.method);
@@ -369,27 +374,50 @@ describe("cdp", () => {
         res.end("not found");
         return;
       }
-      controller.abort(reason);
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({
-          webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
-        }),
-      );
+      releaseDiscovery = () => {
+        if (res.destroyed || res.writableEnded) {
+          return;
+        }
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            webSocketDebuggerUrl: `ws://127.0.0.1:${wsPort}/devtools/browser/TEST`,
+          }),
+        );
+      };
+      markDiscoveryStarted?.();
     });
     await new Promise<void>((resolve) => {
       httpServer?.listen(0, "127.0.0.1", resolve);
     });
     const httpPort = (httpServer.address() as AddressInfo).port;
 
-    await expect(
-      createTargetViaCdp({
-        cdpUrl: `http://127.0.0.1:${httpPort}`,
-        url: "https://example.com",
-        signal: controller.signal,
+    const pending = createTargetViaCdp({
+      cdpUrl: `http://127.0.0.1:${httpPort}`,
+      url: "https://example.com",
+      signal: controller.signal,
+    });
+    await discoveryStarted;
+    controller.abort(reason);
+
+    let cancellationDeadline: ReturnType<typeof setTimeout> | undefined;
+    const boundedCancellation = Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        cancellationDeadline = setTimeout(
+          () => reject(new Error("cancelled CDP discovery remained pending")),
+          300,
+        );
       }),
-    ).rejects.toBe(reason);
-    expect(methods).toEqual([]);
+    ]);
+    try {
+      await expect(boundedCancellation).rejects.toBe(reason);
+      expect(methods).toEqual([]);
+    } finally {
+      clearTimeout(cancellationDeadline);
+      releaseDiscovery?.();
+      await pending.catch(() => {});
+    }
   });
 
   it("reads the browser frame URL with its fragment", async () => {

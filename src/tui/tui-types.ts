@@ -17,6 +17,8 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /** Overrides timeoutMs only for the message sent automatically at startup. */
+  initialMessageTimeoutMs?: number;
   /**
    * Internal CLI guard: after the standalone TUI returns, force the child
    * process out if imported runtime handles keep the event loop alive.
@@ -71,6 +73,7 @@ export type SessionChangedEvent = {
   clientRunId?: string;
   sessionId?: string;
   updatedAt?: number | null;
+  activeRunIds?: string[] | null;
 };
 
 export type SessionMessageEvent = {

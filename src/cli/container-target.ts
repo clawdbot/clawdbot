@@ -320,6 +320,9 @@ export function maybeRunCliInContainer(
       env: buildContainerExecEnv(resolvedDeps.env),
     },
   );
+  if (result.error) {
+    throw result.error;
+  }
   return {
     handled: true,
     exitCode: resolveSubprocessExitCode(result.status, result.signal),
