@@ -2,10 +2,13 @@ import { createServer } from "node:http";
 // Configure gateway auth prompt tests cover interactive auth selection and model-aware auth config.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { applyAuthChoice as applyProviderAuthChoice } from "./auth-choice.apply.js";
 
 const mocks = vi.hoisted(() => ({
   promptAuthChoiceGrouped: vi.fn(),
@@ -168,6 +171,7 @@ function normalizeTestModelKeys(values: string[]): string[] {
 }
 
 vi.mock("../agents/auth-profiles.js", () => ({
+  persistAuthProfileBatch: vi.fn(async () => {}),
   ensureAuthProfileStore: vi.fn(() => ({
     version: 1,
     profiles: {},
@@ -815,44 +819,99 @@ describe("promptAuthConfig", () => {
     });
   });
 
-  it("projects provider-auth model defaults onto the explicit target", async () => {
-    vi.clearAllMocks();
-    mocks.promptAuthChoiceGrouped.mockResolvedValue("provider-auth");
-    mocks.applyAuthChoice.mockResolvedValue({
-      config: {
+  it.each(
+    [false, true].flatMap((sharedPrimary) =>
+      [false, true].flatMap((agentPrimary) =>
+        [false, true].flatMap((explicit) =>
+          [false, true].map((override) => ({ sharedPrimary, agentPrimary, explicit, override })),
+        ),
+      ),
+    ),
+  )(
+    "provider auth preserves primary (shared=$sharedPrimary, agent=$agentPrimary, explicit=$explicit, override=$override)",
+    async ({ sharedPrimary, agentPrimary, explicit, override }) => {
+      vi.clearAllMocks();
+      const recommended = "configure-provider/recommended";
+      const method: ProviderAuthMethod = {
+        id: "api-key",
+        label: "Configure provider",
+        kind: "api_key",
+        run: async () => ({
+          profiles: [],
+          ...(override ? { defaultModel: recommended } : {}),
+          configPatch: {
+            agents: {
+              defaults: {
+                ...(override ? { model: { primary: recommended } } : {}),
+                models: { [recommended]: { alias: "Recommended" } },
+              },
+            },
+            models: {
+              providers: {
+                "configure-provider": {
+                  baseUrl: "https://configure-provider.example/v1",
+                  api: "openai-completions",
+                  models: [createTestModel("recommended")],
+                },
+              },
+            },
+          },
+        }),
+      };
+      const provider: ProviderPlugin = {
+        id: "configure-provider",
+        label: "Configure provider",
+        auth: [method],
+      };
+      mocks.promptAuthChoiceGrouped.mockResolvedValue("provider-plugin:configure-provider:api-key");
+      mocks.applyAuthChoice.mockImplementationOnce(applyProviderAuthChoice);
+      mocks.resolveProviderPluginChoiceCore.mockReturnValue({ provider, method });
+      mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+
+      const defaultModel = sharedPrimary
+        ? { primary: "openai/gpt-5.6-luna", fallbacks: ["shared/fallback"] }
+        : undefined;
+      const agentModel = agentPrimary
+        ? { primary: "anthropic/sonnet-4.6", fallbacks: ["agent/fallback"] }
+        : undefined;
+      const config: OpenClawConfig = {
         agents: {
-          ownership: "explicit" as const,
-          defaults: { model: { primary: "provider/global" } },
-          entries: { main: {}, OPS: {} },
+          ...(explicit ? { ownership: "explicit" } : {}),
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            model: defaultModel,
+            models: { "shared/available": { alias: "Existing" } },
+          },
+          entries: { main: {}, OPS: { model: agentModel } },
         },
-      },
-      agentModelOverride: "provider/selected",
-    });
-    mocks.promptModelAllowlist.mockResolvedValue({ models: undefined });
+      };
+      const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+      });
 
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          model: { primary: "provider/original" },
-        },
-        entries: { main: {}, OPS: {} },
-      },
-    };
-    const result = await promptAuthConfig(config, makeRuntime(), noopPrompter, {
-      agentId: "ops",
-      agentDir: "/tmp/ops-agent",
-      workspaceDir: "/tmp/ops-workspace",
-    });
-
-    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ setDefaultModel: false }),
-    );
-    expect(result.agents?.entries?.OPS?.model).toEqual({ primary: "provider/selected" });
-    expect(result.agents?.defaults?.model).toEqual({ primary: "provider/original" });
-    expect(result.agents?.entries?.ops).toBeUndefined();
-  });
+      const existingPrimary = agentModel?.primary ?? defaultModel?.primary;
+      const initializesPrimary = !existingPrimary && override;
+      expect(resolveAgentEffectiveModelPrimary(result, "ops")).toBe(
+        existingPrimary ?? (override ? recommended : undefined),
+      );
+      expect(result.agents?.entries?.OPS?.model).toEqual(
+        initializesPrimary && explicit ? { primary: recommended } : agentModel,
+      );
+      expect(result.agents?.defaults?.model).toEqual(
+        initializesPrimary && !explicit ? { primary: recommended } : defaultModel,
+      );
+      expect(result.agents?.defaults?.models).toMatchObject({
+        "shared/available": { alias: "Existing" },
+        [recommended]: { alias: "Recommended" },
+      });
+      expect(result.models?.providers?.[provider.id]?.models).toEqual([
+        createTestModel("recommended"),
+      ]);
+      expect(result.agents?.entries?.ops).toBeUndefined();
+    },
+  );
 
   it.each<{
     name: string;
