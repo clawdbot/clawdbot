@@ -229,7 +229,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("store");
   });
 
-  it("strips Azure Responses prompt-cache keys when compat disables them", () => {
+  it("applies Azure Responses prompt-cache compatibility and proxy policy", () => {
     const options = {
       sessionId: "session-123",
     } as const;
@@ -245,11 +245,39 @@ describe("openai transport stream", () => {
       emptyContext(),
       options,
     );
+    const proxyDefault = buildOpenAIResponsesParams(
+      { ...azureModel, baseUrl: "https://gateway.example.com/proxy/openai/v1" },
+      emptyContext(),
+      options,
+    );
+    const proxyDisabled = buildOpenAIResponsesParams(
+      {
+        ...azureModel,
+        baseUrl: "https://gateway.example.com/proxy/openai/v1",
+        compat: { supportsPromptCacheKey: false },
+      } as never,
+      emptyContext(),
+      options,
+    );
+    const proxySupported = buildOpenAIResponsesParams(
+      {
+        ...azureModel,
+        baseUrl: "https://gateway.example.com/proxy/openai/v1",
+        compat: { supportsPromptCacheKey: true },
+      } as never,
+      emptyContext(),
+      options,
+    );
 
     expect(supported).toMatchObject({
       prompt_cache_key: "session-123",
     });
     expect(disabled).not.toHaveProperty("prompt_cache_key");
+    expect(proxyDefault).not.toHaveProperty("prompt_cache_key");
+    expect(proxyDisabled).not.toHaveProperty("prompt_cache_key");
+    expect(proxySupported).toMatchObject({
+      prompt_cache_key: "session-123",
+    });
   });
 
   it("uses system role for xAI default-route responses providers without relying on baseUrl host sniffing", () => {

@@ -165,7 +165,7 @@ describe("azure-openai-responses", () => {
     }
   });
 
-  it("honors the prompt-cache compatibility opt-out at the request boundary", async () => {
+  it("applies prompt-cache compatibility and proxy policy at the request boundary", async () => {
     const sentParams: Array<Record<string, unknown>> = [];
     const hostFetch: typeof fetch = async (input, init) => {
       const body: unknown = await new Request(input, init).json();
@@ -178,11 +178,20 @@ describe("azure-openai-responses", () => {
 
     configureAiTransportHost({ buildModelFetch: () => hostFetch });
     try {
-      for (const supportsPromptCacheKey of [undefined, false, true]) {
+      const cases = [
+        [azureResponsesModel.baseUrl, undefined],
+        [azureResponsesModel.baseUrl, false],
+        [azureResponsesModel.baseUrl, true],
+        ["https://gateway.example.com/proxy/openai/v1", undefined],
+        ["https://gateway.example.com/proxy/openai/v1", false],
+        ["https://gateway.example.com/proxy/openai/v1", true],
+      ] as const;
+      for (const [baseUrl, supportsPromptCacheKey] of cases) {
         await streamAzureOpenAIResponses(
           // SAFETY: Configured Azure models carry generic compat fields beyond the API-specific type.
           {
             ...azureResponsesModel,
+            baseUrl,
             compat: supportsPromptCacheKey === undefined ? undefined : { supportsPromptCacheKey },
           } as never,
           context,
@@ -198,6 +207,9 @@ describe("azure-openai-responses", () => {
 
     expect(sentParams.map((params) => params.prompt_cache_key)).toEqual([
       "session-123",
+      undefined,
+      "session-123",
+      undefined,
       undefined,
       "session-123",
     ]);
