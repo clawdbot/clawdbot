@@ -17,28 +17,72 @@ function makeStateDir(): string {
 
 function writeSharedDatabase(
   stateDir: string,
-  options: { asView?: boolean; storeJson?: string } = {},
+  options: {
+    asView?: boolean;
+    legacyStoreJson?: string;
+    schemaVersion?: 12 | 13;
+    storeJson?: string;
+  } = {},
 ): string {
   const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
   mkdirSync(path.dirname(dbPath), { recursive: true });
   const db = new DatabaseSync(dbPath);
   try {
+    const schemaVersion = options.schemaVersion ?? 13;
+    db.exec(`PRAGMA user_version = ${schemaVersion};`);
+    const table = schemaVersion >= 13 ? "config_machine_state" : "auth_profile_stores";
     if (options.asView) {
-      db.exec(`
-        CREATE VIEW config_machine_state AS
-          SELECT 'authProfiles.store' AS state_key, '{}' AS value_json, 1 AS updated_at_ms;
-      `);
+      if (table === "config_machine_state") {
+        db.exec(`
+          CREATE VIEW config_machine_state AS
+            SELECT 'authProfiles.store' AS state_key, '{}' AS value_json, 1 AS updated_at_ms;
+        `);
+      } else {
+        db.exec(`
+          CREATE VIEW auth_profile_stores AS
+            SELECT 'shared' AS store_key, '{}' AS store_json, 1 AS updated_at;
+        `);
+      }
     } else {
+      if (table === "config_machine_state") {
+        db.exec(`
+          CREATE TABLE config_machine_state (
+            state_key TEXT NOT NULL PRIMARY KEY,
+            value_json TEXT NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+          ) STRICT;
+        `);
+        db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
+          "authProfiles.store",
+          options.storeJson ?? "{}",
+          Date.now(),
+        );
+      } else {
+        db.exec(`
+          CREATE TABLE auth_profile_stores (
+            store_key TEXT NOT NULL PRIMARY KEY,
+            store_json TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+          ) STRICT;
+        `);
+        db.prepare("INSERT INTO auth_profile_stores VALUES (?, ?, ?)").run(
+          "shared",
+          options.storeJson ?? "{}",
+          Date.now(),
+        );
+      }
+    }
+    if (options.legacyStoreJson !== undefined) {
       db.exec(`
-        CREATE TABLE config_machine_state (
-          state_key TEXT NOT NULL PRIMARY KEY,
-          value_json TEXT NOT NULL,
-          updated_at_ms INTEGER NOT NULL
+        CREATE TABLE auth_profile_stores (
+          store_key TEXT NOT NULL PRIMARY KEY,
+          store_json TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
         ) STRICT;
       `);
-      db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
-        "authProfiles.store",
-        options.storeJson ?? "{}",
+      db.prepare("INSERT INTO auth_profile_stores VALUES (?, ?, ?)").run(
+        "shared",
+        options.legacyStoreJson,
         Date.now(),
       );
     }
@@ -99,6 +143,26 @@ describe("auth profile store E2E assertions", () => {
     writeSharedDatabase(stateDir, { storeJson: '{"version":1}' });
 
     expect(readSharedAuthProfileStoreText(stateDir)).toBe('{"version":1}');
+  });
+
+  it("reads the release-owned shared row before schema v13", () => {
+    const stateDir = makeStateDir();
+    writeSharedDatabase(stateDir, {
+      schemaVersion: 12,
+      storeJson: '{"version":1,"schema":12}',
+    });
+
+    expect(readSharedAuthProfileStoreText(stateDir)).toBe('{"version":1,"schema":12}');
+  });
+
+  it("does not accept a retired shared row for schema v13", () => {
+    const stateDir = makeStateDir();
+    writeSharedDatabase(stateDir, {
+      legacyStoreJson: '{"version":1,"schema":12}',
+      storeJson: "",
+    });
+
+    expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
   });
 
   it("returns empty when the shared database or table is absent", () => {
