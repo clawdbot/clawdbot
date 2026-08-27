@@ -23,6 +23,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import type {
   PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorChannelIngressQueueInspection,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -187,6 +188,23 @@ function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
   return guarded;
 }
 
+/** Build a genuinely read-only object rather than a narrowed view of the queue.
+ *  A `Pick<...>` return type would still hand the caller every mutating method at
+ *  runtime, so the boundary has to exist in the value, not only in the type. */
+function projectIngressQueueForInspection<TPayload, TMetadata>(
+  queue: ChannelIngressQueue<TPayload, TMetadata>,
+): PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata> {
+  const listFailed = queue.listFailed?.bind(queue);
+  const projection: PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata> = {
+    listPending: (...args) => queue.listPending(...args),
+    listClaims: () => queue.listClaims(),
+  };
+  if (listFailed) {
+    projection.listFailed = (...args) => listFailed(...args);
+  }
+  return projection;
+}
+
 function buildChannelIngressQueueAccess(
   options: PluginDoctorChannelIngressAccessOptions,
 ): PluginDoctorChannelIngressQueueAccess[] {
@@ -202,7 +220,8 @@ function buildChannelIngressQueueAccess(
       });
     const access: PluginDoctorChannelIngressQueueAccess = {
       channelId,
-      openChannelIngressQueueForInspection: (openOptions) => open(openOptions),
+      openChannelIngressQueueForInspection: (openOptions) =>
+        projectIngressQueueForInspection(open(openOptions)),
       listChannelIngressQueueAccountIds: () =>
         listChannelIngressQueueAccountIds({ channelId, stateDir }),
     };

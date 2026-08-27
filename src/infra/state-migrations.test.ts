@@ -1257,6 +1257,8 @@ describe("state migrations", () => {
     const offeredChannelIds: string[][] = [];
     const detectionMutableLanes: unknown[] = [];
     const detectionPending: number[] = [];
+    const detectionMutatorsReachable: string[] = [];
+    const detectionWriteOutcomes: string[] = [];
     // Detection is now read-only, so the account has to already exist. Seeding it
     // directly is also what makes the inspection assertion meaningful.
     await createChannelIngressQueue<{ note: string }>({
@@ -1283,7 +1285,40 @@ describe("state migrations", () => {
             const inspection = line?.openChannelIngressQueueForInspection<{ note: string }>({
               accountId: "default",
             });
+            // A narrowed return type still hands over every method at runtime, so the
+            // projection is checked as a value: detection must not be able to reach a
+            // mutator even by casting the type away.
+            for (const method of [
+              "enqueue",
+              "claimNext",
+              "claim",
+              "complete",
+              "release",
+              "fail",
+              "delete",
+              "recoverStaleClaims",
+              "prune",
+              "resubmit",
+              "refreshClaim",
+            ]) {
+              detectionMutatorsReachable.push(
+                typeof (inspection as Record<string, unknown> | undefined)?.[method],
+              );
+            }
             detectionPending.push((await inspection?.listPending({ limit: "all" }))?.length ?? -1);
+            // Direct mutation attempt: cast the projection back and actually call a
+            // writer. There is no method to call, so the attempt cannot reach SQLite.
+            try {
+              const forced = inspection as unknown as {
+                enqueue?: (id: string, payload: unknown) => Promise<unknown>;
+              };
+              await forced.enqueue?.("detection-write", { note: "leaked" });
+              detectionWriteOutcomes.push("no-throw");
+            } catch (error) {
+              detectionWriteOutcomes.push(
+                error instanceof TypeError ? "type-error" : `other:${String(error)}`,
+              );
+            }
             discovered.push(...(line?.listChannelIngressQueueAccountIds() ?? []));
             return null;
           },
@@ -1314,6 +1349,19 @@ describe("state migrations", () => {
     expect(detectionMutableLanes.length).toBeGreaterThan(0);
     expect(detectionMutableLanes.every((lane) => lane === undefined)).toBe(true);
     expect(detectionPending.every((count) => count >= 0)).toBe(true);
+    // Not one mutating method is present on the inspection object at runtime.
+    expect(detectionMutatorsReachable.length).toBeGreaterThan(0);
+    expect([...new Set(detectionMutatorsReachable)]).toStrictEqual(["undefined"]);
+    // The forced call is optional-chained past a missing method, so it never runs.
+    expect([...new Set(detectionWriteOutcomes)]).toStrictEqual(["no-throw"]);
+    // And nothing detection did reached durable state: the seeded row is still the
+    // only row, so no detection-time write landed.
+    const afterDetection = await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).listPending({ limit: "all", orderBy: "received" });
+    expect(afterDetection.map((row) => row.id)).toStrictEqual(["ingress-scope-seed"]);
   });
 
   it("revokes migration ingress queue access once the repair section returns", async () => {
