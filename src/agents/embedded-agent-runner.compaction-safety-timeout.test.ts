@@ -154,6 +154,33 @@ describe("compactWithSafetyTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("bounds a forever-pulsing compaction at the absolute ceiling", async () => {
+    // A faulty engine that reports progress forever must not defer the bound
+    // indefinitely: the absolute ceiling (10x the stall budget) is independent
+    // of the re-armable stall timer.
+    vi.useFakeTimers();
+    const TIMEOUT = 30;
+    let pulse: (() => void) | undefined;
+    const compactPromise = compactWithSafetyTimeout(
+      (_signal, onProgress) =>
+        new Promise<never>(() => {
+          pulse = onProgress;
+        }),
+      TIMEOUT,
+    );
+    const assertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
+
+    // Pulse every 20ms (never silent) well past many stall budgets…
+    for (let elapsed = 0; elapsed < 10 * TIMEOUT; elapsed += 20) {
+      await vi.advanceTimersByTimeAsync(20);
+      pulse?.();
+    }
+    // …the absolute ceiling fires at 10x regardless.
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("ignores progress pulses after settle", async () => {
     vi.useFakeTimers();
     let pulse: (() => void) | undefined;

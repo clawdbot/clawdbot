@@ -11,6 +11,9 @@ import { createAbortError } from "../../infra/abort-signal.js";
 
 const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
+/** Absolute compaction ceiling as a multiple of the stall budget; see use below. */
+const ABSOLUTE_COMPACTION_BUDGET_MULTIPLIER = 10;
+
 function abortErrorFromSignal(signal: AbortSignal): Error {
   const reason = "reason" in signal ? signal.reason : undefined;
   if (reason instanceof Error) {
@@ -36,6 +39,8 @@ export function resolveCompactionTimeoutMs(cfg?: OpenClawConfig): number {
  * re-arms the timer, so a reporting compaction is instead bounded by maximum
  * SILENCE: a slow-but-advancing summarization may run past `timeoutMs` total,
  * while a genuinely hung one still aborts after `timeoutMs` without progress.
+ * An independent absolute ceiling (10x `timeoutMs`) that progress can never
+ * re-arm bounds a faulty engine that reports progress forever.
  */
 export async function compactWithSafetyTimeout<T>(
   compact: (abortSignal?: AbortSignal, onProgress?: () => void) => Promise<T>,
@@ -67,6 +72,7 @@ export async function compactWithSafetyTimeout<T>(
   const timeoutAbortCtrl = new AbortController();
   const timeoutError = new Error("Compaction timed out");
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let absoluteTimer: ReturnType<typeof setTimeout> | undefined;
   const clearTimer = () => {
     if (timer !== undefined) {
       clearTimeout(timer);
@@ -86,6 +92,15 @@ export async function compactWithSafetyTimeout<T>(
     }
   };
   armTimer();
+  // Independent absolute ceiling the stall timer can never re-arm: a faulty
+  // engine that reports progress forever must not defer the bound indefinitely
+  // (the stall budget's documented inverse risk). 10x the stall budget keeps
+  // the ceiling generous without a new configuration surface.
+  absoluteTimer = setTimeout(
+    () => timeoutAbortCtrl.abort(timeoutError),
+    resolvedTimeoutMs * ABSOLUTE_COMPACTION_BUDGET_MULTIPLIER,
+  );
+  absoluteTimer.unref?.();
 
   const timeoutListener: () => void = () => {
     cancel();
@@ -100,14 +115,10 @@ export async function compactWithSafetyTimeout<T>(
   timeoutAbortCtrl.signal.addEventListener("abort", timeoutListener, { once: true });
   // A non-settling compaction must still reject on timeout, so the abort
   // itself is raced — not just signaled into an uncooperative callback.
+  let timeoutAbortListener: (() => void) | undefined;
   const timeoutAbortPromise = new Promise<never>((_, reject) => {
-    timeoutAbortCtrl.signal.addEventListener(
-      "abort",
-      () => reject(abortErrorFromSignal(timeoutAbortCtrl.signal)),
-      {
-        once: true,
-      },
-    );
+    timeoutAbortListener = () => reject(abortErrorFromSignal(timeoutAbortCtrl.signal));
+    timeoutAbortCtrl.signal.addEventListener("abort", timeoutAbortListener, { once: true });
   });
 
   try {
@@ -133,7 +144,11 @@ export async function compactWithSafetyTimeout<T>(
   } finally {
     settled = true;
     clearTimer();
+    clearTimeout(absoluteTimer);
     timeoutAbortCtrl.signal.removeEventListener("abort", timeoutListener);
+    if (timeoutAbortListener) {
+      timeoutAbortCtrl.signal.removeEventListener("abort", timeoutAbortListener);
+    }
     if (externalAbortListener) {
       abortSignal?.removeEventListener("abort", externalAbortListener);
     }
