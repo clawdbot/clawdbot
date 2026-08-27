@@ -28,7 +28,7 @@ openclaw models set-image <model-or-alias>
 openclaw models scan
 ```
 
-`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`, `set-image`, `scan`, and `aliases` reject `--agent` outright because they are global and never agent-scoped. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
+`status`, `list`, and `auth` subcommands accept `--agent <id>` to target a configured agent; `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`, `set-image`, `scan`, `refresh`, and `aliases` reject `--agent` outright because they are global and never agent-scoped. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
 
 `models set` and `models set-image` require the provider to be declared by an installed plugin or configured under `models.providers`. An unknown provider exits nonzero without changing config. If the provider is known but the model is absent from the local catalog, the command saves the selection and prints a warning because newly released and self-hosted models may not be cataloged yet. `openclaw doctor --json` reports configured unknown providers; add `--severity-min info` to also see active models that the local catalog cannot confirm.
 
@@ -73,7 +73,7 @@ For OpenAI ChatGPT/Codex OAuth troubleshooting, `openclaw models status`, `openc
 
 `openclaw models list` is read-only: it reads config, auth profiles, existing catalog state, and provider-owned catalog rows, but never rewrites `models.json`.
 
-`openclaw models refresh [--json]` forces an immediate hosted catalog check.
+`openclaw models refresh [--json]` forces an immediate hosted catalog check. Like `scan`, it rejects `--agent` because the hosted catalog is global, not agent-scoped.
 Updated rows apply to a running Gateway after its next restart. The command
 prints a clear disabled result when `models.catalogRefresh.enabled` is `false`.
 The catalog's public change history lives in
