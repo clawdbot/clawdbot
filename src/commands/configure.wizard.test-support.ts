@@ -208,7 +208,9 @@ vi.mock("../agents/codex-native-web-search.js", () => ({
   isCodexNativeWebSearchRelevant: wizardTestMocks.isCodexNativeWebSearchRelevant,
 }));
 
-export { wizardTestMocks };
+// Load the wizard through this fixture so mocks register before its dependencies.
+const { runConfigureWizard } = await import("./configure.wizard.js");
+export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});

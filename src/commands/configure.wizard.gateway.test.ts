@@ -8,11 +8,11 @@ import { WizardCancelledError } from "../wizard/prompts.js";
 import {
   createWizardTestRuntime as createRuntime,
   queueWizardTestPrompts as queueWizardPrompts,
+  runConfigureWizard,
   setupWizardTestDefaults,
   setupBaseWizardTestState as setupBaseWizardState,
   wizardTestMocks as mocks,
-} from "./configure.wizard-test-helpers.js";
-import { runConfigureWizard } from "./configure.wizard.js";
+} from "./configure.wizard.test-support.js";
 
 const { maybeInstallDaemon, formatHealthCheckFailure } = mocks;
 

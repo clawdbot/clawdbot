@@ -8,11 +8,11 @@ import {
   createWizardTestRuntime as createRuntime,
   EMPTY_CONFIG_SNAPSHOT,
   queueWizardTestPrompts as queueWizardPrompts,
+  runConfigureWizard,
   setupWizardTestDefaults,
   setupBaseWizardTestState as setupBaseWizardState,
   wizardTestMocks as mocks,
-} from "./configure.wizard-test-helpers.js";
-import { runConfigureWizard } from "./configure.wizard.js";
+} from "./configure.wizard.test-support.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
