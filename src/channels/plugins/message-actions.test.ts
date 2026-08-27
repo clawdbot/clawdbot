@@ -17,7 +17,7 @@ import {
   resolveChannelMessageToolSchemaProperties,
 } from "./message-action-discovery.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
-import type { ChannelPlugin } from "./types.public.js";
+import type { ChannelMessageToolSchemaContribution, ChannelPlugin } from "./types.public.js";
 
 const emptyRegistry = createTestRegistry([]);
 const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
@@ -202,24 +202,32 @@ describe("message action capability checks", () => {
   });
 
   it("keeps all-configured schema visible from another current channel", () => {
+    const schema: ChannelMessageToolSchemaContribution[] = [
+      {
+        actions: ["react"],
+        properties: { emoji: Type.Optional(Type.String()) },
+      },
+      {
+        actions: ["send"],
+        properties: { components: Type.Optional(Type.Object({})) },
+        visibility: "all-configured",
+      },
+    ];
     activateDiscoveredMessageActionPlugin({
       id: "demo-cross-channel",
       label: "Demo Cross Channel",
       describeMessageTool: () => ({
-        actions: ["send"],
-        schema: {
-          properties: { components: Type.Optional(Type.Object({})) },
-          visibility: "all-configured",
-        },
+        actions: ["react", "send"],
+        schema,
       }),
     });
 
-    expect(
-      resolveChannelMessageToolSchemaProperties({
-        cfg: {} as OpenClawConfig,
-        channel: "other-current-channel",
-      }),
-    ).toHaveProperty("components");
+    const properties = resolveChannelMessageToolSchemaProperties({
+      cfg: {} as OpenClawConfig,
+      channel: "other-current-channel",
+    });
+    expect(properties).toHaveProperty("components");
+    expect(properties).not.toHaveProperty("emoji");
   });
 
   it("keeps contributed schema properties optional so only action stays required", () => {
