@@ -28,9 +28,6 @@ const providerUsageLoader = createLazyImportLoader(() => import("../infra/provid
 const securityAuditModuleLoader = createLazyImportLoader(
   () => import("../security/audit.runtime.js"),
 );
-const readOnlyChannelPluginsModuleLoader = createLazyImportLoader(
-  () => import("../channels/plugins/read-only.js"),
-);
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 function loadProviderUsage() {
@@ -39,10 +36,6 @@ function loadProviderUsage() {
 
 function loadSecurityAuditModule() {
   return securityAuditModuleLoader.load();
-}
-
-function loadReadOnlyChannelPluginsModule() {
-  return readOnlyChannelPluginsModuleLoader.load();
 }
 
 function loadGatewayCallModule() {
@@ -94,11 +87,8 @@ export async function resolveStatusSecurityAudit(params: {
   timeoutMs?: number;
 }) {
   const { runSecurityAudit } = await loadSecurityAuditModule();
-  const { resolveReadOnlyChannelPluginsForConfig } = await loadReadOnlyChannelPluginsModule();
-  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
+  // The audit owns setup-backed capabilities; inventory projections can name
+  // accounts without carrying their channel security adapters.
   return await runSecurityAudit({
     config: params.config,
     sourceConfig: params.sourceConfig,
@@ -107,10 +97,6 @@ export async function resolveStatusSecurityAudit(params: {
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
-    // Missing configured channel plugins make plugin-specific collectors unreliable; omit plugin list then.
-    ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
-      ? { plugins: readOnlyPlugins.plugins }
-      : {}),
   });
 }
 

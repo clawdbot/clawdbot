@@ -99,7 +99,9 @@ export async function markBackendDomRefsOnPage(opts: {
         ) => Promise<unknown>
       )(method, params);
 
-    await send("DOM.enable").catch(() => {});
+    // Backend-id pushes require a bound document in this fresh session.
+    // getDocument also enables DOM; depth zero avoids fetching the subtree.
+    await send("DOM.getDocument", { depth: 0 }).catch(() => {});
 
     const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
     const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {

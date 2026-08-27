@@ -4,12 +4,15 @@ import os from "node:os";
 import path from "node:path";
 // Systemd tests cover Linux service install, start, stop, and status behavior.
 import { expectDefined } from "@openclaw/normalization-core";
+import { err as resultErr, ok } from "@openclaw/normalization-core/result";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGatewayInstallPlan } from "../commands/daemon-install-helpers.js";
+import type { ExecResult } from "./exec-file.js";
 
 type ExecFileError = Error & {
   stderr?: string;
   code?: string | number;
+  termination?: ExecResult["termination"];
 };
 type ExecFileCallback = (error: ExecFileError | null, stdout: string, stderr: string) => void;
 type ExecFileMock = (
@@ -60,19 +63,15 @@ vi.mock("./exec-file.js", () => {
       args: string[],
       options: Omit<ExecFileOptionsWithStringEncoding, "encoding"> = {},
     ) => {
-      let settled:
-        | {
-            stdout: string;
-            stderr: string;
-            code: number;
-          }
-        | undefined;
+      let settled: ExecResult | undefined;
 
       execFileMock(command, args, { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
         settled = {
           stdout: stdout ?? "",
           stderr: stderr || error?.message || "",
           code: error && typeof error.code === "number" ? error.code : error ? 1 : 0,
+          termination: error?.termination ?? (typeof error?.code === "string" ? "error" : "exit"),
+          errorCode: typeof error?.code === "string" ? error.code : undefined,
         };
       });
 
@@ -116,10 +115,11 @@ const NODE_SERVICE = "openclaw-node.service";
 
 const createExecFileError = (
   message: string,
-  options: { stderr?: string; code?: string | number } = {},
+  options: Pick<ExecFileError, "stderr" | "code" | "termination"> = {},
 ): ExecFileError => {
   const err = new Error(message) as ExecFileError;
   err.code = options.code ?? 1;
+  err.termination = options.termination;
   if (options.stderr) {
     err.stderr = options.stderr;
   }
@@ -637,15 +637,25 @@ describe("isSystemdServiceEnabled", () => {
     expect(result).toBe(true);
   });
 
-  it("returns false when systemctl reports disabled", async () => {
-    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
-      const err = new Error("disabled") as Error & { code?: number };
-      err.code = 1;
-      cb(err, "disabled", "");
-    });
-    const result = await readManagedServiceEnabled();
-    expect(result).toBe(false);
-  });
+  it.each(["exit", "timeout", "signal"] as const)(
+    "accepts disabled output only after a completed is-enabled command (%s)",
+    async (termination) => {
+      execFileMock.mockImplementationOnce(
+        systemctlUserResult(
+          [createExecFileError("disabled", { termination }), "disabled", ""],
+          "is-enabled",
+          GATEWAY_SERVICE,
+        ),
+      );
+
+      const result = readManagedServiceEnabled();
+      if (termination === "exit") {
+        await expect(result).resolves.toBe(false);
+      } else {
+        await expect(result).rejects.toThrow("systemctl is-enabled unavailable:");
+      }
+    },
+  );
 
   it("returns false for the WSL2 Ubuntu 24.04 wrapper-only is-enabled failure", async () => {
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
@@ -778,25 +788,46 @@ describe("isSystemdUnitActive", () => {
     assertNoSystemSystemdOwnershipMock.mockResolvedValue();
   });
 
+  describe.each(["user", "system"] as const)("%s activity queries", (scope) => {
+    it.each([
+      ["bus failure", { code: 1 }, "Failed to connect to bus: Permission denied"],
+      ["unexpected exit", { code: 2 }, "Unexpected query failure"],
+      ["launch error", { code: "ENOENT" }, "Command failed during launch (ENOENT)"],
+      ["signal", { code: 1, termination: "signal" }, "Command was terminated by SIGTERM"],
+      ["timeout", { code: 3, termination: "timeout" }, "Command timed out"],
+    ] satisfies [string, Pick<ExecFileError, "code" | "termination">, string][])(
+      "keeps failed activity probes distinguishable from inactive units: %s",
+      async (_, options, detail) => {
+        execFileMock.mockImplementation(
+          execFileResult(createExecFileError(detail, options), "", detail),
+        );
+
+        await expect(
+          isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE, scope),
+        ).resolves.toEqual(resultErr(detail));
+      },
+    );
+  });
+
   it("checks user-scoped units through the user systemd manager", async () => {
     execFileMock.mockImplementationOnce(
       systemctlUserSuccess("is-active", "--quiet", GATEWAY_SERVICE),
     );
 
-    await expect(isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE)).resolves.toBe(
-      true,
-    );
+    await expect(
+      isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE),
+    ).resolves.toEqual(ok(true));
   });
 
-  it("checks system-scoped units without the user manager", async () => {
+  it.each([3, 4])("recognizes non-active system-scoped units (exit %i)", async (code) => {
     execFileMock.mockImplementationOnce((_cmd, args, _opts, cb) => {
       expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
-      cb(createExecFileError("inactive", { code: 3 }), "", "");
+      cb(createExecFileError("not active", { code }), "", "");
     });
 
     await expect(
       isSystemdUnitActive({ HOME: TEST_MANAGED_HOME }, GATEWAY_SERVICE, "system"),
-    ).resolves.toBe(false);
+    ).resolves.toEqual(ok(false));
   });
 });
 
@@ -1185,19 +1216,30 @@ describe("readSystemdServiceRuntime", () => {
     });
   });
 
-  it("reports a missing unit without surfacing routine systemctl stderr", async () => {
-    execFileMock
-      .mockImplementationOnce(systemctlUserSuccess("status"))
-      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
-        const detail = "Unit openclaw-gateway.service could not be found.";
-        cb(createExecFileError(detail, { stderr: detail }), "", detail);
-      });
+  it.each(["exit", "timeout", "signal"] as const)(
+    "reports a missing unit only after a completed show command (%s)",
+    async (termination) => {
+      const detail = "Unit openclaw-gateway.service could not be found.";
+      const accessSpy = vi
+        .spyOn(fs, "access")
+        .mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+      execFileMock
+        .mockImplementationOnce(systemctlUserSuccess("status"))
+        .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+          cb(createExecFileError(detail, { termination }), "", detail);
+        });
 
-    await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual({
-      status: "stopped",
-      missingUnit: true,
-    });
-  });
+      try {
+        await expect(readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME })).resolves.toEqual(
+          termination === "exit"
+            ? { status: "stopped", missingUnit: true }
+            : { status: "unknown", missingUnit: false, detail },
+        );
+      } finally {
+        accessSpy.mockRestore();
+      }
+    },
+  );
 
   it("keeps unexpected systemctl failures visible", async () => {
     execFileMock
@@ -3007,6 +3049,49 @@ describe("systemd service install and uninstall", () => {
     });
   });
 
+  it.each([
+    { action: "enable", termination: "timeout" },
+    { action: "restart", termination: "signal" },
+  ] as const)(
+    "does not retry an interrupted $action reporting a missing unit ($termination)",
+    async ({ action, termination }) => {
+      await withNodeSystemdFixture(async ({ env }) => {
+        execFileMock
+          .mockImplementation(execFileSuccess())
+          .mockImplementationOnce(systemctlUserSuccess("status"))
+          .mockImplementationOnce(systemctlUserSuccess("daemon-reload"));
+        if (action === "restart") {
+          execFileMock.mockImplementationOnce(systemctlUserSuccess("enable", NODE_SERVICE));
+        }
+        execFileMock.mockImplementationOnce(
+          systemctlUserResult(
+            [
+              createExecFileError(`${action} interrupted`, { termination }),
+              "",
+              "Unit file openclaw-node.service does not exist.",
+            ],
+            action,
+            NODE_SERVICE,
+          ),
+        );
+
+        await expect(
+          installSystemdService(
+            nodeSystemdServiceFixture(env, {
+              environment: { OPENCLAW_SYSTEMD_UNIT: "openclaw-node" },
+            }),
+          ),
+        ).rejects.toThrow(`systemctl ${action} failed:`);
+        expect(execFileMock.mock.calls.map(([, args]) => args[1])).toEqual([
+          "status",
+          "daemon-reload",
+          ...(action === "restart" ? ["enable"] : []),
+          action,
+        ]);
+      });
+    },
+  );
+
   it("falls back to machine user scope when install activation hits a no-medium user bus failure", async () => {
     await withNodeSystemdFixture(async ({ env }) => {
       const installEnv = { ...env, USER: "debian" };
@@ -3257,12 +3342,21 @@ describe("isSystemUnitActiveAndEnabled", () => {
     await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
   });
 
-  it("returns false when systemctl is unavailable", async () => {
-    execFileMock.mockImplementation(
-      execFileResult(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
-    );
-    await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
-  });
+  it.each([
+    ["unavailable", { code: "ENOENT" }],
+    ["bus query failed", { code: 1 }],
+    ["terminated", { code: 1, termination: "signal" }],
+    ["timed out", { code: 3, termination: "timeout" }],
+  ] satisfies [string, Pick<ExecFileError, "code" | "termination">][])(
+    "does not adopt the system unit when its activity is unknown: %s",
+    async (detail, options) => {
+      execFileMock.mockImplementation(
+        execFileResult(createExecFileError(detail, options), "", detail),
+      );
+      await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    },
+  );
 
   // systemctl(1) Table 3: these all exit 0 but none survive a reboot as an
   // enabled unit, so none may authorize deleting the user-scope unit.
@@ -3283,37 +3377,48 @@ describe("uninstallLegacySystemdUnits", () => {
     execFileMock.mockReset();
   });
 
-  it("preserves a legacy unit file when systemctl cannot disable it", async () => {
-    const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-unit-"));
-    const env = { HOME: path.join(tempHomeRoot, "home") };
-    const unitPath = path.join(env.HOME, ".config", "systemd", "user", "clawdbot-gateway.service");
-    try {
-      await fs.mkdir(path.dirname(unitPath), { recursive: true });
-      await fs.writeFile(unitPath, "[Unit]\nDescription=Clawdbot Gateway\n", "utf8");
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(
-          systemctlUserResult([null, "enabled\n", ""], "is-enabled", "clawdbot-gateway.service"),
-        )
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(
-          systemctlUserResult(
-            [createExecFileError("permission denied", { code: 1 }), "", "Permission denied"],
-            "disable",
-            "--now",
-            "clawdbot-gateway.service",
-          ),
-        );
-
-      const { stdout } = createWritableStreamMock();
-      await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
-        "systemctl disable failed: Permission denied",
+  it.each(["exit", "signal"] as const)(
+    "preserves a legacy unit file when disable fails after status %s",
+    async (termination) => {
+      const tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legacy-unit-"));
+      const env = { HOME: path.join(tempHomeRoot, "home") };
+      const unitPath = path.join(
+        env.HOME,
+        ".config",
+        "systemd",
+        "user",
+        "clawdbot-gateway.service",
       );
-      await expect(fs.access(unitPath)).resolves.toBeUndefined();
-    } finally {
-      await fs.rm(tempHomeRoot, { recursive: true, force: true });
-    }
-  });
+      try {
+        await fs.mkdir(path.dirname(unitPath), { recursive: true });
+        await fs.writeFile(unitPath, "[Unit]\nDescription=Clawdbot Gateway\n", "utf8");
+        execFileMock.mockImplementation((_command, args, _options, callback) => {
+          if (args[1] === "status") {
+            callback(
+              termination === "signal"
+                ? createExecFileError("status interrupted", { termination })
+                : null,
+              "",
+              "",
+            );
+          } else if (args[1] === "is-enabled") {
+            callback(null, "enabled\n", "");
+          } else {
+            assertUserSystemctlArgs(args, "disable", "--now", "clawdbot-gateway.service");
+            callback(createExecFileError("permission denied"), "", "Permission denied");
+          }
+        });
+
+        const { stdout } = createWritableStreamMock();
+        await expect(uninstallLegacySystemdUnits({ env, stdout })).rejects.toThrow(
+          "systemctl disable failed: Permission denied",
+        );
+        await expect(fs.access(unitPath)).resolves.toBeUndefined();
+      } finally {
+        await fs.rm(tempHomeRoot, { recursive: true, force: true });
+      }
+    },
+  );
 });
 
 describe("uninstallUserSystemdGatewayUnit", () => {
@@ -3391,28 +3496,42 @@ describe("uninstallUserSystemdGatewayUnit", () => {
     });
   });
 
-  it("preserves the unit file when systemctl cannot disable the service", async () => {
-    await withUserUnitFixture(async ({ env, unitPath }) => {
-      await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
-      execFileMock
-        .mockImplementationOnce(systemctlUserSuccess("status"))
-        .mockImplementationOnce(
-          systemctlUserResult(
-            [createExecFileError("permission denied", { code: 1 }), "", "Permission denied"],
-            "disable",
-            "--now",
-            GATEWAY_SERVICE,
-          ),
-        );
+  it.each(["exit", "signal"] as const)(
+    "preserves the unit file when disable fails after status %s",
+    async (termination) => {
+      await withUserUnitFixture(async ({ env, unitPath }) => {
+        await fs.writeFile(unitPath, "[Unit]\nDescription=OpenClaw Gateway\n", "utf8");
+        execFileMock
+          .mockImplementationOnce(
+            systemctlUserResult(
+              [
+                termination === "signal"
+                  ? createExecFileError("status interrupted", { termination })
+                  : null,
+                "",
+                "",
+              ],
+              "status",
+            ),
+          )
+          .mockImplementationOnce(
+            systemctlUserResult(
+              [createExecFileError("permission denied", { code: 1 }), "", "Permission denied"],
+              "disable",
+              "--now",
+              GATEWAY_SERVICE,
+            ),
+          );
 
-      const { stdout } = createWritableStreamMock();
-      await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
-        "systemctl disable failed: Permission denied",
-      );
-      await expect(fs.access(unitPath)).resolves.toBeUndefined();
-      expect(execFileMock).toHaveBeenCalledTimes(2);
-    });
-  });
+        const { stdout } = createWritableStreamMock();
+        await expect(uninstallUserSystemdGatewayUnit({ env, stdout })).rejects.toThrow(
+          "systemctl disable failed: Permission denied",
+        );
+        await expect(fs.access(unitPath)).resolves.toBeUndefined();
+        expect(execFileMock).toHaveBeenCalledTimes(2);
+      });
+    },
+  );
 
   it("surfaces daemon-reload failure after removing the disabled unit", async () => {
     await withUserUnitFixture(async ({ env, unitPath }) => {

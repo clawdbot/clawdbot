@@ -720,7 +720,6 @@ describe("DraftSubmissionFlow", () => {
     });
     if (worktree) {
       place.toggleWorktree();
-      vi.spyOn(place, "worktreeAvailable").mockReturnValue(true);
     }
     flow.setMessage(message);
     if (worktree && !message) {

@@ -85,7 +85,7 @@ extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
 extensions/browser/src/browser/pw-download-capture.ts	1
 extensions/browser/src/browser/pw-role-snapshot.ts	1
-extensions/browser/src/browser/pw-session-actions.ts	7
+extensions/browser/src/browser/pw-session-actions.ts	2
 extensions/browser/src/browser/pw-session-cdp-transport.ts	1
 extensions/browser/src/browser/pw-session-navigation.ts	1
 extensions/browser/src/browser/pw-session.page-cdp.ts	4
@@ -619,7 +619,7 @@ extensions/line/src/flex-templates/basic-cards.ts	19
 extensions/line/src/flex-templates/common.ts	2
 extensions/line/src/flex-templates/media-control-cards.ts	35
 extensions/line/src/flex-templates/schedule-cards.ts	28
-extensions/line/src/gateway.ts	4
+extensions/line/src/gateway.ts	1
 extensions/line/src/group-keys.ts	1
 extensions/line/src/markdown-to-line.ts	7
 extensions/line/src/monitor-durable.ts	1
@@ -878,7 +878,7 @@ extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
 extensions/nextcloud-talk/src/doctor.ts	2
-extensions/nextcloud-talk/src/gateway.ts	8
+extensions/nextcloud-talk/src/gateway.ts	2
 extensions/nextcloud-talk/src/inbound.ts	9
 extensions/nextcloud-talk/src/message-actions.ts	3
 extensions/nextcloud-talk/src/message-adapter.ts	2
@@ -1267,7 +1267,6 @@ extensions/telegram/src/bot/delivery.resolve-media.ts	1
 extensions/telegram/src/bot/helpers.ts	2
 extensions/telegram/src/callback-query-answer-state.ts	1
 extensions/telegram/src/channel-actions.ts	1
-extensions/telegram/src/channel.ts	1
 extensions/telegram/src/client-fetch.ts	5
 extensions/telegram/src/doctor-contract.ts	3
 extensions/telegram/src/doctor.ts	12
@@ -1960,7 +1959,6 @@ src/agents/prepared-model-catalog.ts	1
 src/agents/prepared-model-catalog.worker.ts	1
 src/agents/prepared-model-runtime.configured.ts	2
 src/agents/prepared-model-runtime.facts.ts	1
-src/agents/prepared-model-runtime.plugin-context.ts	2
 src/agents/prepared-model-runtime.ts	1
 src/agents/provider-attribution.ts	14
 src/agents/provider-auth-aliases.ts	2
@@ -1995,7 +1993,7 @@ src/agents/session-dirs.ts	2
 src/agents/session-model-auto-revert.ts	1
 src/agents/session-placement-admission.ts	1
 src/agents/session-raw-append-message.ts	2
-src/agents/session-suspension.ts	2
+src/agents/session-suspension.ts	1
 src/agents/session-tool-result-guard.ts	26
 src/agents/session-transcript-repair.ts	15
 src/agents/sessions/agent-session-base.ts	3
@@ -2511,7 +2509,7 @@ src/commands/doctor-config-analysis.ts	3
 src/commands/doctor-config-flow.ts	3
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-db-bloat.ts	1
-src/commands/doctor-gateway-services.ts	2
+src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-main-session-repair.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	6
 src/commands/doctor-main-session-recovery.ts	1
@@ -2570,7 +2568,7 @@ src/commands/doctor/shared/empty-allowlist-policy.ts	14
 src/commands/doctor/shared/empty-allowlist-scan.ts	17
 src/commands/doctor/shared/include-migration-ownership.ts	2
 src/commands/doctor/shared/legacy-config-compat.ts	1
-src/commands/doctor/shared/legacy-config-core-migrate.ts	7
+src/commands/doctor/shared/legacy-config-core-migrate.ts	1
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	18
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
@@ -3033,7 +3031,7 @@ src/gateway/server.auth.control-ui.mobile-bootstrap.suite.ts	7
 src/gateway/server.auth.control-ui.owner-bootstrap.suite.ts	5
 src/gateway/server.auth.control-ui.pairing.suite.ts	6
 src/gateway/server.auth.control-ui.trusted-proxy.suite.ts	5
-src/gateway/server.auth.default-token.suite.ts	11
+src/gateway/server.auth.default-token.suite.ts	10
 src/gateway/server.auth.modes.suite.ts	1
 src/gateway/server/hooks-request-handler.ts	4
 src/gateway/server/http-listen.ts	1

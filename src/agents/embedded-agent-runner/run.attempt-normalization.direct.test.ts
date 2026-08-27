@@ -57,6 +57,7 @@ function makePromptState(options: { waitForPersistence?: () => Promise<void> } =
     waitForCurrentUserMessagePersistence: vi.fn(
       options.waitForPersistence ?? (async () => undefined),
     ),
+    markOwnedTranscriptRetry: vi.fn(),
     continueFromCurrentTranscript: vi.fn(),
   };
   return state;
@@ -178,6 +179,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected retry, got ${result.action}`);
     }
     expect(result.retryKind).toBe("recovery");
+    expect(state.markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
   });
 
@@ -200,6 +202,7 @@ describe("normalizeEmbeddedRunAttempt", () => {
       throw new Error(`expected retry, got ${result.action}`);
     }
     expect(result.retryKind).toBe("progress_continuation");
+    expect(state.markOwnedTranscriptRetry).not.toHaveBeenCalled();
     expect(state.continueFromCurrentTranscript).toHaveBeenCalledOnce();
   });
 

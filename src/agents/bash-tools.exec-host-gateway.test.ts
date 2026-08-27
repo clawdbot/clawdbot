@@ -54,11 +54,13 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -213,6 +215,22 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   ),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
+const startupCancellationMocks = vi.hoisted(() => ({
+  spawn: vi.fn<ProcessSupervisor["spawn"]>(),
+  prepare: vi.fn<() => void>(),
+}));
+
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => ({ spawn: startupCancellationMocks.spawn }),
+}));
+
+vi.mock("./shell-snapshot.js", () => ({
+  maybeWrapCommandWithShellSnapshot: async (input: { command: string }) => {
+    startupCancellationMocks.prepare();
+    return input.command;
+  },
+}));
+
 const markBackgroundedMock = vi.hoisted(() => vi.fn());
 const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
   vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
@@ -420,7 +438,8 @@ vi.mock("./bash-tools.exec-runtime.js", () => ({
   runExecProcess: runExecProcessMock,
 }));
 
-vi.mock("./bash-process-registry.js", () => ({
+vi.mock("./bash-process-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./bash-process-registry.js")>()),
   getActiveBackgroundExecSessionCount: vi.fn(() => 0),
   markBackgrounded: markBackgroundedMock,
   tail: vi.fn((value) => value),
@@ -555,6 +574,8 @@ describe("processGatewayAllowlist", () => {
       askFallback: "deny",
     });
     runExecProcessMock.mockReset();
+    startupCancellationMocks.spawn.mockReset();
+    startupCancellationMocks.prepare.mockReset();
     markBackgroundedMock.mockReset();
     sendExecApprovalFollowupResultMock.mockReset();
     enforceStrictInlineEvalApprovalBoundaryMock.mockReset();
@@ -583,6 +604,7 @@ describe("processGatewayAllowlist", () => {
   });
 
   afterEach(() => {
+    resetProcessRegistryForTests();
     resetGatewayWorkAdmission();
   });
 
@@ -3139,6 +3161,50 @@ EOF`,
       "external side effects may already have completed",
     );
     expect(requireSentFollowupText(0)).toContain("Verify the resulting state before retrying");
+  });
+
+  it("does not spawn or send a detached followup after cancellation during startup", async () => {
+    const controller = new AbortController();
+    mockApprovedDetachedExec({
+      outcome: { status: "completed", exitCode: 0, timedOut: false, aggregated: "done" },
+    });
+    const runtime = await vi.importActual<typeof import("./bash-tools.exec-runtime.js")>(
+      "./bash-tools.exec-runtime.js",
+    );
+    runExecProcessMock.mockImplementation(runtime.runExecProcess);
+    startupCancellationMocks.prepare.mockImplementationOnce(() =>
+      controller.abort(new Error("cancelled while preparing")),
+    );
+    startupCancellationMocks.spawn.mockImplementationOnce(async (input) => ({
+      runId: input.runId ?? "cancelled-startup",
+      pid: 1234,
+      startedAtMs: Date.now(),
+      cancel: vi.fn(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    }));
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+      signal: controller.signal,
+      env: { PATH: "/usr/bin:/bin" },
+    });
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => expect(startupCancellationMocks.prepare).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(startupCancellationMocks.spawn.mock.calls.length).toBe(0);
+    expect(markBackgroundedMock).not.toHaveBeenCalled();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
   it("drops detached execution and follow-up when the owning run is aborted", async () => {

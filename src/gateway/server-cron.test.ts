@@ -493,6 +493,57 @@ describe("buildGatewayCronService", () => {
     });
   });
 
+  it.each([
+    { monitor: "heartbeat", blockedInventory: 1 },
+    { monitor: "skill review", blockedInventory: 2 },
+  ])(
+    "supersedes an in-flight $monitor reconciliation before mutation",
+    async ({ blockedInventory }) => {
+      const autoConfig = {
+        ...createCronConfig("server-cron-monitor-reconcile-auto"),
+        skills: { workshop: { autonomous: { mode: "auto" } } },
+      } satisfies OpenClawConfig;
+      const offConfig = {
+        ...autoConfig,
+        skills: { workshop: { autonomous: { mode: "off" } } },
+      } satisfies OpenClawConfig;
+      const state = loadCronService(autoConfig);
+
+      try {
+        await expect(state.reconcileHeartbeatJobs(autoConfig)).resolves.toBe("converged");
+        const inventoryStarted = createDeferred();
+        const releaseInventory = createDeferred();
+        const listJobs = state.cron.list.bind(state.cron);
+        let inventoryCall = 0;
+        vi.spyOn(state.cron, "list").mockImplementation(async (options) => {
+          inventoryCall += 1;
+          if (inventoryCall === blockedInventory) {
+            inventoryStarted.resolve();
+            await releaseInventory.promise;
+          }
+          return await listJobs(options);
+        });
+        const addJob = vi.spyOn(state.cron, "add");
+        const removeJob = vi.spyOn(state.cron, "remove");
+
+        const disable = state.reconcileHeartbeatJobs(offConfig);
+        await inventoryStarted.promise;
+        const reenable = state.reconcileHeartbeatJobs(autoConfig);
+        releaseInventory.resolve();
+
+        await expect(disable).resolves.toBe("superseded");
+        await expect(reenable).resolves.toBe("converged");
+        expect(addJob).not.toHaveBeenCalledWith(
+          expect.objectContaining({ enabled: false }),
+          expect.anything(),
+        );
+        expect(removeJob).not.toHaveBeenCalled();
+      } finally {
+        state.cron.stop();
+      }
+    },
+  );
+
   it.each(["update", "updateWithPrecondition"] as const)(
     "forwards authority options through the %s lifecycle wrapper",
     async (method) => {

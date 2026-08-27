@@ -21,6 +21,8 @@ import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 
+export { clearAccountFieldsFromConfigSection } from "../channels/plugins/config-helpers.js";
+
 export {
   ensureOpenDmPolicyAllowFromWildcard,
   normalizeChannelDmPolicy,

@@ -54,6 +54,33 @@ it("projects admitted work as queued until execution starts", () => {
   registration.cleanup({ force: true });
 });
 
+it("keeps terminal persistence visible only to chat history", () => {
+  const terminal = {
+    sessionKey: "agent:main:main",
+    sessionId: "session-main",
+    projectSessionActive: false,
+    projectSessionTerminalPending: true,
+  };
+  const context = { chatAbortControllers: new Map([["run-terminal", terminal]]) } as never;
+  const params = {
+    context,
+    requestedKey: terminal.sessionKey,
+    canonicalKey: terminal.sessionKey,
+    sessionId: terminal.sessionId,
+    agentId: "main",
+  };
+
+  expect(resolveVisibleActiveSessionRunState(params)).toEqual({ active: false, runIds: [] });
+  expect(
+    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
+  ).toEqual({ active: true });
+
+  terminal.projectSessionTerminalPending = false;
+  expect(
+    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
+  ).toEqual({ active: false, runIds: [] });
+});
+
 it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   const context = {
     chatAbortControllers: new Map([

@@ -97,8 +97,8 @@ SecretRef, plugin, or channel auth failures.
 
 - Pull or build the new OpenClaw image, then redeploy the EasyRunner app.
 - Back up the `openclaw-config` volume before updates. It holds
-  `openclaw.json`, `agents/<agentId>/agent/auth-profiles.json`, and installed
-  plugin package state.
+  `openclaw.json`, shared auth in `state/openclaw.sqlite`, agent-local profiles
+  in `agents/<agentId>/agent/openclaw-agent.sqlite`, and installed plugin package state.
 - Back up `openclaw-workspace` if agents write durable project data there.
 - Run `openclaw doctor` after major updates to catch config migrations and
   service warnings.

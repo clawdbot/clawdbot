@@ -63,6 +63,23 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain("TSX_VERSION");
   });
 
+  it("pins only Windows packaged-fresh checks to the known-good Node release", () => {
+    const workflow = readWorkflow(WORKFLOW_PATH);
+    const prepare = job(workflow, "prepare");
+    const consumer = job(workflow, "cross_os_release_checks");
+    const windowsPackagedFreshNodeVersion =
+      "${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}";
+
+    expect(step(prepare, "Setup Node.js").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(step(prepare, "Setup pnpm").with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(step(consumer, "Setup Node.js").with?.["node-version"]).toBe(
+      windowsPackagedFreshNodeVersion,
+    );
+    expect(step(consumer, "Setup pnpm").with?.["node-version"]).toBe(
+      windowsPackagedFreshNodeVersion,
+    );
+  });
+
   it("retries only an interrupted Windows dashboard probe", () => {
     const workflow = readWorkflow(WORKFLOW_PATH);
     const consumer = job(workflow, "cross_os_release_checks");

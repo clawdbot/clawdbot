@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { requireActivePluginRegistry } from "../plugins/runtime.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
@@ -23,7 +24,6 @@ import {
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -294,7 +294,7 @@ describe("prepared model runtime snapshots", () => {
       env,
     });
 
-    expect(getPreparedPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
+    expect(getPluginRuntimeLoadContext(snapshot.pluginRegistry)).toMatchObject({
       rawConfig: config,
       env,
     });

@@ -369,7 +369,7 @@ Configures inbound media understanding (image/audio/video):
 
     - `provider`: API provider id (`openai`, `anthropic`, `google`/`gemini`, `groq`, etc.)
     - `model`: model id override
-    - `profile` / `preferredProfile`: `auth-profiles.json` profile selection
+    - `profile` / `preferredProfile`: stored auth-profile selection
 
     **CLI entry** (`type: "cli"`):
 
@@ -383,7 +383,7 @@ Configures inbound media understanding (image/audio/video):
     - Matching image model `timeoutSeconds` entries also apply when the agent calls the explicit `view_image` tool. For image understanding, this timeout applies to the request itself and is not reduced by earlier preparation work.
     - Failures fall back to the next entry.
 
-    Provider auth follows standard order: `auth-profiles.json` → env vars → `models.providers.*.apiKey`.
+    Provider auth follows standard order: SQLite auth profiles → env vars → `models.providers.*.apiKey`.
 
   </Accordion>
 </AccordionGroup>

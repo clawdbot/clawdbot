@@ -376,6 +376,14 @@ export async function projectSessionEntryLifecycleMutation(
     if (!sessionKey) {
       continue;
     }
+    if (
+      upsert.requiresRemovalSessionKey &&
+      !projectedRemovals.some(
+        (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
+      )
+    ) {
+      continue;
+    }
     const expectedEntry = store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined;
     if (upsert.resetBoundary && !expectedEntry) {
       throw new Error(

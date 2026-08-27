@@ -82,6 +82,7 @@ const completeRequesterSettleWakeBatch = (
     delivery: structuredClone(entry.delivery),
     requesterSettleWake: structuredClone(entry.requesterSettleWake),
     retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
+    suppressCompletionDelivery: entry.suppressCompletionDelivery,
   }));
   const settledDeliveries: SubagentRunRecord[] = [];
   for (const [runId, entry] of entries) {
@@ -105,6 +106,7 @@ const completeRequesterSettleWakeBatch = (
         delivery.lastError = outcome.error ?? outcome.reason ?? "requester settle wake failed";
         delivery.deliveredAt = undefined;
         delivery.announcedAt = undefined;
+        entry.suppressCompletionDelivery = true;
       }
       settledDeliveries.push(entry);
     }
@@ -130,6 +132,7 @@ const completeRequesterSettleWakeBatch = (
       entry.delivery = previous?.delivery;
       entry.requesterSettleWake = previous?.requesterSettleWake;
       entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
+      entry.suppressCompletionDelivery = previous?.suppressCompletionDelivery;
     });
     throw error;
   }

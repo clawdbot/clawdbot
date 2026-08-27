@@ -363,10 +363,10 @@ export function createPendingBridgeStates(params: {
     const target = params.catalogProjection.byCallableName.get(String(request.args[0]));
     const yieldRunSignal = target?.name === "sessions_yield" ? params.ctx.abortSignal : undefined;
     const tracksDispatch = request.method !== "sleep";
-    // Exact catalog binding rejects shadowed or untrusted tools before replay-safety applies.
+    // Discovery is read-only; replay-safe actions such as agentSpawn may still mutate.
     const recoverySafe =
-      (request.method === "nodes" && (request.args[0] === "list" || request.args[0] === "get")) ||
-      (request.method === "callValue" &&
+      ["search", "describe", "skillsList", "skillsRead"].includes(request.method) ||
+      (["nodes", "callValue"].includes(request.method) &&
         isPendingBridgeRequestReplaySafe(request, params.runtime, params.catalogProjection));
     if (tracksDispatch) {
       params.bridgeDispatch.started = true;

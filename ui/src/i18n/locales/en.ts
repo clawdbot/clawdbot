@@ -1251,8 +1251,6 @@ export const en: TranslationMap = {
     newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
-    newGroupMovePartial:
-      "Group created, but some selected sessions were not moved because the list changed. Move them from the row menu.",
     moveToGroup: "Move session to a group",
     moveToGroupMenu: "Move to group",
     moveToGroupMenuCount: "Move {count} to group",
@@ -1900,6 +1898,8 @@ export const en: TranslationMap = {
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
+      usingInheritedAccent: "Using inherited accent",
+      usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
         claw: "Claw red",
@@ -3587,6 +3587,27 @@ export const en: TranslationMap = {
   },
   presence: {
     rosterTitle: "Online",
+    card: {
+      details: "Details for {name}",
+      loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
+      ariaLabel: "Activity for {name}",
+      person: "Person",
+      onlineFor: "Online for",
+      where: "Where",
+      reportedTimeZone: "Reported time zone: {zone}",
+      lastActivity: "Last activity",
+      notObserved: "Not observed yet",
+      viewingNow: "Viewing now",
+      recentSessions: "Recent sessions",
+      noVisibleSessions: "No visible sessions being viewed.",
+      noRecentSessions: "No recent visible sessions.",
+      sessionUpdated: "Session updated",
+      ago: "ago",
+      viewActivity: "View activity",
+      controlUi: "Control UI",
+      cli: "Command line",
+      app: "App",
+    },
   },
   activityFeed: {
     sessionsMode: "Sessions",

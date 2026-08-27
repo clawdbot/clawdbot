@@ -16,10 +16,7 @@ import {
   hasAuthProfileStoreSourceForProvider,
   isConfiguredAwsSdkAuthProfileForProvider,
 } from "../agents/auth-profiles.js";
-import {
-  DEFAULT_MEMORY_EMBEDDING_PROVIDER,
-  resolveMemorySearchConfig,
-} from "../agents/memory-search.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
   resolveApiKeyForProviderCore,
   resolveEnvApiKey,
@@ -38,6 +35,7 @@ import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
+  getMissingLocalMemoryEmbeddingProviderMessage,
   repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
   type DreamingArtifactsAuditSummary,
@@ -45,9 +43,18 @@ import {
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
+  resolveManifestOwnerBasePolicyBlock,
+  type ManifestOwnerBasePolicyBlockReason,
+} from "../plugins/manifest-owner-policy.js";
+import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import {
+  listTrustedExternalProviderPolicyOwners,
+  loadTrustedExternalProviderPolicyArtifacts,
+} from "../plugins/provider-public-artifacts.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveUserPath } from "../utils.js";
@@ -98,6 +105,35 @@ function formatLocalRuntimeDoctorNote(facts: DoctorMemoryEmbeddingRuntimePayload
   const loadError = facts.loadError ? `\nLoad error: ${facts.loadError}` : "";
   const state = facts.state === "ready" ? "" : ` (${facts.state})`;
   return `llama.cpp server: ${backend}${build}${state}${model}${capabilities}${endpoints}${loadError}`;
+}
+
+function resolveLocalProviderPolicyBlockGuidance(
+  reason: ManifestOwnerBasePolicyBlockReason,
+  pluginId: string,
+): { message: string; fix: string } {
+  switch (reason) {
+    case "plugins-disabled":
+      return {
+        message: "Plugin loading is disabled for this config.",
+        fix: `Fix: ${formatCliCommand("openclaw config set plugins.enabled true --strict-json")}, or select another memory provider.`,
+      };
+    case "blocked-by-denylist":
+      return {
+        message: `Installed plugin "${pluginId}" is blocked by plugins.deny.`,
+        fix: `Fix: Remove "${pluginId}" from plugins.deny, or select another memory provider.`,
+      };
+    case "plugin-disabled":
+      return {
+        message: `Installed plugin "${pluginId}" is disabled for this config.`,
+        fix: `Fix: Enable it: ${formatCliCommand(`openclaw plugins enable ${pluginId} --accept-capabilities`)}, or select another memory provider.`,
+      };
+    case "not-in-allowlist":
+      return {
+        message: `Installed plugin "${pluginId}" is omitted from plugins.allow.`,
+        fix: `Fix: Include "${pluginId}" in plugins.allow, or select another memory provider.`,
+      };
+  }
+  return reason satisfies never;
 }
 
 const MEMORY_EMBEDDING_PROVIDER_AUTH_IDS = new Map([
@@ -481,6 +517,7 @@ type MemorySearchHealthOptions = {
   noteFn?: typeof note;
   includeWorkspaceMemoryHealth?: boolean;
   skipAuthProfileResolution?: boolean;
+  env?: NodeJS.ProcessEnv;
 };
 
 export async function noteMemorySearchHealth(
@@ -520,15 +557,14 @@ async function noteMemorySearchHealthForAgent(
 ): Promise<void> {
   const { agentId, agentDir } = scope;
   const noteFn = opts.noteFn ?? note;
-  const recallHealth = noteRememberAcrossConversationsHealth({
-    cfg,
-    agentId,
-    noteFn,
-  });
   const resolved = resolveMemorySearchConfig(cfg, agentId);
-  const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved?.remote?.apiKey);
 
   if (!resolved) {
+    const recallHealth = noteRememberAcrossConversationsHealth({
+      cfg,
+      agentId,
+      noteFn,
+    });
     noteFn(
       recallHealth.enabled
         ? `Remember across conversations is effectively enabled for agent "${agentId}", but memory search is disabled. Enable memory search or set memory.search.rememberAcrossConversations to false.`
@@ -538,6 +574,28 @@ async function noteMemorySearchHealthForAgent(
     return;
   }
   const provider = resolved.provider;
+  const normalizedPlugins = normalizePluginsConfig(cfg.plugins);
+
+  if (provider === "local" && !normalizedPlugins.enabled) {
+    const policyBlock = resolveLocalProviderPolicyBlockGuidance("plugins-disabled", provider);
+    noteFn(
+      [
+        policyBlock.message,
+        "",
+        policyBlock.fix,
+        "",
+        `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+      ].join("\n"),
+      "Memory search",
+    );
+    return;
+  }
+  noteRememberAcrossConversationsHealth({
+    cfg,
+    agentId,
+    noteFn,
+  });
+  const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved.remote?.apiKey);
 
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
@@ -570,6 +628,57 @@ async function noteMemorySearchHealthForAgent(
     }
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
     const gatewayDetail = detail && detail !== runtimeFacts?.loadError ? detail : null;
+    const env = opts.env ?? process.env;
+    const manifestRegistry = loadPluginManifestRegistryForPluginRegistry({
+      config: cfg,
+      env,
+      includeDisabled: true,
+    });
+    const installedOwners = listTrustedExternalProviderPolicyOwners(provider, manifestRegistry);
+    if (installedOwners.length === 0) {
+      noteFn(getMissingLocalMemoryEmbeddingProviderMessage(), "Memory search");
+      return;
+    }
+    const ownerPolicies = installedOwners.map((owner) => ({
+      owner,
+      policyBlock: resolveManifestOwnerBasePolicyBlock({
+        plugin: owner,
+        normalizedConfig: normalizedPlugins,
+      }),
+    }));
+    const eligibleOwners = ownerPolicies
+      .filter(({ policyBlock }) => !policyBlock)
+      .map(({ owner }) => owner);
+    const policyArtifacts =
+      eligibleOwners.length > 0 ? loadTrustedExternalProviderPolicyArtifacts(eligibleOwners) : null;
+    let installedOwner: (typeof installedOwners)[number];
+    let ownerPolicyBlock: ManifestOwnerBasePolicyBlockReason | null;
+    if (policyArtifacts) {
+      installedOwner = policyArtifacts.owner;
+      ownerPolicyBlock = null;
+    } else {
+      const blockedOwner = ownerPolicies.find(({ policyBlock }) => policyBlock);
+      if (!blockedOwner) {
+        throw new Error(`Unable to resolve the installed provider owner for "${provider}".`);
+      }
+      installedOwner = blockedOwner.owner;
+      ownerPolicyBlock = blockedOwner.policyBlock;
+    }
+    const providerPolicy = policyArtifacts?.surface;
+    const inspectSetup = ownerPolicyBlock
+      ? undefined
+      : providerPolicy?.inspectEmbeddingProviderSetup;
+    const setup = inspectSetup ? await inspectSetup({ config: cfg, env, agentId, provider }) : null;
+    const setupReason = setup?.reason.trim();
+    const setupFix = setup?.fixHint?.trim();
+    const updateFix =
+      !ownerPolicyBlock && !inspectSetup
+        ? `Fix: Update the installed plugin: ${formatCliCommand(`openclaw plugins update ${installedOwner.id}`)}`
+        : null;
+    const policyBlock = ownerPolicyBlock
+      ? resolveLocalProviderPolicyBlockGuidance(ownerPolicyBlock, installedOwner.id)
+      : null;
+    const hasRuntimeFailureDetail = Boolean(gatewayDetail || runtimeFacts?.loadError);
     noteFn(
       [
         runtimeFacts ? formatLocalRuntimeDoctorNote(runtimeFacts) : null,
@@ -577,12 +686,22 @@ async function noteMemorySearchHealthForAgent(
         hasExplicitLocalModel
           ? 'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.'
           : 'Memory search provider is set to "local", but local embeddings are not confirmed ready.',
-        gatewayDetail ? `Gateway probe: ${gatewayDetail}` : null,
+        setupReason ? `Setup: ${setupReason}` : null,
+        policyBlock?.message,
+        updateFix
+          ? `Installed plugin "${installedOwner.id}" does not provide current local-memory setup diagnostics.`
+          : null,
+        gatewayDetail && gatewayDetail !== setupReason ? `Gateway probe: ${gatewayDetail}` : null,
         "",
-        "Fix (pick one):",
-        `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
-        `- Set a local GGUF model path in config`,
-        `- Switch to a remote provider: ${formatCliCommand(`openclaw config set memory.search.provider ${DEFAULT_MEMORY_EMBEDDING_PROVIDER}`)}`,
+        policyBlock?.fix ??
+          updateFix ??
+          (setupFix
+            ? `Fix: ${setupFix}`
+            : hasUnavailableConfiguredLocalModel
+              ? "Fix: Set memory.search.local.modelPath to an existing GGUF file, or remove it to use the managed default."
+              : hasRuntimeFailureDetail
+                ? "Fix: Repair the llama.cpp server problem reported by the Gateway."
+                : null),
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ]

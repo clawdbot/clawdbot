@@ -248,9 +248,28 @@ describe("patchSessionRows", () => {
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();
   });
 
-  it("uses the legacy-compatible batch Mark as read payload", async () => {
+  it.each([{ unread: false }, { unread: true }, { category: "Projects" }, { pinned: true }])(
+    "preserves captured identities for metadata patch %j",
+    async (patch) => {
+      const rows = [sessionRow(0), sessionRow(1)];
+      const harness = createHarness();
+
+      await patchSessionRows(harness.host, rows, patch, harness.scope);
+
+      expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
+        targets: rows.map((row) => ({
+          key: row.key,
+          agentId: "main",
+          expectedSessionId: row.sessionId,
+        })),
+        patch,
+      });
+    },
+  );
+
+  it("keeps batch read identity independent of the unread acknowledgement capability", async () => {
     const rows = [sessionRow(0), sessionRow(1)];
-    const harness = createHarness();
+    const harness = createHarness({ capabilities: [] });
 
     await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
 
@@ -258,19 +277,8 @@ describe("patchSessionRows", () => {
       targets: rows.map((row) => ({
         key: row.key,
         agentId: "main",
+        expectedSessionId: row.sessionId,
       })),
-      patch: { unread: false },
-    });
-  });
-
-  it("uses the legacy batch read payload when the Gateway lacks the unread contract", async () => {
-    const rows = [sessionRow(0), sessionRow(1)];
-    const harness = createHarness({ capabilities: [] });
-
-    await patchSessionRows(harness.host, rows, { unread: false }, harness.scope);
-
-    expect(harness.request).toHaveBeenCalledWith("sessions.patchMany", {
-      targets: rows.map((row) => ({ key: row.key, agentId: "main" })),
       patch: { unread: false },
     });
   });

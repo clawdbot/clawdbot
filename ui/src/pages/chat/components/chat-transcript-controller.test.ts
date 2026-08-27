@@ -414,6 +414,56 @@ describe("chat transcript controller", () => {
     },
   );
 
+  it("keeps a smooth latest command through an idle observer delivery before reaching its target", async () => {
+    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, transcript } = await mountTestTranscript("idle-latest", rows);
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, value: 4800 },
+    });
+    const scrollTo = vi.fn();
+    container.scrollTo = scrollTo;
+    vi.useFakeTimers();
+    try {
+      container.scrollTop = 1000;
+      container.dispatchEvent(new Event("scroll"));
+      transcript.scrollToEnd({ behavior: "smooth" });
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 4200, behavior: "smooth" });
+      container.scrollTop = 1500;
+      container.dispatchEvent(new Event("scroll"));
+      Object.defineProperty(container, "scrollHeight", { configurable: true, value: 4900 });
+      vi.advanceTimersByTime(16);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: 4300, behavior: "smooth" });
+      scrollTo.mockClear();
+
+      // A retargeted native animation can pause between offset events. Core's
+      // idle debounce still fires, but the requested end has not been reached.
+      vi.advanceTimersByTime(150);
+      expect(transcript.isProgrammaticScroll).toBe(true);
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      // The 8px UI-follow boundary does not complete the native end command.
+      container.scrollTop = 4296;
+      container.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(150);
+      expect(transcript.isProgrammaticScroll).toBe(false);
+      expect(scrollTo).not.toHaveBeenCalled();
+
+      container.scrollTop = 4300;
+      container.dispatchEvent(new Event("scroll"));
+      vi.advanceTimersByTime(150);
+      expect(scrollTo).toHaveBeenCalledExactlyOnceWith({ top: 4300, behavior: "instant" });
+      expect(transcript.isProgrammaticScroll).toBe(false);
+    } finally {
+      transcript.hostDisconnected();
+      vi.useRealTimers();
+    }
+  });
+
   it("remeasures every visible pane transcript while preserving hidden transcript rows", async () => {
     const host = Object.assign(document.body.appendChild(document.createElement("div")), {
       addController: vi.fn(),

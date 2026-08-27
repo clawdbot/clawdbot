@@ -60,19 +60,11 @@ function replayAgentTurnIfCached(params: {
     return false;
   }
   if (cached.ok && isAcceptedAgentDedupePayload(cached.payload)) {
-    const cachedRunId =
-      typeof cached.payload.runId === "string" && cached.payload.runId.trim()
-        ? cached.payload.runId.trim()
-        : runId;
-    const cachedSessionKey =
-      typeof cached.payload.sessionKey === "string" && cached.payload.sessionKey.trim()
-        ? cached.payload.sessionKey.trim()
-        : undefined;
-    const cachedAgentId =
-      typeof cached.payload.agentId === "string" && cached.payload.agentId.trim()
-        ? cached.payload.agentId.trim()
-        : undefined;
+    const cachedRunId = normalizeOptionalString(cached.payload.runId) ?? runId;
+    const cachedSessionKey = normalizeOptionalString(cached.payload.sessionKey);
+    const cachedAgentId = normalizeOptionalString(cached.payload.agentId);
     const cachedRuntime = asOptionalRecord(cached.payload.runtime);
+    const admissionPending = typeof cached.payload.reservationId === "string";
     params.io.emitAcceptance(
       [
         true,
@@ -82,6 +74,7 @@ function replayAgentTurnIfCached(params: {
           ...(cachedSessionKey ? { sessionKey: cachedSessionKey } : {}),
           ...(cachedAgentId ? { agentId: cachedAgentId } : {}),
           ...(cachedRuntime ? { runtime: cachedRuntime } : {}),
+          ...(admissionPending ? { admissionPending: true } : {}),
         },
         undefined,
       ],

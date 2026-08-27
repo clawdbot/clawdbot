@@ -35,6 +35,7 @@ import {
 } from "../stale-install.js";
 import { cleanupTalkConnection } from "../talk-session-registry.js";
 import { formatForLog, logWs } from "../ws-log.js";
+import { refreshClientPresence } from "./client-presence.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -512,12 +513,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         context.terminalSessions?.handleDisconnect(connId);
         let currentDisconnectedNodeId: string | null = null;
         let disconnectedNodeHistory:
-          | {
-              nodeId: string;
-              connectedAtMs: number;
-              disconnectedAtMs: number;
-              pairingGeneration: string;
-            }
+          | Parameters<typeof recordPairedNodeDisconnection>[0]
           | undefined;
         if (client?.connect?.role === "node") {
           const nodeId = client.connect.device?.id ?? client.connect.client.id;
@@ -527,7 +523,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               nodeId: nodeSession.nodeId,
               connectedAtMs: nodeSession.connectedAtMs,
               disconnectedAtMs: Date.now(),
-              pairingGeneration: nodeSession.pairingGeneration,
+              expectedPairingGeneration: {
+                nodeId: nodeSession.nodeId,
+                key: nodeSession.pairingGeneration,
+              },
             };
           }
           // Retire I/O now, but retain revocation until admitted lifecycle work drains.
@@ -569,15 +568,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           currentDisconnectedNodeId === disconnectedNodeHistory.nodeId
         ) {
           try {
-            await recordPairedNodeDisconnection({
-              nodeId: disconnectedNodeHistory.nodeId,
-              connectedAtMs: disconnectedNodeHistory.connectedAtMs,
-              disconnectedAtMs: disconnectedNodeHistory.disconnectedAtMs,
-              expectedPairingGeneration: {
-                nodeId: disconnectedNodeHistory.nodeId,
-                key: disconnectedNodeHistory.pairingGeneration,
-              },
-            });
+            await recordPairedNodeDisconnection(disconnectedNodeHistory);
           } catch (error) {
             logGateway.warn(
               `failed to record node disconnect for ${disconnectedNodeHistory.nodeId}: ${formatForLog(error)}`,
@@ -628,6 +619,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       releasePreauthBudget();
       client = next;
       clients.add(next);
+      if (next.presenceKey && next.authenticatedUserId && next.connect.role !== "node") {
+        next.personPresence = { onlineSince: Date.now() };
+        refreshClientPresence(clients, next);
+      }
       pingTimer = setInterval(() => {
         // A half-open TCP connection can remain OPEN indefinitely. Terminate
         // after one missed pong so the normal close handler releases node state.
