@@ -21,7 +21,10 @@ import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveTalkSessionAgentId } from "../../talk/agent-target.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -47,7 +50,6 @@ import {
   stopTalkTranscriptionRelaySession,
 } from "../talk-transcription-relay.js";
 import { formatForLog } from "../ws-log.js";
-import { resolveSandboxedSessionCreation } from "./session-creation-provenance.js";
 import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,

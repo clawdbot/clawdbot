@@ -2,9 +2,7 @@ import type {
   SessionCreatedActor,
   SessionCreatedVia,
 } from "../../config/sessions/session-entry-provenance.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import { resolveCreatorSandbox } from "../operator-role-policy.js";
 
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
@@ -72,15 +70,4 @@ export function resolveAgentRunSessionCreation(
 ): TrustedSessionCreation {
   const actor = resolveOperatorSessionCreation(client).actor;
   return { via: "run", ...(actor ? { actor } : {}) };
-}
-
-/** Leave ordinary creation attribution unchanged unless the authenticated person requires isolation. */
-export function resolveSandboxedSessionCreation(
-  client: SessionCreationClient | null | undefined,
-  cfg: OpenClawConfig,
-): TrustedSessionCreation | undefined {
-  const creation = resolveOperatorSessionCreation(client);
-  return resolveCreatorSandbox(cfg, creation) === "required"
-    ? { ...creation, sandbox: "required" }
-    : undefined;
 }

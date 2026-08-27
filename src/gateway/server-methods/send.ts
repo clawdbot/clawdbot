@@ -76,7 +76,10 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { selectMessageActionRequesterIdentity } from "../message-action-turn-capability.js";
-import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
@@ -92,7 +95,6 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
-import { resolveSandboxedSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 

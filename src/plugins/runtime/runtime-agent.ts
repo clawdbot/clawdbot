@@ -190,7 +190,7 @@ async function createSessionEntry(
     // session-meta rides the same lazy boundary: session-utils already pulls it
     // in transitively, so a separate import here would only duplicate the edge.
     import("../../acp/runtime/session-meta.js"),
-    import("../../gateway/server-methods/session-creation-provenance.js"),
+    import("../../gateway/operator-role-policy.js"),
   ]);
   const requiredCreation = resolveSandboxedSessionCreation(
     getPluginRuntimeGatewayRequestScope()?.client,
