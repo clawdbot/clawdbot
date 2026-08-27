@@ -192,6 +192,46 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
             password: nil))
     }
 
+    @Test func setupCodeCarriesNormalizedTLSFingerprint() {
+        let fingerprint = (0..<32).map { _ in "AB" }.joined(separator: ":")
+        let payload = #"{"url":"wss://gateway.example.com","tlsFingerprint":"SHA256:\#(fingerprint)"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.tlsFingerprintSha256 == fingerprint.replacingOccurrences(of: ":", with: "").lowercased())
+    }
+
+    @Test func setupCodeRejectsInvalidTLSFingerprint() {
+        let payload = #"{"url":"wss://gateway.example.com","tlsFingerprint":"not-a-fingerprint"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeRejectsTLSFingerprintOnPlaintextEndpoint() {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"ws://127.0.0.1:18789","tlsFingerprint":"\#(fingerprint)"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func fallbackEndpointDoesNotInheritPrimaryTLSFingerprint() throws {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"wss://direct.example.com","urls":["wss://direct.example.com","wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)"}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+        let fallback = try #require(link.fallbackEndpoints.first)
+
+        #expect(link.tlsFingerprintSha256 == fingerprint)
+        #expect(link.selectingEndpoint(fallback).tlsFingerprintSha256 == nil)
+    }
+
+    @Test func rejectedPrimaryDoesNotTransferTLSFingerprintToFallback() throws {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"ws://127.0.0.1:18789","urls":["wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)"}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+
+        #expect(link.host == "proxy.example.com")
+        #expect(link.tlsFingerprintSha256 == nil)
+    }
+
     @Test func legacyEncodedGatewayLinkDecodesWithoutFallbacks() throws {
         let payload = #"{"host":"gateway.tailnet.ts.net","port":443,"tls":true}"#
 

@@ -29,7 +29,7 @@ private func saveActiveManualGateway(
     return GatewaySettingsStore.upsertGatewayRegistryEntry(entry, activate: true)
 }
 
-private struct GatewayRegistryTestIsolation {
+struct GatewayRegistryTestIsolation {
     private static let service = GatewaySettingsStore._testGatewayService
     private static let keychainAccounts = [
         "gateway-registry",
@@ -789,6 +789,7 @@ private func waitUntil(
             host: "first.gateway.example.com",
             port: 443,
             tls: true,
+            tlsFingerprintSha256: String(repeating: "ab", count: 32),
             bootstrapToken: "bootstrap-token",
             token: "source-token",
             password: "source-password")
@@ -825,15 +826,18 @@ private func waitUntil(
         #expect(first?.bootstrapToken == "bootstrap-token")
         #expect(first?.password == "source-password")
         #expect(first?.targetStableID == firstStableID)
+        #expect(first?.tlsFingerprintSha256 == String(repeating: "ab", count: 32))
         #expect(first?.suppressStoredDeviceAuth == true)
         #expect(second?.token == nil)
         #expect(second?.bootstrapToken == nil)
         #expect(second?.password == nil)
         #expect(second?.targetStableID == secondStableID)
+        #expect(second?.tlsFingerprintSha256 == nil)
         #expect(second?.suppressStoredDeviceAuth == true)
         #expect(edited?.token == "replacement-token")
         #expect(edited?.password == nil)
         #expect(ordinary?.suppressStoredDeviceAuth == false)
+        #expect(ordinary?.tlsFingerprintSha256 == nil)
     }
 
     @Test func `persisted setup auth stays scoped after view recreation`() throws {
@@ -1883,7 +1887,7 @@ private func waitUntil(
         }
     }
 
-    @Test @MainActor func `active manual TLS auto connect wins over legacy manual defaults`() async {
+    @Test @MainActor func `active manual TLS auto connect uses system trust before legacy defaults`() async {
         let registryIsolation = GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let host = "manual-autoconnect-\(UUID().uuidString).example.com"
@@ -1925,13 +1929,10 @@ private func waitUntil(
             let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
             controller._test_triggerAutoConnect()
-            #expect(!controller._test_didAutoConnect())
-
-            GatewayTLSStore.saveFingerprint("trusted-certificate", stableID: stableID)
-            controller._test_triggerAutoConnect()
             #expect(controller._test_didAutoConnect())
             await waitUntil { appModel.activeGatewayConnectConfig?.effectiveStableID == stableID }
             #expect(appModel.activeGatewayConnectConfig?.effectiveStableID == stableID)
+            #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == nil)
         }
     }
 

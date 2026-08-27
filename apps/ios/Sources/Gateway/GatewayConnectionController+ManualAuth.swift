@@ -80,6 +80,7 @@ extension GatewayConnectionController {
             let bootstrapToken: String
             let password: String
             let targetStableID: String
+            let tlsFingerprintSha256: String?
 
             var hasBootstrapToken: Bool {
                 !self.bootstrapToken.isEmpty
@@ -93,6 +94,7 @@ extension GatewayConnectionController {
                     bootstrapToken: self.bootstrapToken,
                     password: self.password,
                     targetStableID: self.targetStableID,
+                    tlsFingerprintSha256: self.tlsFingerprintSha256,
                     suppressStoredDeviceAuth: true)
             }
         }
@@ -101,6 +103,7 @@ extension GatewayConnectionController {
         let bootstrapToken: String?
         let password: String?
         let targetStableID: String?
+        let tlsFingerprintSha256: String?
         let suppressStoredDeviceAuth: Bool
 
         static func explicit(
@@ -108,6 +111,7 @@ extension GatewayConnectionController {
             bootstrapToken: String?,
             password: String?,
             targetStableID: String? = nil,
+            tlsFingerprintSha256: String? = nil,
             suppressStoredDeviceAuth: Bool) -> ManualAuthOverride
         {
             let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -118,6 +122,7 @@ extension GatewayConnectionController {
                 bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
                 password: trimmedPassword.isEmpty ? nil : trimmedPassword,
                 targetStableID: targetStableID,
+                tlsFingerprintSha256: tlsFingerprintSha256,
                 suppressStoredDeviceAuth: suppressStoredDeviceAuth)
         }
 
@@ -179,6 +184,7 @@ extension GatewayConnectionController {
                     bootstrapToken: nil,
                     password: normalizedInput.password == pendingOverride.password ? nil : normalizedInput.password,
                     targetStableID: targetStableID,
+                    tlsFingerprintSha256: nil,
                     suppressStoredDeviceAuth: true)
             }
             return ManualAuthOverride.explicit(
@@ -186,6 +192,7 @@ extension GatewayConnectionController {
                 bootstrapToken: pendingOverride.bootstrapToken,
                 password: password,
                 targetStableID: pendingOverride.targetStableID,
+                tlsFingerprintSha256: pendingOverride.tlsFingerprintSha256,
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
         }
 
@@ -207,7 +214,8 @@ extension GatewayConnectionController {
                 targetStableID: self.manualStableID(
                     host: link.host,
                     port: link.port,
-                    contextPath: link.contextPath))
+                    contextPath: link.contextPath),
+                tlsFingerprintSha256: link.tlsFingerprintSha256)
         }
     }
 }

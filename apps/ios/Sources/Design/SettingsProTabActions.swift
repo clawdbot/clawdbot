@@ -524,7 +524,8 @@ extension SettingsProTab {
         }
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
-            port: port)
+            port: port,
+            contextPath: self.manualGatewayContextPath)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
         if GatewayStableIdentifier.matches(
             self.appModel.activeGatewayConnectConfig?.effectiveStableID,
