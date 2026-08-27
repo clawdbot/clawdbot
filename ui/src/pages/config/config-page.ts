@@ -19,7 +19,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { importCustomThemeFromUrl } from "../../app/custom-theme.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import {
   resetServerUiPref,
   resolveServerUiPrefState,
@@ -871,7 +871,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       "theme",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync("theme"),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
     );
   }
 
@@ -881,7 +884,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       "themeMode",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync("themeMode"),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
     );
   }
 
@@ -891,7 +897,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       "accent",
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
+      {
+        canSync: this.serverUiPrefsCanSync("accent"),
+        profileId: this.context.gateway.snapshot?.selfUser?.id,
+      },
     );
   }
 
@@ -915,9 +924,15 @@ export class ConfigPage extends OpenClawLightDomElement {
     );
   }
 
-  private serverUiPrefsCanSync(): boolean | null {
+  private serverUiPrefsCanSync(key?: "theme" | "themeMode" | "accent"): boolean | null {
     const runtimeConfig = this.context.runtimeConfig;
-    return runtimeConfig.state.connected ? runtimeConfig.canPatch !== false : null;
+    if (!runtimeConfig.state.connected) {
+      return null;
+    }
+    const gateway = this.context.gateway.snapshot;
+    return key && gateway?.selfUser
+      ? hasOperatorWriteAccess(gateway.hello?.auth ?? null)
+      : runtimeConfig.canPatch !== false;
   }
 
   private resetLocale() {

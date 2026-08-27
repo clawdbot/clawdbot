@@ -3949,7 +3949,7 @@ ui/src/app/native-window-drag.ts	1
 ui/src/app/overlays.ts	1
 ui/src/app/question-prompt.ts	2
 ui/src/app/server-prefs-state.ts	14
-ui/src/app/server-prefs.ts	17
+ui/src/app/server-prefs.ts	15
 ui/src/app/settings.ts	9
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1

@@ -3882,10 +3882,10 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
     expectTextToIncludeAll(runner, [
       "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
-      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
       "source scripts/e2e/lib/prepublish-plugin-registry.sh",
-      "openclaw_prepublish_plugin_registry_start",
-      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='[\"@openclaw/codex\"]'",
+      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      "openclaw_prepublish_plugin_registry_start_mounted",
+      "'[\"@openclaw/codex\"]'",
     ]);
     expectTextToIncludeAll(registryHelper, [
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
@@ -3896,6 +3896,20 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
     expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
       runner.indexOf("\nopenclaw onboard --non-interactive"),
+    );
+  });
+
+  it("reuses the candidate registry lifecycle for channel onboarding", () => {
+    const runner = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"',
+      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      "openclaw_prepublish_plugin_registry_start_mounted",
+      "'[\"@openclaw/codex\"]'",
+    ]);
+    expect(runner.indexOf("openclaw_prepublish_plugin_registry_start_mounted")).toBeLessThan(
+      runner.indexOf("\nopenclaw_e2e_install_package"),
     );
   });
 

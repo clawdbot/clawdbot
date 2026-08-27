@@ -26,6 +26,9 @@
           "enabled": {
             "type": "boolean"
           },
+          "responsePrefix": {
+            "type": "string"
+          },
           "markdown": {
             "type": "object",
             "properties": {

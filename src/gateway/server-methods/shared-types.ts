@@ -332,6 +332,7 @@ type GatewayTransportContext = {
   ensureSandboxHostPort?: () => Promise<number>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
   nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;

@@ -67,7 +67,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "../model-selection.js";
 import { createModelVisibilityPolicy } from "../model-visibility-policy.js";
-import { loadPreparedModelCatalog } from "../prepared-model-catalog.js";
+import { loadPublishedPreparedModelCatalog } from "../prepared-model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../session-model-ref.js";
 import {
   describeSessionStatusTool,
@@ -500,7 +500,7 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadPreparedModelCatalog({
+  const catalog = await loadPublishedPreparedModelCatalog({
     config: params.cfg,
     agentId: params.agentId,
     agentDir: params.agentDir,
@@ -1125,7 +1125,7 @@ export function createSessionStatusTool(opts?: {
             config: cfg,
           });
           // Tool status may read persisted/configured facts, but must not start provider discovery.
-          const thinkingCatalog = await loadPreparedModelCatalog({
+          const thinkingCatalog = await loadPublishedPreparedModelCatalog({
             config: cfg,
             agentId,
             agentDir: selectedAgentDir,
@@ -1158,7 +1158,7 @@ export function createSessionStatusTool(opts?: {
                 provider: providerForCard,
                 model: defaultModelForCard,
                 loadRuntimeCatalog: () =>
-                  loadPreparedModelCatalog({
+                  loadPublishedPreparedModelCatalog({
                     config: cfg,
                     agentId,
                     agentDir: selectedAgentDir,
