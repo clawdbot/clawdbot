@@ -32,6 +32,9 @@ suite.define(() => {
     await expect
       .poll(async () => {
         const state = await textarea.evaluate((element) => {
+          if (!(element instanceof HTMLTextAreaElement)) {
+            throw new TypeError("capabilities prompt target must be a textarea");
+          }
           const inputElement = element.closest<HTMLElement>(".agent-chat__input");
           const style = inputElement ? getComputedStyle(inputElement) : null;
           return {
