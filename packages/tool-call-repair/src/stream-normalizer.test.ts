@@ -967,6 +967,58 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(textDeltas(events).join("")).toBe(fenced);
   });
 
+  it("keeps a large preceding block's prefix check bounded across many later candidates (#122513)", async () => {
+    // codex review: hasUntrackedPrecedingContext's deep (same-length) check materialized
+    // the tracked prefix via materializeProtectionPrefix, which joins EVERY chunk ever
+    // pushed -- including the current, still-growing block's own chunks -- before
+    // slicing. Doing that once per candidate made a large preceding block followed by a
+    // bracket-dense later block Theta(precedingBlockSize x candidateCount) again. This
+    // must stay bounded: derive it once per block (cached) using a prefix-bounded
+    // accumulator, not a full join, on every one of the many candidates that follow.
+    // Keep the prefix exactly 200,000 characters while ending its line so the next
+    // block's delimiter is a real CommonMark fence, not a mid-line backtick run.
+    const precedingBlock = `${"x".repeat(199_999)}\n`;
+    const fenced = [
+      "```toml",
+      ...Array.from({ length: 300 }, (_, index) => `[read.section.${index}]\nname = "svc"`),
+      "```",
+      "",
+    ].join("\n");
+    const deltas = fenced.split(/(?<=\[)/);
+    let accumulated = "";
+    const events = [
+      streamTextDelta(precedingBlock, 0, assistantMessage(textContent(precedingBlock, ""))),
+      ...deltas.map((delta) => {
+        accumulated += delta;
+        return streamTextDelta(
+          delta,
+          1,
+          assistantMessage(textContent(precedingBlock, accumulated)),
+        );
+      }),
+    ];
+
+    let resolverCalls = 0;
+    const start = performance.now();
+    const normalized = await collectNormalizedEvents(events, {
+      matcher,
+      createPromotedToolCallEvents: () => [],
+      normalizeTerminalMessage: () => undefined,
+      protectedRangesFenceCompatible: true,
+      resolveProtectedRanges: (text) => {
+        resolverCalls += 1;
+        return resolveTestFenceRanges(text);
+      },
+    });
+    const elapsedMs = performance.now() - start;
+
+    expect(resolverCalls).toBeLessThanOrEqual(3);
+    // A large preceding block re-materialized per candidate would push this into the
+    // hundreds of milliseconds; bounded (cached) prefix validation stays well under it.
+    expect(elapsedMs).toBeLessThan(200);
+    expect(textDeltas(normalized).join("")).toBe(precedingBlock + fenced);
+  });
+
   it("still protects an unfenced caller-defined range when the fast path is not opted in", async () => {
     // The carried fence scan only ever proves fence state. A resolver whose protected
     // ranges are not fences at all (unlike resolveTestFenceRanges/findCodeRegions) would be

@@ -1165,6 +1165,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
   let protectionContextOverflow = false;
   let protectionBlockContentIndex: number | undefined;
   let protectionBlockStart = 0;
+  // Whether this block's preceding-context prefix has been validated against the
+  // partial's own content-order text (see hasUntrackedPrecedingContext). Reset per
+  // block so it is derived once and reused for every candidate within it, rather than
+  // re-materializing and re-comparing the same preceding text on every candidate.
+  let protectionBlockPrefixTrusted: boolean | undefined;
   // Carried Markdown block state mirrors the protection context so a candidate delta can
   // skip re-parsing the whole response. `protectionScanAtBlockStart` matches the prefix an
   // authoritative delta uses (context sliced at protectionBlockStart); the live state
@@ -1180,6 +1185,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     protectionBlockContentIndex = contentIndex;
     protectionBlockStart = protectionContextLength;
     protectionScanAtBlockStart = cloneProtectionScanState(protectionScan);
+    protectionBlockPrefixTrusted = undefined;
   };
   const truncateProtectionContext = (length: number) => {
     while (protectionContextLength > length) {
@@ -1224,6 +1230,22 @@ export async function* normalizePlainTextToolCallStreamEvents(
     }
     const context = protectionChunks.join("");
     return authoritative ? context.slice(0, protectionBlockStart) : context;
+  };
+  // Reconstructs only the first `length` tracked characters, stopping as soon as enough
+  // chunks are collected instead of joining every chunk ever pushed. protectionChunks
+  // keeps growing with the CURRENT block's own advances, so joining it in full to read a
+  // fixed-size preceding-block prefix would itself be the quadratic cost this exists to
+  // avoid; this stays bounded by `length` (the preceding block's own size), not by
+  // however large the current, still-growing block gets.
+  const materializeBoundedPrefix = (length: number): string => {
+    let result = "";
+    for (const chunk of protectionChunks) {
+      if (result.length >= length) {
+        break;
+      }
+      result += chunk;
+    }
+    return result.slice(0, length);
   };
 
   const scrubSnapshot = (
@@ -1416,13 +1438,20 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // block disagrees, either an earlier block was never streamed as its own delta
                 // or blocks interleaved out of content-index order -- either way the scan's
                 // state does not correspond to this block's actual preceding text and cannot
-                // be trusted here, whatever it claims for this block's own content.
-                const untrackedPrecedingContext = hasUntrackedPrecedingContext(
-                  incomingRecord.partial,
-                  eventContentIndex(incomingRecord),
-                  protectionBlockStart,
-                  () => materializeProtectionPrefix(true),
-                );
+                // be trusted here, whatever it claims for this block's own content. The
+                // preceding text a block sees never changes across its own deltas, so this is
+                // derived once per block (protectionBlockPrefixTrusted, reset in
+                // beginProtectionBlock) instead of re-materializing and re-comparing it for
+                // every candidate the current block's own growing content turns up.
+                if (protectionBlockPrefixTrusted === undefined) {
+                  protectionBlockPrefixTrusted = !hasUntrackedPrecedingContext(
+                    incomingRecord.partial,
+                    eventContentIndex(incomingRecord),
+                    protectionBlockStart,
+                    () => materializeBoundedPrefix(protectionBlockStart),
+                  );
+                }
+                const untrackedPrecedingContext = !protectionBlockPrefixTrusted;
                 let isProtectedAt: ((offset: number) => boolean) | undefined =
                   !untrackedPrecedingContext && options.protectedRangesFenceCompatible
                     ? resolveProtectionFastPath(carriedScan, incoming)
