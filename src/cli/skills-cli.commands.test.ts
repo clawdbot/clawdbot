@@ -269,7 +269,10 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayClientRequestError: (error: unknown) =>
     error instanceof Error && error.name === "GatewayClientRequestError",
   isGatewayCredentialsRequiredError: (error: unknown) =>
-    error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+    error instanceof Error &&
+    error.name === "GatewayCredentialsRequiredError" &&
+    typeof (error as { method?: unknown }).method === "string" &&
+    typeof (error as { configPath?: unknown }).configPath === "string",
   isImplicitLocalGatewayTarget: async ({ config }: { config?: { gateway?: { mode?: string } } }) =>
     !process.env.OPENCLAW_GATEWAY_URL && config?.gateway?.mode !== "remote",
 }));
@@ -1651,11 +1654,15 @@ describe("skills cli commands", () => {
     },
     {
       label: "configured remote auth failure",
-      outcome: "command" as const,
+      outcome: "root" as const,
       config: { gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:9" } } },
       // Credentials errors are fallback-eligible too; remote stays fail-closed.
+      // Production credentials errors carry method/configPath and bypass
+      // command-level formatting through the root renderer.
       error: Object.assign(new Error("gateway authentication failed"), {
         name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
       }),
       message: "gateway authentication failed",
     },
@@ -1679,11 +1686,13 @@ describe("skills cli commands", () => {
     },
     {
       label: "environment-selected auth failure",
-      outcome: "command" as const,
+      outcome: "root" as const,
       config: {},
       url: "ws://127.0.0.1:9",
       error: Object.assign(new Error("gateway authentication failed"), {
         name: "GatewayCredentialsRequiredError",
+        method: "skills.status",
+        configPath: "/tmp/openclaw.json",
       }),
       message: "gateway authentication failed",
     },
