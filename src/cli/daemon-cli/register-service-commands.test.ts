@@ -59,12 +59,13 @@ describe("addGatewayServiceCommands", () => {
   it.each([
     {
       name: "forwards install option collisions from parent gateway command",
-      argv: ["install", "--force", "--port", "19000", "--token", "tok_test"],
+      argv: ["install", "--force", "--port", "19000", "--token", "tok_test", "--runtime", "bun"],
       assert: () => {
         const opts = expectSingleDaemonCall(runDaemonInstall);
         expect(opts.force).toBe(true);
         expect(opts.port).toBe("19000");
         expect(opts.token).toBe("tok_test");
+        expect(opts.runtime).toBe("bun");
       },
     },
     {

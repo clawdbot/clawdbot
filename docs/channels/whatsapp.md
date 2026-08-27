@@ -470,7 +470,7 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 }
 ```
 
-Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups.
+Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups. In a group whose activation is `always`, `"group-mentions"` acks every message rather than only mention-triggered turns, because activation stands in for the mention check.
 
 ## Lifecycle status reactions
 
@@ -597,7 +597,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    OpenClaw gateways require Node. Bun does not provide the `node:sqlite` API used by the canonical state store, and doctor migrates legacy Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

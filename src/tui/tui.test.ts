@@ -3,7 +3,6 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -380,7 +379,7 @@ describe("resolveInitialTuiAgentId", () => {
 
   it("keeps an ownerless explicit fleet selection-required", () => {
     expect(() => resolveInitialTuiAgentId({ cfg, cwd: "/var/tmp/unrelated" })).toThrow(
-      AgentSelectionRequiredError,
+      "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
 

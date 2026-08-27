@@ -145,6 +145,7 @@ export type WorkerPlacementDispatchContract = {
   reclaim?(
     request: WorkerPlacementReclaimRequest,
     authorize?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,

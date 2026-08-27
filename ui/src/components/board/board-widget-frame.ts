@@ -6,6 +6,7 @@ import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
@@ -20,10 +21,6 @@ const TICKET_REFRESH_MAX_RETRY_MS = 30_000;
 
 function documentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
-}
-
-function isLoopbackHostname(hostname: string): boolean {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
 }
 
 // Without mcp.apps.sandboxOrigin the sandbox URL is the gateway origin with the

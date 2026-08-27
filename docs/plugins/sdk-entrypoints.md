@@ -391,14 +391,16 @@ limited to config-only routes or methods required by that setup flow.
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode               | When                                               | What to register                                                                                                |
-| ------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Everything                                                                                                      |
-| `"discovery"`      | Read-only capability discovery                     | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                        |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                       |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed during setup                                      |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                            |
+| Mode               | When                                               | Runtime     | What to register                                                                                                |
+| ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
+| `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
+| `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
+| `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
+
+In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember

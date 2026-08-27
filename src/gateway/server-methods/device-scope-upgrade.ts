@@ -8,6 +8,7 @@ import {
 import { getPairedDevice, requestDevicePairing } from "../../infra/device-pairing.js";
 import { normalizeDeviceAuthScopes } from "../../shared/device-auth.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { isOperatorScope } from "../operator-scopes.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -70,6 +71,18 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "requested scopes contain an unknown operator scope",
+        ),
+      );
+      return;
+    }
+    const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
+    if (rolePolicy && requestedScopes.some((scope) => !rolePolicy.scopes.includes(scope))) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "requested scopes exceed your assigned operator role; ask a gateway administrator to change your role",
         ),
       );
       return;
@@ -169,6 +182,25 @@ export const scopeUpgradeHandlers: GatewayRequestHandlers = {
         errorShape(ErrorCodes.INVALID_REQUEST, "scope upgrade expired or not found"),
       );
       return;
+    }
+    if (result.status === "approved") {
+      const rolePolicy = resolveOperatorRolePolicy(client, context.getRuntimeConfig());
+      if (
+        rolePolicy &&
+        result.scopes.some(
+          (scope) => !rolePolicy.scopes.some((allowedScope) => allowedScope === scope),
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "approved scopes exceed your assigned operator role; ask a gateway administrator to change your role",
+          ),
+        );
+        return;
+      }
     }
     respond(true, result, undefined);
   },

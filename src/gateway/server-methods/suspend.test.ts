@@ -58,6 +58,20 @@ describe("gateway suspend handlers", () => {
     });
   });
 
+  it("rejects draining requests that would terminate preserved terminals", async () => {
+    const { respond } = await invoke("gateway.suspend.prepare", {
+      requestId: "request-terminate-drain",
+      terminalPolicy: "terminate",
+      drain: true,
+    });
+
+    expect(coordinator.prepare).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: "invalid gateway.suspend.prepare params",
+    });
+  });
+
   it("wires prepare to scheduler pause/resume and returns busy or ready", async () => {
     coordinator.prepare.mockReturnValueOnce({
       status: "busy",
@@ -101,6 +115,50 @@ describe("gateway suspend handlers", () => {
         retryable: true,
       }),
     );
+  });
+
+  it("passes an explicit preserve-only drain through without changing its wire result", async () => {
+    const result = {
+      status: "draining",
+      suspensionId: "suspension-draining",
+      expiresAtMs: 123_000,
+      retryAfterMs: 20_000,
+      activeCount: 1,
+      blockers: [{ kind: "terminal-session", count: 1, message: "one preserved terminal" }],
+    };
+    coordinator.prepare.mockReturnValueOnce(result);
+
+    const { respond } = await invoke("gateway.suspend.prepare", {
+      requestId: "request-draining",
+      drain: true,
+    });
+
+    expect(coordinator.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "request-draining",
+        terminalPolicy: "preserve",
+        drain: true,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, result);
+  });
+
+  it("returns a draining status without exposing its owner's suspension id", async () => {
+    const result = {
+      status: "draining",
+      expiresAtMs: 123_000,
+      retryAfterMs: 20_000,
+      activeCount: 1,
+      blockers: [{ kind: "reply", count: 1, message: "one pending reply" }],
+    };
+    coordinator.status.mockReturnValueOnce(result);
+
+    const { respond } = await invoke("gateway.suspend.status", {
+      suspensionId: "suspension-draining",
+    });
+
+    expect(coordinator.status).toHaveBeenCalledWith("suspension-draining");
+    expect(respond).toHaveBeenCalledWith(true, result);
   });
 
   it("maps prepare and status recovery to the same retryable unavailable error", async () => {

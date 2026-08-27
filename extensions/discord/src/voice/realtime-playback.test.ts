@@ -1,4 +1,5 @@
 import type { PassThrough } from "node:stream";
+import { finished } from "node:stream/promises";
 import type { RealtimeVoiceSessionHarness } from "openclaw/plugin-sdk/realtime-voice";
 import type { MockCallSource } from "./manager.e2e.test-support.js";
 import { defineDiscordVoiceTests } from "./voice-test-harness.test-support.js";
@@ -319,7 +320,7 @@ defineDiscordVoiceTests(
         const stream = lastAudioResourceInput() as PassThrough | undefined;
         stream?.removeAllListeners("close");
 
-        await vi.advanceTimersByTimeAsync(1_509);
+        await vi.advanceTimersByTimeAsync(3_009);
         expect(player.stop).not.toHaveBeenCalled();
 
         await vi.advanceTimersByTimeAsync(1);
@@ -341,11 +342,14 @@ defineDiscordVoiceTests(
 
         bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
         bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
-        const firstStream = lastAudioResourceInput() as PassThrough | undefined;
-        firstStream?.emit("close");
+        const firstStream = lastAudioResourceInput() as PassThrough;
+        firstStream.resume();
+        await finished(firstStream);
+        const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1];
+        idleHandler?.();
 
         bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-        await vi.advanceTimersByTimeAsync(1_510);
+        await vi.advanceTimersByTimeAsync(3_010);
 
         expect(player.stop).not.toHaveBeenCalled();
       } finally {
@@ -353,7 +357,7 @@ defineDiscordVoiceTests(
       }
     });
 
-    it("drains queued exact speech when stream close arrives without player idle", async () => {
+    it("keeps queued exact speech pending after encoder close until the player idles", async () => {
       vi.useFakeTimers();
       try {
         agentCommandMock
@@ -379,16 +383,18 @@ defineDiscordVoiceTests(
         expectUserMessageNotIncludes("second answer");
 
         bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
-        const firstStream = lastAudioResourceInput() as PassThrough | undefined;
-        firstStream?.emit("close");
+        const firstStream = lastAudioResourceInput() as PassThrough;
+        firstStream.resume();
+        await finished(firstStream);
 
         await vi.advanceTimersByTimeAsync(1_510);
-        expectUserMessageIncludes("second answer");
+        expectUserMessageNotIncludes("second answer");
 
         const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
           | (() => void)
           | undefined;
         idleHandler?.();
+        expectUserMessageIncludes("second answer");
         beginSpeakerTurn(entry);
         bridgeParams?.onTranscript?.("user", "third question", true);
         await vi.advanceTimersByTimeAsync(260);
@@ -415,95 +421,79 @@ defineDiscordVoiceTests(
       bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
     });
 
-    it("cancels realtime output when Discord playback backpressures", async () => {
-      const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
-
-      for (let index = 0; index < 50; index += 1) {
-        bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-      }
-
+    it("drains a complete 6.8-second provider burst in order after backpressure and response completion", async () => {
+      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
       const realtime = entry.realtime as unknown as {
         playback: { currentOutputStream: () => PassThrough | null };
       };
+      // Real provider chunks are 400 ms; Discord's consumer has not drained any yet.
+      const expected = Array.from({ length: 17 }, (_, index) => {
+        bridgeParams.audioSink.sendAudio(Buffer.alloc(19_200, index));
+        return Buffer.alloc(76_800, index);
+      });
       const stream = realtime.playback.currentOutputStream();
-      if (!stream) {
-        throw new Error("expected realtime output stream");
-      }
-      vi.spyOn(stream, "write").mockReturnValueOnce(false);
+      const output = lastAudioResourceInput() as PassThrough;
+      expect(stream?.writableNeedDrain).toBe(true);
+      expect(player.stop).not.toHaveBeenCalled();
+      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
 
-      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      bridgeParams.onResponseDone?.({ status: "completed" });
+      expect(stream?.writableEnded).toBe(false);
+      const received: Buffer[] = [];
+      output.on("data", (chunk: Buffer) => received.push(chunk));
+      await finished(output);
 
-      expect(player.stop).toHaveBeenCalledWith(true);
-      await vi.waitFor(() =>
-        expect(realtimeSessionMock.handleBargeIn).toHaveBeenCalledWith({
-          audioPlaybackActive: true,
-          force: true,
-        }),
-      );
-
-      bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-      expect(createAudioResourceMock).toHaveBeenCalledTimes(1);
-      expect(player.play).toHaveBeenCalledTimes(1);
-
-      bridgeParams?.onEvent?.({ direction: "server", type: "response.cancelled" });
-      for (let index = 0; index < 50; index += 1) {
-        bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-      }
-
-      expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
-      expect(player.play).toHaveBeenCalledTimes(2);
+      expect(Buffer.concat(received)).toEqual(Buffer.concat(expected));
+      expect(player.play).toHaveBeenCalledOnce();
+      expect(player.stop).not.toHaveBeenCalled();
+      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+      await manager.leave({ guildId: "g1" });
     });
 
-    it.each([
-      ["response cancellation", { direction: "server", type: "response.cancelled" }],
-      [
-        "cancellation race",
-        {
-          direction: "server",
-          type: "error",
-          detail: "Cancellation failed: no active response found",
-        },
-      ],
-    ] as const)(
-      "does not let a deferred backpressure cancel cross %s",
-      async (_label, terminal) => {
-        const { bridgeParams, entry, player } = await createJoinedAgentProxyFixture();
+    it("does not let a cancelled response's drain resume or end a later response", async () => {
+      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
+      const realtime = entry.realtime as unknown as {
+        playback: { currentOutputStream: () => PassThrough | null };
+      };
+      for (let index = 0; index < 17; index += 1) {
+        bridgeParams.audioSink.sendAudio(Buffer.alloc(19_200));
+      }
+      const oldStream = realtime.playback.currentOutputStream();
+      expect(oldStream?.writableNeedDrain).toBe(true);
 
-        for (let index = 0; index < 50; index += 1) {
-          bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-        }
+      bridgeParams.onResponseDone?.({ status: "cancelled" });
+      bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
+      const nextStream = realtime.playback.currentOutputStream();
+      expect(nextStream).not.toBe(oldStream);
+      oldStream?.emit("drain");
+      await Promise.resolve();
 
-        const realtime = entry.realtime as unknown as {
-          playback: { currentOutputStream: () => PassThrough | null };
-        };
-        const stream = realtime.playback.currentOutputStream();
-        if (!stream) {
-          throw new Error("expected realtime output stream");
-        }
-        vi.spyOn(stream, "write").mockReturnValueOnce(false);
+      expect(nextStream?.destroyed).toBe(false);
+      expect(nextStream?.writableEnded).toBe(false);
+      expect(player.stop).toHaveBeenCalledOnce();
+      expect(player.play).toHaveBeenCalledTimes(2);
+      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+      await manager.leave({ guildId: "g1" });
+    });
 
-        bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-        bridgeParams?.onEvent?.(terminal);
-        for (let index = 0; index < 50; index += 1) {
-          bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
-        }
-        await Promise.resolve();
+    it("releases queued speech after an encoder failure without waiting for a missing idle event", async () => {
+      const { bridgeParams, entry, manager, player } = await createJoinedAgentProxyFixture();
+      const realtime = entry.realtime as unknown as {
+        playback: { enqueueExactSpeechMessage: (text: string) => void };
+      };
+      realtime.playback.enqueueExactSpeechMessage("first answer");
+      bridgeParams.audioSink.sendAudio(Buffer.alloc(24_000));
+      realtime.playback.enqueueExactSpeechMessage("second answer");
+      expectUserMessageNotIncludes("second answer");
 
-        const stopCallCount = player.stop.mock.calls.length;
-        bridgeParams?.onEvent?.({
-          direction: "server",
-          type: "error",
-          detail: "Cancellation failed: no active response found",
-        });
-        bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+      const output = lastAudioResourceInput() as PassThrough;
+      output.destroy(new Error("encoder failed"));
 
-        expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
-        expect(player.stop).toHaveBeenCalledWith(true);
-        expect(player.stop).toHaveBeenCalledTimes(stopCallCount);
-        expect(createAudioResourceMock).toHaveBeenCalledTimes(2);
-        expect(player.play).toHaveBeenCalledTimes(2);
-      },
-    );
+      await vi.waitFor(() => expectUserMessageIncludes("second answer"));
+      expect(player.stop).toHaveBeenCalledWith(true);
+      expect(realtimeSessionMock.handleBargeIn).not.toHaveBeenCalled();
+      await manager.leave({ guildId: "g1" });
+    });
 
     it.each([
       [

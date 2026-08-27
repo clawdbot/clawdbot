@@ -63,7 +63,11 @@ import {
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
 } from "./memory-state.test-fixtures.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import {
+  activatePluginRecordLifecycleEpoch,
+  isPluginRecordLifecycleEpochActive,
+  isPluginRegistryRetired,
+} from "./registry-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -393,6 +397,10 @@ describe("loadOpenClawPlugins", () => {
     const priorKey = getActivePluginRegistryKey();
     const priorMode = getActivePluginRuntimeSubagentMode();
     const priorWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+    const priorRecord = priorRegistry.plugins.find((entry) => entry.id === "activation-prior");
+    expect(priorRecord).toBeDefined();
+    const priorEpoch = activatePluginRecordLifecycleEpoch(priorRegistry, priorRecord!);
+    expect(priorEpoch).toBeDefined();
 
     const replacement = writePlugin({
       id: "activation-replacement",
@@ -437,10 +445,14 @@ describe("loadOpenClawPlugins", () => {
     expect(getActivePluginRuntimeSubagentMode()).toBe(priorMode);
     expect(getActivePluginRegistryWorkspaceDir()).toBe(priorWorkspaceDir);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["prior"]);
+    expect(isPluginRecordLifecycleEpochActive(priorRegistry, priorRecord!, priorEpoch!)).toBe(true);
 
     const activated = loadOpenClawPlugins(replacementOptions);
     expect(activated.commands.map((entry) => entry.command.name)).toEqual(["replacement"]);
     expect(getPluginCommandSpecs().map((command) => command.name)).toEqual(["replacement"]);
+    expect(isPluginRecordLifecycleEpochActive(priorRegistry, priorRecord!, priorEpoch!)).toBe(
+      false,
+    );
   });
 
   it("fails plugin registration when a hook is missing its required name", () => {

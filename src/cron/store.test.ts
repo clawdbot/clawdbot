@@ -693,24 +693,27 @@ describe("cron store", () => {
     );
   });
 
-  it("round-trips agent-turn external content provenance through SQLite", async () => {
-    const store = await makeStorePath();
-    const payload = makeStore("hook-job", true);
-    expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").sessionTarget = "isolated";
-    expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").payload = {
-      kind: "agentTurn",
-      message: "Summarize hook payload",
-      externalContentSource: "webhook",
-    };
+  it.each(["email", "webhook"] as const)(
+    "round-trips %s agent-turn external content provenance through SQLite",
+    async (externalContentSource) => {
+      const store = await makeStorePath();
+      const payload = makeStore("hook-job", true);
+      expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").sessionTarget = "isolated";
+      expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").payload = {
+        kind: "agentTurn",
+        message: "Summarize hook payload",
+        externalContentSource,
+      };
 
-    await saveCronStore(store.storePath, payload);
+      await saveCronStore(store.storePath, payload);
 
-    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toMatchObject({
-      kind: "agentTurn",
-      message: "Summarize hook payload",
-      externalContentSource: "webhook",
-    });
-  });
+      expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toMatchObject({
+        kind: "agentTurn",
+        message: "Summarize hook payload",
+        externalContentSource,
+      });
+    },
+  );
 
   it("round-trips the toolsAllow default-cap flag through SQLite", async () => {
     // The flag must survive a gateway restart: without it, a CLI-resolved run

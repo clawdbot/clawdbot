@@ -5,10 +5,8 @@ export {
   CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
 } from "./config-contracts.js";
 export type {
-  CodexAppServerApprovalPolicy,
   CodexAppServerHomeScope,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
   CodexComputerUseConfig,
   CodexDynamicToolsLoading,
@@ -17,7 +15,6 @@ export type {
   CodexPluginDestructiveApprovalMode,
   CodexPluginMarketplaceName,
   CodexSupervisionEndpoint,
-  OpenClawExecPolicyForCodexAppServer,
   ResolvedCodexComputerUseConfig,
   ResolvedCodexPluginPolicy,
   ResolvedCodexPluginsPolicy,

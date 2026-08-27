@@ -11,6 +11,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
   lastRunId: undefined,
   lifecycleRunId: undefined,
   mainRestartRecovery: undefined,
+  pendingProjectGitUrl: undefined,
   sessionDiffBaselineCapture: undefined,
 } satisfies Partial<InternalSessionEntry>;
 
@@ -19,6 +20,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "mainRestartRecovery",
+  "pendingProjectGitUrl",
   "sessionDiffBaselineCapture",
 ] as const satisfies readonly (keyof InternalSessionEntry)[];
 

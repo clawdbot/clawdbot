@@ -33,6 +33,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import {
+  mintCronStandingGrantLocked,
+  type CronStandingGrantMintSpec,
+} from "./operator-approval-standing-grants.js";
 
 const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS = 128;
@@ -1658,6 +1662,8 @@ export function resolveOperatorApproval(params: {
   runtimeEpoch?: string;
   nowMs?: number;
   databaseOptions?: OpenClawStateDatabaseOptions;
+  /** Cron-context allow-always mints this scoped grant in the same transaction. */
+  standingGrant?: CronStandingGrantMintSpec;
 }): ResolveOperatorApprovalResult {
   const id = requireApprovalId(params.id);
   const resolverId = normalizeNullableString(params.resolver.id);
@@ -1727,6 +1733,15 @@ export function resolveOperatorApproval(params: {
     }
     record = requireDecodedRecord(row);
     if (result.numAffectedRows === 1n) {
+      if (params.decision === "allow-always" && params.standingGrant) {
+        // Same-transaction mint: the just-resolved approval row is the sole
+        // authorization owner; the grant is its derivative cron re-execution scope.
+        mintCronStandingGrantLocked(database, {
+          ...params.standingGrant,
+          approvalId: id,
+          nowMs: auditTimestampMs,
+        });
+      }
       return { outcome: "resolved", record };
     }
     if (record.status === "pending" && record.expiresAtMs <= nowMs) {

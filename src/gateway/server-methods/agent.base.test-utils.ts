@@ -36,6 +36,7 @@ import {
   backendGatewayClient,
   operatorWriteCliClient,
   waitForAgentCommandCall,
+  waitForAgentCommandCallAfter,
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
@@ -1491,13 +1492,7 @@ describe("gateway agent handler", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       setDateOnlyFakeClockActive(true);
       vi.setSystemTime(now);
-      mocks.readTranscriptStatsSync.mockReturnValue({
-        eventCount: 1,
-        lastMutationAtMs: now - 1_000,
-        lastObservedMutationAtMs: now - 10_000,
-        maxSeq: 0,
-        sizeBytes: 64,
-      });
+      mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync.mockReturnValue(true);
 
       await withTestDir({ prefix: "openclaw-gateway-terminal-main-newer-" }, async (root) => {
         const sessionsDir = `${root}/sessions`;
@@ -1528,11 +1523,12 @@ describe("gateway agent handler", () => {
           canonicalKey: "agent:main:main",
         });
 
+        const commandCallCount = mocks.agentCommand.mock.calls.length;
         const capturedEntry = await runMainAgentAndCaptureEntry(
           "test-idem-terminal-main-newer-transcript",
         );
 
-        const call = await waitForAgentCommandCall<{ sessionId?: string }>();
+        const call = await waitForAgentCommandCallAfter<{ sessionId?: string }>(commandCallCount);
         if (scenario.expectReuse) {
           expect(call.sessionId).toBe("terminal-main-session");
           expect(capturedEntry?.sessionId).toBe("terminal-main-session");

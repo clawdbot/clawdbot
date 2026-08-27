@@ -11,6 +11,7 @@ import { filterConsolidationCandidates } from "./dreaming-consolidation-candidat
 import type { SubagentSurface } from "./dreaming-narrative.js";
 import { extractAssistantText } from "./dreaming-shared.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
 import {
   buildPromotionRecallAnnotations,
   groupPromotionCandidatesByProjectKey,
@@ -21,7 +22,6 @@ import type { PromotionCandidate } from "./short-term-promotion-types.js";
 
 const CONSOLIDATION_TIMEOUT_MS = 60_000;
 const CONSOLIDATION_MESSAGE_LIMIT = 5;
-const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const CONSOLIDATION_SYSTEM_PROMPT = [
   "Revise the supplied MEMORY.md using only the supplied candidates as new evidence.",
@@ -412,11 +412,7 @@ export function applyMemoryConsolidationPlan(params: {
   }
   const lines = params.existingMemory.replace(/\r\n/gu, "\n").split("\n");
   for (const operation of params.plan.operations) {
-    if (
-      lines.some((line) =>
-        line.includes(`<!-- ${PROMOTION_MARKER_PREFIX}${operation.candidateKey} -->`),
-      )
-    ) {
+    if (lines.some((line) => line.includes(buildPromotionMarker(operation.candidateKey)))) {
       return null;
     }
     const latestEntries = extractMemoryEntries(lines.join("\n"));
@@ -474,7 +470,7 @@ export function applyMemoryConsolidationPlan(params: {
     if (operation.lineageKey) {
       additions.push(`<!-- openclaw-memory-lineage:${operation.lineageKey} -->`);
     }
-    additions.push(`<!-- ${PROMOTION_MARKER_PREFIX}${operation.candidateKey} -->`);
+    additions.push(buildPromotionMarker(operation.candidateKey));
     if (!appendedEntries.has(operation.resultEntry)) {
       additions.push(operation.resultEntry);
       appendedEntries.add(operation.resultEntry);

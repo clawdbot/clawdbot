@@ -176,6 +176,7 @@ export function createWorkerPlacementDiskSpaceMonitor(params: {
     for (const [sessionId, observation] of observations) {
       if (!hasExactBinding(observation, params.placements.get(sessionId))) {
         observations.delete(sessionId);
+        observationVersion += 1;
       }
     }
     const tasks = active.map((placement) => () => probe(placement));
