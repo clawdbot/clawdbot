@@ -10,6 +10,8 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  /* Settings takeover and the main sidebar share the same bottom divider geometry. */
+  --shell-sidebar-footer-height: 53px;
   --shell-native-titlebar-controls-inset: 92px;
   --shell-native-titlebar-controls-width: 156px;
   /* Collapsed navigation adds new-thread to the two persistent controls.
@@ -658,6 +660,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+  min-height: var(--shell-sidebar-footer-height);
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   font-size: calc(11.5px * var(--control-ui-text-scale));
@@ -1089,6 +1092,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-shell__footer {
   flex-shrink: 0;
+  min-height: var(--shell-sidebar-footer-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));
   padding: 4px var(--sidebar-pad-x) 0;
   border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
