@@ -447,11 +447,11 @@ describe("recoverEmbeddedRunOverflow", () => {
     expect(mocks.compact).not.toHaveBeenCalled();
   });
 
-  it("bypasses compaction for a provider request-size ceiling", async () => {
+  it("stops the run on a provider request-size ceiling instead of compacting", async () => {
     // Groq refuses an oversized single request with a 413 naming TPM that states both numbers.
     // Requested above Limit cannot be admitted by any bucket state, and compaction budgets
     // against the model's context window rather than this per-request ceiling, so the owner
-    // must surface guidance rather than compact, adopt a transcript, truncate, or retry.
+    // must stop the run rather than compact, adopt a transcript, truncate, or retry.
     const promptError = new Error(
       "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
         "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
@@ -465,6 +465,8 @@ describe("recoverEmbeddedRunOverflow", () => {
 
     const result = await recoverEmbeddedRunOverflow(input);
 
+    // Returning { action: "none" } would hand the refusal back to the same-model rate-limit
+    // retry that reported it, so the run must end here rather than merely skip compaction.
     expect(result).toMatchObject({ action: "surface", kind: "context_overflow" });
     expect(mocks.compact).not.toHaveBeenCalled();
     expect(mocks.truncateOversizedToolResults).not.toHaveBeenCalled();

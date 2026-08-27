@@ -153,10 +153,10 @@ export async function recoverEmbeddedRunOverflow(
 
   const isCompactionFailure = isCompactionFailureError(errorText);
 
-  // The provider refused this request for its own size, against a limit that is not the model's
-  // context window: compaction here budgets against that window, so it cannot make the request
-  // fit and every retry re-sends a payload the provider has already rejected. Surface the reset
-  // guidance instead of compacting, adopting a successor transcript, or truncating and retrying.
+  // Compaction here budgets against the model's context window, so it cannot make the request fit
+  // under the provider's own ceiling, and every retry re-sends a payload already rejected. Stop
+  // the run instead of compacting, adopting a successor transcript, or truncating and retrying:
+  // declining would return this to the same-model rate-limit retry that reported the refusal.
   if (isProviderRequestSizeCeilingError(errorText)) {
     log.warn(
       `[context-overflow-recovery] provider request-size ceiling for ${input.provider}/${input.modelId}; ` +

@@ -35,13 +35,13 @@ function readStatedTokenCount(digits: string | undefined): number | undefined {
 /**
  * Groq denominates a per-request size ceiling per minute: an oversized single request is refused
  * with a 413 naming TPM that states both `Limit <n>` and `Requested <m>`. A request larger than
- * the whole limit does not fit even an empty bucket, so waiting can never admit it and the
- * failure is an overflow. Ordinary throttling states a requested size within the limit and
- * remains a rate limit.
+ * the whole limit does not fit even an empty bucket, so waiting can never admit it. Ordinary
+ * throttling states a requested size within the limit and remains a rate limit.
  *
- * This is narrower than context overflow in general. The ceiling belongs to the single request
- * rather than to the model's context window, so compaction budgeted against that window cannot
- * satisfy it; recovery owners branch on this to stay terminal instead of compacting and retrying.
+ * The ceiling belongs to the request and to the refusing provider's quota, not to the model's
+ * context window, so compaction budgeted against that window cannot satisfy it either. Overflow
+ * recovery declines it and failover keeps advancing candidates, because a differently
+ * provisioned one may still admit the request.
  */
 export function isProviderRequestSizeCeilingError(errorMessage?: string): boolean {
   if (!errorMessage || !hasRateLimitTpmHint(errorMessage)) {

@@ -199,7 +199,7 @@ describe("recoverEmbeddedRunOverflow", () => {
   // Groq refuses an oversized single request with a 413 that names TPM and states both numbers.
   // Requested above Limit cannot be admitted by any bucket state, and compaction budgets against
   // the model's 131k context window rather than the provider's 8k per-request ceiling, so the
-  // recovery owner must go terminal instead of compacting, adopting, truncating, or retrying.
+  // recovery owner must stop the run instead of compacting, adopting, truncating, or retrying.
   const GROQ_REQUEST_CEILING_413 =
     "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
     "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
