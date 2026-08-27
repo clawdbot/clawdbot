@@ -20,6 +20,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
+import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { SUPPORTED_LOCALES } from "../../ui/src/i18n/lib/registry.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -4327,15 +4328,31 @@ NODE
           files: ["index.js"],
           name: "cache-proof-dep",
           packageManager: rootPackageManager,
+          scripts: { "pnpm-path": "node -p process.env.npm_execpath" },
           version: "1.0.0",
         }),
       );
       writeFileSync(path.join(source, "index.js"), 'module.exports = "cache-proof-v1";\n');
-      execFileSync("pnpm", ["pack", "--pack-destination", registry], {
-        cwd: source,
-        env: { ...process.env, CI: "true" },
-        stdio: "pipe",
-      });
+      // Resolve the pinned CLI before changing registry/store: pnpm bootstraps itself
+      // through the selected registry and looks for managed versions in that store.
+      const bootstrap = resolvePnpmRunner();
+      const npmExecPath = execFileSync(
+        bootstrap.command,
+        [...bootstrap.args, "--silent", "run", "pnpm-path"],
+        { cwd: source, encoding: "utf8", env: { ...process.env, CI: "true" } },
+      ).trim();
+      const pnpm = resolvePnpmRunner({ npmExecPath });
+      const runPnpm = (args: string[], cwd: string) =>
+        spawnSync(pnpm.command, [...pnpm.args, ...args], {
+          cwd,
+          encoding: "utf8",
+          env: { ...process.env, CI: "true" },
+        });
+      const version = runPnpm(["--version"], source);
+      expect(version.status, version.stderr).toBe(0);
+      expect(`pnpm@${version.stdout.trim()}`).toBe(rootPackageManager.split("+")[0]);
+      const packed = runPnpm(["pack", "--pack-destination", registry], source);
+      expect(packed.status, `${packed.stdout}${packed.stderr}`).toBe(0);
       const tarball = path.join(registry, "cache-proof-dep-1.0.0.tgz");
       const registryScript = String.raw`
 const { createHash } = require("node:crypto");
@@ -4398,26 +4415,25 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
           }),
         );
         writeFileSync(path.join(workspace, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
-        writeFileSync(
-          path.join(consumer, "package.json"),
-          JSON.stringify({
-            dependencies: { "cache-proof-dep": "1.0.0" },
-            name: "cache-proof-consumer",
-            private: true,
-          }),
-        );
-        execFileSync(
-          "pnpm",
-          [
-            "install",
-            `--registry=${registryUrl}`,
-            `--store-dir=${store}`,
-            "--package-import-method=hardlink",
-            "--ignore-scripts",
-            "--config.engine-strict=false",
-          ],
-          { cwd: workspace, env: { ...process.env, CI: "true" }, stdio: "pipe" },
-        );
+        const writeConsumerManifest = (version: string) =>
+          writeFileSync(
+            path.join(consumer, "package.json"),
+            JSON.stringify({
+              dependencies: { "cache-proof-dep": version },
+              name: "cache-proof-consumer",
+              private: true,
+            }),
+          );
+        writeConsumerManifest("1.0.0");
+        const installArgs = [
+          "install",
+          `--store-dir=${store}`,
+          "--package-import-method=hardlink",
+          "--ignore-scripts",
+          "--config.engine-strict=false",
+        ];
+        const installed = runPnpm([...installArgs, `--registry=${registryUrl}`], workspace);
+        expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
 
         const findSameFile = (directory: string, referencePath: string): string | undefined => {
           const reference = statSync(referencePath);
@@ -4473,23 +4489,18 @@ server.listen(0, "127.0.0.1", () => writeFileSync(readyPath, String(server.addre
 
         registryServer.kill("SIGTERM");
         rmSync(registry, { force: true, recursive: true });
-        const reconciliation = execFileSync(
-          "pnpm",
-          [
-            "install",
-            "--offline",
-            "--frozen-lockfile",
-            `--store-dir=${store}`,
-            "--package-import-method=hardlink",
-            "--ignore-scripts",
-            "--config.engine-strict=false",
-          ],
-          { cwd: workspace, encoding: "utf8", env: { ...process.env, CI: "true" } },
-        );
-        expect(reconciliation).toContain("Already up to date");
+        const offlineArgs = [...installArgs, "--offline", "--frozen-lockfile"];
+        const reconciliation = runPnpm(offlineArgs, workspace);
+        expect(reconciliation.status, `${reconciliation.stdout}${reconciliation.stderr}`).toBe(0);
+        expect(reconciliation.stdout).toContain("Already up to date");
         expect(
           readFileSync(path.join(consumer, "node_modules", "cache-proof-dep", "index.js"), "utf8"),
         ).toBe('module.exports = "cache-proof-v1";\n');
+        writeConsumerManifest("2.0.0");
+        const drift = runPnpm(offlineArgs, workspace);
+        expect(drift.status).toBe(1);
+        expect(`${drift.stdout}${drift.stderr}`).toContain('Cannot install with "frozen-lockfile"');
+        expect(`${drift.stdout}${drift.stderr}`).toContain("packages/consumer/package.json");
       } finally {
         registryServer.kill("SIGTERM");
       }
@@ -8062,7 +8073,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run.match(/wait_checks$/gmu)).toHaveLength(4);
   });
 
-  it("keeps docs i18n CI on the workflow-owned patched Go toolchain", () => {
+  it("keeps docs i18n CI on the workflow-owned Go toolchain", () => {
     const workflow = readCiWorkflow();
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const setupGoStep = nodeTestJob.steps.find(
@@ -8085,7 +8096,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       uses: SETUP_GO_V6,
       with: {
         cache: false,
-        "go-version": "1.26.7",
+        "go-version": "1.27.0",
       },
     });
     expect(setupGoStep.with).not.toHaveProperty("go-version-file");
@@ -8108,12 +8119,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(verifyGoStep).toMatchObject({
       if: "matrix.requires_go == true",
-      run: 'test "$(go env GOVERSION)" = "go1.26.7"',
+      run: 'test "$(go env GOVERSION)" = "go1.27.0"',
     });
 
     const goMod = readTrackedText("scripts/docs-i18n/go.mod");
     expect(goMod).toMatch(/^go 1\.26\.0$/mu);
-    expect(goMod).toMatch(/^toolchain go1\.26\.7$/mu);
+    expect(goMod).toMatch(/^toolchain go1\.27\.0$/mu);
   });
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
