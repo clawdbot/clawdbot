@@ -3400,8 +3400,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         });
         expect(composerFontSizes).toEqual({
           labels: [14, 14, 14],
-          placeholder: 14,
-          textarea: 14,
+          placeholder: 16,
+          textarea: 16,
         });
         if (width <= 480) {
           const modelSettings = expectControlRect(
@@ -3439,6 +3439,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           }
           expect(footer.height).toBeLessThanOrEqual(53);
         } else {
+          // The editor reads at input size, while the controls around it stay
+          // chrome-sized — that difference is what marks the text as the
+          // subject of the surface.
           expect(send.width).toBeCloseTo(32, 2);
           expect(send.height).toBeCloseTo(32, 2);
         }
