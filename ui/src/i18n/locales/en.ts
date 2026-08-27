@@ -1900,6 +1900,8 @@ export const en: TranslationMap = {
       accent: "Accent color",
       accentHint: "Choose an accent color for buttons, highlights, and other controls.",
       customAccent: "Custom color",
+      usingInheritedAccent: "Using inherited accent",
+      usingAccent: "Using {value}",
       accents: {
         default: "Theme default",
         claw: "Claw red",

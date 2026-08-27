@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
+import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
   TEXT_SCALE_STOPS,
   UI_APPEARANCE_DEFAULTS,
@@ -184,6 +185,15 @@ export function renderAppearanceSection(
   const customAccentSelected = Boolean(
     props.accent && !ACCENT_PRESETS.some((preset) => preset.hex === props.accent),
   );
+  const selectedAccentPreset = ACCENT_PRESETS.find((preset) => preset.hex === props.accent);
+  const accentSelectionStatus =
+    props.accent == null
+      ? t("configView.appearance.usingInheritedAccent")
+      : t("configView.appearance.usingAccent", {
+          value: selectedAccentPreset
+            ? t(selectedAccentPreset.labelKey)
+            : t("configView.appearance.customAccent"),
+        });
   return html`
     <div class="settings-page">
       <p class="settings-page__intro">
@@ -244,7 +254,7 @@ export function renderAppearanceSection(
               props.themeModeOverridden,
             )}
             ${themeModeProvenance}`,
-            stacked: true,
+            stackedOnNarrow: true,
             control: renderSettingsSegmented({
               value: props.themeMode,
               options: [
@@ -345,14 +355,7 @@ export function renderAppearanceSection(
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.accent")}</h2>
         </div>
-        <p class="settings-section__desc">
-          ${t("configView.appearance.accentHint")}
-          ${renderSettingsDefaultDescription(
-            t("configView.appearance.accents.default"),
-            props.accentOverridden,
-          )}
-          ${accentProvenance}
-        </p>
+        <p class="settings-section__desc">${t("configView.appearance.accentHint")}</p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-accent-swatches">
@@ -388,21 +391,39 @@ export function renderAppearanceSection(
                   </button>
                 `;
               })}
-              <input
-                type="color"
+              <span
                 class="settings-accent-swatch settings-accent-swatch--custom ${customAccentSelected
                   ? "settings-accent-swatch--active"
                   : ""}"
-                data-accent-custom
-                aria-label=${t("configView.appearance.customAccent")}
-                title=${t("configView.appearance.customAccent")}
-                .value=${props.accent ?? ACCENT_PRESETS[1].hex}
-                @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
-                  props.setAccent(event.currentTarget.value)}
-              />
+                style=${styleMap({
+                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
+                  "--settings-accent-swatch-ink": controlUiAccentInk(
+                    props.accent ?? ACCENT_PRESETS[1].hex,
+                  ),
+                })}
+              >
+                <input
+                  type="color"
+                  class="settings-accent-swatch__input"
+                  data-accent-custom
+                  aria-label=${t("configView.appearance.customAccent")}
+                  aria-describedby="settings-accent-status"
+                  title=${t("configView.appearance.customAccent")}
+                  .value=${props.accent ?? ACCENT_PRESETS[1].hex}
+                  @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
+                    props.setAccent(event.currentTarget.value)}
+                />
+                <span class="settings-accent-swatch__picker" aria-hidden="true"
+                  >${icons.pipette}</span
+                >
+              </span>
             </div>
           </div>
         </div>
+        <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
+          <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
+          <span class="settings-accent-status__scope">${accentProvenance}</span>
+        </p>
       </section>
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
