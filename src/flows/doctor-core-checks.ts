@@ -33,7 +33,6 @@ import {
   collectDisabledCodexPluginRouteIssues,
   resolveKnownModelRefMigrationTarget,
 } from "../commands/doctor/shared/codex-route-warnings.js";
-import { isDefaultInstallIdentity } from "../config/paths.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import type { CronListPageResult } from "../cron/service/list-page-types.js";
@@ -1038,7 +1037,54 @@ function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckDe
   };
 }
 
-const legacyBootSessionStateCheck: SplitHealthCheckInput = {
+const telegramGeneralTopicConversationsCheck: HealthCheck = {
+  id: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+  kind: "core",
+  description: "Telegram General-topic conversation bindings use the canonical chat target.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectTelegramGeneralTopicConversationRepairs } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const repairs = detectTelegramGeneralTopicConversationRepairs({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return repairs.map((repair) => ({
+      checkId: TELEGRAM_GENERAL_TOPIC_CONVERSATIONS_CHECK_ID,
+      severity: "warning" as const,
+      message: `Agent ${repair.agentId} has a stale Telegram General-topic conversation identity.`,
+      target: repair.agentId,
+      requirement: "One canonical chat-scoped conversation binding for Telegram General topic.",
+      fixHint: "Run `openclaw doctor --fix` to merge the stale topic-qualified identity.",
+    }));
+  },
+  async repair(ctx) {
+    const { repairTelegramGeneralTopicConversations } =
+      await import("../commands/doctor-telegram-general-topic-conversations.js");
+    const effect = {
+      kind: "state" as const,
+      action: ctx.dryRun ? "would-merge-stale-bindings" : "merge-stale-bindings",
+      target: "Telegram General topic conversations",
+      dryRunSafe: false,
+    };
+    if (ctx.dryRun) {
+      return {
+        changes: ["Would merge stale Telegram General-topic identities."],
+        effects: [effect],
+      };
+    }
+    const repaired = await repairTelegramGeneralTopicConversations({
+      cfg: ctx.cfg,
+      ...(ctx.env ? { env: ctx.env } : {}),
+    });
+    return {
+      changes: [`Merged ${repaired} stale Telegram General-topic conversation identity row(s).`],
+      effects: repaired > 0 ? [effect] : [],
+    };
+  },
+};
+
+const legacyBootSessionStateCheck: SplitHealthCheckDefinition = {
   id: "core/doctor/legacy-boot-session-state",
   kind: "core",
   description: "Legacy pre-7.1 boot session entries are removed before startup.",

@@ -1,9 +1,9 @@
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
 /** Doctor repair for legacy pre-7.1 boot session entries that block BOOT.md startup.
  * Legacy entries are identified by missing BOTH lifecycleRevision and createdAt —
  * both provenance fields were introduced in 7.1. An entry with createdAt (even
  * without lifecycleRevision) is preserved as a valid current mapping. */
-import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.lifecycle.js";
-import { listSqliteSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import {
   resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
@@ -51,14 +51,14 @@ function isLegacyBootSessionEntry(
 /**
  * Reads all entries from a session store and returns legacy boot entries.
  * Propagates lock errors — an unreadable store must not be reported as clean.
- * listSqliteSessionEntriesReadOnly already returns [] for missing stores,
+ * listSessionEntriesReadOnly already returns [] for missing stores,
  * so callers only receive errors for genuine runtime failures (locks, etc.).
  */
 function collectLegacyBootSessionEntriesForTarget(
   target: SessionStoreTarget,
   env: NodeJS.ProcessEnv,
 ): LegacyBootSessionEntry[] {
-  const entries = listSqliteSessionEntriesReadOnly({
+  const entries = listSessionEntriesReadOnly({
     agentId: target.agentId,
     storePath: target.storePath,
     env,

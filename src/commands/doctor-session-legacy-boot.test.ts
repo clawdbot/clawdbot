@@ -1,17 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const listSqliteSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
+const listSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
 const applySessionEntryLifecycleMutationMock = vi.hoisted(() =>
   vi.fn(async () => ({ archivedTranscriptDirectories: [] })),
 );
 const resolveAllAgentSessionStoreTargetsSyncMock = vi.hoisted(() => vi.fn());
 const shortenHomePathMock = vi.hoisted(() => (path: string) => path);
 
-vi.mock("../config/sessions/session-accessor.sqlite.js", () => ({
-  listSqliteSessionEntriesReadOnly: listSqliteSessionEntriesReadOnlyMock,
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  listSessionEntriesReadOnly: listSessionEntriesReadOnlyMock,
 }));
 
-vi.mock("../config/sessions/session-accessor.lifecycle.js", () => ({
+vi.mock("../config/sessions/session-accessor.sqlite-projection.js", () => ({
   applySessionEntryLifecycleMutation: applySessionEntryLifecycleMutationMock,
 }));
 
@@ -52,7 +52,7 @@ describe("detectLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry({ lifecycleRevision: "abc-123" }) },
       { sessionKey: "agent:main:telegram:direct:42", entry: makeEntry() },
     ]);
@@ -60,7 +60,7 @@ describe("detectLegacyBootSessionEntries", () => {
     const findings = detectLegacyBootSessionEntries({ cfg });
 
     expect(findings).toEqual([]);
-    expect(listSqliteSessionEntriesReadOnlyMock).toHaveBeenCalledWith({
+    expect(listSessionEntriesReadOnlyMock).toHaveBeenCalledWith({
       agentId: "main",
       storePath: "/state/agents/main/sessions",
       env: process.env,
@@ -71,7 +71,7 @@ describe("detectLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
       { sessionKey: "agent:main:boot", entry: makeEntry({ lifecycleRevision: "abc-123" }) },
     ]);
@@ -93,7 +93,7 @@ describe("detectLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry({ createdAt: 1720000000000 }) },
     ]);
 
@@ -106,7 +106,7 @@ describe("detectLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockImplementation(() => {
+    listSessionEntriesReadOnlyMock.mockImplementation(() => {
       throw new Error("database locked");
     });
 
@@ -117,7 +117,7 @@ describe("detectLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
       { sessionKey: "custom:boot", entry: makeEntry() },
       { sessionKey: "workspace:main:boot", entry: makeEntry() },
@@ -135,7 +135,7 @@ describe("detectLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/shared/openclaw-agent.sqlite" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
       { sessionKey: "agent:ops:boot", entry: makeEntry() },
       {
@@ -147,7 +147,10 @@ describe("detectLegacyBootSessionEntries", () => {
     const findings = detectLegacyBootSessionEntries({ cfg });
 
     expect(findings).toHaveLength(2);
-    expect(findings.map((f) => f.target).toSorted()).toEqual(["agent:main:boot", "agent:ops:boot"]);
+    expect(findings.map((f) => f.target).toSorted((a, b) => a.localeCompare(b))).toEqual([
+      "agent:main:boot",
+      "agent:ops:boot",
+    ]);
   });
 });
 
@@ -169,7 +172,7 @@ describe("repairLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
     ]);
 
@@ -190,7 +193,7 @@ describe("repairLegacyBootSessionEntries", () => {
       { agentId: "main", storePath: "/state/agents/main/sessions" },
       { agentId: "ops", storePath: "/state/agents/ops/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockImplementation(({ agentId }: { agentId: string }) => {
+    listSessionEntriesReadOnlyMock.mockImplementation(({ agentId }: { agentId: string }) => {
       if (agentId === "main") {
         return [
           { sessionKey: "agent:main:boot", entry: makeEntry() },
@@ -232,7 +235,7 @@ describe("repairLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([]);
+    listSessionEntriesReadOnlyMock.mockReturnValue([]);
 
     const result = await repairLegacyBootSessionEntries({ cfg });
 
@@ -244,7 +247,7 @@ describe("repairLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
     ]);
     applySessionEntryLifecycleMutationMock.mockRejectedValue(new Error("transaction conflict"));
@@ -261,7 +264,7 @@ describe("repairLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/agents/main/sessions" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
       { sessionKey: "custom:boot", entry: makeEntry() },
       { sessionKey: "workspace:main:boot", entry: makeEntry() },
@@ -288,7 +291,7 @@ describe("repairLegacyBootSessionEntries", () => {
     resolveAllAgentSessionStoreTargetsSyncMock.mockReturnValue([
       { agentId: "main", storePath: "/state/shared/openclaw-agent.sqlite" },
     ]);
-    listSqliteSessionEntriesReadOnlyMock.mockReturnValue([
+    listSessionEntriesReadOnlyMock.mockReturnValue([
       { sessionKey: "agent:main:boot", entry: makeEntry() },
       { sessionKey: "agent:ops:boot", entry: makeEntry() },
     ]);
