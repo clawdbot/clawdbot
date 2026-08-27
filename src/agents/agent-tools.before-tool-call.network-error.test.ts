@@ -81,8 +81,12 @@ describe("before-tool-call network execution error boundary", () => {
         ...(failure as Error).message.matchAll(/EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})"/g),
       ];
       expect(matches).toHaveLength(2);
-      expect(matches[0]?.[1]).toBe(matches[1]?.[1]);
-      markerIds.add(matches[0]![1]);
+      const markerId = matches[0]?.[1];
+      if (!markerId) {
+        throw new Error("Expected a generated external-content marker");
+      }
+      expect(markerId).toBe(matches[1]?.[1]);
+      markerIds.add(markerId);
     }
     expect(markerIds.size).toBe(20);
     const result = await tool.execute("network-loop-blocked", {});
