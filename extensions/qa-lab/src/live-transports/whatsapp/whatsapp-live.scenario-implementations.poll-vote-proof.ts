@@ -69,6 +69,7 @@ async function waitForHookEvent(params: { hookEventsPath: string; pollMessageId?
       .filter(Boolean)
       .map((entry) => {
         try {
+          // SAFETY: JSONL fixture records are inspected for the expected event shape below.
           return JSON.parse(entry) as Record<string, unknown>;
         } catch {
           return undefined;
