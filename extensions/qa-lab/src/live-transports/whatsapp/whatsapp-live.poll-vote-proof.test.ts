@@ -6,9 +6,11 @@ import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
 import { whatsappQaPollVoteHookProofScenario } from "./whatsapp-live.scenario-implementations.poll-vote-proof.js";
 
+type GatewayCall = WhatsAppQaMessageScenarioContext["gateway"]["call"];
+
 function buildContext(params: {
   artifactDir: string;
-  gatewayCall: ReturnType<typeof vi.fn>;
+  gatewayCall: GatewayCall;
   pollMessageId: string;
 }) {
   const pollVote = {
@@ -43,6 +45,7 @@ function buildContext(params: {
     gateway: {
       call: params.gatewayCall,
       logs: () => 'poll vote received for +15550000002@s.whatsapp.net; "token":"secret-value"',
+      restart: vi.fn(async () => undefined),
       workspaceDir: params.artifactDir,
     },
     gatewayTarget: "+15550000002",
@@ -98,7 +101,7 @@ describe("WhatsApp poll-vote hook proof scenario", () => {
     try {
       const pollMessageId = "gateway-poll-1";
       const proofDir = path.join(artifactDir, "whatsapp-poll-vote-hook-proof");
-      const gatewayCall = vi.fn(async (method: string) => {
+      const gatewayCall = vi.fn<GatewayCall>(async (method) => {
         expect(method).toBe("poll");
         await mkdir(proofDir, { recursive: true });
         await writeFile(
@@ -122,9 +125,12 @@ describe("WhatsApp poll-vote hook proof scenario", () => {
         );
         return { messageId: pollMessageId };
       });
-      const { context } = buildContext({ artifactDir, gatewayCall, pollMessageId });
+      const { context, pollVote } = buildContext({ artifactDir, gatewayCall, pollMessageId });
       const run = whatsappQaPollVoteHookProofScenario.buildRun();
-      const details = await run.afterReply?.({} as never, context);
+      if (run.kind === "approval" || !run.afterReply) {
+        throw new Error("WhatsApp poll-vote proof scenario must define afterReply");
+      }
+      const details = await run.afterReply(pollVote, context);
 
       expect(gatewayCall).toHaveBeenCalledWith(
         "poll",
@@ -162,14 +168,17 @@ describe("WhatsApp poll-vote hook proof scenario", () => {
   it("rejects a Gateway poll response without the accepted message identifier", async () => {
     const artifactDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-poll-proof-"));
     try {
-      const { context } = buildContext({
+      const { context, pollVote } = buildContext({
         artifactDir,
-        gatewayCall: vi.fn(async () => ({})),
+        gatewayCall: vi.fn<GatewayCall>(async () => ({})),
         pollMessageId: "gateway-poll-1",
       });
       const run = whatsappQaPollVoteHookProofScenario.buildRun();
 
-      await expect(run.afterReply?.({} as never, context)).rejects.toThrow(
+      if (run.kind === "approval" || !run.afterReply) {
+        throw new Error("WhatsApp poll-vote proof scenario must define afterReply");
+      }
+      await expect(run.afterReply(pollVote, context)).rejects.toThrow(
         "Gateway poll proof requires an accepted poll messageId",
       );
     } finally {
