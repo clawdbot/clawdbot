@@ -169,6 +169,10 @@ async function streamPreparedProjection(plan: PreparedSessionTranscriptProjectio
 }
 
 async function run(): Promise<void> {
+  let terminalMessage: Extract<
+    SessionTranscriptReconcileWorkerMessage,
+    { type: "done" | "failed" }
+  >;
   try {
     const database = openOpenClawAgentDatabase({
       agentId: reconcileInput.agentId,
@@ -184,14 +188,20 @@ async function run(): Promise<void> {
         await streamPreparedProjection(plan);
       }
     }
-    port.postMessage({ type: "done" } satisfies SessionTranscriptReconcileWorkerMessage);
+    terminalMessage = { type: "done" };
   } catch (error) {
-    port.postMessage({
+    terminalMessage = {
       type: "failed",
       error: error instanceof Error ? error.message : String(error),
-    } satisfies SessionTranscriptReconcileWorkerMessage);
-  } finally {
+    };
+  }
+
+  try {
+    // The parent terminates this worker as soon as it receives a terminal
+    // message, so release the durable database lease before reporting one.
     closeOpenClawAgentDatabaseByPath(reconcileInput.path);
+    port.postMessage(terminalMessage);
+  } finally {
     port.close();
   }
 }

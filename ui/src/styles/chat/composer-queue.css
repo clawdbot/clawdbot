@@ -4,6 +4,7 @@
   --chat-queue-divider: color-mix(in srgb, var(--text-strong) 6%, transparent);
   --chat-stack-icon-size: 14px;
   --chat-stack-leading-inset: 13px;
+  --chat-stack-trailing-control-size: 24px;
   --chat-stack-trailing-inset: 8px;
 }
 

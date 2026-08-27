@@ -67,10 +67,12 @@ type CronRunPluginGenerationLease = {
 async function acquireCronRunPluginGeneration(context: {
   agentId: string;
   workspaceDir: string;
+  abortSignal?: AbortSignal;
 }): Promise<CronRunPluginGenerationLease | undefined> {
   try {
     const dispatchRuntime = await loadPublishedGatewayReplyDispatchRuntime({
       agentId: context.agentId,
+      abortSignal: context.abortSignal,
     });
     if (!dispatchRuntime) {
       return undefined;
@@ -86,7 +88,11 @@ async function acquireCronRunPluginGeneration(context: {
         allowGatewaySubagentBinding: true,
         workspaceDir: context.workspaceDir,
       },
-      { catalogMode: "static", pluginGeneration: dispatchRuntime.pluginGeneration },
+      {
+        catalogMode: "static",
+        pluginGeneration: dispatchRuntime.pluginGeneration,
+        abortSignal: context.abortSignal,
+      },
     );
     let leaseActive = true;
     return {
@@ -331,7 +337,10 @@ export async function runCronIsolatedAgentTurn(params: {
           ),
         ),
       );
-    const pluginGenerationLease = await acquireCronRunPluginGeneration(prepared.context);
+    const pluginGenerationLease = await acquireCronRunPluginGeneration({
+      ...prepared.context,
+      abortSignal,
+    });
     let execution: Awaited<ReturnType<typeof runExecutionWithAdmission>>;
     try {
       execution = pluginGenerationLease

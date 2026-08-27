@@ -662,7 +662,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             await startGmailWatcherWithLogs({
               cfg: nextConfig,
               log: params.logHooks,
-              isCancelled: () => restartAbortController.signal.aborted,
               signal: restartAbortController.signal,
               onSkipped: () =>
                 params.logHooks.info(

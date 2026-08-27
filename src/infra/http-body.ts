@@ -12,10 +12,11 @@ import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-respon
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
 
-/** Cancels a response body only when no consumer has started reading it. */
+/** Requests cancellation only when no consumer has started reading the body. */
 export async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
   if (response && !response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
+    // A capture tee must not delay errors or the caller's bounded dispatcher release.
+    void response.body?.cancel().catch(() => undefined);
   }
 }
 

@@ -334,6 +334,9 @@ export type ControlUiMockGatewayScenario = {
     host?: string;
     instanceId?: string;
     lastInputSeconds?: number;
+    onlineSince?: number;
+    lastActivityAt?: number;
+    timeZone?: string;
     mode?: string;
     platform?: string;
     ts?: number;
@@ -1380,6 +1383,9 @@ function installControlUiMockGateway(
         ...(user.platform ? { platform: user.platform } : {}),
         ...(user.deviceFamily ? { deviceFamily: user.deviceFamily } : {}),
         ...(user.lastInputSeconds === undefined ? {} : { lastInputSeconds: user.lastInputSeconds }),
+        ...(user.onlineSince === undefined ? {} : { onlineSince: user.onlineSince }),
+        ...(user.lastActivityAt === undefined ? {} : { lastActivityAt: user.lastActivityAt }),
+        ...(user.timeZone ? { timeZone: user.timeZone } : {}),
         user: {
           id: user.id,
           name: user.name ?? null,

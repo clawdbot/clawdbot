@@ -19,15 +19,13 @@ import { loadWebMediaRaw } from "../media/web-media.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
-import {
-  getPreparedPluginRuntimeLoadContext,
-  prepareOwnedPluginLoadContext,
-} from "./prepared-model-runtime.plugin-context.js";
+import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
 import { jsonResult } from "./tools/common.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -491,7 +489,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         metadataSnapshot,
       ),
     ).toBe(metadataSnapshot);
-    const loadContext = getPreparedPluginRuntimeLoadContext(pluginRegistry);
+    const loadContext = getPluginRuntimeLoadContext(pluginRegistry);
     if (!loadContext) {
       throw new Error("expected prepared plugin load context");
     }

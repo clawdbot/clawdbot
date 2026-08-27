@@ -628,14 +628,20 @@ export function releaseCodexAppServerClientLease(lease: CodexAppServerClientLeas
   return client ? releaseLeasedSharedCodexAppServerClient(client) : false;
 }
 
-/** Retries one config-loading request after moving its lease to the current owner. */
+export type CodexAppServerLeasedRequestOptions = {
+  timeoutMs: number;
+  signal?: AbortSignal;
+  assertCurrent: () => void;
+};
+
+/** Retries one config-loading operation with a shared deadline and current client lease. */
 export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(params: {
   lease: CodexAppServerClientLease;
   options?: CodexAppServerClientOptions;
   signal?: AbortSignal;
   run: (
     client: CodexAppServerClient,
-    requestOptions: { timeoutMs: number; signal?: AbortSignal },
+    requestOptions: () => CodexAppServerLeasedRequestOptions,
   ) => Promise<T>;
   onClientChange: (client: CodexAppServerClient) => void;
 }): Promise<T> {
@@ -663,8 +669,21 @@ export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(param
     };
   };
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const attemptClient = client;
+    let scopeActive = true;
+    const assertCurrent = () => {
+      if (!scopeActive || params.lease.client !== attemptClient) {
+        throw new CodexAppServerStartupError("aborted", "Codex app-server request scope is closed");
+      }
+    };
     try {
-      return await params.run(client, requestOptions());
+      requestOptions();
+      return await params.run(client, () => {
+        assertCurrent();
+        // Sample the deadline before each request or commit. Cleanup keeps the
+        // lease-only assertion so an accepted native operation can finish safely.
+        return { ...requestOptions(), assertCurrent };
+      });
     } catch (error) {
       if (!isCodexAppServerStartSelectionChangedError(error) || attempt > 0) {
         throw error;
@@ -687,6 +706,8 @@ export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(param
       });
       params.lease.client = client;
       params.onClientChange(client);
+    } finally {
+      scopeActive = false;
     }
   }
   throw new Error("Codex app-server selection retry loop exited unexpectedly");

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   type WorkerProfile,
   type WorkerProvider,
@@ -351,36 +352,110 @@ describe("Crabbox worker provider", () => {
 
   it.each([
     {
+      name: "throws synchronously",
+      result: () => {
+        throw new Error("missing binary");
+      },
+    },
+    {
       name: "cannot start",
       result: () => Promise.reject(new Error("missing binary")),
-      warns: true,
     },
     {
       name: "exits non-zero",
       result: () => Promise.resolve(commandResult({ code: 2 })),
-      warns: true,
     },
-    {
-      name: "times out",
-      result: () =>
-        Promise.resolve(commandResult({ code: null, killed: true, termination: "timeout" })),
-      warns: true,
-    },
+    ...(["timeout", "no-output-timeout", "signal"] as const).map((termination) => ({
+      name: `ends with ${termination}`,
+      result: () => Promise.resolve(commandResult({ code: null, killed: true, termination })),
+    })),
     {
       name: "returns junk JSON",
       result: () => Promise.resolve(commandResult({ stdout: "not-json" })),
-      warns: true,
     },
+    {
+      name: "returns a non-array catalog",
+      result: () => Promise.resolve(commandResult({ stdout: "{}" })),
+    },
+  ])("retries discovery after providers $name and caches recovery", async ({ result }) => {
+    const warn = vi.fn();
+    const runCommand = vi
+      .fn<CrabboxCommandRunner>()
+      .mockImplementationOnce(result)
+      .mockResolvedValue(
+        commandResult({
+          stdout: JSON.stringify([
+            {
+              provider: "hetzner",
+              classCatalog: { disposition: "mapped" },
+              classes: [
+                { class: "tiny", type: "ccx13", vcpu: 2, memoryGb: 8 },
+                { class: "standard", type: "ccx33", vcpu: 8, memoryGb: 32 },
+              ],
+            },
+          ]),
+        }),
+      );
+    const provider = providerWithRawRunner(runCommand, warn);
+    const profile = { ...PROFILE, provider: "hetzner" };
+
+    expect(await provider.listMachineOptions?.(profile)).toEqual([]);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    const recovered = await provider.listMachineOptions?.(profile);
+    expect(recovered).toEqual([
+      { id: "tiny", label: "Tiny", cpu: 2, memoryGb: 8 },
+      { id: "standard", label: "Standard", cpu: 8, memoryGb: 32, default: true },
+    ]);
+    expect(await provider.listMachineOptions?.(profile)).toEqual(recovered);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("coalesces overlapping catalog reads before and after a failed load", async () => {
+    const failed = createDeferred<SpawnResult>();
+    const healthy = createDeferred<SpawnResult>();
+    const runCommand = vi
+      .fn<CrabboxCommandRunner>()
+      .mockReturnValueOnce(failed.promise)
+      .mockReturnValue(healthy.promise);
+    const warn = vi.fn();
+    const provider = providerWithRawRunner(runCommand, warn);
+    const first = provider.listMachineOptions?.(PROFILE);
+    const second = provider.listMachineOptions?.(PROFILE);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+
+    failed.resolve(commandResult({ code: 2 }));
+    expect(await first).toEqual([]);
+    const retry = provider.listMachineOptions?.(PROFILE);
+    expect(await second).toEqual([]);
+    const concurrentRetry = provider.listMachineOptions?.(PROFILE);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    healthy.resolve(
+      commandResult({
+        stdout: JSON.stringify([
+          { provider: "aws", classes: [{ class: "standard", vcpu: 32, memoryGb: 64 }] },
+        ]),
+      }),
+    );
+    const expected = [{ id: "standard", label: "Standard", cpu: 32, memoryGb: 64, default: true }];
+    expect(await retry).toEqual(expected);
+    expect(await concurrentRetry).toEqual(expected);
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual(expected);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls).toEqual([
+      ["Crabbox machine shapes unavailable: Crabbox providers command failed (exit, code 2)"],
+    ]);
+  });
+
+  it.each([
     {
       name: "returns an empty catalog",
       result: () => Promise.resolve(commandResult({ stdout: "[]" })),
-      warns: false,
     },
     {
       name: "omits classes",
       result: () =>
         Promise.resolve(commandResult({ stdout: JSON.stringify([{ provider: "aws" }]) })),
-      warns: false,
     },
     ...[
       { name: "returns empty classes", metadata: { classes: [] } },
@@ -410,7 +485,6 @@ describe("Crabbox worker provider", () => {
         Promise.resolve(
           commandResult({ stdout: JSON.stringify([{ provider: "aws", ...metadata }]) }),
         ),
-      warns: false,
     })),
     {
       name: "reports another provider",
@@ -425,15 +499,16 @@ describe("Crabbox worker provider", () => {
             ]),
           }),
         ),
-      warns: false,
     },
-  ])("offers no machine override when providers $name", async ({ result, warns }) => {
+  ])("caches no machine override when providers $name", async ({ result }) => {
     const warn = vi.fn();
-    const provider = providerWithRunner(result, warn);
+    const runCommand = vi.fn(result);
+    const provider = providerWithRunner(runCommand, warn);
 
     expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
-    await provider.listMachineOptions?.(PROFILE);
-    expect(warn).toHaveBeenCalledTimes(warns ? 1 : 0);
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([

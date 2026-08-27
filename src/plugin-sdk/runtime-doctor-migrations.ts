@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
@@ -324,7 +325,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   const readSource = async (filePath: string): Promise<TSource | null> => {
     try {
       return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-    } catch {
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
       return null;
     }
   };

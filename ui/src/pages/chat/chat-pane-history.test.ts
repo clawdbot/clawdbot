@@ -40,7 +40,7 @@ type TestChatPane = HTMLElement & {
   transcriptScrollTop: number | null;
   transcript: {
     activeSessionKey: string | null;
-    pendingScrollOffsetFor: (sessionKey: string) => number | null;
+    readonly scrollElement: HTMLDivElement | null;
     revealMessage: (messageId: string) => boolean;
     scrollToOffset: (offset: number) => void;
   };
@@ -98,15 +98,12 @@ function createTestChatPane(params: { client: GatewayBrowserClient; sessions: Se
     chatScrollGeneration: 0,
     chatScrollCommitCleanup: null,
     chatScrollFrame: null,
-    chatScrollGuardFrame: null,
     chatLastScrollTop: 0,
     chatLastScrollHeight: 0,
     chatHasAutoScrolled: false,
     chatUserNearBottom: true,
     chatFollowLocked: false,
     chatNewMessagesBelow: false,
-    chatIsProgrammaticScroll: false,
-    chatProgrammaticScrollTarget: 0,
     handleChatScroll: vi.fn(),
     renderLifecycle: { afterCommit: () => () => {}, invalidate: () => {} },
   } as unknown as ChatPageHost;
@@ -142,6 +139,7 @@ function appendChatThread(
   Object.defineProperty(thread, "clientHeight", { value: options.clientHeight ?? 500 });
   Object.defineProperty(thread, "scrollHeight", { value: options.scrollHeight ?? 2_000 });
   pane.append(thread);
+  vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
   return thread;
 }
 
@@ -544,6 +542,7 @@ describe("chat pane native history pagination", () => {
     sentinel.className = "chat-history-sentinel";
     thread.append(sentinel);
     pane.append(thread);
+    vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const observe = vi.fn();
     class FakeIntersectionObserver {
       constructor(private readonly callback: IntersectionObserverCallback) {}
@@ -603,6 +602,7 @@ describe("chat pane native history pagination", () => {
     sentinel.className = "chat-history-sentinel";
     thread.append(sentinel);
     pane.append(thread);
+    vi.spyOn(pane.transcript, "scrollElement", "get").mockReturnValue(thread);
     const observe = vi.fn();
     const disconnect = vi.fn();
     const construct = vi.fn();

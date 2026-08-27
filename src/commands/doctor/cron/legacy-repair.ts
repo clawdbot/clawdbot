@@ -1,6 +1,6 @@
 // Doctor cron storage repair mechanics for legacy stores, run logs, payloads, and Codex refs.
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { tryResolveLegacyCompatibilityAgentId } from "../../../agents/agent-scope-config.js";
+import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -134,7 +134,7 @@ export async function loadLegacyCronRepairState(params: {
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
-  const runtimeDefaultAgentId = tryResolveLegacyCompatibilityAgentId(params.cfg);
+  const runtimeDefaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const projectedOwnersByJobId = new Map(
     loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
   );

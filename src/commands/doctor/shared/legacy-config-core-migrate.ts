@@ -1,5 +1,7 @@
-import { migrateLegacyContextBudgetConfig } from "../../../config/legacy.context-budget.js";
 // Core doctor compatibility migration pipeline for current config objects.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readAgentRosterProperty } from "../../../agents/agent-scope-config.js";
+import { migrateLegacyContextBudgetConfig } from "../../../config/legacy.context-budget.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { HeartbeatSchema } from "../../../config/zod-schema.agent-runtime.js";
 import { runPluginSetupConfigMigrations } from "../../../plugins/setup-registry.js";
@@ -12,88 +14,85 @@ import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-cor
 import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
 import { migrateReservedMcpServerNames } from "./reserved-mcp-server-name-migrate.js";
 
+function repairAgentRoster(
+  cfg: OpenClawConfig,
+  repair: (agent: Record<string, unknown>, path: string) => Record<string, unknown>,
+): OpenClawConfig {
+  // Snapshot/legacy migration normally converts lists first; blocked include migrations
+  // can still leave a legacy list in doctor's best-effort candidate.
+  const roster = readAgentRosterProperty(cfg);
+  const values = roster?.value;
+  if (!roster || (!isRecord(values) && !Array.isArray(values))) {
+    return cfg;
+  }
+  if (Array.isArray(values) !== (roster.kind === "list")) {
+    return cfg;
+  }
+  let changed = false;
+  const entries = Object.entries(values).map(([key, agent]) => {
+    const path = roster.kind === "entries" ? `agents.entries.${key}` : `agents.list[${key}]`;
+    const next = isRecord(agent) ? repair(agent, path) : agent;
+    changed ||= next !== agent;
+    return [key, next] as const;
+  });
+  return changed
+    ? {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          [roster.kind]:
+            roster.kind === "entries"
+              ? Object.fromEntries(entries)
+              : entries.map(([, agent]) => agent),
+        },
+      }
+    : cfg;
+}
+
 function repairInvalidHeartbeatActiveHours(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const repairHeartbeat = (
-    heartbeat: unknown,
-    path: string,
-  ): { value: unknown; changed: boolean } => {
-    if (!heartbeat || typeof heartbeat !== "object" || Array.isArray(heartbeat)) {
-      return { value: heartbeat, changed: false };
+  const repairHeartbeat = (heartbeat: unknown, path: string): unknown => {
+    if (!isRecord(heartbeat) || !Object.hasOwn(heartbeat, "activeHours")) {
+      return heartbeat;
     }
-    const record = heartbeat as Record<string, unknown>;
-    if (!Object.hasOwn(record, "activeHours")) {
-      return { value: heartbeat, changed: false };
-    }
-    const result = HeartbeatSchema.safeParse({ activeHours: record.activeHours });
+    const result = HeartbeatSchema.safeParse({ activeHours: heartbeat.activeHours });
     if (result.success) {
-      return { value: heartbeat, changed: false };
+      return heartbeat;
     }
 
-    const { activeHours: _activeHours, ...rest } = record;
+    const { activeHours: _activeHours, ...rest } = heartbeat;
     changes.push(
       `Removed invalid ${path}.activeHours; heartbeats will use unrestricted hours until it is reconfigured.`,
     );
-    return { value: rest, changed: true };
+    return rest;
   };
 
   const defaultsHeartbeat = repairHeartbeat(
     cfg.agents?.defaults?.heartbeat,
     "agents.defaults.heartbeat",
   );
-  const agents = cfg.agents?.list;
-  let listChanged = false;
-  const nextAgents = Array.isArray(agents)
-    ? agents.map((agent, index) => {
-        if (!agent || typeof agent !== "object") {
-          return agent;
-        }
-        const repaired = repairHeartbeat(
-          (agent as Record<string, unknown>).heartbeat,
-          `agents.list[${index}].heartbeat`,
-        );
-        if (!repaired.changed) {
-          return agent;
-        }
-        listChanged = true;
-        return { ...agent, heartbeat: repaired.value };
-      })
-    : agents;
+  const next = repairAgentRoster(cfg, (agent, path) => {
+    const heartbeat = repairHeartbeat(agent.heartbeat, `${path}.heartbeat`);
+    return heartbeat === agent.heartbeat ? agent : { ...agent, heartbeat };
+  });
 
-  if (!defaultsHeartbeat.changed && !listChanged) {
-    return cfg;
+  if (defaultsHeartbeat === cfg.agents?.defaults?.heartbeat) {
+    return next;
   }
   return {
-    ...cfg,
+    ...next,
     agents: {
-      ...cfg.agents,
-      ...(defaultsHeartbeat.changed
-        ? {
-            defaults: {
-              ...cfg.agents?.defaults,
-              heartbeat: defaultsHeartbeat.value,
-            },
-          }
-        : {}),
-      ...(listChanged ? { list: nextAgents as typeof agents } : {}),
+      ...next.agents,
+      defaults: { ...next.agents?.defaults, heartbeat: defaultsHeartbeat },
     },
   } as OpenClawConfig;
 }
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const agents = cfg.agents?.list;
-  if (!Array.isArray(agents)) {
-    return cfg;
-  }
-
   let repaired = 0;
-  const nextAgents = agents.map((agent) => {
-    if (
-      agent &&
-      typeof agent === "object" &&
-      (agent as Record<string, unknown>).workspace === null
-    ) {
+  const next = repairAgentRoster(cfg, (agent) => {
+    if (agent.workspace === null) {
       repaired += 1;
-      const { workspace: _workspace, ...rest } = agent as Record<string, unknown>;
+      const { workspace: _workspace, ...rest } = agent;
       return rest;
     }
     return agent;
@@ -104,17 +103,11 @@ function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): Open
   }
 
   changes.push(
-    `Removed null workspace value${repaired === 1 ? "" : "s"} from agents.list entr${
+    `Removed null workspace value${repaired === 1 ? "" : "s"} from agents.${readAgentRosterProperty(cfg)?.kind} entr${
       repaired === 1 ? "y" : "ies"
     }.`,
   );
-  return {
-    ...cfg,
-    agents: {
-      ...cfg.agents,
-      list: nextAgents as typeof agents,
-    },
-  };
+  return next;
 }
 
 /** Normalize current config through core, plugin setup, channel, and secret-ref migrations. */

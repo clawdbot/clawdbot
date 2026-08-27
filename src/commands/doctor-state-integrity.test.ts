@@ -106,18 +106,6 @@ describe("structured state integrity findings", () => {
     });
   });
 
-  it("skips default-owned session repairs for an ambiguous roster", async () => {
-    fs.mkdirSync(path.join(tempHome, ".openclaw"), { recursive: true });
-    await noteStateIntegrityRaw(
-      { agents: { entries: { alpha: {}, beta: {} } } },
-      { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock },
-    );
-
-    expect(stateIntegrityText()).toContain(
-      "Skipped default-agent session and transcript integrity checks because the agent roster does not have exactly one default.",
-    );
-  });
-
   it("reports permissive state and config file permissions as structured findings", () => {
     if (process.platform === "win32") {
       return;

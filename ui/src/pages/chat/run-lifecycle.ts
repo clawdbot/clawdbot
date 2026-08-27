@@ -59,6 +59,7 @@ type RunLifecycleHost = Omit<
   agentsList?: { mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
   chatRunId?: string | null;
+  chatRunSessionAbortable?: boolean;
   chatStream?: string | null;
   chatStreamStartedAt?: number | null;
   chatRunStartup?: ChatRunStartupState | null;
@@ -98,6 +99,7 @@ type ChatAbortRunState = SessionScopeHost & {
   connected: boolean;
   sessionKey: string;
   chatRunId?: string | null;
+  chatRunSessionAbortable?: boolean;
   lastError?: string | null;
   chatError?: string | null;
 };
@@ -112,6 +114,8 @@ export type PendingChatAbort = ChatAbortIntentBase & {
   // Session-key-only stops can become stale and target a newer run after reconnect.
   // Only an exact run identity is safe to replay.
   runId: string;
+  /** True when the exact run is embedded-owned and must go through sessions.abort. */
+  sessionAbortable?: boolean;
 };
 
 type ChatAbortIntent =
@@ -203,11 +207,22 @@ async function requestChatAbort(
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
   try {
     if (intent.runId !== null) {
-      await client.request("chat.abort", {
-        sessionKey: intent.sessionKey,
-        ...(intent.agentId ? { agentId: intent.agentId } : {}),
-        runId: intent.runId,
-      });
+      if (intent.sessionAbortable) {
+        // Recovered embedded runs keep their exact run identity on the
+        // session-owned abort path; sessions.abort resolves the embedded owner
+        // by run id so a delayed Stop cannot abort replacement work.
+        await client.request("sessions.abort", {
+          key: intent.sessionKey,
+          ...(intent.agentId ? { agentId: intent.agentId } : {}),
+          runId: intent.runId,
+        });
+      } else {
+        await client.request("chat.abort", {
+          sessionKey: intent.sessionKey,
+          ...(intent.agentId ? { agentId: intent.agentId } : {}),
+          runId: intent.runId,
+        });
+      }
     } else {
       // A channel reply can be active without a browser-local chat run ID.
       // Session abort resolves the selected persisted session's exact run.
@@ -227,6 +242,7 @@ function currentChatAbortIntent(
   state: ChatAbortRunState,
   sourceClient: GatewayBrowserClient,
 ): ChatAbortIntent {
+  const sessionAbortable = state.chatRunSessionAbortable === true;
   const runId = state.chatRunId ?? null;
   const base = {
     sourceClient,
@@ -234,7 +250,7 @@ function currentChatAbortIntent(
     ...scopedAgentParamsForSession(state, state.sessionKey),
   };
   return runId
-    ? { ...base, runId }
+    ? { ...base, runId, ...(sessionAbortable ? { sessionAbortable: true } : {}) }
     : {
         ...base,
         runId: null,
@@ -461,6 +477,7 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   }
   if (options.clearLocalRun) {
     host.chatRunId = null;
+    host.chatRunSessionAbortable = undefined;
   }
   if (canResetToolStream(host)) {
     if (options.clearToolStream) {

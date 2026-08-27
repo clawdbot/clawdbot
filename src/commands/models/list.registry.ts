@@ -1,9 +1,6 @@
 /** Registry access for full and configured-only model lists. */
 import { modelKey } from "../../agents/model-ref-shared.js";
-import {
-  shouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModelFromManifest,
-} from "../../agents/model-suppression.js";
+import { shouldSuppressBuiltInModelCore } from "../../agents/model-suppression.js";
 import { loadPreparedAgentModelRegistry as loadAgentModelRegistry } from "../../agents/prepared-model-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Model } from "../../llm/types.js";
@@ -42,12 +39,8 @@ function validateAvailableModels(availableModels: unknown): Model[] {
 /** Loads the full registry, discovered keys, and model-level availability. */
 export async function loadModelRegistry(cfg: OpenClawConfig, opts?: ModelListRegistryOptions) {
   const { config: runtimeConfig, registry } = await loadAgentModelRegistry(cfg, opts);
-  const shouldSuppress =
-    opts?.normalizeModels === false
-      ? shouldSuppressBuiltInModelFromManifest
-      : shouldSuppressBuiltInModelCore;
   const isVisible = (model: Model) =>
-    !shouldSuppress({
+    !shouldSuppressBuiltInModelCore({
       provider: model.provider,
       id: model.id,
       baseUrl: model.baseUrl,

@@ -236,6 +236,14 @@ describe("unit-fast vitest lane", () => {
   });
 
   it("keeps obvious stateful files out of the unit-fast lane", () => {
+    for (const file of [
+      "src/agents/agent-command.compaction-rotation.test.ts",
+      "src/agents/agent-command.embedded-maintenance.test.ts",
+    ]) {
+      expect(isUnitFastTestFile(file), file).toBe(false);
+      expect(resolveUnitFastTestIncludePattern(file), file).toBeNull();
+      expect(resolveUnitFastIsolatedTestIncludePattern(file), file).toBeNull();
+    }
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/openai-transport-stream.base.test.ts")).toBe(false);
     expect(

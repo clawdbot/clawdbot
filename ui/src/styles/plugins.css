@@ -902,6 +902,105 @@ h3.plugins-subheader {
   font-size: var(--control-ui-text-xs);
 }
 
+.plugins-consent {
+  display: grid;
+  max-height: min(85vh, 860px);
+  gap: var(--space-4);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: var(--space-5);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.plugins-consent__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.plugins-consent__header > div {
+  min-width: 0;
+}
+
+.plugins-consent__section,
+.plugins-detail__capabilities {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.plugins-consent__section h3,
+.plugins-detail__capabilities > h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 600;
+}
+
+.plugins-consent__description,
+.plugins-consent__hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.plugins-consent__hint {
+  display: block;
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugins-consent__rows {
+  border-top: 1px solid var(--border);
+}
+
+.plugins-consent__items {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+  overflow-wrap: anywhere;
+}
+
+.plugins-consent__row--warning .plugins-detail__meta-label,
+.plugins-consent__row--warning .plugins-detail__meta-value {
+  color: var(--warn);
+}
+
+.plugins-consent__provenance,
+.plugins-consent__trust {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+}
+
+.plugins-consent__provenance code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.plugins-consent__trust ul {
+  margin: 0;
+  padding-left: var(--space-4);
+  color: var(--muted);
+}
+
+.plugins-consent__error,
+.plugins-consent__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.plugins-consent__error {
+  color: var(--danger);
+}
+
+.plugins-consent__actions {
+  justify-content: flex-end;
+}
+
 /* ---------- responsive ---------- */
 
 @media (max-width: 560px) {

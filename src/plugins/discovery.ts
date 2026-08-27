@@ -912,6 +912,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
   function discoverBundleInRoot(params: {
     rootDir: string;
+    hasPackageExtensions: boolean;
     origin: PluginOrigin;
     workspaceDir?: string;
     installOwner?: string;
@@ -919,7 +920,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     manifest?: PackageManifest | null;
   }): "added" | "invalid" | "none" {
     return withPluginScanExistenceCache(() => {
-      const bundleFormat = detectBundleManifestFormat(params.rootDir);
+      const bundleFormat = detectBundleManifestFormat(params.rootDir, params.hasPackageExtensions);
       if (!bundleFormat) {
         return "none";
       }
@@ -1109,6 +1110,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
     if (
       discoverBundleInRoot({
         rootDir: dir,
+        hasPackageExtensions: extensions.length > 0,
         origin: params.origin,
         workspaceDir: params.workspaceDir,
         ...(params.installOwner ? { installOwner: params.installOwner } : {}),
@@ -1313,7 +1315,6 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 
     result.candidates = [...candidatesBySource.values()];
     result.diagnostics = uniqueDiagnostics;
-    addMissingRequiredPluginDiagnostics(result, { env, realpathCache });
     return result;
   }
   return {
@@ -1330,6 +1331,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
 /** Discovers only explicit plugins.load.paths candidates without scanning shared roots. */
 export function discoverConfiguredPluginLoadPaths(params: {
   loadPaths: readonly string[];
+  deduplicate?: boolean;
   workspaceDir?: string;
   ownershipUid?: number | null;
   env?: NodeJS.ProcessEnv;
@@ -1337,7 +1339,7 @@ export function discoverConfiguredPluginLoadPaths(params: {
   const scanner = createPluginScanner(params.env ?? process.env, params.ownershipUid);
   scanner.discoverConfiguredPaths(params.loadPaths, normalizeOptionalString(params.workspaceDir));
   // Doctor needs raw alias counts and diagnostics, not the full scan's publication pass.
-  return scanner.result;
+  return params.deduplicate ? scanner.finish() : scanner.result;
 }
 
 export function discoverOpenClawPlugins(params: {
@@ -1470,6 +1472,8 @@ export function discoverOpenClawPlugins(params: {
     },
     { scope: "shared" },
   );
-  return scanner.finish();
+  scanner.finish();
+  addMissingRequiredPluginDiagnostics(result, { env, realpathCache });
+  return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

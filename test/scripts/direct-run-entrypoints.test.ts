@@ -100,6 +100,13 @@ function writeTsxFixture(modulesDir: string, marker: string) {
     path.join(packageDir, "loader.mjs"),
     `process.env.OPENCLAW_TSX_FIXTURE_LOADER = ${JSON.stringify(marker)};\n`,
   );
+  const dependencyDir = path.join(modulesDir, "shim-dependency");
+  mkdirSync(dependencyDir, { recursive: true });
+  writeFileSync(
+    path.join(dependencyDir, "package.json"),
+    JSON.stringify({ name: "shim-dependency", type: "module", exports: "./index.js" }),
+  );
+  writeFileSync(path.join(dependencyDir, "index.js"), 'export const value = "loaded";\n');
 }
 
 function runShimFixture(
@@ -121,10 +128,14 @@ function runShimFixture(
       "scripts/lib/tsx-cli-shim.mjs",
       path.join(checkoutRoot, "scripts", "lib", "tsx-cli-shim.mjs"),
     );
+    copyFileSync(
+      "scripts/lib/local-check-runtime.mts",
+      path.join(checkoutRoot, "scripts", "lib", "local-check-runtime.mts"),
+    );
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     writeFileSync(
       implementationPath,
-      "process.stdout.write(JSON.stringify({ loader: process.env.OPENCLAW_TSX_FIXTURE_LOADER, args: process.argv.slice(2) }));\n",
+      'import { value } from "shim-dependency";\nprocess.stdout.write(JSON.stringify({ loader: process.env.OPENCLAW_TSX_FIXTURE_LOADER, dependency: value, args: process.argv.slice(2) }));\n',
     );
     writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
     const modulesEnv = configureModules({ checkoutRoot, fixtureRoot });
@@ -149,7 +160,11 @@ function runShimFixture(
 function expectShimLoader(result: ReturnType<typeof runShimFixture>, loader: string) {
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  expect(JSON.parse(result.stdout)).toEqual({ loader, args: ["--hydrated-proof"] });
+  expect(JSON.parse(result.stdout)).toEqual({
+    loader,
+    dependency: "loaded",
+    args: ["--hydrated-proof"],
+  });
 }
 
 describe("script direct-run entrypoints", () => {
@@ -195,6 +210,29 @@ describe("script direct-run entrypoints", () => {
   it("falls back to checkout dependencies without an external modules directory", () => {
     expectShimLoader(runShimFixture(TSX_SHIM_WRAPPERS[3]), "checkout");
   });
+
+  it.each(["hydrated", "primary"] as const)(
+    "resolves implementation dependencies from the %s toolchain without local modules",
+    (source) => {
+      const result = runShimFixture(TSX_SHIM_WRAPPERS[0], ({ checkoutRoot, fixtureRoot }) => {
+        rmSync(path.join(checkoutRoot, "node_modules"), { recursive: true });
+        const primaryRoot = path.join(fixtureRoot, "primary");
+        const modulesDir = path.join(primaryRoot, "node_modules");
+        writeTsxFixture(modulesDir, source);
+        if (source === "hydrated") {
+          return { PNPM_CONFIG_MODULES_DIR: modulesDir };
+        }
+        const initialized = spawnSync(
+          "git",
+          ["init", "--quiet", "--separate-git-dir", path.join(primaryRoot, ".git"), checkoutRoot],
+          { encoding: "utf8" },
+        );
+        expect(initialized.status, initialized.stderr).toBe(0);
+        return {};
+      });
+      expectShimLoader(result, source);
+    },
+  );
 
   it("matches Windows drive paths case-insensitively", () => {
     expect(

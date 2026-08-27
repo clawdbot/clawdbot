@@ -37,7 +37,7 @@ const resolveReplyToModeMock = vi.fn();
 const createReplyToModeFilterForChannelMock = vi.fn();
 const createReplyMediaContextMock = vi.fn();
 const createReplyMediaPathNormalizerMock = vi.fn();
-const runPreflightCompactionIfNeededMock = vi.fn();
+const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
 const prepareGitCoauthorAttributionMock = vi.fn();
@@ -77,8 +77,7 @@ vi.mock("./reply-media-paths.js", () => ({
 }));
 
 vi.mock("./agent-runner-memory.js", () => ({
-  runPreflightCompactionIfNeeded: (...args: unknown[]) =>
-    runPreflightCompactionIfNeededMock(...args),
+  runSessionCompactionIfNeeded: (...args: unknown[]) => runSessionCompactionIfNeededMock(...args),
   runMemoryFlushIfNeeded: (...args: unknown[]) => runMemoryFlushIfNeededMock(...args),
 }));
 
@@ -269,7 +268,7 @@ describe("runReplyAgent runtime config", () => {
     createReplyToModeFilterForChannelMock.mockReset();
     createReplyMediaContextMock.mockReset();
     createReplyMediaPathNormalizerMock.mockReset();
-    runPreflightCompactionIfNeededMock.mockReset();
+    runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
     prepareGitCoauthorAttributionMock.mockReset();
@@ -280,7 +279,7 @@ describe("runReplyAgent runtime config", () => {
     resolveReplyToModeMock.mockReturnValue("all");
     createReplyToModeFilterForChannelMock.mockReturnValue((payload: unknown) => payload);
     createReplyMediaPathNormalizerMock.mockReturnValue((payload: unknown) => payload);
-    runPreflightCompactionIfNeededMock.mockRejectedValue(sentinelError);
+    runSessionCompactionIfNeededMock.mockRejectedValue(sentinelError);
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });
     executeAgentTurnMock.mockResolvedValue({
       runId: "runtime-config-test",
@@ -319,17 +318,17 @@ describe("runReplyAgent runtime config", () => {
       requesterSenderUsername: undefined,
       requesterSenderE164: undefined,
     });
-    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+    expect(runSessionCompactionIfNeededMock).toHaveBeenCalledTimes(1);
     expect(runMemoryFlushIfNeededMock).toHaveBeenCalledTimes(1);
     expect(runMemoryFlushIfNeededMock.mock.invocationCallOrder[0]).toBeLessThan(
-      runPreflightCompactionIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      runSessionCompactionIfNeededMock.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
     expect(memoryCall.cfg).toBe(freshCfg);
     expect(memoryCall.followupRun).toBe(followupRun);
     const preflightCall = requireMaintenanceCall(
-      runPreflightCompactionIfNeededMock,
-      "runPreflightCompactionIfNeeded",
+      runSessionCompactionIfNeededMock,
+      "runSessionCompactionIfNeeded",
     );
     expect(preflightCall.cfg).toBe(freshCfg);
     expect(preflightCall.followupRun).toBe(followupRun);
@@ -349,8 +348,8 @@ describe("runReplyAgent runtime config", () => {
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
     const preflightCall = requireMaintenanceCall(
-      runPreflightCompactionIfNeededMock,
-      "runPreflightCompactionIfNeeded",
+      runSessionCompactionIfNeededMock,
+      "runSessionCompactionIfNeeded",
     );
     expect(preflightCall.sessionKey).toBe("agent:main:main");
     expect(preflightCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
@@ -365,7 +364,7 @@ describe("runReplyAgent runtime config", () => {
     prepareGitCoauthorAttributionMock.mockImplementation((params: { currentProfileId?: string }) =>
       params.currentProfileId === "profile-ada" ? attribution : undefined,
     );
-    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
     await withTestDir({ prefix: "openclaw-coauthor-owner-" }, async (tempDir) => {
       const storePath = join(tempDir, "sessions.json");
       const runCase = async (
@@ -435,7 +434,7 @@ describe("runReplyAgent runtime config", () => {
       ...freshCfg,
       agents: { defaults: { compaction: { notifyUser: true } } },
     });
-    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
     runMemoryFlushIfNeededMock.mockImplementation(
       async (params: {
         replyOperation: ReplyOperation;
@@ -485,7 +484,7 @@ describe("runReplyAgent runtime config", () => {
       replyParams.opts = { onBlockReply };
       const replyOperation = createReplyOperation();
       replyParams.replyOperation = replyOperation;
-      runPreflightCompactionIfNeededMock.mockImplementation(
+      runSessionCompactionIfNeededMock.mockImplementation(
         async (params: { sessionEntry?: unknown }) => params.sessionEntry,
       );
       runMemoryFlushIfNeededMock.mockImplementation(
@@ -578,7 +577,7 @@ describe("runReplyAgent runtime config", () => {
       sessionEntry,
       outcome: "exhausted",
     });
-    runPreflightCompactionIfNeededMock.mockImplementation(
+    runSessionCompactionIfNeededMock.mockImplementation(
       async (params: { sessionEntry?: typeof sessionEntry }) => {
         expect(params.sessionEntry?.sessionId).toBe("session-1");
         return { ...params.sessionEntry, compactionCount: 5 };
@@ -600,7 +599,7 @@ describe("runReplyAgent runtime config", () => {
       sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
       outcome: "exhausted",
     });
-    runPreflightCompactionIfNeededMock.mockRejectedValue(
+    runSessionCompactionIfNeededMock.mockRejectedValue(
       new Error("Preflight compaction required but failed: context_overflow"),
     );
 
@@ -625,7 +624,7 @@ describe("runReplyAgent runtime config", () => {
       sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
       outcome: "exhausted",
     });
-    runPreflightCompactionIfNeededMock.mockRejectedValue(
+    runSessionCompactionIfNeededMock.mockRejectedValue(
       new Error("Preflight compaction required but failed: auth profile mismatch"),
     );
 
@@ -648,7 +647,7 @@ describe("runReplyAgent runtime config", () => {
       });
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-      runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
       runMemoryFlushIfNeededMock.mockImplementation(
         async (params: { replyOperation: ReplyOperation }) => {
           expect(params.replyOperation[abortMethod]()).toBe(true);
@@ -678,7 +677,7 @@ describe("runReplyAgent runtime config", () => {
       });
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
-      runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
       executeAgentTurnMock.mockResolvedValue({
         runId: "cancelled-runtime-config-test",
         outcome: { kind: "aborted", reason },
@@ -697,7 +696,7 @@ describe("runReplyAgent runtime config", () => {
     });
     const codexMessage =
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
-    runPreflightCompactionIfNeededMock.mockRejectedValue(
+    runSessionCompactionIfNeededMock.mockRejectedValue(
       new FailoverError(codexMessage, {
         reason: "rate_limit",
         provider: "openai",
@@ -721,7 +720,7 @@ describe("runReplyAgent runtime config", () => {
       shouldFollowup: false,
       isActive: false,
     });
-    runPreflightCompactionIfNeededMock.mockRejectedValue(
+    runSessionCompactionIfNeededMock.mockRejectedValue(
       new Error("Preflight compaction required but failed: auth profile mismatch"),
     );
     runMemoryFlushIfNeededMock.mockResolvedValue({ sessionEntry: undefined, outcome: "skipped" });

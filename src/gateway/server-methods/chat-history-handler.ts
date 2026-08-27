@@ -8,6 +8,10 @@ import {
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
+  resolveActiveEmbeddedRunOwner,
+  resolveActiveEmbeddedRunHandleSessionId,
+} from "../../agents/embedded-agent-runner/runs.js";
+import {
   isSessionTranscriptProjectionUnavailableError,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
@@ -19,10 +23,12 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
+  projectInFlightRunSnapshot,
   resolveInFlightRunSnapshot,
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.js";
+import type { ChatRunState } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
@@ -76,6 +82,31 @@ function respondChatHistoryUnavailable(
       retryAfterMs: 250,
     }),
   );
+}
+
+function resolveEmbeddedAgentRunRecoverySnapshot(params: {
+  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
+  requestedSessionKey: string;
+  canonicalSessionKey: string;
+  sessionId?: string;
+}) {
+  const sessionId =
+    params.sessionId ??
+    resolveActiveEmbeddedRunHandleSessionId(params.canonicalSessionKey) ??
+    resolveActiveEmbeddedRunHandleSessionId(params.requestedSessionKey);
+  if (!sessionId) {
+    return undefined;
+  }
+  const owner = resolveActiveEmbeddedRunOwner(sessionId);
+  if (!owner) {
+    return undefined;
+  }
+  return projectInFlightRunSnapshot({
+    chatRunState: params.chatRunState,
+    runId: owner.runId,
+    startedAtMs: owner.startedAtMs,
+    sessionAbortable: true,
+  });
 }
 
 async function handleChatMetadataRequest({
@@ -408,9 +439,11 @@ async function handleChatHistoryRequest({
     context,
     requestedKey: sessionKey,
     canonicalKey,
-    sessionId: entry?.sessionId,
+    sessionId,
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId: compatibilityOwnerAgentId,
+    // History stays active until the terminal row is queryable or its write fails.
+    includeTerminalPersistence: true,
   });
   sessionInfo.hasActiveRun = activeRunState.active;
   if (activeRunState.runIds !== undefined) {
@@ -423,6 +456,17 @@ async function handleChatHistoryRequest({
   // carry the placement facts that projection adds; without them the merge
   // erases a live worker placement and its move intent.
   Object.assign(sessionInfo, readSessionPlacementFields(context, entry?.sessionId));
+  // An active embedded run can be owned by the embedded registry while absent
+  // from the visible chat-abort controllers. The activeRunIds field stays
+  // omitted to preserve the exact-chat-send identity contract (coordination
+  // gates such as suggestion send-now rely on it being a complete set); the
+  // scoped inFlightRun snapshot below drives UI adoption instead.
+  const embeddedRecovery = resolveEmbeddedAgentRunRecoverySnapshot({
+    chatRunState: context.chatRunState,
+    requestedSessionKey: sessionKey,
+    canonicalSessionKey: canonicalKey,
+    sessionId,
+  });
   if (Object.hasOwn(historyPage, "activeLeafEntryId")) {
     sessionInfo.activeLeafEntryId = historyPage.activeLeafEntryId ?? null;
   }
@@ -435,17 +479,18 @@ async function handleChatHistoryRequest({
   // Surface any run still streaming for this session+agent so a client that
   // switched away (and stopped receiving the run's per-agent-delivered events)
   // can restore the in-flight assistant text on switch-back.
-  const inFlightRun = resolveInFlightRunSnapshot({
-    chatAbortControllers: context.chatAbortControllers,
-    chatRunState: context.chatRunState,
-    requestedSessionKey: sessionKey,
-    // The agent-scoped canonical key from session load: an unscoped re-resolve
-    // falls back to the default agent for alias keys, misses the abort entry's
-    // stored key, and drops the in-flight snapshot for non-default agents.
-    canonicalSessionKey: canonicalKey,
-    agentId: activeRunAgentId,
-    defaultAgentId: compatibilityOwnerAgentId,
-  });
+  const inFlightRun =
+    resolveInFlightRunSnapshot({
+      chatAbortControllers: context.chatAbortControllers,
+      chatRunState: context.chatRunState,
+      requestedSessionKey: sessionKey,
+      // The agent-scoped canonical key from session load: an unscoped re-resolve
+      // falls back to the default agent for alias keys, misses the abort entry's
+      // stored key, and drops the in-flight snapshot for non-default agents.
+      canonicalSessionKey: canonicalKey,
+      agentId: activeRunAgentId,
+      defaultAgentId: compatibilityOwnerAgentId,
+    }) ?? embeddedRecovery;
   if (cursor !== undefined) {
     if (!sessionId || !storePath || resolveClaudeCliBindingSessionId(entry)) {
       respond(true, { kind: "reset" });

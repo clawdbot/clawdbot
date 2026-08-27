@@ -59,9 +59,15 @@ vi.mock("../plugins/loader.js", () => ({
   loadOpenClawPlugins,
 }));
 
-vi.mock("../plugins/runtime/load-context.js", () => ({
-  createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
-}));
+vi.mock("../plugins/runtime/load-context.js", async (importOriginal) => {
+  const { buildPluginRuntimeLoadOptions, setPluginRuntimeLoadContext } =
+    await importOriginal<typeof import("../plugins/runtime/load-context.js")>();
+  return {
+    buildPluginRuntimeLoadOptions,
+    setPluginRuntimeLoadContext,
+    createPluginRuntimeLoaderLogger: () => pluginRuntimeLoaderLogger,
+  };
+});
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable,

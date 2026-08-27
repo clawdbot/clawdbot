@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../../chrome-extension/relay-key.test-support.js";
 import { resolveProfile, type ResolvedBrowserConfig } from "../config.js";
+import { refreshResolvedBrowserConfigFromDisk } from "../resolved-config-refresh.js";
 import {
   beginProfileTransition,
   getOrCreateProfileRuntime,
@@ -10,12 +11,15 @@ import {
 import type { BrowserServerState } from "../server-context.types.js";
 import type { ExtensionRelayHandle } from "./relay-server.js";
 
-const readExtensionRelayTokenMock = vi.fn();
 const ensureExtensionRelayTokenMock = vi.fn();
 vi.mock("./relay-auth.js", () => ({
-  readExtensionRelayToken: () => readExtensionRelayTokenMock(),
   ensureExtensionRelayToken: () => ensureExtensionRelayTokenMock(),
-  resolveExtensionRelayToken: () => readExtensionRelayTokenMock(),
+}));
+
+vi.mock("../config-refresh-source.js", () => ({
+  loadBrowserConfigForRuntimeRefresh: () => ({
+    browser: { profiles: { chrome: { driver: "extension", cdpPort: RELAY_PORT } } },
+  }),
 }));
 
 const startExtensionRelayServerMock = vi.fn();
@@ -82,8 +86,7 @@ function deferred() {
 describe("extension relay lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    readExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
-    ensureExtensionRelayTokenMock.mockReturnValue(ROTATED_TOKEN);
+    ensureExtensionRelayTokenMock.mockResolvedValue(ROTATED_TOKEN);
     startExtensionRelayServerMock.mockImplementation(async ({ port, token, allowLegacyAuth }) => ({
       port,
       token,
@@ -139,6 +142,20 @@ describe("extension relay lifecycle", () => {
     expect(startExtensionRelayServerMock).toHaveBeenCalledOnce();
   });
 
+  it("retains the adopted key when config refreshes during relay startup", async () => {
+    const { profile, state } = createState(OLD_TOKEN);
+    const replacement = createHandle(ROTATED_TOKEN);
+    startExtensionRelayServerMock.mockImplementationOnce(async () => {
+      refreshResolvedBrowserConfigFromDisk({ current: state, refreshConfigFromDisk: true });
+      return replacement;
+    });
+
+    await expect(ensureExtensionRelayForProfile(state, profile)).resolves.toBe(replacement);
+    expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);
+    expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(replacement);
+    expect(replacement.close).not.toHaveBeenCalled();
+  });
+
   it("coalesces concurrent rebinds to one exact relay handle", async () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
@@ -192,7 +209,7 @@ describe("extension relay lifecycle", () => {
       run: async (signal) => await ensureExtensionRelayForProfile(state, profile, signal),
     });
     void sibling.catch(() => {});
-    await expect.poll(() => readExtensionRelayTokenMock.mock.calls.length).toBe(2);
+    await expect.poll(() => ensureExtensionRelayTokenMock.mock.calls.length).toBe(2);
     firstController.abort(new Error("first browser request cancelled"));
     releaseStart.resolve();
 
@@ -241,7 +258,7 @@ describe("extension relay lifecycle", () => {
     void sibling.catch((error: unknown) => {
       siblingError = error;
     });
-    await expect.poll(() => readExtensionRelayTokenMock.mock.calls.length).toBe(2);
+    await expect.poll(() => ensureExtensionRelayTokenMock.mock.calls.length).toBe(2);
     siblingController.abort(new Error("sibling browser request cancelled"));
     try {
       await expect

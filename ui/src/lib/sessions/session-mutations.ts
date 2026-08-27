@@ -14,6 +14,7 @@ import {
   requestSessionCreate,
   resolveSessionCreateParams,
   type SessionCreateParams,
+  type SessionCreateOutcome,
 } from "./create.ts";
 import type { SessionPatch, SessionPatchOptions } from "./patch.ts";
 import { createSessionArchiveVisibility } from "./session-archive-visibility.ts";
@@ -49,7 +50,8 @@ type SessionMutationsHost = {
   refreshReplacement: (agentId?: string | null) => Promise<void>;
   publishedRow: (key: string) => GatewaySessionRow | undefined;
   redecorateLists: () => void;
-  notifyCreated: (key: string) => void;
+  notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
+  clearThink: (key: string, agentId?: string | null) => void;
   retirePullRequestSummary: (key: string) => void;
 };
 
@@ -196,7 +198,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       }
       // Creation precedes canonical rows; claim placement before any event or
       // list publication can assign this key an ordinary roster position.
-      host.notifyCreated(result.key);
+      host.notifyCreated(result.key, result.entry, requestParams.agentId);
       if (requestParams.worktree === true || Boolean(requestParams.execNode?.trim())) {
         preparedWorkSessionKeys.add(result.key.trim());
       }
@@ -382,6 +384,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
         return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;
+      }
+      if (Object.hasOwn(patchParams, "thinkingLevel")) {
+        host.clearThink(normalizedKey, options.agentId);
       }
       if (archivedPresentationRow) {
         const archivedAt = result.entry?.archivedAt ?? Date.now();
@@ -742,9 +747,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       archiveVisibility.clearAll();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
-      if (Object.keys(state.modelOverrides).length > 0) {
-        host.publish({ ...state, modelOverrides: {} });
-      }
+      host.publish({ ...state, modelOverrides: {} });
     },
     dispose() {
       pendingCreatedModelOverrides.clear();

@@ -79,6 +79,7 @@ export type SidebarLifecycleState = HTMLElement & {
     routeId: string,
     options?: { pathname?: string; search?: string; hash?: string },
   ) => void;
+  dismissTransientMenus: () => boolean;
   readonly sessionData: SessionDataController;
   readonly sessionOrganizer: SessionOrganizerController;
   listSessionGroupFolders(path?: string): Promise<{

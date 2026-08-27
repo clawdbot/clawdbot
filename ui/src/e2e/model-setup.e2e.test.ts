@@ -794,12 +794,9 @@ suite.define(() => {
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
-              page.locator("openclaw-modal-dialog.nav-drawer").evaluate((element) => {
-                const dialog = element.shadowRoot
-                  ?.querySelector("wa-dialog")
-                  ?.shadowRoot?.querySelector("dialog");
-                return dialog?.open ?? false;
-              }),
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
           await page.screenshot({
@@ -899,12 +896,9 @@ suite.define(() => {
           await page.setViewportSize({ height: 844, width: 390 });
           await expect
             .poll(() =>
-              page.locator("openclaw-modal-dialog.nav-drawer").evaluate((element) => {
-                const dialog = element.shadowRoot
-                  ?.querySelector("wa-dialog")
-                  ?.shadowRoot?.querySelector("dialog");
-                return dialog?.open ?? false;
-              }),
+              page
+                .locator(".shell-nav.nav-drawer")
+                .evaluate((element) => element.getAttribute("aria-hidden") !== "true"),
             )
             .toBe(false);
           await page.screenshot({

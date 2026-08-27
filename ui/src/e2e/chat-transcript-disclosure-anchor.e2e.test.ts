@@ -85,7 +85,7 @@ function expectStableDisclosureFrames(frames: DisclosureFrame[], label = "disclo
   ).toBe(true);
   expect(
     Math.max(...frames.map((frame) => Math.abs(frame.rowTop - initial!.rowTop))),
-    `${label} geometry`,
+    `${label} geometry: ${JSON.stringify(frames)}`,
   ).toBeLessThanOrEqual(2);
   expect(
     Math.max(...frames.map((frame) => Math.abs(frame.scrollTop - initial!.scrollTop))),
@@ -111,6 +111,265 @@ async function showSplitDashboard(page: import("playwright").Page, sessionKey: s
 }
 
 suite.define(() => {
+  it.each([
+    { reducedMotion: "no-preference", interruption: "wheel" },
+    { reducedMotion: "reduce", interruption: "wheel" },
+    { reducedMotion: "no-preference", interruption: "pointer" },
+  ] as const)(
+    "remeasures recovered assistant text after interrupted scrolling ($reducedMotion, $interruption)",
+    async ({ reducedMotion, interruption }) => {
+      const artifactDir = path.resolve(
+        process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR ??
+          ".artifacts/control-ui-e2e/virtual-sizing/after",
+        interruption === "wheel" ? reducedMotion : `${reducedMotion}-${interruption}`,
+      );
+      await fs.mkdir(artifactDir, { recursive: true });
+      await suite.withPage(
+        {
+          reducedMotion,
+          viewport: { width: 1440, height: 900 },
+          recordVideo: { dir: artifactDir },
+        },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, {
+            deferredMethods: ["chat.message.get"],
+            historyMessages: Array.from({ length: 60 }, (_, index) => ({
+              role: index % 2 === 0 ? "user" : "assistant",
+              content:
+                index === 1
+                  ? "Assistant preview awaiting full text."
+                  : `Transcript message ${index}. ${"Keep this conversation scrollable. ".repeat(6)}`,
+              timestamp: 1000 + index,
+              __openclaw: {
+                id: `sizing-message-${index}`,
+                seq: index + 1,
+                ...(index === 1 ? { truncated: true, reason: "display-cap" } : {}),
+              },
+            })),
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await page.getByText("Transcript message 59.", { exact: false }).waitFor();
+          await waitForChatScrollIdle(page);
+          const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
+          await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          await gateway.waitForRequest("chat.message.get");
+          await waitForChatScrollIdle(page);
+          const bubble = page.locator('.chat-bubble[data-entry-id="sizing-message-1"]');
+          await bubble.waitFor({ state: "visible" });
+          const initial = await bubble.evaluate((element) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            return { key: row.dataset.virtualRowKey, height: row.offsetHeight };
+          });
+          await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
+          await page.locator(".chat-scroll-to-bottom").click();
+          await page.waitForFunction(() => {
+            const scroller = document.querySelector<HTMLElement>(
+              ".chat-pane-cache__pane--active .chat-thread",
+            );
+            return scroller && scroller.scrollTop > 0;
+          });
+          const during = await thread.evaluate((element) => ({
+            top: element.scrollTop,
+            max: element.scrollHeight - element.clientHeight,
+          }));
+          if (reducedMotion === "no-preference") {
+            expect(during.top).toBeLessThan(during.max);
+          }
+          if (interruption === "wheel") {
+            await thread.hover();
+            await page.mouse.wheel(0, -100_000);
+          } else {
+            const track = await thread.boundingBox();
+            expect(track).not.toBeNull();
+            // A real pointer press in the scroll gutter can take over without
+            // a wheel event or a changed offset.
+            await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
+            await page.locator(".chat-scroll-to-bottom").waitFor({ state: "visible" });
+            // Chromium can commit its last canceled animation offset after the
+            // pointer action returns. Capture the reader before releasing text.
+            await waitForChatScrollIdle(page);
+          }
+          const interruptedOffset = await thread.evaluate((element) => element.scrollTop);
+          if (interruption === "wheel") {
+            await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
+          } else {
+            expect(interruptedOffset).toBeGreaterThan(0);
+            expect(interruptedOffset).toBeLessThan(during.max);
+          }
+          const fullText = Array.from(
+            { length: 5 },
+            (_, index) =>
+              `Recovered paragraph ${index + 1}. ${"All wrapped lines must reserve space before the next user message. ".repeat(5)}`,
+          ).join("\n\n");
+          await gateway.resolveDeferred("chat.message.get", {
+            ok: true,
+            message: { role: "assistant", content: fullText },
+          });
+          await bubble.getByText("Recovered paragraph 1.", { exact: false }).waitFor();
+          await waitForChatScrollIdle(page);
+          // Outlast virtual-core's five-second scroll reconciliation deadline:
+          // the assertion protects durable geometry, not a transient resize frame.
+          const final = await bubble.evaluate(async (element) => {
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 5_500);
+            });
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            const next = row
+              .closest(".chat-thread")!
+              .querySelector('.chat-bubble[data-entry-id="sizing-message-2"]')!
+              .closest<HTMLElement>(".chat-virtual-row")!;
+            const rect = row.getBoundingClientRect();
+            return {
+              key: row.dataset.virtualRowKey,
+              height: row.offsetHeight,
+              top: rect.top,
+              bottom: rect.bottom,
+              nextTop: next.getBoundingClientRect().top,
+              gap: next.getBoundingClientRect().top - rect.bottom,
+            };
+          });
+          await page.screenshot({ path: path.join(artifactDir, "02-after-interruption.png") });
+          await fs.writeFile(
+            path.join(artifactDir, "interrupted-scroll.json"),
+            JSON.stringify({ initial, during, final }, null, 2),
+          );
+          if (interruption === "pointer") {
+            expect(
+              Math.abs((await thread.evaluate((element) => element.scrollTop)) - interruptedOffset),
+            ).toBeLessThanOrEqual(1);
+          }
+          expect(final.key).toBe(initial.key);
+          expect(final.height).toBeGreaterThan(initial.height);
+          expect(
+            Math.abs(final.gap),
+            JSON.stringify({ initial, during, final }),
+          ).toBeLessThanOrEqual(1);
+          // Leaving and returning must use the recovered size in the virtual
+          // range too, not merely conceal stale cached geometry with DOM flow.
+          await page.locator(".chat-scroll-to-bottom").click();
+          await expect
+            .poll(() =>
+              thread.evaluate((element) =>
+                Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
+              ),
+            )
+            .toBeLessThanOrEqual(2);
+          await expect.poll(() => bubble.count()).toBe(0);
+          await page
+            .getByText("Transcript message 59.", { exact: false })
+            .waitFor({ state: "visible" });
+          await thread.hover();
+          await page.mouse.wheel(0, -100_000);
+          await bubble
+            .getByText("Recovered paragraph 1.", { exact: false })
+            .waitFor({ state: "visible" });
+          await waitForChatScrollIdle(page);
+          const returned = await bubble.evaluate((element) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            const next = row
+              .closest(".chat-thread")!
+              .querySelector('.chat-bubble[data-entry-id="sizing-message-2"]')!
+              .closest<HTMLElement>(".chat-virtual-row")!;
+            return {
+              height: row.offsetHeight,
+              gap: next.getBoundingClientRect().top - row.getBoundingClientRect().bottom,
+            };
+          });
+          expect(returned.height).toBe(final.height);
+          expect(Math.abs(returned.gap)).toBeLessThanOrEqual(1);
+          await page.screenshot({ path: path.join(artifactDir, "03-after-return.png") });
+          await thread.evaluate((element) => {
+            element.scrollTop = 300;
+          });
+          await waitForChatScrollIdle(page);
+          await page.screenshot({ path: path.join(artifactDir, "04-visible-adjacency.png") });
+        },
+      );
+    },
+  );
+
+  it("tracks late intrinsic image growth through a transcript remount", async () => {
+    await suite.withPage(
+      { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const imageUrl = `${suite.server.baseUrl}sizing-image.png`;
+        const imageData = await page.evaluate(() => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 480;
+          canvas.height = 240;
+          canvas.getContext("2d")!.fillRect(0, 0, canvas.width, canvas.height);
+          return canvas.toDataURL("image/png").split(",")[1]!;
+        });
+        let releaseImage!: () => void;
+        const imageReady = new Promise<void>((resolve) => {
+          releaseImage = resolve;
+        });
+        await page.route(imageUrl, async (route) => {
+          await imageReady;
+          await route.fulfill({ contentType: "image/png", body: Buffer.from(imageData, "base64") });
+        });
+        await installMockGateway(page, {
+          historyMessages: Array.from({ length: 60 }, (_, index) => ({
+            role: index % 2 ? "assistant" : "user",
+            content:
+              index === 1
+                ? [
+                    { type: "text", text: "Delayed image." },
+                    { type: "image", url: imageUrl, alt: "Intrinsic size proof" },
+                  ]
+                : `Image fixture message ${index}.`,
+            timestamp: index + 1,
+            __openclaw: { id: `image-message-${index}`, seq: index + 1 },
+          })),
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        await page.getByText("Image fixture message 59.", { exact: false }).waitFor();
+        await thread.hover();
+        await page.mouse.wheel(0, -100_000);
+        const image = thread.getByRole("img", { name: "Intrinsic size proof" });
+        await image.waitFor({ state: "attached" });
+        const rowHeight = () =>
+          image.evaluate(
+            (element) => element.closest<HTMLElement>(".chat-virtual-row")!.offsetHeight,
+          );
+        const initialHeight = await rowHeight();
+        releaseImage();
+        await expect
+          .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalHeight))
+          .toBe(240);
+        await expect.poll(rowHeight).toBeGreaterThan(initialHeight + 100);
+        const height = await rowHeight();
+        const gap = () =>
+          image.evaluate((element) => {
+            const row = element.closest<HTMLElement>(".chat-virtual-row")!;
+            const next = row
+              .closest(".chat-thread")!
+              .querySelector('.chat-bubble[data-entry-id="image-message-2"]')!
+              .closest<HTMLElement>(".chat-virtual-row")!;
+            return next.getBoundingClientRect().top - row.getBoundingClientRect().bottom;
+          });
+        expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
+        await page.locator(".chat-scroll-to-bottom").click();
+        await expect.poll(() => image.count()).toBe(0);
+        await expect
+          .poll(() =>
+            thread.evaluate((element) =>
+              Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
+            ),
+          )
+          .toBeLessThanOrEqual(2);
+        await thread.hover();
+        await page.mouse.wheel(0, -100_000);
+        await image.waitFor({ state: "visible" });
+        await expect.poll(rowHeight).toBe(height);
+        expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
+      },
+    );
+  });
+
   it("keeps completed-work and tool disclosures anchored on every expand and collapse frame", async () => {
     const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.browser.newContext({

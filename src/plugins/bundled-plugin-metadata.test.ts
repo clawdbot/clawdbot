@@ -503,6 +503,8 @@ describe("bundled plugin metadata", () => {
           env: {
             anyOf: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
           },
+          specifier: "./configured-state",
+          exportName: "hasConfiguredSlackChannelState",
         },
       },
       {

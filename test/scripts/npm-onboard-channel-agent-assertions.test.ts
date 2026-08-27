@@ -43,6 +43,7 @@ function writeSharedAuthProfileStoreSqlite(home: string, store: unknown): void {
   const db = new DatabaseSync(path.join(stateDir, "openclaw.sqlite"));
   try {
     db.exec(`
+      PRAGMA user_version = 13;
       CREATE TABLE IF NOT EXISTS config_machine_state (
         state_key TEXT NOT NULL PRIMARY KEY,
         value_json TEXT NOT NULL,

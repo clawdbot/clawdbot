@@ -4,6 +4,8 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../lib/record-shared.mjs";
 
+const AUTH_PROFILE_MACHINE_STATE_SCHEMA_VERSION = 13;
+
 export function readSharedAuthProfileStoreText(stateDir) {
   const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) {
@@ -12,19 +14,38 @@ export function readSharedAuthProfileStoreText(stateDir) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
+    const schemaVersion = db.prepare("PRAGMA user_version").get()?.user_version;
+    if (!Number.isInteger(schemaVersion)) {
+      throw new Error(`invalid state schema version ${String(schemaVersion)}`);
+    }
+    // Release candidates own their persisted schema. Never let a retired row
+    // mask a missing canonical row once the v13 fold has occurred.
+    const storage =
+      schemaVersion >= AUTH_PROFILE_MACHINE_STATE_SCHEMA_VERSION
+        ? {
+            column: "value_json",
+            key: "authProfiles.store",
+            query: "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+            table: "config_machine_state",
+          }
+        : {
+            column: "store_json",
+            key: "shared",
+            query: "SELECT store_json FROM auth_profile_stores WHERE store_key = ?",
+            table: "auth_profile_stores",
+          };
     const schema = db
       .prepare("SELECT type FROM sqlite_schema WHERE name = ? LIMIT 1")
-      .get("config_machine_state");
+      .get(storage.table);
     if (!schema) {
       return "";
     }
     if (schema.type !== "table") {
-      throw new Error(`config_machine_state is ${String(schema.type)}, not a table`);
+      throw new Error(`${storage.table} is ${String(schema.type)}, not a table`);
     }
-    const row = db
-      .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-      .get("authProfiles.store");
-    return typeof row?.value_json === "string" ? row.value_json : "";
+    const row = db.prepare(storage.query).get(storage.key);
+    const value = row?.[storage.column];
+    return typeof value === "string" ? value : "";
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(`could not read the shared auth profile store: ${detail}`, {

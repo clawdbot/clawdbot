@@ -711,6 +711,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  html:has(.shell--chat),
+  body:has(.shell--chat) {
+    /* iOS Safari exposes the document canvas around its browser chrome; keep
+       that canvas on the same semantic surface as the narrow transcript. */
+    background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
+  }
+}
+
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
    Controls that manage their own touch size declare it via

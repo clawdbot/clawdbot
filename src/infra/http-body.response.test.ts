@@ -133,6 +133,28 @@ describe("cancelUnreadResponseBody", () => {
 
     expect(cancel).not.toHaveBeenCalled();
   });
+
+  it("does not wait for a retained response clone to finish cancellation", async () => {
+    const cancel = vi.fn();
+    const response = new Response(makeStallingStream([], cancel));
+    const capture = response.clone();
+    const cleanup = cancelUnreadResponseBody(response);
+    try {
+      const completed = await Promise.race([
+        cleanup.then(() => true),
+        new Promise<boolean>((resolve) => {
+          setImmediate(() => resolve(false));
+        }),
+      ]);
+      expect(completed).toBe(true);
+      expect(response.bodyUsed).toBe(true);
+      expect(cancel).not.toHaveBeenCalled();
+    } finally {
+      await capture.body?.cancel();
+      await cleanup;
+    }
+    expect(cancel).toHaveBeenCalledOnce();
+  });
 });
 
 describe("readResponseWithLimit", () => {
