@@ -14,8 +14,11 @@ private let gatewayConnectionLogger = Logger(subsystem: "ai.openclaw", category:
 actor GatewayConnection {
     static let shared = GatewayConnection(
         endpointProvider: GatewayConnection.defaultEndpointProvider)
-    nonisolated static let operatorClientCaps =
-        [OpenClawGatewayClientCapability.agentKind, OpenClawGatewayClientCapability.inlineWidgets]
+    nonisolated static let operatorClientCaps = [
+        OpenClawGatewayClientCapability.agentKind,
+        OpenClawGatewayClientCapability.inlineWidgets,
+        OpenClawGatewayClientCapability.usageRefreshing,
+    ]
 
     typealias Config = (url: URL, token: String?, password: String?)
 
@@ -114,6 +117,7 @@ actor GatewayConnection {
         case devicePairList = "device.pair.list"
         case devicePairApprove = "device.pair.approve"
         case devicePairReject = "device.pair.reject"
+        case execApprovalList = "exec.approval.list"
         case execApprovalResolve = "exec.approval.resolve"
         case approvalResolve = "approval.resolve"
         case cronList = "cron.list"

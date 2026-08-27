@@ -52,6 +52,22 @@ describe("daemon action JSON hints", () => {
       }),
     );
   });
+
+  it.each([
+    "openclaw --profile work gateway install",
+    "openclaw --container demo gateway install",
+    "openclaw node install",
+    "openclaw --profile work node install",
+    "openclaw --container demo node install",
+  ])("classifies scoped Gateway and node service install hints: %s", (hint) => {
+    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+
+    createDaemonActionContext({ action: "start", json: true }).emit({ ok: false, hints: [hint] });
+
+    expect(writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ hintItems: [{ kind: "install", text: hint }] }),
+    );
+  });
 });
 
 describe("daemon install verification", () => {

@@ -243,6 +243,8 @@ async function runEmbeddedAgentViaCliBackend(
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
+      onBlockReply: params.onBlockReply,
+      onPartialReply: params.onPartialReply,
       onExecutionPhase: params.onExecutionPhase,
       cliToolAvailability,
       // One-shot helper run: fresh CLI process, no warm live session left

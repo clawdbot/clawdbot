@@ -5,10 +5,7 @@ import type {
 } from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
-export type IrcAccountConfig = Omit<
-  CommonChannelMessagingConfig,
-  "mentionPatterns" | "replyToMode"
-> & {
+export type IrcAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPatterns"> & {
   /** IRC server hostname (example: irc.example.com). */
   host?: string;
   /** IRC server port (default: 6697 with TLS, otherwise 6667). */

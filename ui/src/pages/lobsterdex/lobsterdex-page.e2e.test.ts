@@ -76,6 +76,10 @@ suite.define(() => {
         const blue = copyButtons.nth(1);
         const crimsonUrl = `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-crimson`;
         const blueUrl = `${new URL(suite.server.baseUrl).origin}/settings/lobsterdex#lobsterdex-blue`;
+        await Promise.all([
+          gateway.waitForRequest("cron.list"),
+          gateway.waitForRequest("models.authStatus"),
+        ]);
         const requestsBeforeCopy = (await gateway.getRequests()).length;
 
         await crimson.focus();

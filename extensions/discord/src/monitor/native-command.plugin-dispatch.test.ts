@@ -66,8 +66,10 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
 }));
+let observedNativeTurnDispatcher: unknown;
 
 const dispatchChannelInboundTurnForTest: typeof dispatchChannelInboundTurn = async (plan) => {
+  observedNativeTurnDispatcher = plan.dispatchReplyFromConfig;
   const dispatchResult = await runtimeModuleMocks.dispatchReplyWithDispatcher({
     ctx: plan.ctxPayload,
     cfg: plan.cfg,
@@ -173,7 +175,13 @@ function createConfiguredAcpCase(params: {
   };
 }
 
-async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeCommandSpec) {
+async function createNativeCommand(
+  cfg: OpenClawConfig,
+  commandSpec: NativeCommandSpec,
+  dispatchReplyFromConfig?: Parameters<
+    typeof createDiscordNativeCommand
+  >[0]["dispatchReplyFromConfig"],
+) {
   return createDiscordNativeCommand({
     command: commandSpec,
     cfg,
@@ -182,6 +190,7 @@ async function createNativeCommand(cfg: OpenClawConfig, commandSpec: NativeComma
     sessionPrefix: "discord:slash",
     ephemeralDefault: true,
     threadBindings: createNoopThreadBindingManager("default"),
+    dispatchReplyFromConfig,
   });
 }
 
@@ -499,6 +508,7 @@ describe("Discord native plugin command dispatch", () => {
   });
 
   beforeEach(() => {
+    observedNativeTurnDispatcher = undefined;
     clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
     clearPluginCommands();
@@ -537,6 +547,24 @@ describe("Discord native plugin command dispatch", () => {
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
+  });
+
+  it("keeps the owning Gateway dispatcher on a native slash turn", async () => {
+    const cfg = createConfig();
+    const interaction = createInteraction();
+    const dispatchReplyFromConfig =
+      vi.fn<
+        NonNullable<Parameters<typeof createDiscordNativeCommand>[0]["dispatchReplyFromConfig"]>
+      >();
+    const command = await createNativeCommand(
+      cfg,
+      { name: "new", description: "Start a new session.", acceptsArgs: true },
+      dispatchReplyFromConfig,
+    );
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(observedNativeTurnDispatcher).toBe(dispatchReplyFromConfig);
   });
 
   it("refreshes native command routing config between invocations", async () => {

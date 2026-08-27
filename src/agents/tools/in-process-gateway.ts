@@ -6,6 +6,7 @@ import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../gateway/meth
 import type { TrustedSessionCreation } from "../../gateway/server-methods/session-creation-provenance.js";
 import type {
   GatewayAgentRunTaskOwner,
+  GatewayContextResolver,
   GatewayRequestContext,
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
@@ -14,12 +15,18 @@ import {
   getInProcessGatewayRequestContext,
   hasInProcessGatewayContext,
 } from "../../gateway/server-plugins.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { callGatewayTool } from "./gateway.js";
+
+type InProcessGatewayCallOptions = {
+  resolveGatewayContext?: GatewayContextResolver;
+};
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
   method: string,
   params: Record<string, unknown>,
+  options?: InProcessGatewayCallOptions,
 ) => Promise<T>;
 
 type AgentToolGatewayRequest = Pick<
@@ -59,12 +66,58 @@ export type AgentToolGatewayRequestCaller = <T = Record<string, unknown>>(
 
 const DEFAULT_IN_PROCESS_GATEWAY_REQUEST_TIMEOUT_MS = 10_000;
 
-export function hasInProcessGatewayToolContext(): boolean {
-  return hasInProcessGatewayContext();
+function callerGatewayContextResolver(
+  explicit?: GatewayContextResolver,
+): GatewayContextResolver | undefined {
+  return explicit ?? getGatewayToolCallerIdentity()?.gatewayContextResolver;
 }
 
-export function getInProcessGatewayToolContext(): GatewayRequestContext | undefined {
-  return getInProcessGatewayRequestContext();
+function bindInProcessGatewayContext(
+  method: string,
+  resolveGatewayContext: GatewayContextResolver,
+): { assertCurrent: () => void; resolve: GatewayContextResolver } {
+  const admittedContext = resolveGatewayContext();
+  if (!admittedContext) {
+    throw new Error(`Gateway instance unavailable for ${method}`);
+  }
+  const assertCurrent = () => {
+    if (resolveGatewayContext() !== admittedContext) {
+      throw new Error(`Gateway instance unavailable for ${method}`);
+    }
+  };
+  return {
+    assertCurrent,
+    resolve: () => {
+      assertCurrent();
+      return admittedContext;
+    },
+  };
+}
+
+async function runBoundInProcessGatewayCall<T>(
+  boundGateway: ReturnType<typeof bindInProcessGatewayContext> | undefined,
+  run: (resolveGatewayContext?: GatewayContextResolver) => Promise<T>,
+): Promise<T> {
+  try {
+    const result = await run(boundGateway?.resolve);
+    boundGateway?.assertCurrent();
+    return result;
+  } catch (error) {
+    boundGateway?.assertCurrent();
+    throw error;
+  }
+}
+
+export function hasInProcessGatewayToolContext(): boolean {
+  const resolveGatewayContext = callerGatewayContextResolver();
+  return resolveGatewayContext ? Boolean(resolveGatewayContext()) : hasInProcessGatewayContext();
+}
+
+export function getInProcessGatewayToolContext(
+  explicitResolver?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  const resolveGatewayContext = callerGatewayContextResolver(explicitResolver);
+  return resolveGatewayContext ? resolveGatewayContext() : getInProcessGatewayRequestContext();
 }
 
 /**
@@ -72,13 +125,20 @@ export function getInProcessGatewayToolContext(): GatewayRequestContext | undefi
  * router without opening a loopback transport. Outside a Gateway process, the
  * same request falls back to the ordinary Gateway client.
  */
-export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
+async function callAgentToolGatewayRequestBound<T>(
   request: AgentToolGatewayRequest,
-): Promise<T> => {
-  const runtimeIdentity = agentToolGatewayRuntimeIdentities.get(request);
-  if (!hasInProcessGatewayContext()) {
+  resolveGatewayContext: GatewayContextResolver | undefined,
+  runtimeIdentity: AgentRuntimeIdentity | undefined,
+): Promise<T> {
+  const boundGateway = resolveGatewayContext
+    ? bindInProcessGatewayContext(request.method, resolveGatewayContext)
+    : undefined;
+  if (!hasInProcessGatewayContext(boundGateway?.resolve)) {
     if (runtimeIdentity) {
       throw new Error("trusted agent runtime identity requires in-process Gateway dispatch");
+    }
+    if (boundGateway) {
+      throw new Error(`Gateway instance unavailable for ${request.method}`);
     }
     const { callGateway } = await import("../../gateway/call.js");
     const {
@@ -105,30 +165,62 @@ export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async 
       ? {
           onSignalAbort: () =>
             request.onSignalAbort?.((method, params, options) =>
-              callAgentToolGatewayRequest({ method, params, ...options }),
+              callAgentToolGatewayRequestBound(
+                { method, params, ...options },
+                boundGateway?.resolve ?? resolveGatewayContext,
+                runtimeIdentity,
+              ),
             ),
         }
       : {}),
     ...(request.signal ? { signal: request.signal } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    ...(boundGateway ? { resolveGatewayContext: boundGateway.resolve } : {}),
   };
-  return await dispatchGatewayMethodInProcess<T>(
-    request.method,
-    (request.params ?? {}) as Record<string, unknown>,
-    withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
+  return await runBoundInProcessGatewayCall(
+    boundGateway,
+    async () =>
+      await dispatchGatewayMethodInProcess<T>(
+        request.method,
+        (request.params ?? {}) as Record<string, unknown>,
+        withInProcessAgentRuntimeIdentity(dispatchOptions, runtimeIdentity),
+      ),
+  );
+}
+
+export const callAgentToolGatewayRequest: AgentToolGatewayRequestCaller = async <T>(
+  request: AgentToolGatewayRequest,
+): Promise<T> => {
+  return await callAgentToolGatewayRequestBound(
+    request,
+    callerGatewayContextResolver(),
+    agentToolGatewayRuntimeIdentities.get(request),
   );
 };
 
 export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
   method: string,
   params: Record<string, unknown>,
+  options: InProcessGatewayCallOptions = {},
 ): Promise<T> => {
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(method, params);
-  if (hasInProcessGatewayContext()) {
-    return await dispatchGatewayMethodInProcess<T>(method, params, {
-      forceSyntheticClient: true,
-      syntheticScopes: scopes,
-    });
+  const resolveGatewayContext = callerGatewayContextResolver(options.resolveGatewayContext);
+  const boundGateway = resolveGatewayContext
+    ? bindInProcessGatewayContext(method, resolveGatewayContext)
+    : undefined;
+  if (hasInProcessGatewayContext(boundGateway?.resolve)) {
+    return await runBoundInProcessGatewayCall(
+      boundGateway,
+      async (boundResolver) =>
+        await dispatchGatewayMethodInProcess<T>(method, params, {
+          forceSyntheticClient: true,
+          syntheticScopes: scopes,
+          ...(boundResolver ? { resolveGatewayContext: boundResolver } : {}),
+        }),
+    );
+  }
+  if (boundGateway) {
+    throw new Error(`Gateway instance unavailable for ${method}`);
   }
   return await callGatewayTool<T>(method, {}, params, { scopes });
 };

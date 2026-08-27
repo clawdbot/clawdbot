@@ -12,7 +12,6 @@ import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { createGatewayEnvSecretRef } from "../../secrets/ref-contract.js";
 import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
-import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 
@@ -94,9 +93,6 @@ export async function runNonInteractiveRemoteSetup(params: {
   };
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
-  }
-  if (!opts.skipHooks) {
-    nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
   }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await commitNonInteractiveOnboardConfig({

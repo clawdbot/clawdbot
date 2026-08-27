@@ -210,6 +210,7 @@ export async function buildMessagePayload(params: {
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
     sandboxRoot: input.sandboxRoot,
+    sandboxContainerWorkdir: input.sandboxContainerWorkdir,
   });
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);

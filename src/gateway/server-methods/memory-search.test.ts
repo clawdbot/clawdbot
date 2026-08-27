@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { MemorySearchResult } from "../../memory-host-sdk/host/types.js";
+import type { MemoryProviderStatus, MemorySearchResult } from "../../memory-host-sdk/host/types.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -56,12 +56,14 @@ async function invokeMemorySearch(params: unknown, cfg: OpenClawConfig) {
 function createStubManager() {
   return {
     search: vi.fn(async (): Promise<MemorySearchResult[]> => []),
-    status: vi.fn(() => ({
-      backend: "builtin" as const,
-      provider: "none",
-      dirty: false,
-      custom: { searchMode: "fts-only" },
-    })),
+    status: vi.fn(
+      (): MemoryProviderStatus => ({
+        backend: "builtin" as const,
+        provider: "none",
+        dirty: false,
+        custom: { searchMode: "fts-only" },
+      }),
+    ),
     close: vi.fn(async () => undefined),
   };
 }
@@ -280,6 +282,32 @@ describe("memory.search gateway method", () => {
         stale: true,
         warning: "Memory index is dirty. Search results may be incomplete.",
         action: "Run: openclaw memory status --index --agent main",
+      },
+      undefined,
+    );
+  });
+
+  it("does not qualify results while session-only catch-up is in progress", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: true,
+      pendingSyncSources: ["sessions"],
+      custom: { searchMode: "fts-only" },
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+
+    const respond = await invokeMemorySearch({ query: "hidden codeword" }, cfg);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        agentId: "main",
+        provider: "none",
+        searchMode: "fts-only",
+        results: [],
       },
       undefined,
     );

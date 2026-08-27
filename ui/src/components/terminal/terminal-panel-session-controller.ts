@@ -363,7 +363,7 @@ export class TerminalPanelSessionController
     const { createTerminalDefaultColorQueryResponder } =
       await import("@openclaw/libterminal/browser");
     const defaultColorQueries = createTerminalDefaultColorQueryResponder({
-      getColors: () => terminalDynamicColors(this.host.themeMode),
+      getColors: terminalDynamicColors,
       reply: (data) => startupInput.onData(TERMINAL_OUTPUT_ENCODER.encode(data)),
     });
     const createController = (parent: HTMLElement, controllerOptions?: { readOnly?: boolean }) =>

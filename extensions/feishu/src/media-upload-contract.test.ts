@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   imageCreate: vi.fn(),
   messageCreate: vi.fn(),
   runFfmpeg: vi.fn(),
+  runFfprobe: vi.fn(),
 }));
 
 vi.mock("./client.js", () => ({ createFeishuClient: mocks.createClient }));
@@ -27,6 +28,7 @@ vi.mock("./runtime.js", () => ({
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   runFfmpeg: mocks.runFfmpeg,
+  runFfprobe: mocks.runFfprobe,
 }));
 
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
@@ -83,6 +85,81 @@ describe("Feishu upload contracts", () => {
     mocks.fileCreate.mockResolvedValue({ code: 0, data: { file_key: "file_1" } });
     mocks.imageCreate.mockResolvedValue({ code: 0, data: { image_key: "image_1" } });
     mocks.messageCreate.mockResolvedValue({ code: 0, data: { message_id: "message_1" } });
+    mocks.runFfprobe.mockResolvedValue("1.25\n");
+  });
+
+  it.each([
+    {
+      label: "a voice-looking URL resolves to a PDF",
+      mediaUrl: "https://example.com/download.ogg",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.7 document"),
+      messageType: "file",
+      degraded: true,
+    },
+    {
+      label: "a voice-looking URL resolves to an image",
+      mediaUrl: "https://example.com/download.opus",
+      fileName: "photo.png",
+      contentType: "image/png",
+      buffer: pngImage,
+      messageType: "image",
+      degraded: true,
+    },
+    {
+      label: "a voice-looking URL resolves to a video",
+      mediaUrl: "https://example.com/download.ogg",
+      fileName: "clip.mp4",
+      contentType: "video/mp4",
+      buffer: Buffer.from("video bytes"),
+      messageType: "media",
+      degraded: true,
+    },
+    {
+      label: "actual native voice remains audio",
+      mediaUrl: "https://example.com/download.ogg",
+      fileName: "voice.ogg",
+      contentType: "audio/ogg",
+      buffer: Buffer.from("voice bytes"),
+      messageType: "audio",
+      degraded: false,
+    },
+    {
+      label: "an ordinary PDF was never treated as voice",
+      mediaUrl: "https://example.com/report.pdf",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.7 document"),
+      messageType: "file",
+      degraded: false,
+    },
+    {
+      label: "explicit voice intent still reports a PDF degradation",
+      mediaUrl: "https://example.com/report.pdf",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+      buffer: Buffer.from("%PDF-1.7 document"),
+      audioAsVoice: true,
+      messageType: "file",
+      degraded: true,
+    },
+  ])("reconciles voice visibility after loading when $label", async (media) => {
+    mocks.loadWebMedia.mockResolvedValueOnce({
+      buffer: media.buffer,
+      fileName: media.fileName,
+      contentType: media.contentType,
+    });
+
+    const result = await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: media.mediaUrl,
+      ...(media.audioAsVoice ? { audioAsVoice: true } : {}),
+    });
+
+    expect(mockCallData(mocks.messageCreate).msg_type).toBe(media.messageType);
+    expect(result.voiceIntentDegradedToFile).toBe(media.degraded ? true : undefined);
   });
 
   it.each([

@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" role="img" aria-label="JSON file overlay">
+  <path d="M9 3.75H7.5c-1.25 0-2 .75-2 2v3.1c0 1.4-.65 2.15-2 2.15 1.35 0 2 .75 2 2.15v3.1c0 1.25.75 2 2 2H9" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M15 3.75h1.5c1.25 0 2 .75 2 2v3.1c0 1.4.65 2.15 2 2.15-1.35 0-2 .75-2 2.15v3.1c0 1.25-.75 2-2 2H15" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

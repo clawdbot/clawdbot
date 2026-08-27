@@ -7,7 +7,6 @@ const mocks = vi.hoisted(() => ({
   buildModelsProviderData: vi.fn(),
   deliverReply: vi.fn(),
   dispatch: vi.fn(),
-  markDeliverySettled: vi.fn(),
   parseContext: vi.fn(),
   runDetachedWebhookWork: vi.fn(),
 }));
@@ -75,6 +74,7 @@ describe("Mattermost model-picker interaction dispatch", () => {
       content: "model updated",
     });
     mocks.buildEventPlan.mockResolvedValue({
+      channelId: "channel-1",
       channelDisplay: "Lifecycle",
       kind: "channel",
       roomLabel: "#lifecycle",
@@ -83,11 +83,6 @@ describe("Mattermost model-picker interaction dispatch", () => {
       to: "channel:channel-1",
       finalizeContext: (context: Record<string, unknown>) => context,
       createReplyPlan: () => ({
-        deliveryBarrier: {
-          trackDmChannelResolution: vi.fn(),
-          resolveTimeoutPolicy: vi.fn(),
-          markDeliverySettled: mocks.markDeliverySettled,
-        },
         replyOptions: {},
         replyPipeline: {},
         tableMode: "off",
@@ -98,19 +93,15 @@ describe("Mattermost model-picker interaction dispatch", () => {
       const delivery = params.delivery as
         | { deliver?: (payload: { text: string; replyToId?: string }) => Promise<unknown> }
         | undefined;
-      const dispatcherOptions = params.dispatcherOptions as
-        | { onDeliverySettled?: () => void }
-        | undefined;
       await delivery?.deliver?.({
         text: "model updated",
         replyToId: "interaction:picker-post-1:select:openai/gpt-5.4",
       });
-      dispatcherOptions?.onDeliverySettled?.();
       return {};
     });
   });
 
-  it("reserves independent work before ack and observes terminal settlement", async () => {
+  it("reserves independent work before ack", async () => {
     let detachedRun: (() => Promise<void>) | undefined;
     mocks.runDetachedWebhookWork.mockImplementation((run: () => Promise<void>) => {
       detachedRun = run;
@@ -162,14 +153,10 @@ describe("Mattermost model-picker interaction dispatch", () => {
       expect.objectContaining({
         channel: "mattermost",
         delivery: expect.objectContaining({ observeMessageSent: true }),
-        dispatcherOptions: expect.objectContaining({
-          onDeliverySettled: mocks.markDeliverySettled,
-        }),
       }),
     );
-    expect(mocks.markDeliverySettled).toHaveBeenCalledOnce();
     expect(mocks.deliverReply).toHaveBeenCalledWith(
-      expect.objectContaining({ replyToId: "picker-post-1" }),
+      expect.objectContaining({ channelId: "channel-1", replyToId: "picker-post-1" }),
     );
     expect(updateModelPickerPost).toHaveBeenCalledWith(
       expect.objectContaining({ message: "updated picker" }),

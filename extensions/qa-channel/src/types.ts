@@ -9,6 +9,7 @@ type QaChannelActionConfig = {
 export type QaChannelAccountConfig = {
   name?: string;
   enabled?: boolean;
+  responsePrefix?: string;
   baseUrl?: string;
   botUserId?: string;
   botDisplayName?: string;

@@ -6,6 +6,7 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildRemoteCommand, sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
+import { resolveFsSandboxPolicy } from "./fs-policy.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
 import { resolveExecServerPath } from "./path-uri.js";
 import { prepareSandboxChildExec, spawnSandboxChild } from "./sandbox-child.js";
@@ -30,6 +31,7 @@ export async function startProcess(
   const argv = requireStringArray(record.argv, "argv");
   const cwd = resolveExecServerPath(requireString(record.cwd, "cwd"), "process cwd");
   rejectUnsupportedArg0(record.arg0);
+  assertSupportedProcessSandbox(execServer, record);
   const env = readProcessEnv(record);
   const tty = record.tty === true;
   const pipeStdin = record.pipeStdin === true;
@@ -78,7 +80,38 @@ export async function startProcess(
       managed.startPromise = undefined;
     }
   }
-  return { processId };
+  return { processId, sandboxType: "none" };
+}
+
+function assertSupportedProcessSandbox(execServer: OpenClawExecServer, record: JsonObject): void {
+  if (record.networkProxy !== undefined && record.networkProxy !== null) {
+    throw new Error("Codex sandbox exec-server network proxy launch is not supported.");
+  }
+  if (
+    record.enforceManagedNetwork === true ||
+    (record.managedNetwork !== undefined && record.managedNetwork !== null)
+  ) {
+    throw new Error(
+      "Codex managed network restrictions cannot be enforced by the sandbox backend.",
+    );
+  }
+  // Docker/SSH owns the outer sandbox; it cannot impose narrower Codex process-local policy.
+  if (resolveFsSandboxPolicy(execServer, record)?.unrestricted === false) {
+    throw new Error(
+      "Codex process filesystem sandbox restrictions cannot be enforced by the backend.",
+    );
+  }
+  if (record.sandbox === undefined || record.sandbox === null) {
+    return;
+  }
+  const sandbox = requireObject(record.sandbox, "process sandbox context");
+  const permissions = requireObject(sandbox.permissions, "process sandbox permissions");
+  if (permissions.network !== "restricted") {
+    return;
+  }
+  if (!execServer.networkIsolated) {
+    throw new Error("Codex network restrictions cannot be enforced by the sandbox backend.");
+  }
 }
 
 async function runProcess(

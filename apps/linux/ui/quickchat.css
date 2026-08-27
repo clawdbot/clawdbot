@@ -125,7 +125,7 @@ body.shown .composer {
   outline: 0;
   color: #f7f7f8;
   font: 400 14px/1.4 inherit;
-  caret-color: #ff6b6b;
+  caret-color: var(--accent, #ff6b6b);
   background: transparent;
 }
 
@@ -145,7 +145,7 @@ body.shown .composer {
   border-radius: 50%;
   color: #1c1c1e;
   cursor: pointer;
-  background: #ff6b6b;
+  background: var(--accent, #ff6b6b);
   transition:
     opacity 120ms ease,
     transform 120ms ease;

@@ -178,15 +178,16 @@ export class GatewayPendingRequests {
   }
 
   flush(error: Error): void {
-    for (const [id, pending] of this.pending) {
-      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
+    const retired = [...this.pending];
+    this.pending.clear();
+    // Timing observers can reconnect synchronously, so detach the entire old
+    // generation and reset its sequence before running any caller-owned code.
+    this.requestSequence = 0;
+    for (const [id, pending] of retired) {
       pending.cleanup?.();
+      this.finishTiming(id, pending, false, "CLIENT_CLOSED");
       pending.reject(error);
     }
-    this.pending.clear();
-    // Request sequences belong to one socket generation. Retired socket frames
-    // are fenced by GatewayProtocolClient before the sequence restarts.
-    this.requestSequence = 0;
   }
 
   private allocateRequestId(): string {

@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   ensureBrowserControlAuth,
   resolveBrowserControlAuth,
@@ -29,6 +30,8 @@ import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
+
+const sandboxLog = createSubsystemLogger("agent/sandbox");
 
 const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
   () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
@@ -83,6 +86,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   agentId: string;
   rawSessionKey: string;
+  sandboxPrincipalId?: string;
   config?: OpenClawConfig;
   execOverrides?: ExecPolicyOverrides;
   skillsSnapshot?: SkillSnapshot;
@@ -102,6 +106,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       cfg,
       rawSessionKey,
       agentId: params.agentId,
+      sandboxPrincipalId: params.sandboxPrincipalId,
       workspaceDir: params.workspaceDir,
     });
 
@@ -165,7 +170,27 @@ function resolveSandboxSession(params: {
     return null;
   }
 
-  const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  const configuredSandbox = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  if (!runtime.sandboxRequired) {
+    return { rawSessionKey, runtime, cfg: configuredSandbox };
+  }
+  if (!runtime.sandboxPrincipalId) {
+    throw new Error(
+      "A required sandbox cannot be provisioned without its session creator principal.",
+    );
+  }
+  if (configuredSandbox.workspaceAccess === "rw") {
+    sandboxLog.warn(
+      'Configured sandbox workspaceAccess "rw" is capped to "ro" for a role-required session; guests cannot share the writable agent workspace.',
+    );
+  }
+  // Docker and browser backends replace shared scope keys with a literal name;
+  // agent scope lets the creator-qualified key own every sandbox resource.
+  const cfg = {
+    ...configuredSandbox,
+    scope: "agent" as const,
+    workspaceAccess: runtime.workspaceAccess,
+  };
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -236,6 +261,7 @@ async function resolveProvisionedSandboxContext(
     cfg,
     agentId: runtime.agentId,
     rawSessionKey,
+    sandboxPrincipalId: runtime.sandboxPrincipalId,
     config: params.config,
     execOverrides: params.execOverrides,
     skillsSnapshot: params.skillsSnapshot,
@@ -319,6 +345,7 @@ async function resolveProvisionedSandboxContext(
 
   const sandboxContext: SandboxContext = {
     enabled: true,
+    ...(runtime.sandboxRequired ? { required: true } : {}),
     backendId: backend.id,
     sessionKey: rawSessionKey,
     workspaceDir,
@@ -392,6 +419,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     cfg,
     agentId: runtime.agentId,
     rawSessionKey,
+    sandboxPrincipalId: runtime.sandboxPrincipalId,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });

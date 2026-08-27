@@ -240,14 +240,29 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
         : [];
     }),
   );
-  const allToolsProvenSettled =
-    attempt.itemLifecycle.startedCount > 0 &&
-    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
-    attempt.itemLifecycle.activeCount === 0 &&
+  // Transcript proof: every call in the batch has its result persisted. Nested
+  // code-mode work (exec status "waiting") keeps lifecycle items active while
+  // the outer result is already recorded, so this is the weaker of the two.
+  const allToolCallsRecorded =
     requestedToolCalls.length > 0 &&
     requestedToolCalls.every(
       ({ id, name }) =>
         id !== null && name !== null && settledToolResults.get(id)?.toolName === name,
+    );
+  const allToolsProvenSettled =
+    allToolCallsRecorded &&
+    attempt.itemLifecycle.startedCount > 0 &&
+    attempt.itemLifecycle.completedCount === attempt.itemLifecycle.startedCount &&
+    attempt.itemLifecycle.activeCount === 0;
+  // Producer-recorded fact from the tool completion handler: one of this batch's
+  // exec results parked a Code Mode run, which is the only legitimate reason a
+  // fully recorded batch still shows active lifecycle items.
+  const parkedCodeModeRun =
+    allToolCallsRecorded &&
+    requestedToolCalls.some(({ id }) =>
+      attempt.toolMetas.some(
+        (entry) => entry.toolCallId === id && entry.codeModeSuspended === true,
+      ),
     );
   const failedToolNames = new Set(
     requestedToolCalls.flatMap(({ id, name }) =>
@@ -266,7 +281,14 @@ export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) 
       );
       return metadata?.terminate === true && metadata.isError !== true;
     });
-  return { assistant, allToolsProvenSettled, failedToolNames, intentionalTermination };
+  return {
+    assistant,
+    allToolCallsRecorded,
+    allToolsProvenSettled,
+    parkedCodeModeRun,
+    failedToolNames,
+    intentionalTermination,
+  };
 }
 
 /** Builds one fresh continuation after settled tools ended without a visible final answer. */

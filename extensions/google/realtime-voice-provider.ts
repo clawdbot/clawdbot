@@ -57,7 +57,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { createGoogleGenAI } from "./google-genai-runtime.js";
-import { resolveGoogleGemini3ThinkingLevel } from "./thinking.js";
+import { resolveGoogleGemini3ThinkingLevel } from "./thinking-api.js";
 
 const GOOGLE_REALTIME_DEFAULT_MODEL = "gemini-3.1-flash-live-preview";
 const GOOGLE_REALTIME_DEFAULT_VOICE = "Kore";

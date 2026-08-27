@@ -13,6 +13,7 @@ import pMap from "p-map";
 import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -78,18 +79,6 @@ Examples:
 `);
 }
 
-function parsePositiveInt(raw: unknown, flagName: string): number {
-  const text = typeof raw === "string" || typeof raw === "number" ? String(raw).trim() : "";
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${flagName} must be a positive integer`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${flagName} must be a positive integer`);
-  }
-  return parsed;
-}
-
 /**
  * Parses extension memory profiler options after pnpm's optional separator.
  */
@@ -129,19 +118,19 @@ export function parseArgs(argv: string[]): {
         break;
       }
       case "--concurrency":
-        options.concurrency = parsePositiveInt(args[index + 1], arg);
+        options.concurrency = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInt(args[index + 1], arg);
+        options.timeoutMs = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--combined-timeout-ms":
-        options.combinedTimeoutMs = parsePositiveInt(args[index + 1], arg);
+        options.combinedTimeoutMs = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--top":
-        options.top = parsePositiveInt(args[index + 1], arg);
+        options.top = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--json": {

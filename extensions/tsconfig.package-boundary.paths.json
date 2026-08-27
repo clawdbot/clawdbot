@@ -134,6 +134,9 @@
       "openclaw/plugin-sdk/cli-backend": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/cli-backend.d.ts"
       ],
+      "openclaw/plugin-sdk/claude-model-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/claude-model-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
@@ -256,6 +259,12 @@
       ],
       "openclaw/plugin-sdk/channel-contract-testing": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/channel-contract-testing.d.ts"
+      ],
+      "openclaw/plugin-sdk/channel-ingress-test-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-ingress-test-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/channel-join-intro-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/channel-join-intro-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/dangerous-name-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/dangerous-name-runtime.d.ts"

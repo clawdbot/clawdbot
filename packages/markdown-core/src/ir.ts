@@ -1,10 +1,11 @@
 // Markdown Core module implements ir behavior.
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
-import MarkdownIt from "markdown-it";
+import MarkdownIt, {
+  type MarkdownIt as MarkdownItParser,
+  type StateCore,
+  type StateInline,
+} from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
-import { HTML_TAG_RE } from "markdown-it/lib/common/html_re.mjs";
-import type StateCore from "markdown-it/lib/rules_core/state_core.mjs";
-import type StateInline from "markdown-it/lib/rules_inline/state_inline.mjs";
 import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
@@ -13,7 +14,7 @@ import {
   type AssistantTranscriptRoleTokenMeta,
 } from "./assistant-transcript.js";
 import { chunkText } from "./chunk-text.js";
-import { tokenizeHtmlTags } from "./html-tags.js";
+import { matchMarkdownHtmlTag, tokenizeHtmlTags } from "./html-tags.js";
 import {
   appendAssistantTranscriptRoleImage,
   appendAssistantTranscriptRoleText,
@@ -269,6 +270,11 @@ export type MarkdownParseOptions = {
   horizontalRuleText?: string;
   /** Preserve source line spacing after headings and code blocks. */
   preserveSourceBlockSpacing?: boolean;
+  /**
+   * Treat Python-style `__name__` member, call, argument, and index identifiers as literal text
+   * instead of emphasis delimiters. Disabled by default.
+   */
+  preserveDunderIdentifiers?: boolean;
 };
 
 function appendHeadingSeparator(state: RenderState, nextBlockStart: number | undefined) {
@@ -287,15 +293,23 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
   state.headingLineEnd = undefined;
 }
 
-function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
+function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   const md = new MarkdownIt({
     html: false,
     linkify: options.linkify ?? true,
     breaks: false,
     typographer: false,
   });
+  md.linkify.set({ fuzzyLink: true });
   md.use(markdownItCjkFriendly);
   md.use(markdownItAssistantTranscriptRoles);
+  if (options.preserveDunderIdentifiers) {
+    md.inline.ruler.before(
+      "emphasis",
+      "markdown_core_dunder_identifiers",
+      preserveDunderIdentifier,
+    );
+  }
   if (options.enableTaskLists) {
     md.core.ruler.before("inline", "markdown_core_task_lists", protectTaskListMarkers);
   }
@@ -320,6 +334,32 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownIt {
     md.disable("autolink");
   }
   return md;
+}
+
+function preserveDunderIdentifier(state: StateInline, silent: boolean): boolean {
+  const match = /^__[\p{L}_][\p{L}\p{N}_]*__/u.exec(state.src.slice(state.pos, state.posMax));
+  if (!match) {
+    return false;
+  }
+  const identifier = match[0];
+  const end = state.pos + identifier.length;
+  const before = state.src[state.pos - 1];
+  const beforeBefore = state.src[state.pos - 2];
+  const after = end < state.posMax ? state.src[end] : undefined;
+  const member = before === ".";
+  const call = after === "(";
+  const functionArgument = before === "(" && /[\p{L}\p{N}_]/u.test(beforeBefore ?? "");
+  const index = after === "[";
+  if (!member && !call && !functionArgument && !index) {
+    return false;
+  }
+  // markdown-it also invokes matching rules silently while scanning labels;
+  // both modes must consume the same source span.
+  if (!silent) {
+    state.push("text", "", 0).content = identifier;
+  }
+  state.pos = end;
+  return true;
 }
 
 function protectTaskListMarkers(state: StateCore): void {
@@ -355,7 +395,7 @@ function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x3c) {
     return false;
   }
-  const raw = HTML_TAG_RE.exec(state.src.slice(state.pos))?.[0];
+  const raw = matchMarkdownHtmlTag(state.src.slice(state.pos));
   if (!raw) {
     return false;
   }

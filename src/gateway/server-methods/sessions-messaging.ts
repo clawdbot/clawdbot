@@ -324,6 +324,7 @@ async function handleSessionSend(params: {
         sessionKey: canonicalKey,
         runId: startedRunId,
         task: (p as { message: string }).message,
+        gatewayContextResolver: params.context.resolveGatewayContext,
       });
     }
     emitSessionsChanged(params.context, {

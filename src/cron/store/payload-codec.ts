@@ -1,6 +1,6 @@
 /** SQLite column codec for cron payload variants. */
 import { safeParseJson } from "@openclaw/normalization-core";
-import type { CronPayload } from "../types.js";
+import { isSystemOwnedCronPayloadKind, type CronPayload } from "../types.js";
 import {
   booleanToInteger,
   integerToBoolean,
@@ -39,9 +39,9 @@ function payloadToolAllowFromRow(
   };
 }
 
-function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | undefined {
+function parseExternalContentSource(raw: string | null): "email" | "gmail" | "webhook" | undefined {
   const parsed = raw ? safeParseJson(raw) : undefined;
-  return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
+  return parsed === "email" || parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
 }
 
 function parseCommandPayloadMessage(
@@ -132,11 +132,9 @@ export function bindPayloadColumns(
   let payloadMessage: string | null;
   if (payload.kind === "systemEvent") {
     payloadMessage = payload.text;
-  } else if (payload.kind === "heartbeat") {
-    payloadMessage = null;
-  } else if (agentTurn) {
-    payloadMessage = agentTurn.message;
-  } else {
+  } else if (payload.kind === "agentTurn") {
+    payloadMessage = payload.message;
+  } else if (payload.kind === "command" || payload.kind === "script") {
     const {
       timeoutSeconds: _timeoutSeconds,
       toolsAllow: _toolsAllow,
@@ -144,6 +142,8 @@ export function bindPayloadColumns(
       ...serializedPayload
     } = payload;
     payloadMessage = serializeJson(serializedPayload);
+  } else {
+    payloadMessage = null;
   }
 
   return {
@@ -153,9 +153,9 @@ export function bindPayloadColumns(
     payload_fallbacks_json: serializeJson(agentTurn?.fallbacks),
     payload_thinking: agentTurn?.thinking ?? null,
     payload_timeout_seconds:
-      payload.kind === "systemEvent" || payload.kind === "heartbeat"
-        ? null
-        : (payload.timeoutSeconds ?? null),
+      payload.kind === "agentTurn" || payload.kind === "command" || payload.kind === "script"
+        ? (payload.timeoutSeconds ?? null)
+        : null,
     payload_allow_unsafe_external_content: booleanToInteger(agentTurn?.allowUnsafeExternalContent),
     payload_external_content_source_json: serializeJson(agentTurn?.externalContentSource),
     payload_light_context: booleanToInteger(agentTurn?.lightContext),
@@ -218,8 +218,8 @@ export function payloadFromRow(row: CronJobRow): CronPayload | null {
       ...payloadToolAllowFromRow(row),
     };
   }
-  if (row.payload_kind === "heartbeat") {
-    return { kind: "heartbeat" };
+  if (isSystemOwnedCronPayloadKind(row.payload_kind)) {
+    return { kind: row.payload_kind };
   }
   if (row.payload_kind === "script") {
     const script = parseScriptPayloadMessage(row.payload_message);

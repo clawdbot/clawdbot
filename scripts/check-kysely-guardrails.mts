@@ -25,7 +25,10 @@ const nodeSqliteBoundaryRoots = [
   path.join(repoRoot, "packages"),
 ];
 
-const nodeSqliteConstructorOwnerPaths = new Set(["src/infra/node-sqlite.ts"]);
+const nodeSqliteConstructorOwnerPaths = new Set([
+  "src/infra/node-sqlite.ts",
+  "src/infra/sqlite-runtime-version.ts",
+]);
 
 const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 
@@ -63,7 +66,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
     "src/state/openclaw-state-db-schema-repair.ts",
+    "src/state/openclaw-state-db-schema-v12-foldin.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
+    "src/state/openclaw-state-db-table-retirements.ts",
     "src/state/openclaw-state-db-fast-path.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/openclaw-state-ownership-operations.ts",
@@ -135,7 +140,6 @@ const rawSqliteAllowPathGroups = {
     "src/plugin-state/plugin-state-store.sqlite.ts",
     "src/tasks/task-flow-registry.store.sqlite.ts",
     "src/tasks/task-registry.store.sqlite.ts",
-    "src/tui/tui-last-session.ts",
   ],
 };
 
