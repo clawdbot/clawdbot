@@ -2751,6 +2751,60 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(consumeCompactionSafeguardCancelReason(sessionManager)).toBeNull();
   });
 
+  it("retries a split-turn summary that revives a completed request", async () => {
+    mockSummarizeInStages.mockReset();
+    const latestAsk = "combine the provider boxes into one completed artifact";
+    const identifier = "/tmp/pr130620/live/marker";
+    const structuredSummary = (pendingAsk: string) =>
+      [
+        "## Decisions",
+        `${latestAsk} was completed.`,
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Preserve exact identifiers.",
+        "## Pending user asks",
+        pendingAsk,
+        "## Exact identifiers",
+        identifier,
+      ].join("\n");
+    mockSummarizeInStages
+      .mockResolvedValueOnce(summaryResult(structuredSummary(latestAsk)))
+      .mockResolvedValueOnce(summaryResult(structuredSummary("None.")));
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: createAnthropicModelFixture(),
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          { role: "user", content: `${latestAsk} and preserve ${identifier}`, timestamp: 1 },
+        ] as AgentMessage[],
+        splitTurnCompleted: true,
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 90_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "test-key" });
+
+    const finalSummary = expectCompactionResult(result).summary;
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    expect(finalSummary).not.toContain(`## Pending user asks\n${latestAsk}`);
+    expect(finalSummary).toContain("## Pending user asks\nNone.");
+    const retry = requireRecord(mockCallArg(mockSummarizeInStages, 1));
+    expect(retry.customInstructions).toContain("completed_latest_user_ask_marked_pending");
+  });
+
   it("audits all-preserved fallback output against pre-partition source facts", async () => {
     mockSummarizeInStages.mockReset();
     const latestAsk = "report deployment status";

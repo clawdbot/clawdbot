@@ -130,6 +130,13 @@ function parseRequiredSummarySectionContents(summary: string): string[] | null {
   return contents.map((lines) => lines.join("\n").trim());
 }
 
+function parsePendingUserAskSections(summary: string): string[] {
+  return summary
+    .split(/^## Pending user asks[ \t]*$/gmu)
+    .slice(1)
+    .map((section) => section.split(/^##[ \t]+\S.*$/mu, 1)[0]?.trim() ?? "");
+}
+
 /**
  * Plan truncation that keeps the audit facts and lets everything else shrink.
  * Only the headings, the bounded latest-ask context, and the audited source
@@ -400,6 +407,7 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
 export function auditSummaryQuality(params: {
   summary: string;
   structuralSummary: string;
+  completionSummary?: string;
   identifiers: string[];
   latestAsk: string | null;
   latestAskCompleted?: boolean;
@@ -425,9 +433,10 @@ export function auditSummaryQuality(params: {
     reasons.push("latest_user_ask_not_reflected");
   }
   if (params.latestAskCompleted) {
-    const sectionContents = parseRequiredSummarySectionContents(params.structuralSummary);
-    const pendingAsks = sectionContents?.[PENDING_ASK_SECTION_INDEX] ?? "";
-    if (hasAskOverlap(pendingAsks, params.latestAsk)) {
+    const pendingAskSections = parsePendingUserAskSections(
+      params.completionSummary ?? params.structuralSummary,
+    );
+    if (pendingAskSections.some((pendingAsks) => hasAskOverlap(pendingAsks, params.latestAsk))) {
       reasons.push("completed_latest_user_ask_marked_pending");
     }
   }

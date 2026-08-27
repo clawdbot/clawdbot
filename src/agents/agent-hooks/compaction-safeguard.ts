@@ -1239,7 +1239,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       const oracleMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const latestUserTurn = extractLatestUserTurn(oracleMessages);
       const latestUserAsk = latestUserTurn?.ask ?? null;
-      const latestUserAskCompleted = latestUserTurn?.completed ?? false;
+      const latestUserAskCompleted =
+        preparation.splitTurnCompleted ?? latestUserTurn?.completed ?? false;
       const identifiers = extractOpaqueIdentifiers(
         oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
       );
@@ -1379,6 +1380,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const quality = auditSummaryQuality({
           summary: finalized.summary,
           structuralSummary: finalized.structuralSummary,
+          completionSummary: unbudgetedSummary,
           identifiers,
           latestAsk: latestUserAsk,
           latestAskCompleted: latestUserAskCompleted,
