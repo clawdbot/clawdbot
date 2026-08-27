@@ -336,6 +336,10 @@ export async function runPublisher({ broker, event, github, organization, env, n
     ),
     context.actor,
   );
+  validateTrustedMain(
+    await github.request("GET", `/repos/${REPOSITORY}/git/ref/heads/main`),
+    context.workflowSha,
+  );
   const check = record(
     await github.request("POST", `/repos/${REPOSITORY}/check-runs`, {
       conclusion: "success",

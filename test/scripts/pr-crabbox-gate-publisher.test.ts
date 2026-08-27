@@ -291,7 +291,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
     expect(github.request).not.toHaveBeenCalled();
   });
 
-  it("revalidates admin and PR state before publishing the exact check", async () => {
+  it("revalidates admin, PR, and protected main before publishing the exact check", async () => {
     const calls: Array<{ body?: unknown; method: string; path: string }> = [];
     const orderedCalls: string[] = [];
     const github = {
@@ -359,9 +359,11 @@ describe("Crabbox gate publisher mutation boundary", () => {
     ).resolves.toMatchObject({ checkId: 88 });
     expect(organization.request).toHaveBeenCalledTimes(2);
     expect(calls.filter((call) => call.path.includes("/pulls/"))).toHaveLength(2);
+    expect(calls.filter((call) => call.path.endsWith("/git/ref/heads/main"))).toHaveLength(2);
     expect(orderedCalls[0]).toBe("organization:GET:/orgs/openclaw/memberships/maintainer");
-    expect(orderedCalls.slice(-2)).toEqual([
+    expect(orderedCalls.slice(-3)).toEqual([
       "organization:GET:/orgs/openclaw/memberships/maintainer",
+      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
       "github:POST:/repos/openclaw/openclaw/check-runs",
     ]);
     const checkCall = calls.at(-1);
@@ -375,6 +377,69 @@ describe("Crabbox gate publisher mutation boundary", () => {
       method: "POST",
       path: "/repos/openclaw/openclaw/check-runs",
     });
+  });
+
+  it("rejects protected main moving after broker validation", async () => {
+    let mainReads = 0;
+    const github = {
+      request: vi.fn(async (method: string, path: string) => {
+        if (path === "/repos/openclaw/openclaw/pulls/130481") {
+          return pullRequest();
+        }
+        if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
+          mainReads += 1;
+          return {
+            object: { sha: mainReads === 1 ? workflowSha : "c".repeat(40) },
+            ref: "refs/heads/main",
+          };
+        }
+        if (path === "/users/maintainer") {
+          return { id: 42, login: "maintainer" };
+        }
+        if (method === "POST" && path === "/repos/openclaw/openclaw/check-runs") {
+          throw new Error("check publication must not run after protected main moves");
+        }
+        throw new Error(`unexpected GitHub call: ${method} ${path}`);
+      }),
+    };
+    const organization = {
+      request: vi.fn(async () => ({
+        role: "admin",
+        state: "active",
+        user: { login: "maintainer" },
+      })),
+    };
+    const broker = {
+      request: vi.fn(async (path: string, options?: { text?: boolean }) => {
+        if (path.endsWith("/logs") && options?.text) {
+          return retainedLog();
+        }
+        if (path.endsWith("/events?limit=500")) {
+          return { events: brokerEvents() };
+        }
+        if (path === `/v1/runs/${runId}`) {
+          return { run: brokerRun() };
+        }
+        throw new Error(`unexpected broker call: ${path}`);
+      }),
+    };
+
+    await expect(
+      runPublisher({
+        broker,
+        env: env(),
+        event: event(),
+        github,
+        now: Date.parse("2026-08-27T02:00:00Z"),
+        organization,
+      }),
+    ).rejects.toThrow(/trusted main moved/u);
+    expect(mainReads).toBe(2);
+    expect(github.request).not.toHaveBeenCalledWith(
+      "POST",
+      "/repos/openclaw/openclaw/check-runs",
+      expect.anything(),
+    );
   });
 
   it("rejects a malformed published check ID", async () => {
