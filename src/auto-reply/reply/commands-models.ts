@@ -371,6 +371,15 @@ export async function buildModelsProviderData(
     // through @zeroaltitude/openclaw-claude-bridge instead of the
     // direct provider runtime.
     { provider: "anthropic", runtime: "claude-bridge", cli: false },
+    // Z.ai gets the same treatment for the same reason: extensions/glm-bridge
+    // is a deliberate mirror of extensions/claude — it runs the SAME
+    // @zeroaltitude/openclaw-claude-bridge process pointed at Z.ai's
+    // Anthropic-compatible endpoint, declares its own `glm-bridge` harness id,
+    // and defaults modelProvider to "zai" so turns are attributed correctly.
+    // Without a row here, runtimeChoicesByProvider never gets a "zai" key and
+    // the picker silently renders no runtime chooser for GLM models, even
+    // though the harness is installed and enabled.
+    { provider: "zai", runtime: "glm-bridge", cli: false },
     ...listCliRuntimeModelBackendBindings().map((binding) => ({
       provider: binding.provider,
       runtime: binding.runtime,

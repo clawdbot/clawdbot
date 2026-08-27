@@ -756,6 +756,20 @@ describe("handleModelsCommand", () => {
     });
   });
 
+  it("offers the glm-bridge runtime for zai, the way anthropic gets claude-bridge", async () => {
+    // Regression for openclaw-ahp8: runtimeBindings is a hardcoded list, so a
+    // bridge-backed provider that is installed and enabled still renders no
+    // runtime chooser unless it has a row. zai/glm-bridge was the omission.
+    const data = await buildModelsProviderData({
+      agents: { defaults: { model: { primary: "zai/glm-5.3" } } },
+    } as OpenClawConfig);
+    const ids = data.runtimeChoicesByProvider?.get("zai")?.map((choice) => choice.id);
+    expect(ids, "zai must have a runtime chooser at all").toBeDefined();
+    // openclaw must stay selectable alongside the bridge, so picking GLM never
+    // strands the user on a single runtime.
+    expect(ids).toEqual(expect.arrayContaining(["glm-bridge", "openclaw"]));
+  });
+
   it("keeps custom OpenAI-compatible providers on the OpenClaw default runtime choice", async () => {
     const data = await buildModelsProviderData({
       models: {
