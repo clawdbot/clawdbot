@@ -6,7 +6,6 @@ struct StatusMenuDescriptor {
         var isPaused: Bool
         var connection: Connection
         var quickChatEnabled: Bool
-        var canvasEnabled: Bool
         var voiceWakeSupported: Bool
         var debugEnabled: Bool
         var updateReady: Bool
@@ -23,7 +22,6 @@ struct StatusMenuDescriptor {
             isPaused: Bool = false,
             connection: Connection = .connected,
             quickChatEnabled: Bool = false,
-            canvasEnabled: Bool = false,
             voiceWakeSupported: Bool = true,
             debugEnabled: Bool = false,
             updateReady: Bool = false,
@@ -39,7 +37,6 @@ struct StatusMenuDescriptor {
             self.isPaused = isPaused
             self.connection = connection
             self.quickChatEnabled = quickChatEnabled
-            self.canvasEnabled = canvasEnabled
             self.voiceWakeSupported = voiceWakeSupported
             self.debugEnabled = debugEnabled
             self.updateReady = updateReady
@@ -114,7 +111,6 @@ struct StatusMenuDescriptor {
         case dashboard
         case quickChat
         case talkMode
-        case canvas
         case allSessions
         case settings
         case debug
@@ -214,9 +210,6 @@ struct StatusMenuDescriptor {
             entries.append(Entry(.action(.quickChat)))
         }
         entries.append(Entry(.action(.talkMode)))
-        if snapshot.canvasEnabled {
-            entries.append(Entry(.action(.canvas)))
-        }
         return Section(id: "actions", entries: entries)
     }
 

@@ -10,7 +10,9 @@ import {
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { createReceiptCard, toFlexMessage, type FlexBubble } from "./flex-templates.js";
+import { toFlexMessage } from "./flex-templates/message.js";
+import { createReceiptCard } from "./flex-templates/schedule-cards.js";
+import type { FlexBubble } from "./flex-templates/types.js";
 export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 
 type FlexMessage = messagingApi.FlexMessage;

@@ -36,7 +36,7 @@ const createEmbeddingProviderMock = vi.hoisted(() =>
             }
             return texts.map(() => [1, 0]);
           },
-          embedQuery: async () => {
+          embed: async () => {
             providerQueryCalls += 1;
             return [1, 0];
           },

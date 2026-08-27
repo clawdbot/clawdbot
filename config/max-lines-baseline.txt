@@ -753,7 +753,6 @@ src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
 src/plugin-state/plugin-state-store.sqlite.ts
-src/plugins/bundled-plugin-metadata.test.ts
 src/plugins/capability-provider-runtime.test.ts
 src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts

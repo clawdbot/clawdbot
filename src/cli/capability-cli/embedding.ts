@@ -66,7 +66,7 @@ async function runMemoryEmbeddingCreate(params: {
   let operationError: unknown;
   let operationFailed = false;
   try {
-    embeddings = await provider.embedBatch(params.texts);
+    embeddings = await provider.embedBatch(params.texts, { inputType: "document" });
   } catch (err) {
     operationError = err;
     operationFailed = true;

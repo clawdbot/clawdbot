@@ -39,9 +39,9 @@ function payloadToolAllowFromRow(
   };
 }
 
-function parseExternalContentSource(raw: string | null): "gmail" | "webhook" | undefined {
+function parseExternalContentSource(raw: string | null): "email" | "gmail" | "webhook" | undefined {
   const parsed = raw ? safeParseJson(raw) : undefined;
-  return parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
+  return parsed === "email" || parsed === "gmail" || parsed === "webhook" ? parsed : undefined;
 }
 
 function parseCommandPayloadMessage(

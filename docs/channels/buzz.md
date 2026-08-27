@@ -137,6 +137,9 @@ While the Gateway is connected, OpenClaw publishes and refreshes the bot's
 ephemeral Buzz presence every 30 seconds. Buzz removes the presence when the
 last authenticated Gateway connection for that bot identity closes, so
 multiple Gateway instances do not incorrectly mark one another offline.
+If the relay stops acknowledging presence, OpenClaw reconnects the affected
+Buzz account instead of leaving an open but stalled connection marked ready.
+An explicit presence rejection remains a warning, not a reconnect trigger.
 
 The local Buzz `just dev` relay does not require separate relay membership by
 default. A hosted or closed relay may require the bot public key to be added to
@@ -310,9 +313,18 @@ Buzz applies two independent controls:
 
 Fresh guided setup allows normal messages from current members of the selected
 rooms. OpenClaw loads Buzz's relay-signed room roster before accepting messages,
-checks membership in memory before persistent dedupe or agent work, and refreshes
-the roster after Buzz membership-change events. There is no per-message relay
-query or Gateway polling.
+checks membership before queuing and again after asynchronous admission, and
+follows live relay-signed roster updates, including role changes. A removal
+invalidates queued messages immediately; cancelled admission is not committed as
+processed. Bounded snapshot refreshes confirm membership-change notifications.
+There is no per-message relay query or Gateway polling.
+Removing a sender does not cancel a room turn already admitted for that sender;
+losing the bot's own Bot role or stopping its connection still fences output.
+
+Startup and reconnect recover eligible messages from the last 24 hours, but
+never from before that room's first activation by this Buzz account. That
+activation floor survives restarts; sender-supplied timestamps do not advance it.
+Replay deduplication prevents completed messages from running again.
 
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
@@ -326,6 +338,24 @@ These controls decide who can start an agent run; they do not limit what the
 routed agent can do after a message is accepted. Treat room messages as
 untrusted input, and configure that agent's [sandbox and tool policy](/gateway/sandbox-vs-tool-policy-vs-elevated)
 for the room's trust level.
+
+### Bot conversations
+
+Authorized room members with the relay-assigned **Bot** role can activate the
+agent under the same mention and sender rules. Within each Gateway, OpenClaw
+limits repeated exchanges between each bot pair in the same relay and room:
+the default budget is 20 accepted messages in 60 seconds, followed by a
+60-second cooldown. Changing threads does not reset the budget. Restarting the
+Gateway clears this in-memory budget; separate Gateways have separate budgets.
+Human messages are unaffected, and suppressed bot turns are logged without
+starting an agent run.
+
+Use the shared `channels.defaults.botLoopProtection` settings to adjust
+`maxEventsPerWindow`, `windowSeconds`, or `cooldownSeconds`. Setting
+`enabled: false` disables this protection. Bot classification comes from the latest
+received relay-signed room roster, never a display name or message content. If an
+authorized bot stops replying during a busy exchange, check the suppression log
+and allow the cooldown to expire before adjusting the budget.
 
 ## Manual configuration
 
@@ -387,6 +417,16 @@ directory, but automation should use `buzz:<ROOM_UUID>` to avoid ambiguity.
 
 For manual configuration, `groupAllowFrom` entries must use the 64-character
 hexadecimal form.
+
+### Reply prefix
+
+Set `channels.buzz.responsePrefix` to prefix automatic agent replies, for
+example `"[Support]"`. Use `"auto"` for the routed agent's identity name,
+`"[{model}]"` for its selected model, or `""` to disable an inherited global
+prefix. Explicit `message` tool and CLI text sends also apply literal and
+identity prefixes; see [shared prefix behavior](/concepts/messages#prefixes-threading-and-replies)
+for model-dependent templates. Buzz uses one account per Gateway, so there is
+no nested `accounts` override.
 
 ### Bot key storage
 

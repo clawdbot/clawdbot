@@ -341,6 +341,44 @@ if (list.status !== 0) {
   fail(`tar -tf failed for ${tarball}: ${list.stderr || list.error?.message || list.status}`);
 }
 
+const verboseList = runPhase("tar mode list", () =>
+  spawnSync("tar", ["-tvf", tarball], {
+    encoding: "utf8",
+    maxBuffer: TAR_LIST_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  }),
+);
+if (verboseList.status !== 0) {
+  fail(
+    `tar -tvf failed for ${tarball}: ${verboseList.stderr || verboseList.error?.message || verboseList.status}`,
+  );
+}
+
+// System tar and mode-preserving installers extract entry modes verbatim, so
+// an owner-only (0600/0700) entry packed on a restrictive-umask host can leave
+// a root-installed CLI unreadable for non-root users. Require a+rX everywhere.
+function collectTarballEntryModeErrors(verboseListing: string): string[] {
+  const modeErrors: string[] = [];
+  for (const line of verboseListing.split(/\r?\n/u)) {
+    const modeString = line.trimStart().split(/\s+/u, 1)[0] ?? "";
+    // Symlinks and hardlinks carry no install-mode contract of their own.
+    if (!/^[-d][rwxsStT-]{9}$/u.test(modeString)) {
+      continue;
+    }
+    // Lowercase x/s/t mean the exec bit is set; uppercase S/T mean it is not.
+    const execAt = (index: number) => /^[xst]$/u.test(modeString.charAt(index));
+    const needsExec = modeString.startsWith("d") || execAt(3) || execAt(6) || execAt(9);
+    const worldReadable = modeString.charAt(4) === "r" && modeString.charAt(7) === "r";
+    const worldExecutable = execAt(6) && execAt(9);
+    if (!worldReadable || (needsExec && !worldExecutable)) {
+      modeErrors.push(
+        `tar entry is not world-readable (${modeString}): ${line.trim().split(/\s+/u).at(-1)}`,
+      );
+    }
+  }
+  return modeErrors;
+}
+
 const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
 try {
   const extract = runPhase("tar extract", () =>
@@ -479,6 +517,8 @@ for (const entry of normalized) {
     errors.push(`unsafe tar entry: ${entry}`);
   }
 }
+
+errors.push(...collectTarballEntryModeErrors(verboseList.stdout));
 
 if (!entrySet.has("package.json")) {
   errors.push("missing package.json");

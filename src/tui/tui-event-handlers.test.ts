@@ -1503,6 +1503,47 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
+  it("discards a delayed local BTW result from the previous same-key session incarnation", () => {
+    const { state, btw, noteLocalBtwRunId, handleBtwEvent, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        localMode: true,
+        state: { activeChatRunId: null, currentSessionId: "private-session" },
+      });
+    noteLocalBtwRunId("private-btw-run");
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+      sessionId: "replacement-session",
+      updatedAt: Date.now(),
+    });
+    handleBtwEvent({
+      kind: "btw",
+      runId: "private-btw-run",
+      sessionKey: state.currentSessionKey,
+      question: "what was discussed?",
+      text: "answer from the previous session",
+    });
+
+    expect(state.currentSessionId).toBe("replacement-session");
+    expect(btw.showResult).not.toHaveBeenCalled();
+
+    noteLocalBtwRunId("replacement-btw-run");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "replacement-btw-run",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "answer for the replacement session",
+    });
+
+    expect(btw.showResult).toHaveBeenCalledExactlyOnceWith({
+      question: "what changed?",
+      text: "answer for the replacement session",
+      isError: undefined,
+    });
+  });
+
   it("clears stale streaming for a local BTW empty final without hiding the result", () => {
     const {
       state,
@@ -3394,8 +3435,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(tui.requestRender).not.toHaveBeenCalled();
     });
 
-    it("does not let an older transcript snapshot replace newer session metadata", () => {
-      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+    it.each([
+      { name: "older timestamp", updatedAt: 100 },
+      { name: "equal timestamp", updatedAt: 200 },
+      { name: "missing timestamp", updatedAt: undefined },
+    ])("rejects a retired session snapshot with a $name", ({ updatedAt }) => {
+      const { state, chatLog, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
         state: {
           activeChatRunId: null,
           currentSessionId: "session-current",
@@ -3405,12 +3450,19 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
       handleSessionMessageEvent({
         sessionId: "session-stale",
-        updatedAt: 100,
+        ...(updatedAt === undefined ? {} : { updatedAt }),
+        message: {
+          role: "user",
+          content: "private previous-session prompt",
+          __openclaw: { id: "previous-session-message", seq: 1 },
+        },
       });
 
       expect(state.currentSessionId).toBe("session-current");
       expect(state.sessionInfo.updatedAt).toBe(200);
-      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(chatLog.addLiveUser).not.toHaveBeenCalled();
+      expect(state.sessionProjection?.entries ?? []).toHaveLength(0);
+      expect(loadHistory).not.toHaveBeenCalled();
     });
 
     it("reloads a global session only for its selected agent", () => {

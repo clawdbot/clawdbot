@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseForTest,
-  OPENCLAW_STATE_SCHEMA_VERSION,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -157,9 +156,7 @@ describe("worker session placement moves", () => {
       },
     });
     expect(begun.intent.operationId).toMatch(/^move:v1:[A-Za-z0-9_-]{43}$/u);
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
+    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 12 });
     expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
     expect(store.getPlacementMoves([SESSION.sessionId, "missing"])).toEqual(
       new Map([[SESSION.sessionId, begun.intent]]),

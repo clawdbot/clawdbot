@@ -2,6 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveLegacyInheritedAuthDir } from "../../agents/legacy-inherited-auth-dir.js";
 import { parseModelRef } from "../../agents/model-selection-normalize.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
@@ -119,7 +120,10 @@ export async function modelsListCommand(
       throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
     }
   }
-  const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(cfg);
+  const authStore = inheritedAuthDir
+    ? loadAuthProfileStoreWithoutExternalProfiles(agentDir, { inheritedAuthDir })
+    : loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
@@ -215,7 +219,7 @@ export async function modelsListCommand(
     cfg,
     agentId,
     agentDir,
-    inheritedAuthDir: agentDir,
+    ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
     authIndex,
     providerDiscoveryProviderIds,
     providerRuntimeDiscoveryProviderIds,

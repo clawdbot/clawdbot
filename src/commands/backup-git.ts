@@ -239,6 +239,11 @@ export async function backupGitRestoreCommand(
         `Warning: this redacted backup omits tables: ${result.excludedTables.join(", ")}`,
       );
     }
+    if (result.excludedConfigStateKeyPrefixes.length > 0) {
+      runtime.error(
+        `Warning: this redacted backup omits machine-state values under: ${result.excludedConfigStateKeyPrefixes.join(", ")}`,
+      );
+    }
   }
   return result;
 }

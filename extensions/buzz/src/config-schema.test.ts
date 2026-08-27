@@ -3,6 +3,18 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import { describe, expect, it } from "vitest";
 import { BuzzConfigSchema } from "./config-schema.js";
 
+const pluginManifest = JSON.parse(
+  readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+) as {
+  channelConfigs: {
+    buzz: { schema: Parameters<typeof validateJsonSchemaValue>[0]["schema"] };
+  };
+};
+const configSchemas = [
+  ["runtime", BuzzConfigSchema.schema],
+  ["manifest", pluginManifest.channelConfigs.buzz.schema],
+] as const;
+
 function parseBuzzConfig(value: unknown) {
   const runtime = BuzzConfigSchema.runtime;
   if (!runtime) {
@@ -24,6 +36,23 @@ function expectRelayUrlValidity(relayUrl: string, valid: boolean) {
 }
 
 describe("BuzzConfigSchema", () => {
+  it.each(["[bot]", "auto", "", "[{model}]"])(
+    "accepts responsePrefix %j in runtime and manifest schemas",
+    (responsePrefix) => {
+      const config = { groupPolicy: "allowlist", responsePrefix };
+      expect(parseBuzzConfig(config).success).toBe(true);
+      for (const [name, schema] of configSchemas) {
+        expect(
+          validateJsonSchemaValue({
+            cacheKey: `buzz.config-schema.prefix.${name}`,
+            schema,
+            value: config,
+          }).ok,
+        ).toBe(true);
+      }
+    },
+  );
+
   it.each([
     "ws://localhost:3000",
     "wss://buzz.example.com/relay",
@@ -72,17 +101,7 @@ describe("BuzzConfigSchema", () => {
     };
 
     expect(parseBuzzConfig(config).success).toBe(true);
-    const pluginManifest = JSON.parse(
-      readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
-    ) as {
-      channelConfigs: {
-        buzz: { schema: Parameters<typeof validateJsonSchemaValue>[0]["schema"] };
-      };
-    };
-    for (const [name, schema] of [
-      ["runtime", BuzzConfigSchema.schema],
-      ["manifest", pluginManifest.channelConfigs.buzz.schema],
-    ] as const) {
+    for (const [name, schema] of configSchemas) {
       expect(
         validateJsonSchemaValue({
           cacheKey: `buzz.config-schema.room-sender-policy.${name}`,

@@ -5,6 +5,8 @@ import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agen
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
+import { emitAgentEvent, onAgentRuntimeEvent } from "../../infra/agent-events.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
@@ -70,6 +72,78 @@ afterEach(async () => {
 });
 
 describe("experience review auto apply", () => {
+  it("keeps detached review events out of foreground session presentation", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-hidden-events-");
+    const observed: Array<
+      [
+        stream: string,
+        controlUiVisible?: boolean,
+        projectSessionLifecycle?: boolean,
+        projectSessionMessages?: boolean,
+        sessionKey?: string,
+      ]
+    > = [];
+    let reviewRunId = "";
+    const unsubscribe = onAgentRuntimeEvent((event) => {
+      if (event.runId !== reviewRunId) {
+        return;
+      }
+      observed.push([
+        event.stream,
+        event.controlUiVisible,
+        event.projectSessionLifecycle,
+        event.projectSessionMessages,
+        event.sessionKey,
+      ]);
+    });
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      reviewRunId = params.runId;
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "NOTHING_TO_LEARN" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "start", name: "skill_workshop", toolCallId: "review-tool" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: Date.now() },
+      });
+      return {};
+    });
+    const config = { skills: { workshop: { autonomous: { mode: "auto" as const } } } };
+
+    try {
+      await runSkillExperienceReview(
+        {
+          ctx: {
+            sessionId: "foreground-session",
+            sessionKey: "agent:main:main",
+            workspaceDir,
+            modelProviderId: "openai",
+            modelId: "gpt-test",
+            foregroundPromptContext: foregroundPromptContext(workspaceDir),
+          },
+          config,
+        },
+        { getCurrentConfig: () => config },
+      );
+    } finally {
+      unsubscribe();
+    }
+
+    expect(observed).toEqual([
+      ["assistant", false, false, false, undefined],
+      ["tool", false, false, false, undefined],
+      ["lifecycle", false, false, false, "agent:main:main"],
+    ]);
+    expect(getAgentRunContext(reviewRunId)).toBeUndefined();
+  });
+
   it("applies the isolated reviewer proposal after the reviewer completes", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-workspace-");
     const foregroundPromptCacheKey = resolveSessionBoundaryPromptCacheKey({
@@ -138,6 +212,9 @@ describe("experience review auto apply", () => {
         skillWorkshopAutonomousCapture: true,
         toolExecutionAllow: ["skill_workshop"],
         sessionPersistence: "detached",
+        silentExpected: true,
+        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "optional",
         promptCacheKey: foregroundPromptCacheKey,
         trigger: "user",
         reasoningLevel: "on",

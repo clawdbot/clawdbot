@@ -499,7 +499,7 @@ class UsagePage extends OpenClawLightDomElement {
     }
   }
 
-  private selectSession(key: string, shiftKey: boolean) {
+  private selectSession(key: string, shiftKey: boolean, orderedKeys: string[]) {
     this.clearDetails();
     this.usageRecentSessions = [
       key,
@@ -509,8 +509,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageSelectedSessions = selectUsageSessionKeys(
       this.usageSelectedSessions,
       key,
-      this.usageResult?.sessions ?? [],
-      this.usageChartMode === "tokens",
+      orderedKeys,
       shiftKey,
     );
 
@@ -690,7 +689,8 @@ class UsagePage extends OpenClawLightDomElement {
             this.usageLogFilterHasTools = false;
             this.usageLogFilterQuery = "";
           },
-          onSelectSession: (key, shiftKey) => this.selectSession(key, shiftKey),
+          onSelectSession: (key, shiftKey, orderedKeys) =>
+            this.selectSession(key, shiftKey, orderedKeys),
           onTimeSeriesModeChange: (mode) => {
             this.usageTimeSeriesMode = mode;
           },

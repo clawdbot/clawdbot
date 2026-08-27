@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 340810,
-  "reason": "sidebar gateway status pill rebased onto the composer-queue main: combined tree measures 340754-340770 B; pinned with jitter headroom",
+  "startupJsGzipBytes": 342930,
+  "reason": "per-profile appearance preferences: profile-scoped resolution, users.prefs routing, and live cross-device sync on the boot path; measured 342875 B on the tide/beacon/phosphor base, pinned with jitter headroom",
   "updatedAt": "2026-08-26"
 }

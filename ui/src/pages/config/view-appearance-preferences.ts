@@ -32,6 +32,9 @@ import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import type { ConfigProps } from "./view-types.ts";
 
 export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
+  if (provenance === "profile") {
+    return t("configView.profileSyncedHint");
+  }
   if (provenance === "device-local") {
     return t("quickSettings.personal.browserOnly");
   }

@@ -312,27 +312,23 @@ export async function createLmstudioEmbeddingProvider(
     client,
     errorPrefix: "lmstudio embeddings failed",
   });
+  const embed: MemoryEmbeddingProvider["embed"] = async (input, callOptions) =>
+    await withLocalServiceLease(callOptions?.signal, async () => {
+      return await remoteProvider.embed(input, callOptions);
+    });
+  const embedBatch: MemoryEmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
+    if (callOptions?.inputType === "query") {
+      // Promise.all rejects before sibling requests settle, so every query keeps its own lease.
+      return await Promise.all(inputs.map((input) => embed(input, callOptions)));
+    }
+    return await withLocalServiceLease(callOptions?.signal, async () => {
+      return await remoteProvider.embedBatch(inputs, callOptions);
+    });
+  };
   const provider: MemoryEmbeddingProvider = {
     ...remoteProvider,
-    embedQuery: async (text, callOptions) =>
-      await withLocalServiceLease(callOptions?.signal, async () => {
-        return await remoteProvider.embedQuery(text, callOptions);
-      }),
-    embedBatch: async (texts, callOptions) =>
-      await withLocalServiceLease(callOptions?.signal, async () => {
-        return await remoteProvider.embedBatch(texts, callOptions);
-      }),
-    ...(remoteProvider.embedBatchInputs
-      ? {
-          embedBatchInputs: async (
-            inputs: Parameters<NonNullable<MemoryEmbeddingProvider["embedBatchInputs"]>>[0],
-            callOptions?: Parameters<NonNullable<MemoryEmbeddingProvider["embedBatchInputs"]>>[1],
-          ) =>
-            await withLocalServiceLease(callOptions?.signal, async () => {
-              return await remoteProvider.embedBatchInputs!(inputs, callOptions);
-            }),
-        }
-      : {}),
+    embed,
+    embedBatch,
   };
   return {
     provider,

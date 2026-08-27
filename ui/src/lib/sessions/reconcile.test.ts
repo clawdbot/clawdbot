@@ -142,6 +142,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
         controlOwnerSessionKey: "agent:main:owner",
         restartRecoveryStatus: "pending",
         goal: "ship it",
+        modelOverrideSource: "user",
       } as never,
     ],
   };
@@ -159,6 +160,7 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
       controlOwnerSessionKey: null,
       restartRecoveryStatus: null,
       goal: null,
+      modelOverrideSource: null,
     },
   } as never);
 
@@ -176,6 +178,10 @@ test("sessions.changed deletes every nested null tombstone, not a hand-kept list
   }
   // updatedAt stays legitimately nullable and must not be deleted by the loop.
   expect(row?.updatedAt).toBe(2);
+  // Clearing a pin means the gateway confirmed inheritance. Deleting that null would
+  // make the row indistinguishable from a gateway too old to report provenance, and
+  // the picker would keep showing the cleared pin.
+  expect(row?.modelOverrideSource).toBeNull();
 });
 
 test("sessions.changed clears exact run ids only for an explicit tombstone", () => {

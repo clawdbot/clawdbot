@@ -105,5 +105,5 @@ export function createBoardHarness(
     });
     return respond;
   };
-  return { store, broadcast, invoke, mcpApp };
+  return { store, broadcast, handlers, invoke, mcpApp };
 }

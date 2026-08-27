@@ -69,6 +69,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI agent files:** keep confirmed saves and file metadata intact when older reads or list refreshes finish later, preserve newer drafts, and rebuild invalidated file lists without losing the open editor.
+
 - **Control UI terminal transcript settlement:** retire live commentary, tool, and streamed reply projections atomically when the matching durable terminal message arrives, preventing duplicated final responses and transient row overlap after steering. Fixes #127209. Thanks @shakkernerd.
 - **Control UI Codex compaction history:** preserve successful native context compactions as durable, model-excluded activity inside completed work traces after the composer status clears or the session reloads. Fixes #127206. Thanks @shakkernerd.
 - **Control UI Codex steering:** preserve pre-steer commentary and tool activity in durable transcript order, keep it visible while active, and collapse it before the steering message after completion. Fixes #126938. Thanks @shakkernerd.
@@ -310,6 +312,7 @@ Docs: https://docs.openclaw.ai
 - **Control UI agent model labels:** show each selected agent's effective model in the Default picker option instead of the global model. (#100719, #77690, #77440) Thanks @hyspacex.
 - **Control UI inbound image previews:** render canonical inbound media references through the authenticated ticket route after chat-history reloads. (#100725, #90172, #89591) Thanks @sweetcornna.
 - **Small-context compaction:** cap the effective reserve against the known model context window so small local models do not enter compaction from the first token. (#100621) Thanks @vincentkoc.
+- **Tool-loop detection:** recognize repeated browser and network failures despite fresh external-content wrapper nonces, while preserving meaningful progress and model-visible security markers. Fixes #130210. (#130261) Thanks @ruel225.
 - **Detail-less provider failures:** keep opaque upstream failures from cooling API-key auth profiles while preserving WHAM-backed OpenAI OAuth health checks and configured model fallback. (#100600, #100617) Thanks @fengjikui.
 - **Plugin install diagnostics:** suppress the misleading hook-pack fallback after plugin install failures only when the hook manifest is absent, while preserving actionable malformed hook-pack errors. (#100554) Thanks @vincentkoc.
 - **Config validation diagnostics:** emit each unchanged sanitized validation-warning payload once per config path, reset deduplication after a clean validation, and preserve the warning fingerprint across transient invalid reads and failed refreshes. (#100569, #25574) Thanks @vincentkoc.
@@ -406,6 +409,7 @@ Docs: https://docs.openclaw.ai
 - **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
 - **Cron llama.cpp tool schemas:** keep the model-facing cron declaration schema compatible with llama.cpp while retaining gateway and runtime nonblank validation. Fixes #107449. (#108360) Thanks @lee-xydt.
 - **System-agent recovery guidance:** direct browser and app users to Settings or the OpenClaw host instead of terminal-only exit guidance while preserving the required stop, onboard, and restart lifecycle. (#114633) Thanks @jesse-merhi.
+- **Browser keyboard aliases:** accept `Esc`, `Return`, `Del`, `Ctrl`, and `Cmd` in browser actions and shortcuts, and preserve keyboard guidance in compact tool schemas. (#130401) Thanks @geekforlife.
 
 ## 2026.7.1
 

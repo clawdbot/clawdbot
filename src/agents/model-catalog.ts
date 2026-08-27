@@ -17,6 +17,7 @@ import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapsh
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import type {
@@ -408,14 +409,13 @@ export function loadManifestModelCatalog(params: {
   if (cached?.snapshot === resolvedSnapshot) {
     return cached.rows;
   }
+  const plugins = resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config);
   const plan = planEffectiveModelCatalogRows({
-    registry: {
-      plugins: resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config),
-    },
+    registry: { plugins },
     config: params.config,
   });
   const providerOrderByKey = new Map<string, number>();
-  for (const plugin of resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config)) {
+  for (const plugin of plugins) {
     for (const [provider, providerCatalog] of Object.entries(
       plugin.modelCatalog?.providers ?? {},
     )) {
@@ -428,53 +428,10 @@ export function loadManifestModelCatalog(params: {
     }
   }
   const rows = plan.rows.map((row) => {
-    const entry: ModelCatalogEntry = {
-      id: row.id,
-      name: row.name,
-      provider: row.provider,
-      api: row.api,
-      status: row.status,
-    };
+    const entry = modelCatalogRowToEntry(row);
     const providerOrder = providerOrderByKey.get(catalogEntryDedupeKey(row.provider, row.id));
     if (providerOrder !== undefined) {
       entry.providerOrder = providerOrder;
-    }
-    if (row.baseUrl) {
-      entry.baseUrl = row.baseUrl;
-    }
-    const contextWindow = row.contextWindow ?? row.contextTokens;
-    if (contextWindow) {
-      entry.contextWindow = contextWindow;
-    }
-    if (row.contextWindows?.length) {
-      entry.contextWindows = row.contextWindows.map((option) => ({ ...option }));
-    }
-    if (row.contextWindowDefault) {
-      entry.contextWindowDefault = row.contextWindowDefault;
-    }
-    if (row.contextTokens) {
-      entry.contextTokens = row.contextTokens;
-    }
-    if (typeof row.reasoning === "boolean") {
-      entry.reasoning = row.reasoning;
-    }
-    if (row.thinkingLevelMap) {
-      entry.thinkingLevelMap = { ...row.thinkingLevelMap };
-    }
-    if (row.input?.length) {
-      entry.input = [...row.input];
-    }
-    if (row.compat) {
-      entry.compat = row.compat;
-    }
-    if (row.statusReason) {
-      entry.statusReason = row.statusReason;
-    }
-    if (row.replaces?.length) {
-      entry.replaces = [...row.replaces];
-    }
-    if (row.replacedBy) {
-      entry.replacedBy = row.replacedBy;
     }
     return entry;
   });

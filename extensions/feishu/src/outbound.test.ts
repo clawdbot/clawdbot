@@ -67,6 +67,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
+  sendStickerFeishu: vi.fn(),
   shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
 
@@ -853,6 +854,48 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expectFeishuResult(result, "native_card_msg");
   });
+
+  it.each(["title", "text", "context"] as const)(
+    "delivers complete authored %s through native presentation cards",
+    async (kind) => {
+      const text = `${"x".repeat(3999)} \n  TAIL_NOT_DELIVERED`;
+      const original: MessagePresentation =
+        kind === "title" ? { title: text, blocks: [] } : { blocks: [{ type: kind, text }] };
+      const presentation = adaptMessagePresentationForChannel({
+        presentation: original,
+        capabilities: feishuOutbound.presentationCapabilities,
+      });
+      const payload = { presentation };
+      const rendered = await feishuOutbound.renderPresentation?.({
+        payload,
+        presentation,
+        ctx: { cfg: emptyConfig, to: "chat_1", text: "", accountId: "main", payload },
+      });
+      if (!rendered) {
+        throw new Error("expected native Feishu presentation");
+      }
+      expect(rendered.text).toBe(text);
+      const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+      await feishuOutbound.sendPayload?.({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: rendered.text ?? "",
+        accountId: "main",
+        payload: coreRenderedPayload,
+      });
+      const card = sendCardCall()?.card;
+      expect(JSON.stringify(card)).toContain("TAIL_NOT_DELIVERED");
+      expect(
+        [
+          card?.header?.title?.content ?? "",
+          ...(card?.body?.elements ?? []).map((element: { content?: string }) =>
+            (element.content ?? "").replace(/<\/?font[^>]*>/gu, ""),
+          ),
+        ].join(""),
+      ).toBe(text);
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders webApp presentation buttons into Feishu channelData link buttons", async () => {
     const presentation: MessagePresentation = {

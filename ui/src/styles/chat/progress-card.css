@@ -611,7 +611,8 @@
   color: var(--session-progress-neutral);
 }
 
-.session-progress-card__step--pending .session-progress-card__step-marker {
+.session-progress-card__step--pending .session-progress-card__step-marker,
+.session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);
 }
 

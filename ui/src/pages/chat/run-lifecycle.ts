@@ -69,7 +69,7 @@ type RunLifecycleHost = Omit<
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">>;
+  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };

@@ -70,6 +70,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "users.prefs.changed": [READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
@@ -387,9 +388,9 @@ export function createGatewayBroadcaster(params: {
       clientSeq.set(c, nextSeq);
       try {
         c.socket.send(frame);
-      } catch {
-        // The consumed seq makes this send failure visible to the client's
-        // gap detector on its next received frame.
+      } catch (err) {
+        log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, { event });
+        c.socket.terminate();
       }
     }
   };

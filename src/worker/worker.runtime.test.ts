@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   validateWorkerGitHubPublishParams,
+  validateWorkerPortalParams,
   validateWorkerSessionsSendParams,
   validateWorkerSessionsSpawnParams,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -21,9 +22,11 @@ import {
   type WorkerLiveEventParams,
   type WorkerLiveEventRequestFrame,
   WorkerLiveEventRequestFrameSchema,
+  WORKER_PORTAL_PROTOCOL_FEATURE,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
   type WorkerGitHubPublishParams,
+  type WorkerPortalParams,
   type WorkerSessionsSendParams,
   type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
@@ -186,6 +189,7 @@ class FakeWorkerGateway {
   readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
   readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
   readonly githubPublishRequests: WorkerGitHubPublishParams[] = [];
+  readonly portalRequests: WorkerPortalParams[] = [];
   readonly applicationOrder: string[] = [];
 
   waitForInferenceStart(): Promise<void> {
@@ -280,7 +284,9 @@ class FakeWorkerGateway {
             : parsed.method === "worker.github.publish" &&
                 validateWorkerGitHubPublishParams(parsed.params)
               ? parsed.method
-              : undefined;
+              : parsed.method === "worker.portal" && validateWorkerPortalParams(parsed.params)
+                ? parsed.method
+                : undefined;
       if (sessionToolMethod) {
         this.handleSessionTool(socket, {
           id: parsed.id,
@@ -288,7 +294,8 @@ class FakeWorkerGateway {
           params: parsed.params as
             | WorkerSessionsSpawnParams
             | WorkerSessionsSendParams
-            | WorkerGitHubPublishParams,
+            | WorkerGitHubPublishParams
+            | WorkerPortalParams,
         });
         return;
       }
@@ -389,8 +396,16 @@ class FakeWorkerGateway {
     socket: WebSocket,
     frame: {
       id: string;
-      method: "worker.sessions.spawn" | "worker.sessions.send" | "worker.github.publish";
-      params: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerGitHubPublishParams;
+      method:
+        | "worker.sessions.spawn"
+        | "worker.sessions.send"
+        | "worker.github.publish"
+        | "worker.portal";
+      params:
+        | WorkerSessionsSpawnParams
+        | WorkerSessionsSendParams
+        | WorkerGitHubPublishParams
+        | WorkerPortalParams;
     },
   ): void {
     this.methods.push(frame.method);
@@ -398,13 +413,16 @@ class FakeWorkerGateway {
       this.sessionSpawnRequests.push(structuredClone(frame.params as WorkerSessionsSpawnParams));
     } else if (frame.method === "worker.sessions.send") {
       this.sessionSendRequests.push(structuredClone(frame.params as WorkerSessionsSendParams));
-    } else {
+    } else if (frame.method === "worker.github.publish") {
       this.githubPublishRequests.push(structuredClone(frame.params as WorkerGitHubPublishParams));
+    } else {
+      this.portalRequests.push(structuredClone(frame.params as WorkerPortalParams));
     }
     const requestCount =
       this.sessionSpawnRequests.length +
       this.sessionSendRequests.length +
-      this.githubPublishRequests.length;
+      this.githubPublishRequests.length +
+      this.portalRequests.length;
     if (requestCount <= (this.options.silenceSessionToolResponses ?? 0)) {
       return;
     }
@@ -985,6 +1003,7 @@ describe("worker runtime", () => {
       "exec",
       "sessions_spawn",
       "sessions_send",
+      "portal",
     ];
 
     await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
@@ -994,7 +1013,21 @@ describe("worker runtime", () => {
       "exec",
       "sessions_spawn",
       "sessions_send",
+      "portal",
     ]);
+  });
+
+  it("hides portal authority when the admitted Gateway lacks portal protocol support", async () => {
+    const { gateway, launch } = await setup();
+    launch.assignment.toolAuthority.allowedToolNames = ["read", "portal"];
+    launch.admission.handshake.protocolFeatures =
+      launch.admission.handshake.protocolFeatures.filter(
+        (feature) => feature !== WORKER_PORTAL_PROTOCOL_FEATURE,
+      );
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual(["read"]);
   });
 
   it("runs with no tools when the Gateway authority is empty", async () => {
@@ -1142,6 +1175,28 @@ describe("worker runtime", () => {
     await connection.stop();
   });
 
+  it("never replays a portal operation after its response is lost", async () => {
+    const { gateway, launch } = await setup({
+      heartbeatIntervalMs: 1,
+      ignoreHeartbeat: true,
+      silenceSessionToolResponses: 1,
+    });
+    const connection = createWorkerConnection({
+      endpoint: { kind: "unix", socketPath: gateway.socketPath },
+      connectParams: buildWorkerConnectParams(launch),
+      requestTimeoutMs: 25,
+      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
+    });
+    await connection.start();
+    const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
+
+    await expect(connection.requestPortal(request)).rejects.toMatchObject({
+      name: "WorkerConnectionInterruptedError",
+    });
+    expect(gateway.portalRequests).toEqual([request]);
+    await connection.stop();
+  });
+
   it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
     const { gateway, launch } = await setup({ transcriptFailureAtRequest: 2 });
 
@@ -1227,6 +1282,68 @@ describe("worker runtime", () => {
     await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker admission rejected");
     expect(gateway.connectionCount).toBe(1);
   });
+
+  it.each(["initial admission", "running turn"] as const)(
+    "marks only an initial admission deadline as safe to re-arm: %s",
+    async (phase) => {
+      const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-admission-"));
+      tempDirs.push(workspaceDir);
+      const launch = descriptor(path.join(workspaceDir, "gateway.sock"), workspaceDir);
+      const connection = createWorkerConnection({
+        endpoint: launch.connectionEndpoint,
+        connectParams: buildWorkerConnectParams(launch),
+      });
+      // Production formats the last failure into the deadline message
+      // (WorkerConnection.failAdmissionDeadline); model that here.
+      const deadline = new WorkerAdmissionDeadlineExceededError(
+        "no admission after 3 attempts to gateway.sock: connect ECONNREFUSED",
+      );
+      const start = vi.spyOn(connection, "start");
+      if (phase === "initial admission") {
+        start.mockRejectedValue(deadline);
+      } else {
+        start.mockResolvedValue({
+          type: "worker-hello-ok",
+          environmentId: launch.admission.environmentId,
+          sessionId: SESSION_ID,
+          ownerEpoch: OWNER_EPOCH,
+          rpcSetVersion: WORKER_RPC_SET_VERSION,
+          protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
+          credentialExpiresAtMs: Date.now() + 60_000,
+          policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
+        });
+      }
+      const connectionModule = await import("./worker-connection.js");
+      const factory = vi
+        .spyOn(connectionModule, "createWorkerConnection")
+        .mockImplementation((options) => {
+          options.onConnectionFailure?.(new Error("connect ECONNREFUSED"));
+          return connection;
+        });
+      const embeddedRuntime = await import("./embedded-agent.runtime.js");
+      const runTurn = vi
+        .spyOn(embeddedRuntime, "runWorkerEmbeddedTurn")
+        .mockRejectedValue(deadline);
+      try {
+        if (phase === "initial admission") {
+          await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+            status: "not-started",
+            reason: "admission-deadline",
+            errorText: expect.stringContaining("connect ECONNREFUSED"),
+          });
+          expect(runTurn).not.toHaveBeenCalled();
+        } else {
+          await expect(runWorkerDescriptor(launch)).rejects.toBe(deadline);
+          expect(runTurn).toHaveBeenCalledOnce();
+        }
+      } finally {
+        runTurn.mockRestore();
+        factory.mockRestore();
+        start.mockRestore();
+        await connection.stop();
+      }
+    },
+  );
 
   it("exits cleanly when admission observes a superseded owner epoch", async () => {
     const { launch } = await setup({ admissionFailure: "owner-epoch-mismatch" });

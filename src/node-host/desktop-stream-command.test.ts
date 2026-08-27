@@ -165,107 +165,118 @@ describe("node desktop stream command", () => {
     ).rejects.toThrow("ticket and attachPath required");
   });
 
-  it("authenticates public and worker attaches and tears down both sockets when cancelled", async () => {
-    const rfbPeers = new Set<net.Socket>();
-    const rfbServer = net.createServer((socket) => {
-      rfbPeers.add(socket);
-      socket.once("close", () => rfbPeers.delete(socket));
-      // Cancellation destroys the client socket; the synthetic server owns the matching reset.
-      socket.on("error", handleExpectedPeerTeardownError);
-      socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-      socket.once("data", () => socket.write(Buffer.from([1, 2])));
-    });
-    await new Promise<void>((resolve) => {
-      rfbServer.listen(0, "127.0.0.1", resolve);
-    });
-    const rfbAddress = rfbServer.address();
-    if (!rfbAddress || typeof rfbAddress === "string") {
-      throw new Error("expected RFB test address");
-    }
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve) => {
-          for (const peer of rfbPeers) {
-            peer.destroy();
-          }
-          rfbServer.close(() => resolve());
-        }),
-    );
-
-    const httpServer = http.createServer();
-    const wss = new WebSocketServer({ server: httpServer });
-    const streams: Array<{
-      accessHeaders: [string | undefined, string | undefined];
-      closed: boolean;
-    }> = [];
-    wss.on("connection", (ws, request) => {
-      const stream = {
-        accessHeaders: [
-          request.headers["cf-access-client-id"],
-          request.headers["cf-access-client-secret"],
-        ] as [string | undefined, string | undefined],
-        closed: false,
-      };
-      streams.push(stream);
-      ws.once("close", () => {
-        stream.closed = true;
+  it.each(["", "/openclaw-gw", "/openclaw-gw/"])(
+    "authenticates public and worker attaches through Gateway context %j and tears down on cancellation",
+    async (contextPath) => {
+      const rfbPeers = new Set<net.Socket>();
+      const rfbServer = net.createServer((socket) => {
+        rfbPeers.add(socket);
+        socket.once("close", () => rfbPeers.delete(socket));
+        // Cancellation destroys the client socket; the synthetic server owns the matching reset.
+        socket.on("error", handleExpectedPeerTeardownError);
+        socket.write(Buffer.from("RFB 003.008\n", "ascii"));
+        socket.once("data", () => socket.write(Buffer.from([1, 2])));
       });
-    });
-    await new Promise<void>((resolve) => {
-      httpServer.listen(0, "127.0.0.1", resolve);
-    });
-    const gatewayAddress = httpServer.address();
-    if (!gatewayAddress || typeof gatewayAddress === "string") {
-      throw new Error("expected Gateway test address");
-    }
-    cleanups.push(
-      async () =>
-        await new Promise<void>((resolve) => {
-          wss.close(() => httpServer.close(() => resolve()));
-        }),
-    );
-
-    for (const kind of ["public", "worker"] as const) {
-      const controller = new AbortController();
-      const emitStatus = vi.fn(async () => undefined);
-      const connection = {
-        paramsJSON: JSON.stringify({
-          ticket: TICKET,
-          attachPath: `/node-desktop/attach?ticket=${TICKET}`,
-          ...(kind === "worker" ? { port: rfbAddress.port } : {}),
-        }),
-        gatewayUrl: `ws://127.0.0.1:${gatewayAddress.port}`,
-        gatewayCloudflareAccess: {
-          clientId: "desktop-client-id",
-          clientSecret: "desktop-client-secret",
-        },
-        signal: controller.signal,
-      };
-      const running =
-        kind === "worker"
-          ? invokeNodeWorkerDesktopStream(connection)
-          : invokeNodeDesktopStream({
-              ...connection,
-              config: { enabled: true, port: rfbAddress.port },
-              emitStatus,
-            });
-      await vi.waitFor(() => expect(streams).toHaveLength(kind === "public" ? 1 : 2));
-      const stream = streams.at(-1);
-      if (!stream) {
-        throw new Error("expected desktop stream attachment");
+      await new Promise<void>((resolve) => {
+        rfbServer.listen(0, "127.0.0.1", resolve);
+      });
+      const rfbAddress = rfbServer.address();
+      if (!rfbAddress || typeof rfbAddress === "string") {
+        throw new Error("expected RFB test address");
       }
-      expect(stream.accessHeaders).toEqual(["desktop-client-id", "desktop-client-secret"]);
-      if (kind === "public") {
-        await vi.waitFor(() =>
-          expect(emitStatus).toHaveBeenCalledWith("desktop stream attached\n"),
-        );
+      cleanups.push(
+        async () =>
+          await new Promise<void>((resolve) => {
+            for (const peer of rfbPeers) {
+              peer.destroy();
+            }
+            rfbServer.close(() => resolve());
+          }),
+      );
+
+      const httpServer = http.createServer();
+      const wss = new WebSocketServer({
+        server: httpServer,
+        path: `${contextPath.replace(/\/$/u, "")}/node-desktop/attach`,
+      });
+      const streams: Array<{
+        accessHeaders: [string | undefined, string | undefined];
+        closed: boolean;
+      }> = [];
+      wss.on("connection", (ws, request) => {
+        const stream = {
+          accessHeaders: [
+            request.headers["cf-access-client-id"],
+            request.headers["cf-access-client-secret"],
+          ] as [string | undefined, string | undefined],
+          closed: false,
+        };
+        streams.push(stream);
+        ws.once("close", () => {
+          stream.closed = true;
+        });
+      });
+      await new Promise<void>((resolve) => {
+        httpServer.listen(0, "127.0.0.1", resolve);
+      });
+      const gatewayAddress = httpServer.address();
+      if (!gatewayAddress || typeof gatewayAddress === "string") {
+        throw new Error("expected Gateway test address");
       }
+      cleanups.push(
+        async () =>
+          await new Promise<void>((resolve) => {
+            wss.close(() => httpServer.close(() => resolve()));
+          }),
+      );
 
-      controller.abort();
+      for (const kind of ["public", "worker"] as const) {
+        const controller = new AbortController();
+        const emitStatus = vi.fn(async () => undefined);
+        const connection = {
+          paramsJSON: JSON.stringify({
+            ticket: TICKET,
+            attachPath: `/node-desktop/attach?ticket=${TICKET}`,
+            ...(kind === "worker" ? { port: rfbAddress.port } : {}),
+          }),
+          gatewayUrl: `ws://127.0.0.1:${gatewayAddress.port}${contextPath}`,
+          gatewayCloudflareAccess: {
+            clientId: "desktop-client-id",
+            clientSecret: "desktop-client-secret",
+          },
+          signal: controller.signal,
+        };
+        const running =
+          kind === "worker"
+            ? invokeNodeWorkerDesktopStream(connection)
+            : invokeNodeDesktopStream({
+                ...connection,
+                config: { enabled: true, port: rfbAddress.port },
+                emitStatus,
+              });
+        void running.catch(() => undefined);
+        cleanups.push(async () => {
+          controller.abort();
+          await running.catch(() => undefined);
+        });
+        await vi.waitFor(() => expect(streams).toHaveLength(kind === "public" ? 1 : 2));
+        const stream = streams.at(-1);
+        if (!stream) {
+          throw new Error("expected desktop stream attachment");
+        }
+        expect(stream.accessHeaders).toEqual(["desktop-client-id", "desktop-client-secret"]);
+        if (kind === "public") {
+          await vi.waitFor(() =>
+            expect(emitStatus).toHaveBeenCalledWith("desktop stream attached\n"),
+          );
+        }
 
-      await expect(running).resolves.toBeUndefined();
-      await vi.waitFor(() => expect(stream.closed).toBe(true));
-      await vi.waitFor(() => expect(rfbPeers.size).toBe(0));
-    }
-  });
+        controller.abort();
+
+        await expect(running).resolves.toBeUndefined();
+        await vi.waitFor(() => expect(stream.closed).toBe(true));
+        await vi.waitFor(() => expect(rfbPeers.size).toBe(0));
+      }
+    },
+  );
 });

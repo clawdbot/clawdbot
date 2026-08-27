@@ -34,6 +34,7 @@ import {
   type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
+import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
@@ -668,6 +669,7 @@ export function buildGatewaySessionRow(params: {
     }).mode,
     modelProvider: rowModelProvider,
     model: rowModel,
+    modelOverrideSource: resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,

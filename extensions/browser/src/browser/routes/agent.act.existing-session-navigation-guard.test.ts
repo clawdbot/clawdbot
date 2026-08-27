@@ -593,6 +593,15 @@ describe("existing-session interaction navigation guard", () => {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
   });
 
+  it("normalizes keyboard aliases before existing-session Chrome MCP dispatch", async () => {
+    const response = await runAction({ kind: "press", key: "Ctrl+Shift+Esc" }, null);
+
+    expect(response.statusCode).toBe(200);
+    expect(chromeMcpMocks.pressChromeMcpKey).toHaveBeenCalledWith(
+      expect.objectContaining({ key: "Control+Shift+Escape" }),
+    );
+  });
+
   it("still probes navigation when the interaction command throws", async () => {
     chromeMcpMocks.clickChromeMcpElement.mockImplementationOnce(() => {
       throw new Error("stale element");

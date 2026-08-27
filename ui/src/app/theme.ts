@@ -1,6 +1,14 @@
 // Control UI module implements theme behavior.
 import { inferControlUiPublicAssetPath } from "./public-assets.ts";
-export type ThemeName = "claw" | "knot" | "dash" | "absolutely" | "custom";
+export type ThemeName =
+  | "claw"
+  | "knot"
+  | "dash"
+  | "absolutely"
+  | "tide"
+  | "beacon"
+  | "phosphor"
+  | "custom";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =
   | "dark"
@@ -11,10 +19,25 @@ export type ResolvedTheme =
   | "dash-light"
   | "absolutely"
   | "absolutely-light"
+  | "tide"
+  | "tide-light"
+  | "beacon"
+  | "beacon-light"
+  | "phosphor"
+  | "phosphor-light"
   | "custom"
   | "custom-light";
 
-const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "absolutely", "custom"]);
+const VALID_THEME_NAMES = new Set<ThemeName>([
+  "claw",
+  "knot",
+  "dash",
+  "absolutely",
+  "tide",
+  "beacon",
+  "phosphor",
+  "custom",
+]);
 
 const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
 /* Themes that ship their own faces. The stylesheet is fetched only while such a
@@ -26,6 +49,8 @@ const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
    are relative to it, so both levels follow a non-root base path. */
 const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>> = {
   absolutely: "fonts/absolutely.css",
+  beacon: "fonts/beacon.css",
+  phosphor: "fonts/phosphor.css",
 };
 type ControlUiFontStylesheet = `fonts/${string}.css`;
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
@@ -70,6 +95,15 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   }
   if (theme === "absolutely") {
     return resolvedMode === "light" ? "absolutely-light" : "absolutely";
+  }
+  if (theme === "tide") {
+    return resolvedMode === "light" ? "tide-light" : "tide";
+  }
+  if (theme === "beacon") {
+    return resolvedMode === "light" ? "beacon-light" : "beacon";
+  }
+  if (theme === "phosphor") {
+    return resolvedMode === "light" ? "phosphor-light" : "phosphor";
   }
   return resolvedMode === "light" ? "custom-light" : "custom";
 }
