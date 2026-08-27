@@ -404,7 +404,6 @@ async function runSkillExperienceReviewInner(
   const runId = `skill-workshop-review:${randomUUID()}`;
   const reviewSession = resolveInternalSessionEffectsIdentity({
     agentId: foregroundPromptContext.agentId,
-    incognito: true,
     runId,
   });
   const origin = foregroundPromptContext.cronCreatorCallerOrigin;

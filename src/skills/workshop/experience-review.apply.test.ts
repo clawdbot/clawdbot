@@ -14,7 +14,6 @@ import {
   isGatewaySubordinateWorkAdmissionClosed,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -191,7 +190,7 @@ describe("experience review auto apply", () => {
     ]);
     expect(observed[2]?.slice(0, 4)).toEqual(["lifecycle", false, false, false]);
     expect(observed[2]?.[4]).toMatch(
-      /^agent:main:internal-session-effects:incognito-skill-workshop-review_/u,
+      /^agent:main:internal-session-effects:skill-workshop-review_/u,
     );
     expect(getAgentRunContext(reviewRunId)).toBeUndefined();
   });
@@ -273,7 +272,7 @@ describe("experience review auto apply", () => {
         sandboxSessionKey: "agent:main:main",
         sessionId: expect.stringMatching(/^internal-session-effects-skill-workshop-review_/u),
         sessionKey: expect.stringMatching(
-          /^agent:main:internal-session-effects:incognito-skill-workshop-review_/u,
+          /^agent:main:internal-session-effects:skill-workshop-review_/u,
         ),
         skillWorkshopOrigin: {
           agentId: "main",
@@ -285,7 +284,6 @@ describe("experience review auto apply", () => {
       }),
     );
     const reviewSessionKey = runEmbeddedAgent.mock.calls[0]?.[0].sessionKey;
-    expect(isIncognitoSessionKey(reviewSessionKey)).toBe(true);
     expect(reviewSessionKey).not.toBe("agent:main:main");
     expect(runEmbeddedAgent.mock.calls[0]?.[0].messageActionTurnCapability).toBeUndefined();
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("sessionTarget");

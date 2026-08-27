@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveInternalSessionEffectsIdentity } from "../../../config/sessions/internal-session-key.js";
 import { createFixtureSkillEntry } from "../../../skills/test-support/test-helpers.js";
 import {
   runSkillExperienceReview,
@@ -178,7 +179,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(snapshots[1]).toEqual(snapshots[0]);
   });
 
-  it("keeps review prompt digests equal while transcript and store stay unchanged", async () => {
+  it("keeps review prompt digests equal on a private session without persistence", async () => {
     const sessionRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-review-parity-"));
     tempPaths.push(sessionRoot);
     const transcriptFile = path.join(sessionRoot, "transcript.jsonl");
@@ -218,23 +219,35 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     ] as AnyAgentTool[];
 
+    const foregroundSession = {
+      sessionId: "embedded-session",
+      sessionKey: "agent:main:main",
+    };
+    const reviewSession = resolveInternalSessionEffectsIdentity({
+      agentId: "main",
+      runId: "skill-workshop-review:prompt-parity",
+    });
     const snapshots = [];
     for (const review of [false, true]) {
+      const session = review ? reviewSession : foregroundSession;
       resetEmbeddedAttemptHarness();
       hoisted.createOpenClawCodingToolsMock.mockReturnValue(codingTools);
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
-        sessionKey: "agent:main:main",
+        sessionKey: session.sessionKey,
         tempPaths,
         attemptOverrides: {
           disableTools: false,
           disableMessageTool: false,
           reasoningLevel: "on",
+          sessionId: session.sessionId,
+          sandboxSessionKey: foregroundSession.sessionKey,
+          promptCacheKey: "foreground-cache-prefix",
           sessionFile: transcriptFile,
           sessionTarget: {
             agentId: "main",
-            sessionId: "embedded-session",
-            sessionKey: "agent:main:main",
+            sessionId: session.sessionId,
+            sessionKey: session.sessionKey,
             storePath: storeFile,
           },
           ...(review
@@ -258,8 +271,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       expect(tools.some((tool) => tool.name === "message")).toBe(true);
       snapshots.push(
         beginPromptCacheObservation({
-          sessionId: "embedded-session",
-          sessionKey: "agent:main:main",
+          sessionId: session.sessionId,
+          sessionKey: session.sessionKey,
           provider: "openai",
           modelId: "gpt-test",
           streamStrategy: "test",
