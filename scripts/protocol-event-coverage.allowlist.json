@@ -33,7 +33,6 @@
     "terminal.exit": "Embedded terminal is a web/desktop surface; iOS has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; iOS does not consume them.",
     "update.available": "Gateway self-update notices do not apply to iOS; app updates ship via the App Store.",
-    "users.prefs.changed": "iOS resolves the profile accent through talk.config on connect and config refresh; live per-profile appearance push is a named follow-up.",
     "voicewake.routing.changed": "iOS only consumes voicewake.changed trigger updates; routing changes are not surfaced."
   },
   "android": {
@@ -71,7 +70,6 @@
     "terminal.data": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "terminal.exit": "Embedded terminal is a web/desktop surface; Android has no terminal client.",
     "ui.command": "Web Control UI-only layout commands; Android does not consume them.",
-    "users.prefs.changed": "Android resolves the profile accent through talk.config on connect and config refresh; live per-profile appearance push is a named follow-up.",
     "voicewake.routing.changed": "Android reads voicewake state on demand via voicewake.get; no push consumer yet."
   }
 }

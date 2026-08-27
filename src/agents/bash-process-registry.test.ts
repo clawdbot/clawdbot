@@ -10,11 +10,9 @@ import {
   addSession,
   appendOutput,
   deleteSession,
-  drainFinishedSession,
   drainSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
-  getFinishedSessionForProcess,
   isProcessSessionIdTaken,
   listFinishedSessions,
   listRunningSessions,
@@ -208,34 +206,21 @@ describe("bash process registry", () => {
     addSession(session);
     markExited(session, 0, null, "completed");
     expect(listFinishedSessions()).toHaveLength(0);
+    expect(session.endedAt).toBeUndefined();
 
     markBackgrounded(session);
     markExited(session, 0, null, "completed");
     const finishedSessions = listFinishedSessions();
     const endedAt = finishedSessions[0]?.endedAt;
     expect(endedAt).toEqual(expect.any(Number));
-    expect(finishedSessions).toStrictEqual([
-      {
-        id: "sess",
-        command: "echo test",
-        scopeKey: undefined,
-        startedAt: session.startedAt,
-        endedAt,
-        cwd: "/tmp",
-        status: "completed",
-        exitCode: 0,
-        exitSignal: null,
-        exitReason: undefined,
-        aggregated: "",
-        tail: "",
-        truncated: false,
-        totalOutputChars: 0,
-        unreadOutput: { output: "", outputDropped: false },
-      },
-    ]);
+    expect(finishedSessions).toEqual([session]);
+    expect(session.terminalStatus).toBe("completed");
+    deleteSession(session.id);
+    expect(session.endedAt).toBe(endedAt);
+    expect(listFinishedSessions()).toHaveLength(0);
   });
 
-  it("moves unread output into the exact finished snapshot and consumes it once", () => {
+  it("retains unread output on its exact process and consumes it once", () => {
     const session = createRegistrySession({
       id: "exact-finished-output",
       maxOutputChars: 100,
@@ -246,10 +231,9 @@ describe("bash process registry", () => {
     appendOutput(session, "stdout", "terminal output\n");
     markExited(session, 0, null, "completed");
 
-    const finished = getFinishedSessionForProcess(session);
-    expect(finished).toBe(getFinishedSession(session.id));
-    expect(finished && drainFinishedSession(finished).output).toBe("terminal output\n");
-    expect(finished && drainFinishedSession(finished).output).toBe("");
+    const finished = getFinishedSession(session.id);
+    expect(finished).toBe(session);
+    expect(finished && drainSession(finished).output).toBe("terminal output\n");
     expect(drainSession(session).output).toBe("");
   });
 

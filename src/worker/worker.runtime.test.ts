@@ -996,6 +996,32 @@ describe("worker runtime", () => {
     });
   });
 
+  it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
+    const { gateway, workspaceDir, launch } = await setup();
+    const promptDir = path.join(workspaceDir, ".openclaw");
+    const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
+    await mkdir(promptDir);
+    await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
+    await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
+    await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
+    await writeFile(literalPrompt, "unrequested-file-contents");
+    if (extra) {
+      launch.assignment.systemPrompt = literalPrompt;
+    }
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
+    expect(prompt).toContain("prepared-worker-context");
+    expect.soft(prompt).toContain("Available tools:");
+    expect.soft(prompt).not.toContain("ambient-system-marker");
+    expect.soft(prompt).not.toContain("ambient-append-marker");
+    expect.soft(prompt).not.toContain("unrequested-file-contents");
+    if (extra) {
+      expect.soft(prompt).toContain(literalPrompt);
+    }
+  });
+
   it("exposes exactly the Gateway-authorized worker tools", async () => {
     const { gateway, launch } = await setup();
     launch.assignment.toolAuthority.allowedToolNames = [

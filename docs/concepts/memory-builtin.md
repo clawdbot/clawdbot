@@ -23,6 +23,10 @@ started.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
+Native sqlite-vec queries run in a separate, read-only process so a slow query
+does not block the Gateway event loop. Cancelling a search terminates its query
+process; OpenClaw does not retry that native query on the Gateway thread.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -110,6 +114,10 @@ which support selective deletion after promotion. For coverage and limits, see
 - **Auto-reindex:** the index rebuilds automatically when the embedding
   provider, model, chunking config, configured sources, or scope change.
 - **Reindex on demand:** `openclaw memory index --force`
+
+Full reindexes build a replacement in a temporary database and publish the
+memory tables atomically. Concurrent searches and status reads keep using the
+published index; a failed rebuild leaves that index intact.
 
 <Info>
 You can also index Markdown files outside the workspace with

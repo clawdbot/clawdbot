@@ -3,6 +3,7 @@ import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
 import {
   boardWidgetContentPermissionCases,
@@ -23,10 +24,12 @@ vi.mock("../../config/sessions/session-accessor.entry.js", async (importOriginal
 
 describe("board gateway methods", () => {
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     resetBoardEventNoticeStateForTest();
     resetSystemEventsForTest();
     reviewWidgetApproval.mockReset();
     readSessionEntry.mockReset();
+    return () => resetPluginRuntimeStateForTest();
   });
 
   it("registers every contract method with its required scope", () => {

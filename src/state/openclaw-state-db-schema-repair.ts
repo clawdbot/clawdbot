@@ -9,7 +9,6 @@ import {
   hasCanonicalAuditEventsSchema,
 } from "./openclaw-state-db-audit-migration.js";
 import {
-  OPENCLAW_STATE_SCHEMA_VERSION,
   OPENCLAW_STATE_STRICT_SCHEMA_VERSION,
   type OpenClawStateDatabaseOptions,
   type OpenClawStateDatabaseSchemaMigration,
@@ -26,6 +25,7 @@ import { FOLDED_SINGLETON_STATE_TABLES_V12 } from "./openclaw-state-db-schema-v1
 import * as sessionWatchMigration from "./openclaw-state-db-session-watch-migration.js";
 import {
   hasRecognizedRetiredCommitmentsSchema,
+  RETIRED_COMMITMENTS_SCHEMA_VERSION,
   RETIRED_DEAD_STATE_TABLES_V10,
   RETIRED_SKILL_CURATOR_TABLES_V11,
 } from "./openclaw-state-db-table-retirements.js";
@@ -359,7 +359,7 @@ export function detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(
   const migrations: OpenClawStateDatabaseSchemaMigration[] = [];
   const userVersion = readSqliteUserVersion(db);
   if (
-    userVersion < OPENCLAW_STATE_SCHEMA_VERSION &&
+    userVersion < RETIRED_COMMITMENTS_SCHEMA_VERSION &&
     tableExists(db, "commitments") &&
     hasRecognizedRetiredCommitmentsSchema(db)
   ) {

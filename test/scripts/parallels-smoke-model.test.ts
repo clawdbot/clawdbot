@@ -48,6 +48,7 @@ import {
 import {
   LinuxGuest,
   MacosGuest,
+  WindowsGuest,
   runPosixBackgroundShell,
   runWindowsBackgroundPowerShell,
 } from "../../scripts/e2e/parallels/guest-transports.ts";
@@ -499,6 +500,92 @@ describe("Parallels smoke model selection", () => {
     expect(controller).toContain("winget.exe download --source winget");
     expect(controller).toContain("OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY");
     expect(controller).not.toContain("openclaw-windows-node");
+  });
+
+  it.each([
+    ["ensure_node", "v24.14.0", "v24.15.0", true, 0],
+    ["ensure_node", "missing", "v24.15.0", true, 0],
+    ["ensure_node", "v24.15.0", "v24.15.0", false, 0],
+    ["ensure_node", "v24.14.0", "v24.14.0", true, 1],
+    ["verify_baseline", "v24.14.0", "v24.15.0", false, 1],
+    ["verify_baseline", "v24.15.0", "v24.15.0", false, 0],
+  ])(
+    "%s enforces the Windows Node contract from %s after installation of %s",
+    (command, initialVersion, installedVersion, installs, exitCode) => {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
+OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
+guest_version="$3"
+guest_user_cmd() {
+  case "$1" in
+    'where node.exe') [[ "$guest_version" != missing ]] ;;
+    'node.exe --version') [[ "$guest_version" != missing ]] && printf '%s\\r\\n' "$guest_version" ;;
+    'git --version && node --version && npm --version'|'wsl.exe --version'|'wsl.exe --status') : ;;
+    *) printf 'unexpected guest command: %s\\n' "$1" >&2; return 1 ;;
+  esac
+}
+winget_download() { printf 'download=%s\\n' "$1"; WINGET_EXPECTED_HASH=fixture; }
+downloaded_installer() { printf 'node.msi'; }
+stage_installer() { printf 'staged-node.msi'; }
+finish_installer_reboot() { :; }
+wait_for_check() { guest_user_cmd "$2"; }
+set_guest_paths() { :; }
+guest_system_ps() { :; }
+get_wsl_default_version() { printf '2'; }
+assert_clean_product_state() { :; }
+assert_no_pending_reboot() { :; }
+installed_version="$4"
+run_windows_installer() { printf 'installed-node\\n'; guest_version="$installed_version"; }
+"$2"
+printf 'verified-node=%s\\n' "$guest_version"`,
+          "bash",
+          WINDOWS_PREPARE_WRAPPER,
+          command,
+          initialVersion,
+          installedVersion,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+
+      expect(result.status, result.stderr).toBe(exitCode);
+      expect(result.stdout.includes("installed-node")).toBe(installs);
+      if (installs) {
+        expect(result.stdout).toContain("download=OpenJS.NodeJS.LTS");
+      }
+      if (exitCode === 0) {
+        expect(result.stdout).toContain("verified-node=v24.15.0");
+      } else {
+        expect(result.stderr).toContain("upgrade Node");
+      }
+    },
+  );
+
+  it("waits for Windows snapshot restoration before starting the guest", () => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-windows-restore-");
+    const statePath = join(tempDir, "state");
+    writeFileSync(statePath, "restoring");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `set -euo pipefail
+OPENCLAW_PARALLELS_WINDOWS_LIBRARY_ONLY=1 source "$1"
+vm_state() { cat "$VM_STATE_FILE"; }
+sleep() { printf stopped >"$VM_STATE_FILE"; }
+run_bounded() { printf 'invoked=%s\\n' "$*"; }
+ensure_vm_running`,
+        "bash",
+        WINDOWS_PREPARE_WRAPPER,
+      ],
+      { encoding: "utf8", env: { ...process.env, VM_STATE_FILE: statePath }, timeout: 10_000 },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Starting VM: Windows 11");
+    expect(readFileSync(statePath, "utf8")).toBe("stopped");
   });
 
   it("resets Linux product state before both install lanes", () => {
@@ -1056,14 +1143,6 @@ kill -TERM "$$"`,
       const tempDir = makeTempDir(tempDirs, "openclaw-parallels-macos-restore-");
       const callsPath = join(tempDir, "prlctl-calls.jsonl");
       const statePath = join(tempDir, "vm-state");
-      const npmBootstrapPath = join(tempDir, "npm-bootstrap.mjs");
-      writeFileSync(
-        npmBootstrapPath,
-        `if (process.argv[1]?.endsWith("npm-cli.js") && process.argv.includes("view")) {
-  process.stdout.write("2026.1.1\\n");
-  process.exit(0);
-}`,
-      );
       writeNodeFakePrlctl(
         tempDir,
         `const fs = process.getBuiltinModule("node:fs");
@@ -1092,7 +1171,6 @@ if (commandArgs[0] === "list") {
 }`,
       );
 
-      const fakeEnv = fakePrlctlEnv(tempDir);
       const result = spawnSync(
         process.execPath,
         [
@@ -1103,8 +1181,6 @@ if (commandArgs[0] === "list") {
           "upgrade",
           "--latest-version",
           "2026.1.1",
-          "--target-package-spec",
-          "openclaw@2026.1.1",
           "--api-key-env",
           "OPENCLAW_PARALLELS_TEST_KEY",
           "--json",
@@ -1114,9 +1190,7 @@ if (commandArgs[0] === "list") {
           encoding: "utf8",
           env: {
             ...process.env,
-            ...fakeEnv,
-            "BASH_FUNC_ifconfig%%": "() { return 1; }",
-            NODE_OPTIONS: `${fakeEnv.NODE_OPTIONS} --import=${pathToFileURL(npmBootstrapPath).href}`,
+            ...fakePrlctlEnv(tempDir),
             OPENCLAW_PARALLELS_ARTIFACT_ROOT: tempDir,
             OPENCLAW_PARALLELS_TEST_KEY: "fixture",
           },
@@ -1125,6 +1199,7 @@ if (commandArgs[0] === "list") {
       );
 
       expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("macOS guest command failed with exit code 41");
       const calls = readFileSync(callsPath, "utf8")
         .trim()
         .split("\n")
@@ -1733,6 +1808,54 @@ if (commandArgs[0] === "list") {
     expect(state.cleanupPayload).toContain('for child in $(/usr/bin/pgrep -P "$1"');
     expect(state.cleanupPayload).toContain('/bin/kill -TERM "$1"');
     expect(state.cleanupPayload).toContain('/bin/kill -KILL "$1"');
+  });
+
+  it("carries refreshed Windows guest environment into every PowerShell script", () => {
+    const tempDir = makeTempDir(tempDirs, "openclaw-parallels-windows-env-");
+    const scriptsPath = join(tempDir, "scripts.jsonl");
+    writeNodeFakePrlctl(
+      tempDir,
+      `if (args.includes("-EncodedCommand")) { const fs = process.getBuiltinModule("node:fs"); fs.appendFileSync(${JSON.stringify(scriptsPath)}, JSON.stringify(fs.readFileSync(0, "utf8")) + "\\n"); } process.exit(0);`,
+    );
+    let registry = "http://192.0.2.2:48123/first";
+    withEnv(fakePrlctlEnv(tempDir), () => {
+      const guest = new WindowsGuest("Windows VM", new PhaseRunner(tempDir), () => ({
+        NPM_CONFIG_REGISTRY: registry,
+      }));
+      guest.powershell("Write-Output $env:NPM_CONFIG_REGISTRY");
+      registry = "http://192.0.2.2:48123/second's";
+      guest.powershell("Write-Output $env:NPM_CONFIG_REGISTRY");
+    });
+
+    const scripts = readFileSync(scriptsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string);
+    expect(scripts).toEqual([
+      "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/first'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
+      "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/second''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
+    ]);
+  });
+
+  it("carries Windows background environment before the detached command", async () => {
+    let uploadedScript = "";
+    const runCommand = (_command: string, _args: string[], options?: { input?: string }) => {
+      uploadedScript = options?.input ?? "";
+      return { status: 1, stderr: "fixture upload failure", stdout: "" };
+    };
+    await expect(
+      runWindowsBackgroundPowerShell({
+        env: { NPM_CONFIG_REGISTRY: "http://192.0.2.2:48123/candidate's" },
+        label: "environment proof",
+        runCommand,
+        script: "Write-Output $env:NPM_CONFIG_REGISTRY",
+        timeoutMs: 720_000,
+        vmName: "Windows VM",
+      }),
+    ).rejects.toThrow("background script write failed");
+    expect(uploadedScript).toContain(
+      "Set-Item -LiteralPath 'Env:NPM_CONFIG_REGISTRY' -Value 'http://192.0.2.2:48123/candidate''s'\nWrite-Output $env:NPM_CONFIG_REGISTRY",
+    );
   });
 
   it("paces ambiguous Windows background launch materialization probes", async () => {

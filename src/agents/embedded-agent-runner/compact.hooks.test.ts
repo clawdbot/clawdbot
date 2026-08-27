@@ -1451,6 +1451,34 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     });
   });
 
+  it("creates a distinct skill-instruction delivery cache for each compaction attempt", async () => {
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    const firstCache = expectRecordFields(
+      mockCallArg(createOpenClawCodingToolsMock),
+      {},
+    ).skillInstructionDeliveryCache;
+
+    await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-2",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    const secondCache = expectRecordFields(
+      mockCallArg(createOpenClawCodingToolsMock, 1),
+      {},
+    ).skillInstructionDeliveryCache;
+
+    expect(firstCache).toBeInstanceOf(Map);
+    expect(secondCache).toBeInstanceOf(Map);
+    expect(secondCache).not.toBe(firstCache);
+  });
+
   it("skips runtime tool construction when the compaction model does not support tools", async () => {
     mockResolvedModel({ supportsTools: false });
 

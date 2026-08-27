@@ -6,7 +6,6 @@ import type { AssistantIdentity } from "../../../lib/assistant-identity.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
-import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import { renderChatQuestionSummary } from "./chat-question-card.ts";
@@ -46,7 +45,7 @@ export type StreamGroupOptions = StreamMessageOptions & {
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: AssistantIdentity;
   showAssistantAvatar?: boolean;
-  startupPhase?: ChatRunStartupPhase;
+  startupLabel?: string;
   waitingApproval?: boolean;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
@@ -69,7 +68,7 @@ export function renderStreamGroupParts(
     part.kind === "reading-indicator"
       ? renderChatWorkingIndicator(part, {
           waitingApproval: opts.waitingApproval === true,
-          startupPhase: opts.startupPhase,
+          startupLabel: opts.startupLabel,
           outputTokens: opts.runOutputTokens,
           presentation,
         })

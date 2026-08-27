@@ -138,6 +138,45 @@ describe("parallels npm update smoke", () => {
     });
   });
 
+  it("accepts an explicit Windows VM at the aggregate CLI", () => {
+    const result = hostCommandRun(
+      process.execPath,
+      ["--import", "tsx", SCRIPT_PATH, "--windows-vm", "Windows Test Guest", "--help"],
+      { check: false, quiet: true },
+    );
+    expect(result.status, result.stderr).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses the selected Windows VM for same-guest update transport",
+    async () => {
+      const root = tempDirs.make("openclaw-parallels-windows-selection-");
+      const logPath = path.join(root, "prlctl.log");
+      const prlctlPath = path.join(root, "prlctl");
+      writeFileSync(
+        prlctlPath,
+        `#!/usr/bin/env bash\nprintf '%s|%s|%s\\n' "$1" "$2" "$3" >'${logPath}'\ncat >/dev/null\nexit 7\n`,
+      );
+      chmodSync(prlctlPath, 0o755);
+
+      await withEnvAsync(
+        { OPENAI_API_KEY: "test-key", PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}` },
+        async () => {
+          const smoke = new NpmUpdateSmoke({ ...parseArgs([]), windowsVm: "Windows Test Guest" });
+          const guestWindows = Reflect.get(smoke, "guestWindows") as (
+            script: string,
+            timeoutMs: number,
+            ctx: { append: (chunk: string) => void },
+          ) => Promise<void>;
+          await expect(
+            guestWindows.call(smoke, "Write-Output update", 180_000, { append: () => undefined }),
+          ).rejects.toThrow("background script write failed");
+        },
+      );
+      expect(readFileSync(logPath, "utf8")).toBe("exec|Windows Test Guest|--current-user\n");
+    },
+  );
+
   it("stops the host artifact server when the wrapper fails mid-run", async () => {
     let stopCalls = 0;
     const server: HostServer = {
@@ -339,37 +378,93 @@ exit 1
     expect(script).toContain("freshTargetStatus");
   });
 
-  it("serves a prepared package set for both proof phases", () => {
-    const script = readFileSync(SCRIPT_PATH, "utf8");
+  it.runIf(process.platform !== "win32").each([
+    ["macos", macosUpdateScript],
+    ["linux", linuxUpdateScript],
+  ] as const)(
+    "keeps the %s candidate registry available through gateway shutdown and the local turn",
+    (platform, buildScript) => {
+      const root = tempDirs.make("openclaw-parallels-update-registry-");
+      const logPath = path.join(root, "registry.log");
+      const lifecycleLog = path.join(root, "lifecycle.log");
+      const gatewayOwner = path.join(root, "gateway-owner");
+      const gatewayTitle = platform === "macos" ? "openclaw-gateway        " : "openclaw-gateway";
+      const registry = "http://192.0.2.2:48123";
+      const script = buildScript({
+        auth: TEST_AUTH,
+        expectedNeedle: "2026.7.1-beta.3",
+        npmRegistry: registry,
+        updateTarget: "2026.7.1-beta.3",
+      }).replaceAll(
+        `/tmp/openclaw-parallels-${platform}-gateway.log`,
+        path.join(root, "gateway.log"),
+      );
+      const result = hostCommandRun(
+        "bash",
+        [
+          "-c",
+          `
+export HOME='${root}'
+unset OPENCLAW_WORKSPACE_DIR
+node() { cat >/dev/null; }
+python3() { cat >/dev/null; }
+function /usr/bin/env() { cat >/dev/null; }
+release_gateway_owner() {
+  if [ -f '${gatewayOwner}' ]; then
+    printf 'stop\\n' >>'${lifecycleLog}'
+    rm '${gatewayOwner}'
+  fi
+}
+pkill() {
+  if [ "$1" = '-f' ] && printf '%s\\n' '${gatewayTitle}' | grep -Eq "$2"; then
+    release_gateway_owner
+  else
+    return 1
+  fi
+}
+pgrep() { return 1; }
+lsof() { :; }
+sleep() { :; }
+setsid() { :; }
+openclaw() {
+  case "$1 \${2-}" in
+    "gateway stop")
+      if [[ " $* " == *" --help "* ]]; then echo '--force'; return 0; fi
+      release_gateway_owner
+      return 0 ;;
+    "gateway status")
+      touch '${gatewayOwner}'
+      printf 'ready\\n' >>'${lifecycleLog}' ;;
+    "agent --local")
+      if [ -f '${gatewayOwner}' ]; then echo 'gateway owns state' >&2; return 73; fi
+      printf 'local-turn\\n' >>'${lifecycleLog}'
+      echo '{"finalAssistantVisibleText":"OK"}' ;;
+    "gateway run"|"models set"|"config set") return 0 ;;
+  esac
+  printf '%s|%s|%s\\n' "$1" "\${NPM_CONFIG_REGISTRY-}" "\${npm_config_registry-}" >>'${logPath}'
+  case "$1" in
+    --version) echo 'OpenClaw 2026.7.1-beta.3' ;;
+  esac
+}
+${script}`,
+        ],
+        { check: false, quiet: true, timeoutMs: 5000 },
+      );
 
-    expect(script).toContain("--target-tarball <path>");
-    expect(script).toContain("--dependency-tarball <path>");
-    expect(script).toContain("--registry-package-tarball <path>");
-    expect(script).toContain('label: "prepared candidate tgz"');
-    expect(script).toContain("await copyFile(this.targetTarballPath, hostedTarballPath)");
-    expect(script).toContain("startNpmRegistryServer");
-    expect(script).toContain("...this.targetRegistryPackages");
-    expect(script).toContain("this.updateTargetEffective = this.targetTarballVersion");
-    expect(script).toContain("this.freshTargetSpec = `openclaw@${this.targetTarballVersion}`");
-    expect(script).toContain("NPM_CONFIG_REGISTRY: this.targetRegistryHostUrl");
-    expect(script).toContain("npm_config_registry: this.targetRegistryHostUrl");
-    expect(script).toContain("this.updateExpectedNeedle = this.targetTarballVersion");
-    expect(script).toContain('readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 2700)');
-  });
-
-  it("routes update installs through the prepared package registry", () => {
-    const registry = "http://192.0.2.2:48123";
-    const input = {
-      auth: TEST_AUTH,
-      expectedNeedle: "2026.7.1-beta.3",
-      npmRegistry: registry,
-      updateTarget: "2026.7.1-beta.3",
-    };
-
-    expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
-    expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
-    expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
-  });
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+        `update|${registry}|${registry}`,
+        `--version|${registry}|${registry}`,
+        `gateway|${registry}|${registry}`,
+        `agent|${registry}|${registry}`,
+      ]);
+      expect(readFileSync(lifecycleLog, "utf8").trim().split("\n")).toEqual([
+        "ready",
+        "stop",
+        "local-turn",
+      ]);
+    },
+  );
 
   it("restarts POSIX gateways only after an exact current-launch migration refusal", () => {
     const input = {

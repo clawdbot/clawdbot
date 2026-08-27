@@ -19,6 +19,28 @@ struct ChannelsStoreUIConfigTests {
         #expect(ChannelsStore.uiAccent(userAccent: "  ", seamColor: " \n ") == nil)
     }
 
+    @Test func `profile accent wins over the gateway seam color`() {
+        let store = AppStateStore.shared
+        let savedSeam = store.seamColorHex
+        let savedProfile = store.profileAccentHex
+        defer {
+            store.seamColorHex = savedSeam
+            store.profileAccentHex = savedProfile
+        }
+        store.seamColorHex = "#445566"
+        store.profileAccentHex = nil
+        #expect(store.effectiveAccentHex == "#445566")
+        store.profileAccentHex = "#112233"
+        #expect(store.effectiveAccentHex == "#112233")
+    }
+
+    @Test func `profile accent entries validate strictly`() {
+        #expect(ColorHexSupport.profileAccentHex(entries: ["ui.accent": "#A1B2C3"]) == "#a1b2c3")
+        #expect(ColorHexSupport.profileAccentHex(entries: ["ui.accent": "not-a-color"]) == nil)
+        #expect(ColorHexSupport.profileAccentHex(entries: [:]) == nil)
+        #expect(ColorHexSupport.profileAccentHex(entries: nil) == nil)
+    }
+
     @Test func `config snapshots preserve the Control UI user accent`() {
         let previousAccent = AppStateStore.shared.seamColorHex
         defer { AppStateStore.shared.seamColorHex = previousAccent }

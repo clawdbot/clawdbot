@@ -839,20 +839,33 @@ export async function runExecProcess(opts: {
       // Finalization can release remote process/session resources. Keep the
       // background-work blocker until that owner transition has settled.
       session.finalizing = false;
-      const shouldNotify = !session.exited;
-      if (shouldNotify) {
-        markExited(
-          session,
-          finalOutcome.exitCode,
-          finalOutcome.exitSignal,
-          finalOutcome.status,
-          finalOutcome.exitReason,
-          finalOutcome.noOutputTimedOut,
-        );
-      }
-      opts.onSettledBeforeNotify?.(finalOutcome);
-      if (shouldNotify) {
-        maybeNotifyOnExit(session, finalOutcome.status);
+      try {
+        const shouldNotify = !session.exited;
+        if (shouldNotify) {
+          markExited(
+            session,
+            finalOutcome.exitCode,
+            finalOutcome.exitSignal,
+            finalOutcome.status,
+            finalOutcome.exitReason,
+            finalOutcome.noOutputTimedOut,
+          );
+        }
+        opts.onSettledBeforeNotify?.(finalOutcome);
+        if (shouldNotify) {
+          maybeNotifyOnExit(session, finalOutcome.status);
+        }
+      } finally {
+        // Notifications need start-time routing, but completed logs must not
+        // retain it, including when a task callback or notification throws.
+        delete session.sessionKey;
+        delete session.agentId;
+        delete session.mainKey;
+        delete session.sessionScope;
+        delete session.eventRouting;
+        delete session.notifyDeliveryContext;
+        delete session.notifyOnExit;
+        delete session.notifyOnExitEmptySuccess;
       }
     }
     return finalOutcome;

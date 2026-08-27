@@ -693,70 +693,76 @@ describe("ModelRegistry models.json auth", () => {
     expect(availableRefs).toContain("nvidia/explicit-empty");
   });
 
-  it("isolates invalid SQLite-cached plugin catalogs from valid models", () => {
-    const modelsPath = writeModelsJsonWithPluginCatalogs({
-      root: {
-        providers: {
-          custom: {
-            baseUrl: "https://models.example/v1",
-            api: "openai-responses",
-            apiKey: "CUSTOM_API_KEY",
-            models: [{ id: "root-model", name: "Root Model" }],
-          },
-        },
-      },
-      pluginCatalogs: [
-        {
-          pluginRelativePath: join("plugins", "google", PLUGIN_MODEL_CATALOG_FILE),
-          pluginCatalog: {
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: {
-              "google-vertex": {
-                baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
-                api: "google-vertex",
-                apiKey: "GOOGLE_API_KEY",
-                models: [
-                  {
-                    id: "gemini-3.1-pro-preview",
-                    name: "Gemini 3.1 Pro",
-                    contextWindow: 0,
-                  },
-                ],
-              },
+  it.each(["persisted", "captured"] as const)(
+    "isolates invalid %s plugin catalogs from valid models",
+    (source) => {
+      const modelsPath = writeModelsJsonWithPluginCatalogs({
+        root: {
+          providers: {
+            custom: {
+              baseUrl: "https://models.example/v1",
+              api: "openai-responses",
+              apiKey: "CUSTOM_API_KEY",
+              models: [{ id: "root-model", name: "Root Model" }],
             },
           },
         },
-        {
-          pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
-          pluginCatalog: {
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: {
-              zai: {
-                baseUrl: "https://api.z.ai/api/paas/v4",
-                api: "openai-completions",
-                apiKey: "ZAI_API_KEY",
-                models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+        pluginCatalogs: [
+          {
+            pluginRelativePath: join("plugins", "google", PLUGIN_MODEL_CATALOG_FILE),
+            pluginCatalog: {
+              generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+              providers: {
+                "google-vertex": {
+                  baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
+                  api: "google-vertex",
+                  apiKey: "GOOGLE_API_KEY",
+                  models: [
+                    {
+                      id: "gemini-3.1-pro-preview",
+                      name: "Gemini 3.1 Pro",
+                      contextWindow: 0,
+                    },
+                  ],
+                },
               },
             },
           },
-        },
-      ],
-    });
+          {
+            pluginRelativePath: join("plugins", "zai", PLUGIN_MODEL_CATALOG_FILE),
+            pluginCatalog: {
+              generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+              providers: {
+                zai: {
+                  baseUrl: "https://api.z.ai/api/paas/v4",
+                  api: "openai-completions",
+                  apiKey: "ZAI_API_KEY",
+                  models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+                },
+              },
+            },
+          },
+        ],
+      });
 
-    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
-      pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
-        { providerId: "google-vertex", pluginId: "google" },
-        { providerId: "zai", pluginId: "zai" },
-      ]),
-    });
+      const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+        ...(source === "captured"
+          ? { pluginCatalogs: listPersistedPluginModelCatalogs(dirname(modelsPath)) }
+          : {}),
+        pluginMetadataSnapshot: pluginOwnerSnapshotEntries([
+          { providerId: "google-vertex", pluginId: "google" },
+          { providerId: "zai", pluginId: "zai" },
+        ]),
+      });
 
-    expect(registry.getError()).toContain(
-      "Provider google-vertex, model gemini-3.1-pro-preview: invalid contextWindow",
-    );
-    expect(registry.find("custom", "root-model")?.name).toBe("Root Model");
-    expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-    expect(registry.find("google-vertex", "gemini-3.1-pro-preview")).toBeUndefined();
-  });
+      expect(registry.getError()).toContain(
+        "Provider google-vertex, model gemini-3.1-pro-preview: invalid contextWindow",
+      );
+      expect(registry.find("custom", "root-model")?.name).toBe("Root Model");
+      expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
+      expect(registry.find("google-vertex", "gemini-3.1-pro-preview")).toBeUndefined();
+    },
+  );
 
   it("repairs missing-api generated rows before repeated registry loads", () => {
     const modelsPath = writeModelsJsonWithPluginCatalogs({

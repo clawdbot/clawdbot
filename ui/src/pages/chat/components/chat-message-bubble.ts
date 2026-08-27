@@ -451,10 +451,8 @@ export function renderGroupedMessage(
             : undefined,
           opts.onOpenReply,
           opts.onResolveReply,
-          opts.replyNavigationId ===
-            (normalizedMessage.replyTarget?.kind === "id"
-              ? normalizedMessage.replyTarget.id
-              : null),
+          normalizedMessage.replyTarget?.kind === "id" &&
+            opts.replyNavigationId === normalizedMessage.replyTarget.id,
         )}
         ${renderInlineToolCards(toolCards, {
           messageKey,
@@ -498,8 +496,8 @@ export function renderGroupedMessage(
           : undefined,
         opts.onOpenReply,
         opts.onResolveReply,
-        opts.replyNavigationId ===
-          (normalizedMessage.replyTarget?.kind === "id" ? normalizedMessage.replyTarget.id : null),
+        normalizedMessage.replyTarget?.kind === "id" &&
+          opts.replyNavigationId === normalizedMessage.replyTarget.id,
       )}
       ${isStandaloneToolMessage
         ? html`
