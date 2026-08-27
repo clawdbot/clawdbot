@@ -17,7 +17,7 @@ import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-au
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -484,6 +484,30 @@ export async function runConfigureWizard(
       }
     }
 
+    // Resolve --agent before any branch can return. The remote-gateway path exits below without
+    // reaching setup-target resolution, so validating there let an unknown selector be accepted
+    // and ignored. Strict normalization is required: normalizeAgentId falls back to the default
+    // agent, which would silently retarget setup at the wrong owner.
+    const requestedAgentId = ((): string | undefined => {
+      const supplied = opts.agentId;
+      if (supplied === undefined) {
+        return undefined;
+      }
+      const normalized = normalizeAgentIdStrict(supplied);
+      if (!normalized.ok) {
+        throw new Error(
+          `Invalid --agent "${supplied}". Agent ids are lowercase letters, digits, and dashes.`,
+        );
+      }
+      const configured = listAgentIds(baseConfig);
+      if (!configured.includes(normalized.value)) {
+        throw new Error(
+          `Unknown agent "${supplied}". Configured agents: ${configured.join(", ") || "(none)"}.`,
+        );
+      }
+      return normalized.value;
+    })();
+
     const selectedSections = opts.sections;
     const shouldPromptGatewayRunMode =
       !selectedSections ||
@@ -608,12 +632,6 @@ export async function runConfigureWizard(
     // `--agent` is the operator's explicit owner and outranks both defaults below. Without it,
     // an explicit multi-agent roster with no System Agent has no sole owner, so the wizard used
     // to abort with AgentSelectionRequiredError naming a flag that did not exist.
-    const requestedAgentId = opts.agentId ? normalizeAgentId(opts.agentId) : undefined;
-    if (requestedAgentId && !listAgentIds(nextConfig).includes(requestedAgentId)) {
-      throw new Error(
-        `Unknown agent "${opts.agentId}". Configured agents: ${listAgentIds(nextConfig).join(", ") || "(none)"}.`,
-      );
-    }
     // Configure keeps legacy default-owner semantics; only explicit fleets opt into
     // the System Agent target used unconditionally by setup and recovery callers.
     const resolveSetupTarget = () =>

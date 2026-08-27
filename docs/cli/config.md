@@ -18,6 +18,10 @@ When `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-o
   Repeatable guided-setup section filter when you run `openclaw config` without a subcommand.
 </ParamField>
 
+<ParamField path="--agent <id>" type="string">
+  Agent that owns the guided setup when you run `openclaw config` without a subcommand. Required when `agents.ownership` is `explicit`, more than one agent is configured, and no System Agent is set. Same behavior as [`openclaw configure --agent`](/cli/configure).
+</ParamField>
+
 Guided sections: `workspace`, `model`, `web`, `gateway`, `daemon`, `channels`, `plugins`, `skills`, `health`.
 
 ## Examples
@@ -27,6 +31,7 @@ openclaw config file
 openclaw config file --json
 openclaw config --section model
 openclaw config --section gateway --section daemon
+openclaw config --agent ops
 openclaw config schema
 openclaw config schema --json
 openclaw config get browser.executablePath

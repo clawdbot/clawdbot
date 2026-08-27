@@ -28,6 +28,18 @@ openclaw configure --section model --section channels
 openclaw configure --section gateway --section daemon
 ```
 
+`--agent <id>`: the agent that owns this configuration. Optional on a single-agent install and on rosters with a default or System Agent, where the owner resolves on its own.
+
+Required when `agents.ownership` is `explicit`, more than one agent is configured, and no System Agent is set: the wizard then has no sole owner and exits before its first prompt.
+
+```bash
+openclaw configure --agent ops
+openclaw configure --section model --agent ops
+openclaw config --agent ops
+```
+
+An id outside the roster fails with the configured ids rather than falling back to the default agent.
+
 Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `--section`) prompts where the Gateway runs and updates `gateway.mode`. Section filters that skip all three go straight to the requested setup with no gateway-mode prompt. Picking remote gateway mode writes the remote config and exits immediately; it does not run local-only steps like plugin installs.
 
 <Note>

@@ -448,9 +448,19 @@ export function registerConfigCli(program: Command) {
       collectOption,
       [] as string[],
     )
+    .option(
+      "--agent <id>",
+      "Agent that owns this configuration (required when agents.ownership is explicit and no System Agent is set). Use with no subcommand.",
+    )
     .action(async (opts) => {
       const { configureCommandFromSectionsArg } = await import("../commands/configure.js");
-      await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+      // This alias is documented as the same guided wizard, so it must accept the same
+      // setup-owner selector; otherwise the remedy the error text names is unavailable here.
+      await configureCommandFromSectionsArg(
+        opts.section,
+        defaultRuntime,
+        opts.agent === undefined ? {} : { agentId: String(opts.agent) },
+      );
     });
   setCommandJsonMode(cmd, "output", ({ argv }) => isConfigMachineOutput(argv));
 

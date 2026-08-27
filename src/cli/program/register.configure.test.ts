@@ -69,6 +69,14 @@ describe("registerConfigureCommand", () => {
     });
   });
 
+  it("forwards an empty --agent instead of dropping it", async () => {
+    // Truthiness filtering dropped `--agent ""`, so an invalid selector silently resolved to the
+    // default owner instead of failing. Presence must survive to the wizard's validation.
+    await runCli(["configure", "--agent", ""]);
+
+    expect(configureCommandFromSectionsArgMock).toHaveBeenCalledWith([], runtime, { agentId: "" });
+  });
+
   it("reports errors through runtime when configure command fails", async () => {
     configureCommandFromSectionsArgMock.mockRejectedValueOnce(new Error("configure failed"));
 

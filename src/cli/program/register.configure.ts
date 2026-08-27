@@ -30,9 +30,13 @@ export function registerConfigureCommand(program: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { configureCommandFromSectionsArg } =
           await import("../../commands/configure.commands.js");
-        await configureCommandFromSectionsArg(opts.section, defaultRuntime, {
-          ...(opts.agent ? { agentId: String(opts.agent) } : {}),
-        });
+        // Presence, not truthiness: `--agent ""` must reach validation instead of being
+        // dropped and silently resolving to the default owner.
+        await configureCommandFromSectionsArg(
+          opts.section,
+          defaultRuntime,
+          opts.agent === undefined ? {} : { agentId: String(opts.agent) },
+        );
       });
     });
 }
