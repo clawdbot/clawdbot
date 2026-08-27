@@ -34,6 +34,23 @@ export function shellEscape(value) {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+export function buildSessionCommand(command, env = {}) {
+  const exports = Object.entries(env).map(([key, value]) => {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
+      throw new Error(
+        `Invalid Daytona sandbox environment variable name ${JSON.stringify(key)}; use a POSIX variable name.`,
+      );
+    }
+    if (value.includes("\0")) {
+      throw new Error(
+        `Invalid Daytona sandbox environment variable ${JSON.stringify(key)}; values must not contain NUL bytes.`,
+      );
+    }
+    return `export ${key}=${shellEscape(value)}`;
+  });
+  return exports.length > 0 ? `${exports.join("; ")}; exec ${command}` : command;
+}
+
 function formatError(error) {
   if (error && typeof error === "object" && typeof error.stack === "string") {
     return error.stack;
@@ -113,7 +130,7 @@ async function runPtyExec(sandbox, payload, options = {}) {
   return result.exitCode ?? 0;
 }
 
-async function runSessionExec(sandbox, payload, options = {}) {
+export async function runSessionExec(sandbox, payload, options = {}) {
   const sessionId = `openclaw-exec-${randomBytes(6).toString("hex")}`;
   const deleteSession = async () => {
     await sandbox.process.deleteSession(sessionId).catch(() => {});
@@ -123,8 +140,11 @@ async function runSessionExec(sandbox, payload, options = {}) {
   const signalState = registerCleanupSignals(deleteSession, options);
   await sandbox.process.createSession(sessionId);
   try {
+    if (signalState.interrupted) {
+      return signalExitCode(signalState.interrupted);
+    }
     const execution = await sandbox.process.executeSessionCommand(sessionId, {
-      command: payload.command,
+      command: buildSessionCommand(payload.command, payload.env),
       runAsync: true,
       suppressInputEcho: true,
     });

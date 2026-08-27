@@ -453,7 +453,8 @@ describe("daytona backend exec", () => {
     expect(payload.command).toContain("echo hello");
     expect(payload.command).toContain("cd ");
     expect(payload.command).toContain(setup.remoteWorkspaceDir);
-    expect(payload.command).toContain("OC_TEST=1");
+    expect(payload.command).not.toContain("OC_TEST=1");
+    expect(payload.env).toEqual({ OC_TEST: "1" });
 
     await handle.finalizeExec?.({
       status: "completed",
@@ -524,6 +525,61 @@ describe("daytona backend shell transport", () => {
       handle.runShellCommand({ script: "true", signal: controller.signal }),
     ).rejects.toThrow("caller cancelled");
     expect(created.process.createSession).not.toHaveBeenCalled();
+    expect(created.process.executeSessionCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not submit a command when aborted during stdin upload", async () => {
+    const setup = await createTestSetup();
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    const handle = await createFactory(setup.pluginConfig)(setup.createParams);
+    created.process.executeSessionCommand.mockClear();
+    let releaseUpload: (() => void) | undefined;
+    created.fs.uploadFile.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseUpload = resolve;
+        }),
+    );
+
+    const controller = new AbortController();
+    const pending = handle.runShellCommand({
+      script: "cat",
+      stdin: Buffer.from("data"),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(releaseUpload).toBeTypeOf("function"));
+    controller.abort(new Error("caller cancelled during upload"));
+    releaseUpload?.();
+
+    await expect(pending).rejects.toThrow("caller cancelled during upload");
+    expect(created.process.executeSessionCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not submit a command when aborted during session creation", async () => {
+    const setup = await createTestSetup();
+    const created = createFakeSandbox();
+    installFakeClient({ created });
+    const handle = await createFactory(setup.pluginConfig)(setup.createParams);
+    created.process.executeSessionCommand.mockClear();
+    let releaseSession: (() => void) | undefined;
+    created.process.createSession.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSession = resolve;
+        }),
+    );
+
+    const controller = new AbortController();
+    const pending = handle.runShellCommand({
+      script: "true",
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(releaseSession).toBeTypeOf("function"));
+    controller.abort(new Error("caller cancelled during session creation"));
+    releaseSession?.();
+
+    await expect(pending).rejects.toThrow("caller cancelled during session creation");
     expect(created.process.executeSessionCommand).not.toHaveBeenCalled();
   });
 

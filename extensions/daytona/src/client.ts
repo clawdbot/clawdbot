@@ -1,7 +1,8 @@
 // Daytona API client construction, credential resolution, and transient-error retry.
-import type { Daytona, DaytonaError, Sandbox } from "@daytona/sdk";
+import type { Daytona, Sandbox } from "@daytona/sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/sandbox";
 import { resolveConfiguredSecretInputWithFallback } from "openclaw/plugin-sdk/secret-input-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDaytonaPluginConfig } from "./config.js";
 
 export type { Daytona, Sandbox };
@@ -65,10 +66,10 @@ export async function createDaytonaClient(connection: DaytonaConnection): Promis
 }
 
 function readDaytonaStatusCode(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") {
+  if (!isRecord(error)) {
     return undefined;
   }
-  const statusCode = (error as Partial<DaytonaError>).statusCode;
+  const statusCode = error.statusCode;
   return typeof statusCode === "number" ? statusCode : undefined;
 }
 
@@ -82,7 +83,7 @@ function isTransientDaytonaError(error: unknown): boolean {
   if (statusCode === 502 || statusCode === 503 || statusCode === 504) {
     return true;
   }
-  const code = (error as { code?: unknown } | null)?.code;
+  const code = isRecord(error) ? error.code : undefined;
   return code === "ECONNRESET" || code === "ETIMEDOUT" || code === "EAI_AGAIN";
 }
 

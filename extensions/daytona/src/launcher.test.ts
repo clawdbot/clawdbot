@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const launcherPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -13,6 +13,7 @@ const loadLauncher = async () =>
   (await import(pathToFileURL(launcherPath).href)) as {
     decodePayload: (argv: string[]) => unknown;
     shellEscape: (value: string) => string;
+    buildSessionCommand: (command: string, env?: Record<string, string>) => string;
     registerCleanupSignals: (
       cleanup: () => Promise<unknown>,
       options?: {
@@ -20,6 +21,20 @@ const loadLauncher = async () =>
         exit?: (code: number) => void;
       },
     ) => { interrupted: string | null };
+    runSessionExec: (
+      sandbox: {
+        process: {
+          createSession: ReturnType<typeof vi.fn>;
+          executeSessionCommand: ReturnType<typeof vi.fn>;
+          deleteSession: ReturnType<typeof vi.fn>;
+        };
+      },
+      payload: { command: string },
+      options?: {
+        onSignal?: (signal: string, handler: () => void) => void;
+        exit?: (code: number) => void;
+      },
+    ) => Promise<number>;
   };
 
 describe("daytona exec launcher", () => {
@@ -47,6 +62,19 @@ describe("daytona exec launcher", () => {
     const launcher = await loadLauncher();
     expect(launcher.shellEscape("plain")).toBe("'plain'");
     expect(launcher.shellEscape("with 'quote'")).toBe(`'with '"'"'quote'"'"''`);
+  });
+
+  it("stages session environment without putting values in launcher argv", async () => {
+    const launcher = await loadLauncher();
+    expect(launcher.buildSessionCommand("printf ok", { TOKEN: "a'b" })).toBe(
+      `export TOKEN='a'"'"'b'; exec printf ok`,
+    );
+    expect(() => launcher.buildSessionCommand("true", { "BAD-NAME": "1" })).toThrow(
+      "use a POSIX variable name",
+    );
+    expect(() => launcher.buildSessionCommand("true", { TOKEN: "bad\0value" })).toThrow(
+      "must not contain NUL bytes",
+    );
   });
 
   it("runs remote cleanup before exiting when a signal arrives", async () => {
@@ -83,5 +111,38 @@ describe("daytona exec launcher", () => {
     });
     // Exit happens only after the remote cleanup settled.
     expect(events).toEqual(["cleanup-start", "cleanup-done", "exit-143"]);
+  });
+
+  it("does not submit a command when signalled during session creation", async () => {
+    const launcher = await loadLauncher();
+    const handlers = new Map<string, () => void>();
+    let releaseSession: (() => void) | undefined;
+    const sandbox = {
+      process: {
+        createSession: vi.fn(
+          () =>
+            new Promise<void>((resolve) => {
+              releaseSession = resolve;
+            }),
+        ),
+        executeSessionCommand: vi.fn(),
+        deleteSession: vi.fn(async () => {}),
+      },
+    };
+
+    const pending = launcher.runSessionExec(
+      sandbox,
+      { command: "touch should-not-exist" },
+      {
+        onSignal: (signal, handler) => handlers.set(signal, handler),
+        exit: () => {},
+      },
+    );
+    await vi.waitFor(() => expect(releaseSession).toBeTypeOf("function"));
+    handlers.get("SIGTERM")?.();
+    releaseSession?.();
+
+    await expect(pending).resolves.toBe(143);
+    expect(sandbox.process.executeSessionCommand).not.toHaveBeenCalled();
   });
 });

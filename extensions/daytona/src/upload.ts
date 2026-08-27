@@ -1,5 +1,6 @@
 // Local directory upload into a Daytona sandbox via a tar file over the toolbox API.
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/sandbox";
@@ -88,7 +89,7 @@ export async function uploadDirectoryToDaytonaSandbox(params: {
     async (workspace) => {
       const tarPath = workspace.path("openclaw-seed.tar");
       await createLocalTarFile(params.localDir, tarPath);
-      const remoteTarPath = `/tmp/openclaw-seed-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tar`;
+      const remoteTarPath = `/tmp/openclaw-seed-${randomBytes(12).toString("hex")}.tar`;
       const runRemoteOperation = params.runRemoteOperation ?? (async (run) => await run());
       await runRemoteOperation(() =>
         params.sandbox.fs.uploadFile(tarPath, remoteTarPath, Math.ceil(params.timeoutMs / 1000)),

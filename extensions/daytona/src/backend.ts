@@ -19,6 +19,7 @@ import {
   type SandboxBackendManager,
   type SandboxBackendRuntimeInfo,
 } from "openclaw/plugin-sdk/sandbox";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createDaytonaClient,
   isDaytonaNotFoundError,
@@ -166,7 +167,7 @@ class DaytonaSandboxBackendImpl {
         const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: remoteWorkdir,
-          env,
+          env: {},
         });
         const ensured = await this.ensureSandbox();
         if (!this.consumeRefreshedSkillsForNextExec(remoteWorkdir)) {
@@ -201,8 +202,8 @@ class DaytonaSandboxBackendImpl {
         };
       },
       finalizeExec: async ({ token }) => {
-        const payloadDir = (token as PendingDaytonaExec | undefined)?.payloadDir;
-        if (payloadDir) {
+        const payloadDir = isRecord(token) ? token.payloadDir : undefined;
+        if (typeof payloadDir === "string") {
           await fs.rm(payloadDir, { recursive: true, force: true });
         }
       },
@@ -538,6 +539,7 @@ class DaytonaSandboxBackendImpl {
         await this.withStartedSandbox(sandbox, () =>
           sandbox.fs.uploadFile(data ?? Buffer.alloc(0), stdinPath, this.timeoutSeconds),
         );
+        options.signal?.throwIfAborted();
       }
       await this.withStartedSandbox(sandbox, () => sandbox.process.createSession(sessionId));
       response = await this.runCancellableSessionCommand(
@@ -585,6 +587,7 @@ class DaytonaSandboxBackendImpl {
     command: string,
     signal?: AbortSignal,
   ): Promise<{ stdout?: string; exitCode?: number | null }> {
+    signal?.throwIfAborted();
     const execution = sandbox.process.executeSessionCommand(
       sessionId,
       { command, runAsync: false, suppressInputEcho: true },
