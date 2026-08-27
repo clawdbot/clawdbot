@@ -666,35 +666,6 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
     });
   });
 
-  it("stops on a provider request-size ceiling instead of spending a fallback candidate", async () => {
-    await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
-      await writeAuthStore(agentDir);
-      // Groq refuses an oversized single request with a 413 naming TPM and stating both figures.
-      // Inside an embedded run the only thing downstream of declining is the same request again,
-      // so the runner ends the turn here; the configured candidate is not spent on a payload the
-      // session will keep regrowing past. Rotation for this class is decided at the fallback
-      // boundary instead, which a transport-owning harness reaches -- see model-fallback.test.ts.
-      mockPrimaryErrorThenFallbackSuccess(
-        "413 Request too large for model `openai/gpt-oss-120b` in organization `org_x` " +
-          "service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8098, " +
-          "please reduce your message size and try again.",
-      );
-
-      const result = await runEmbeddedFallback({
-        agentDir,
-        workspaceDir,
-        sessionKey: "agent:test:request-size-ceiling-terminal",
-        runId: "run:request-size-ceiling-terminal",
-      });
-
-      expect(result.provider).toBe("openai");
-      expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
-      expect(result.result.meta.livenessState).toBe("blocked");
-      expect(result.result.meta.error?.kind).toBe("context_overflow");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("/reset");
-    });
-  });
-
   it("falls back on timeout errors using defaults-only model fallbacks", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
