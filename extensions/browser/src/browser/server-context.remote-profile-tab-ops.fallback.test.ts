@@ -389,6 +389,48 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     });
   });
 
+  it.each([
+    { method: "PUT", retryWithGet: false },
+    { method: "GET", retryWithGet: true },
+  ])("cancels pending /json/new $method tab creation with the caller", async ({ retryWithGet }) => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(
+      new Error("Target.createTarget unavailable"),
+    );
+
+    const controller = new AbortController();
+    let requestStarted!: () => void;
+    const pendingRequest = new Promise<void>((resolve) => {
+      requestStarted = resolve;
+    });
+    const fetchMock = vi.fn(async (...args: unknown[]) => {
+      const init = args[1] as RequestInit | undefined;
+      if (retryWithGet && init?.method === "PUT") {
+        return new Response(null, { status: 405 });
+      }
+      requestStarted();
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = init.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error(String(reason)));
+          },
+          { once: true },
+        );
+      });
+    });
+    const { state, remote } = deps.createRemoteRouteHarness(fetchMock);
+    state.resolved.remoteCdpTimeoutMs = 250;
+
+    const opening = remote.openTab("https://example.com", { signal: controller.signal });
+    await pendingRequest;
+    controller.abort(new Error("caller cancelled pending tab creation"));
+
+    await expect(opening).rejects.toThrow("caller cancelled pending tab creation");
+    expect(fetchMock).toHaveBeenCalledTimes(retryWithGet ? 2 : 1);
+  });
+
   it("uses the remote HTTP timeout for /json/new fallback tab opens", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     vi.spyOn(deps.cdpModule, "createTargetViaCdp").mockRejectedValue(

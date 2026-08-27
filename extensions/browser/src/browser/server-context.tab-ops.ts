@@ -420,16 +420,14 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     const created = await fetchJson<CdpTarget>(
       endpoint,
       cdpActionTimeouts?.httpTimeoutMs ?? CDP_JSON_NEW_TIMEOUT_MS,
-      {
-        method: "PUT",
-      },
+      { method: "PUT", signal: opts?.signal },
       getCdpControlPolicy(),
     ).catch(async (err: unknown) => {
       if (String(err).includes("HTTP 405")) {
         return await fetchJson<CdpTarget>(
           endpoint,
           cdpActionTimeouts?.httpTimeoutMs ?? CDP_JSON_NEW_TIMEOUT_MS,
-          undefined,
+          { signal: opts?.signal },
           getCdpControlPolicy(),
         );
       }
