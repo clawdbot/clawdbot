@@ -593,20 +593,39 @@ describe("lmstudio-models", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
-  it("cancels guarded non-ok discovery bodies before releasing the dispatcher", async () => {
-    const tracked = cancelTrackedResponse("unavailable", { status: 503 });
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });
-
-    const result = await fetchLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      ssrfPolicy: {},
-    });
-
-    expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
-    expect(tracked.wasCanceled()).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
-  });
+  it.each([false, true])(
+    "releases guarded non-ok discovery without waiting for capture (retained clone: %s)",
+    async (retainCaptureClone) => {
+      const tracked = cancelTrackedResponse("unavailable", { status: 503 });
+      const captureClone = retainCaptureClone ? tracked.response.clone() : undefined;
+      const release = vi.fn(async () => undefined);
+      fetchWithSsrFGuardMock.mockResolvedValue({ response: tracked.response, release });
+      const request = fetchLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        ssrfPolicy: {},
+      });
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const result = await Promise.race([
+          request,
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(
+              () => reject(new Error("LM Studio cleanup waited for the capture clone")),
+              500,
+            );
+          }),
+        ]);
+        expect(result).toMatchObject({ reachable: true, status: 503, models: [] });
+        expect(tracked.response.bodyUsed).toBe(true);
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        clearTimeout(timeout);
+        await captureClone?.body?.cancel().catch(() => undefined);
+        await request;
+      }
+      expect(tracked.wasCanceled()).toBe(true);
+    },
+  );
 
   it.each([
     {

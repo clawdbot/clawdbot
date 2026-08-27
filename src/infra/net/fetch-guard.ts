@@ -9,6 +9,7 @@ import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
 } from "../fetch-headers.js";
+import { cancelUnreadResponseBody } from "../http-body.js";
 import {
   shouldUseConfiguredLocalOriginManagedProxyBypass,
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
@@ -559,9 +560,14 @@ async function fetchWithSsrFGuardInternal(
 
     let dispatcher: Dispatcher | null = null;
     let dispatcherLease: PinnedDispatcherLease | undefined;
-    let activeResponse: Response | undefined;
-    const releaseDispatcher = async () =>
+    let response: Response | undefined;
+    const requestController = new AbortController();
+    const releaseDispatcher = async () => {
+      // Release only this hop's transport, including capture tees, before returning its pool lease.
+      requestController.abort();
+      await cancelUnreadResponseBody(response);
       await (dispatcherLease ? dispatcherLease.release() : closeDispatcher(dispatcher));
+    };
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
@@ -689,11 +695,14 @@ async function fetchWithSsrFGuardInternal(
         }
       }
 
+      const requestSignal = signal ?? currentInit?.signal;
       const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
-        ...(signal ? { signal } : {}),
+        signal: requestSignal
+          ? AbortSignal.any([requestSignal, requestController.signal])
+          : requestController.signal,
       };
 
       const supportsDispatcherInit =
@@ -708,10 +717,9 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
+      response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
-      activeResponse = response;
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&
         isAmbientGlobalFetch({
@@ -765,8 +773,6 @@ async function fetchWithSsrFGuardInternal(
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        await response.body?.cancel().catch(() => undefined);
-        activeResponse = undefined;
         await releaseDispatcher();
         currentUrl = nextUrl;
         continue;
@@ -786,7 +792,6 @@ async function fetchWithSsrFGuardInternal(
           `security: blocked URL fetch (${context}) targetOrigin=${parsedUrl.origin} reason=${err.message}`,
         );
       }
-      await activeResponse?.body?.cancel().catch(() => undefined);
       await finishRequest(releaseDispatcher);
       throw err;
     }
