@@ -169,6 +169,7 @@ export const CommandsSchema = z
     plugins: z.boolean().optional(),
     debug: z.boolean().optional(),
     restart: z.boolean().optional().default(true),
+    update: z.boolean().optional().default(true),
     ownerAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     allowFrom: ElevatedAllowFromSchema.optional(),
   })
@@ -180,5 +181,6 @@ export const CommandsSchema = z
         native: "auto",
         nativeSkills: "auto",
         restart: true,
+        update: true,
       }) as const,
   );

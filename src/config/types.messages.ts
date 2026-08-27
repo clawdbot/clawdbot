@@ -166,6 +166,8 @@ export type CommandsConfig = {
   debug?: boolean;
   /** Allow restart commands/tools (default: true). */
   restart?: boolean;
+  /** Allow /update chat command (default: true). */
+  update?: boolean;
   /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;
   /** How owner IDs are rendered in system prompts. */

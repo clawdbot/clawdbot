@@ -13,6 +13,7 @@ export const commandHandlerOrder = [
   "usage",
   "session",
   "restart",
+  "update",
   "tts",
   "help",
   "commands-list",

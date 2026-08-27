@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";
+import { isCommandFlagEnabled, isRestartEnabled, isUpdateEnabled } from "./commands.flags.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
@@ -259,6 +259,16 @@ describe("isRestartEnabled", () => {
         commands: Object.create({ restart: false }) as Record<string, unknown>,
       }),
     ).toBe(true);
+  });
+});
+
+describe("isUpdateEnabled", () => {
+  it("defaults to enabled unless explicitly false", () => {
+    expect(isUpdateEnabled(undefined)).toBe(true);
+    expect(isUpdateEnabled({})).toBe(true);
+    expect(isUpdateEnabled({ commands: {} })).toBe(true);
+    expect(isUpdateEnabled({ commands: { update: true } })).toBe(true);
+    expect(isUpdateEnabled({ commands: { update: false } })).toBe(false);
   });
 });
 

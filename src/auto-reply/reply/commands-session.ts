@@ -20,7 +20,7 @@ import {
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings-messages.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import { isRestartEnabled } from "../../config/commands.flags.js";
+import { isRestartEnabled, isUpdateEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
@@ -33,6 +33,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
+import { spawnDetachedChatUpdate } from "./commands-update-spawn.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -668,6 +669,77 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   return sessionCommandReply(
     `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+  );
+};
+
+function buildUpdateCommandSentinel(params: HandleCommandsParams): RestartSentinelPayload | null {
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return null;
+  }
+  const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
+  const payload: RestartSentinelPayload = {
+    kind: "restart",
+    status: "ok",
+    ts: Date.now(),
+    sessionKey,
+    deliveryContext,
+    threadId,
+    message: "/update",
+    continuation: buildRestartSuccessContinuation({ sessionKey }),
+    doctorHint: formatDoctorNonInteractiveHint(),
+    stats: {
+      mode: "gateway.update",
+      reason: "/update",
+    },
+  };
+  return payload;
+}
+
+export const handleUpdateCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  if (params.command.commandBodyNormalized !== "/update") {
+    return null;
+  }
+  if (!params.command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /update from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
+  const nonOwner = rejectNonOwnerCommand(params, "/update");
+  if (nonOwner) {
+    return nonOwner;
+  }
+  if (!isUpdateEnabled(params.cfg)) {
+    return sessionCommandReply("⚠️ /update is disabled (commands.update=false).");
+  }
+  await params.opts?.turnAdoptionLifecycle?.onAdopted();
+  const sentinelPayload = buildUpdateCommandSentinel(params);
+  let sentinelWritten = false;
+  try {
+    if (sentinelPayload) {
+      await writeRestartSentinel(sentinelPayload);
+      sentinelWritten = true;
+    }
+  } catch (err) {
+    logVerbose(`failed to write /update sentinel: ${String(err)}`);
+    return sessionCommandReply(
+      "⚠️ Update failed: could not persist the post-update acknowledgement.",
+    );
+  }
+  const started = spawnDetachedChatUpdate();
+  if (!started.ok) {
+    if (sentinelWritten) {
+      await clearRestartSentinel();
+    }
+    const detail = started.detail ? ` Details: ${started.detail}` : "";
+    return sessionCommandReply(`⚠️ Update failed to start.${detail}`);
+  }
+  return sessionCommandReply(
+    "⚙️ Updating OpenClaw in the background; I will restart when the update finishes.",
   );
 };
 
