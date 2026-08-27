@@ -363,6 +363,113 @@ describe("discord component registry", () => {
     await expect(resolveDiscordComponentEntryWithPersistence({ id: "btn_1" })).resolves.toBeNull();
   });
 
+  it.each([
+    { placement: "row", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
+    { placement: "row", buttonReusable: true, cardReusable: false, expectedReusable: true },
+    { placement: "row", buttonReusable: false, cardReusable: true, expectedReusable: false },
+    { placement: "row", buttonReusable: undefined, cardReusable: true, expectedReusable: true },
+    {
+      placement: "row",
+      buttonReusable: undefined,
+      cardReusable: undefined,
+      expectedReusable: undefined,
+    },
+    { placement: "section", buttonReusable: true, cardReusable: undefined, expectedReusable: true },
+    { placement: "section", buttonReusable: false, cardReusable: true, expectedReusable: false },
+    {
+      placement: "section",
+      buttonReusable: undefined,
+      cardReusable: true,
+      expectedReusable: true,
+    },
+  ] as const)(
+    "preserves $placement button reuse=$buttonReusable over card reuse=$cardReusable through delivery",
+    async ({ placement, buttonReusable, cardReusable, expectedReusable }) => {
+      const { RequestClient } = await import("./internal/discord.js");
+      const { sendDiscordComponentMessage } = await import("./send.components.js");
+      const button = {
+        label: "Refresh",
+        callbackData: "refresh",
+        ...(buttonReusable === undefined ? {} : { reusable: buttonReusable }),
+      };
+      const spec = readDiscordComponentSpec({
+        ...(cardReusable === undefined ? {} : { reusable: cardReusable }),
+        blocks: [
+          placement === "row"
+            ? { type: "actions", buttons: [button] }
+            : { type: "section", text: "Actions", accessory: { type: "button", button } },
+        ],
+      });
+      if (!spec) {
+        throw new Error("Expected component spec to be parsed");
+      }
+
+      const requests: Array<{ method: string | undefined; path: string; body: unknown }> = [];
+      const rest = new RequestClient("fixture-token", {
+        queueRequests: false,
+        fetch: async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          requests.push({
+            method: init?.method,
+            path: url.pathname,
+            body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+          });
+          const message =
+            init?.method === "GET"
+              ? { id: "789", type: 0 }
+              : { id: "delivered-message", channel_id: "789" };
+          return new Response(JSON.stringify(message), {
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+
+      const delivery = await sendDiscordComponentMessage("channel:789", spec, {
+        cfg: { channels: { discord: { token: "fixture-token" } } },
+        rest,
+        token: "fixture-token",
+      });
+      expect(delivery.messageId).toBe("delivered-message");
+      const sent = requests.find((request) => request.method === "POST");
+      expect(sent?.path).toBe("/api/v10/channels/789/messages");
+      expect(JSON.stringify(sent?.body)).not.toContain("reusable");
+
+      const sentBody = sent?.body as {
+        components?: Array<{
+          components?: Array<{
+            components?: Array<{ custom_id?: string }>;
+            accessory?: { custom_id?: string };
+          }>;
+        }>;
+      };
+      const block = sentBody.components?.[0]?.components?.[0];
+      const customId = block?.components?.[0]?.custom_id ?? block?.accessory?.custom_id;
+      if (!customId) {
+        throw new Error("Expected a delivered Discord button custom id");
+      }
+      const componentId = parseDiscordComponentCustomId(customId)?.componentId;
+      if (!componentId) {
+        throw new Error("Expected a registered Discord component id");
+      }
+
+      const registered = await resolveDiscordComponentEntryWithPersistence({
+        id: componentId,
+        consume: false,
+      });
+      expect(registered?.reusable).toBe(expectedReusable);
+      const firstInteraction = await resolveDiscordComponentEntryWithPersistence({
+        id: componentId,
+        consume: !registered?.reusable,
+      });
+      expect(firstInteraction?.id).toBe(componentId);
+      const secondInteraction = await resolveDiscordComponentEntryWithPersistence({
+        id: componentId,
+        consume: false,
+      });
+      expect(Boolean(secondInteraction)).toBe(expectedReusable === true);
+    },
+  );
+
   it("consumes sibling entries from the same non-reusable component message", async () => {
     const result = buildDiscordComponentMessage({
       spec: {

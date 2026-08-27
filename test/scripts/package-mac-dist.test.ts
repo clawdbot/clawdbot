@@ -159,7 +159,7 @@ describe("package-mac-dist plist validation", () => {
       [
         "#!/usr/bin/env bash",
         '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
-        "echo 'Xcode 26.0'",
+        "echo 'Xcode 26.4'",
         "",
       ].join("\n"),
       "utf8",
@@ -184,7 +184,7 @@ describe("package-mac-dist plist validation", () => {
     `);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
     expect(result.stderr).toContain("Current Swift is 6.0");
     expect(result.stderr).not.toContain("node should not run before Swift preflight");
   });

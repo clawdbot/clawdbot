@@ -30,6 +30,7 @@ import {
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -2930,11 +2931,14 @@ describe("doctor legacy state migrations", () => {
       "utf8",
     );
     const { db } = openOpenClawStateDatabase({ env });
-    db.prepare(
-      `INSERT INTO update_check_state (
-        state_key, last_checked_at, last_available_version, updated_at_ms
-      ) VALUES (?, ?, ?, ?)`,
-    ).run("default", "2026-07-14T00:00:00.000Z", "2026.7.2", 1);
+    writeConfigMachineState(
+      "update.checkState",
+      {
+        lastCheckedAt: "2026-07-14T00:00:00.000Z",
+        lastAvailableVersion: "2026.7.2",
+      },
+      { env },
+    );
     db.prepare(
       `INSERT INTO config_health_entries (
         config_path, last_known_good_json, last_promoted_good_json,
@@ -2968,13 +2972,9 @@ describe("doctor legacy state migrations", () => {
         demo: { source: "npm", spec: "demo@1.0.0", version: "1.0.0" },
       },
     });
-    expect(
-      db
-        .prepare(
-          "SELECT last_available_version FROM update_check_state WHERE state_key = 'default'",
-        )
-        .get(),
-    ).toMatchObject({ last_available_version: "2026.7.2" });
+    expect(readConfigMachineState("update.checkState", { env })).toMatchObject({
+      lastAvailableVersion: "2026.7.2",
+    });
     expect(
       db
         .prepare("SELECT last_known_good_json FROM config_health_entries WHERE config_path = ?")

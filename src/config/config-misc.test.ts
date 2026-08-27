@@ -518,6 +518,18 @@ describe("ui.seamColor", () => {
   });
 });
 
+describe("ui.prefs.accent", () => {
+  it.each([
+    ["lowercase hex", "#ff5c5c", true],
+    ["uppercase hex", "#AbCdEf", true],
+    ["missing hash", "ff5c5c", false],
+    ["invalid hex", "#gggggg", false],
+    ["invalid length", "#ff5c5c00", false],
+  ])("validates %s", (_label, accent, valid) => {
+    expect(validateConfigObject({ ui: { prefs: { accent } } }).ok).toBe(valid);
+  });
+});
+
 describe("ui.prefs.sidebarEntries", () => {
   it("accepts the route and session entries synchronized by the Control UI", () => {
     const result = validateConfigObject({

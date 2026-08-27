@@ -48,11 +48,15 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I switch models without wiping my config?">
     Change only the model fields — avoid full config replaces.
 
-    - `/model <model> -s` in chat (current session only; see [Slash commands](/tools/slash-commands))
-    - direct owner/admin `/model <model>` (current session plus a best-effort configured-default update request)
+    - `/model <model> -s` in chat (current session only)
+    - owner/admin `/model <model> -a` (current session and agent default)
+    - owner/admin `/model <model> -g` (current session and global default)
     - `openclaw models set ...` (updates just model config)
     - `openclaw configure --section model` (interactive)
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json` directly
+
+    Bare `/model <model>` keeps owner/admin configured-default persistence unless
+    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
     For RPC edits, inspect with `config.schema.lookup` first (normalized
     path, shallow schema docs, child summaries), then prefer `config.patch`
@@ -87,12 +91,12 @@ troubleshooting, see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="How do I switch models on the fly (without restarting)?">
-    Send `/model <name> -s` as a standalone message for a temporary switch.
-    A direct owner/admin `/model <name>` without `-s` also requests a
-    best-effort configured-default update. See
+    Send `/model <name> -s` as a standalone message to switch only this session.
+    Without a scope flag, the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+    applies; leaving it unset preserves owner/admin configured-default persistence. See
     [Slash commands](/tools/slash-commands) for the
     full command list, including the numbered picker (`/model`, `/model
-    list`, `/model 3`), `/model default` to clear a session model override, and
+    list`, `/model 3`), `/model default -s` to clear only a session model override, and
     `/model status` for endpoint/API-mode detail.
 
     Force a specific auth profile per session with `@profile`:
@@ -279,9 +283,9 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    Then `/model sonnet -s` resolves to that model id for the current session.
-    Omit `-s` only when an owner/admin also wants to request a configured-default
-    update.
+    Then `/model sonnet -s` selects that model ID for the current session only.
+    Owners/admins can use `-a` to also update the agent default or `-g` for the
+    shared global default. Bare selections follow the [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
   </Accordion>
 

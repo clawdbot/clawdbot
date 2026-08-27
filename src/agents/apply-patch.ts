@@ -17,7 +17,7 @@ import {
 } from "./apply-patch-file-ops.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
-import { resolvePathFromInput } from "./path-policy.js";
+import { preserveAtPrefixedRelativePath, resolvePathFromInput } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import {
@@ -309,10 +309,11 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
   await ops.mkdirp(parent);
 }
 
-async function assertPatchParentPath(filePath: string, options: ApplyPatchOptions) {
+async function assertPatchParentPath(rawFilePath: string, options: ApplyPatchOptions) {
   if (options.workspaceOnly === false || options.sandbox) {
     return;
   }
+  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
   const parent = path.dirname(filePath);
   if (!parent || parent === ".") {
     return;
@@ -358,11 +359,16 @@ async function assertNoExistingParentAliases(params: { parentPath: string; rootP
 }
 
 async function resolvePatchPath(
-  filePath: string,
+  rawFilePath: string,
   options: ApplyPatchOptions,
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; display: string }> {
   if (options.sandbox) {
+    const filePath = await preserveAtPrefixedRelativePath(
+      rawFilePath,
+      options.cwd,
+      options.sandbox.bridge,
+    );
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
       cwd: options.cwd,
@@ -382,6 +388,7 @@ async function resolvePatchPath(
     };
   }
 
+  const filePath = preserveAtPrefixedRelativePath(rawFilePath, options.cwd);
   const workspaceOnly = options.workspaceOnly !== false;
   const resolved = workspaceOnly
     ? (

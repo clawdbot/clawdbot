@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
@@ -8,6 +9,7 @@ import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.t
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.ts";
 import {
+  renderChildSessionLoadError,
   renderRecentSession,
   renderSessionTree,
   type SessionListHost,
@@ -232,7 +234,11 @@ function renderSessionSection(params: {
         : html`
             ${section.rows.length > 0
               ? html`<div class="sidebar-recent-sessions__list" role="list" aria-label=${label}>
-                  ${section.rows.map((session) => renderSessionTree({ host, session }))}
+                  ${repeat(
+                    section.rows,
+                    (session) => session.key,
+                    (session) => renderSessionTree({ host, session }),
+                  )}
                 </div>`
               : nothing}
             ${renderSessionPagination({
@@ -351,6 +357,7 @@ function renderSessionCatalog(params: {
       terminalAvailable: snapshot.terminalAvailable,
       onOpenTerminal: openCatalogSessionInTerminal,
       onOpenMenu: (request, x, y, trigger) => host.openCatalogMenu(request, x, y, trigger),
+      onCatalogMenuTriggerRendered: (key, element) => host.retargetCatalogMenuTrigger(key, element),
       isMenuOpen: (key) => host.sidebarMenus.catalogMenu.isOpenFor(key),
     })}
   `;
@@ -368,41 +375,45 @@ function renderSessionListBody(params: {
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
   return html`
-    ${params.sections.map((section) => {
-      if (section.id.startsWith("catalog:")) {
-        const catalog = catalogsBySectionId.get(section.id);
-        return catalog && params.catalogRenderer
-          ? renderSessionCatalog({
-              host,
-              snapshot: params.catalogs,
-              catalog,
-              renderer: params.catalogRenderer,
-            })
-          : nothing;
-      }
-      if (section.id === "work") {
-        if (section.totalRowCount === 0) {
+    ${repeat(
+      params.sections,
+      (section) => section.id,
+      (section) => {
+        if (section.id.startsWith("catalog:")) {
+          const catalog = catalogsBySectionId.get(section.id);
+          return catalog && params.catalogRenderer
+            ? renderSessionCatalog({
+                host,
+                snapshot: params.catalogs,
+                catalog,
+                renderer: params.catalogRenderer,
+              })
+            : nothing;
+        }
+        if (section.id === "work") {
+          if (section.totalRowCount === 0) {
+            return nothing;
+          }
+          return renderSessionSection({ host, section });
+        }
+        // Empty Other remains useful only as a collaborator or drag destination.
+        if (
+          section.id === "ungrouped" &&
+          section.totalRowCount === 0 &&
+          !params.nativeSessionsHaveMore &&
+          !host.sessionOwnershipVisible &&
+          host.sessionsStatusFilter === "active" &&
+          host.sessionOrganizer.draggingSessionKey === null
+        ) {
           return nothing;
         }
-        return renderSessionSection({ host, section });
-      }
-      // Empty Other remains useful only as a collaborator or drag destination.
-      if (
-        section.id === "ungrouped" &&
-        section.totalRowCount === 0 &&
-        !params.nativeSessionsHaveMore &&
-        !host.sessionOwnershipVisible &&
-        host.sessionsStatusFilter === "active" &&
-        host.sessionOrganizer.draggingSessionKey === null
-      ) {
-        return nothing;
-      }
-      return renderSessionSection({
-        host,
-        section,
-        nativeSessionsHaveMore: params.nativeSessionsHaveMore,
-      });
-    })}
+        return renderSessionSection({
+          host,
+          section,
+          nativeSessionsHaveMore: params.nativeSessionsHaveMore,
+        });
+      },
+    )}
   `;
 }
 
@@ -451,6 +462,7 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  const hiddenMainSessionKey = host.mainSessionRow()?.key;
   return html`
     <section
       class="sidebar-sessions ${host.sessionOrganizer.sessionListRemovalDrop
@@ -461,6 +473,7 @@ export function renderSessionList(params: {
       @drop=${(event: DragEvent) => host.handleSessionListDrop(event)}
     >
       ${renderSessionListToolbar(host)}
+      ${hiddenMainSessionKey ? renderChildSessionLoadError(host, hiddenMainSessionKey) : nothing}
       ${host.sessionData.sessionMutationError
         ? html`
             <div

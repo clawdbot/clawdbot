@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ACTIONLINT_VERSION = "1.7.12";
-const PRE_COMMIT_VERSION = "4.2.0";
+const PRE_COMMIT_VERSION = "4.6.2";
 const WORKFLOW_DIR = ".github/workflows";
 
 function commandExists(command: string, args: readonly string[] = ["--version"]): boolean {

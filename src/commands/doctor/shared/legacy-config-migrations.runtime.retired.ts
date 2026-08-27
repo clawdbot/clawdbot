@@ -322,10 +322,6 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
         delete entry.ui;
       }
     }
-    if (Object.hasOwn(entry, "subagentProgress")) {
-      delete entry.subagentProgress;
-      changes.push(`Removed ${path}.subagentProgress.`);
-    }
   });
 
   let messages = getRecord(raw.messages);
@@ -438,6 +434,21 @@ function migrateFinalLayoutKills(raw: Record<string, unknown>, changes: string[]
     delete controlUi.chatMessageMaxWidth;
     changes.push("Removed gateway.controlUi.chatMessageMaxWidth; chat width is now browser-local.");
   }
+}
+
+function removeUiAssistantIdentity(raw: Record<string, unknown>, changes: string[]): void {
+  const ui = getRecord(raw.ui);
+  if (!ui || !Object.hasOwn(ui, "assistant")) {
+    return;
+  }
+
+  // The retired override was presentation-only. Translating it into agent identity
+  // would unexpectedly change outbound channel identity.
+  delete ui.assistant;
+  if (Object.keys(ui).length === 0) {
+    delete raw.ui;
+  }
+  changes.push("Removed retired ui.assistant; configure agents.list[].identity instead.");
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
@@ -555,6 +566,14 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
       }
     },
+  }),
+  defineLegacyConfigMigration({
+    id: "runtime.ui-assistant-identity",
+    describe: "Remove the retired UI assistant identity override",
+    legacyRules: [
+      rule(["ui", "assistant"], "ui.assistant was retired; use agents.list[].identity instead."),
+    ],
+    apply: removeUiAssistantIdentity,
   }),
   defineLegacyConfigMigration({
     id: "runtime.retired-config-keys",

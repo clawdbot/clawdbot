@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../test-helpers/load-styles.ts";
 import "./menu-surface.ts";
 import "./resizable-divider.ts";
+import "./web-awesome.ts";
 
 // Real-browser regression for the sidebar menu z-order bug: the nav column is
 // a stacking context (.shell-nav z-index 10) painted below the sidebar
 // resizer (.sidebar-resizer z-index 20), so a fixed-position menu rendered
 // inside the nav is overdrawn by the divider unless it is promoted to the
-// popover top layer via openclaw-menu-surface.
+// popover top layer. Plain overlays use openclaw-menu-surface; Web Awesome
+// dropdowns already own their popup and must not nest inside that surface.
 //
 // The repo-level test shard also collects *.browser.test.ts under jsdom,
 // which has neither the Popover API nor real layout; the paint-order
@@ -77,7 +79,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     expect(hitTestOnDivider(menu, divider)).toBe(divider);
   });
 
-  it("paints a menu hosted in openclaw-menu-surface above the resizer divider", async () => {
+  it("paints a plain menu hosted in openclaw-menu-surface above the resizer divider", async () => {
     await useDesktopViewport();
     const { nav, divider } = mountShell();
     const surface = document.createElement("openclaw-menu-surface");
@@ -89,5 +91,47 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     const hit = hitTestOnDivider(menu, divider);
     expect(hit).not.toBeNull();
     expect(menu.contains(hit)).toBe(true);
+  });
+
+  it("paints a Web Awesome dropdown above the divider through its own popover", async () => {
+    await useDesktopViewport();
+    const { nav, divider } = mountShell();
+    const dividerBounds = divider.getBoundingClientRect();
+    const dropdown = document.createElement("wa-dropdown") as HTMLElement & {
+      open: boolean;
+      updateComplete: Promise<unknown>;
+    };
+    dropdown.className = "sidebar-session-sort-menu";
+    const trigger = document.createElement("button");
+    trigger.slot = "trigger";
+    trigger.style.position = "fixed";
+    trigger.style.left = `${Math.round(dividerBounds.left) - 120}px`;
+    trigger.style.top = "100px";
+    const item = document.createElement("wa-dropdown-item");
+    item.className = "sidebar-session-sort-menu__item";
+    item.textContent = "Created";
+    dropdown.append(trigger, item);
+    nav.append(dropdown);
+    dropdown.open = true;
+    await dropdown.updateComplete;
+
+    const popup = dropdown.shadowRoot?.querySelector<
+      HTMLElement & { updateComplete: Promise<unknown> }
+    >("wa-popup");
+    await popup?.updateComplete;
+    const popupSurface = popup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+    await expect.poll(() => popupSurface?.matches(":popover-open")).toBe(true);
+    expect(dropdown.closest("openclaw-menu-surface")).toBeNull();
+
+    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+    expect(menu).not.toBeNull();
+    const menuBounds = menu!.getBoundingClientRect();
+    expect(menuBounds.right).toBeGreaterThan(dividerBounds.left);
+    const hit = document.elementFromPoint(
+      dividerBounds.left + dividerBounds.width / 2,
+      menuBounds.top + menuBounds.height / 2,
+    );
+    expect(hit).not.toBeNull();
+    expect(dropdown.contains(hit)).toBe(true);
   });
 });

@@ -364,14 +364,17 @@ export function buildAgentContext(
   const workspace =
     workspaceFromFiles ||
     config.entry?.workspace ||
-    config.defaults?.workspace ||
     agent.workspace ||
+    config.defaults?.workspace ||
     "default";
-  const modelLabel = config.entry?.model
-    ? resolveModelLabel(config.entry?.model)
-    : config.defaults?.model
-      ? resolveModelLabel(config.defaults?.model)
-      : resolveModelLabel(agent.model);
+  const primary =
+    resolveModelPrimary(config.entry?.model) ??
+    resolveModelPrimary(config.defaults?.model) ??
+    resolveModelPrimary(agent.model);
+  const fallbacks =
+    resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
+    (configForm ? null : resolveModelFallbacks(agent.model));
+  const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
   const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||

@@ -48,7 +48,7 @@ export function enqueuePendingSendMessage(
   if (!trimmed && !hasAttachments) {
     return null;
   }
-  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId);
+  const sender = resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser);
   // A send that resumes an edited row inherits its place; the row itself is
   // retired by the write that admits this replacement, not here.
   const pending: ChatQueueItem = {

@@ -31,9 +31,15 @@ const controlUiPerformanceBudgets = {
   startupJsGzipBytes: 350 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
+  // Briefly 47 KiB for the Tide/Beacon/Phosphor palettes, restored to 45 KiB
+  // once those palettes moved out of the startup sheet into public/themes and
+  // measured 42.2 KiB — below where they started. Adding a built-in theme no
+  // longer costs the default path anything, so this ceiling should stay put.
   startupCssGzipBytes: 45 * KIB,
   largestJsGzipBytes: 215 * KIB,
-  largestCssGzipBytes: 45 * KIB,
+  // Composer multiline surface (stack #124301) legitimately grew boot CSS;
+  // operator decision 2026-08-25 rejected boot splitting due to precedence risk.
+  largestCssGzipBytes: 53 * KIB,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

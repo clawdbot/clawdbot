@@ -1,0 +1,205 @@
+/* Beacon palette; selected by index.html and app/theme.ts. */
+
+/*
+ * Beacon targets WCAG AAA (7:1), not the AA 4.5:1 floor the other themes hold,
+ * for low vision, direct sunlight, projectors, and poor panels.
+ *
+ * That forces one deliberate break from the status-token convention in :root:
+ * elsewhere each --x-subtle is --x at 8%, but a label sitting on a tint of its
+ * own hue caps the achievable contrast, because the tint pulls the background
+ * toward the text. Beacon tints neutrally instead and lets the label carry the
+ * contrast, which is what buys AAA on the status pairs.
+ */
+:root[data-theme="beacon"] {
+  /*
+   * Accent — high-visibility amber on pure black
+   *
+   * WCAG 2.1 AAA audit (bg = #000000):
+   *   --accent #ffc233  contrast ≈ 13.0:1 AAA ✓
+   *   --primary-foreground #000000 on #ffc233 button: 13.0:1 ✓
+   *   worst text pairing --muted on --bg-muted: 10.29:1 ✓
+   *   worst status label on its neutral subtle tint: 7.05:1 ✓
+   */
+  --ring: #ffc233;
+  --accent: #ffc233;
+  --accent-hover: #ffd45e;
+  --accent-muted: #ffc233;
+  --accent-subtle: rgba(255, 255, 255, 0.1);
+  --accent-glow: rgba(255, 194, 51, 0.3);
+  --primary: #ffc233;
+  --primary-hover: #ffd45e;
+  --primary-foreground: #000000;
+
+  /* Focus is 3px and fully opaque: a translucent ring is the first thing to
+     disappear on a poor panel, which is exactly this theme's audience. */
+  --focus: rgba(255, 194, 51, 0.35);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+
+  --bg: #000000;
+  --bg-accent: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-hover: #1c1c1c;
+  --bg-muted: #1c1c1c;
+
+  --card: #0a0a0a;
+  --card-foreground: #ffffff;
+  --card-highlight: rgba(255, 255, 255, 0.06);
+  --popover: #141414;
+  --popover-foreground: #ffffff;
+
+  --panel: #000000;
+  --panel-strong: #141414;
+  --panel-hover: #1c1c1c;
+  --chrome: rgba(0, 0, 0, 0.98);
+  --chrome-strong: #000000;
+
+  --text: #ffffff;
+  --text-strong: #ffffff;
+  --chat-text: #ffffff;
+  --muted: #c9c9c9;
+  --muted-strong: #dcdcdc;
+  --muted-foreground: #c9c9c9;
+
+  /* Borders are structure here, not decoration: hairlines vanish first. */
+  --border: #4a4a4a;
+  --border-strong: #6e6e6e;
+  --border-hover: #9a9a9a;
+  --input: #4a4a4a;
+
+  --secondary: #141414;
+  --secondary-foreground: #ffffff;
+  --accent-2: #8ecdff;
+  --accent-2-muted: rgba(142, 205, 255, 0.85);
+  --accent-2-subtle: rgba(255, 255, 255, 0.1);
+
+  /* Neutral status tints — see the block comment above. */
+  --ok: #5ee88a;
+  --ok-muted: rgba(94, 232, 138, 0.85);
+  --ok-subtle: rgba(255, 255, 255, 0.1);
+  --destructive: #ffabab;
+  --destructive-hover: #ffc4c4;
+  --destructive-foreground: #000000;
+  --warn: #ffc233;
+  --warn-muted: rgba(255, 194, 51, 0.85);
+  --warn-subtle: rgba(255, 255, 255, 0.1);
+  --danger: #ffabab;
+  --danger-muted: rgba(255, 171, 171, 0.85);
+  --danger-subtle: rgba(255, 255, 255, 0.1);
+  --info: #8ecdff;
+  --info-subtle: rgba(255, 255, 255, 0.1);
+  --run: #5ee88a;
+
+  /* Diff ink is a status pair too: it sits on the same neutral tints. */
+  --hljs-deletion: #ffaba3;
+  --hljs-addition: #7ee787;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.9);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.9);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.95);
+  --overlay-shadow: var(--shadow-md);
+  --overlay-border: var(--border-strong);
+
+  --grid-line: rgba(255, 255, 255, 0.08);
+  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
+     the accessibility contract, not an accent (see styles fonts/beacon.css). */
+  --font-body:
+    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: var(--font-body);
+}
+
+:root[data-theme="beacon-light"] {
+  /*
+   * Accent — dark amber on pure white
+   *
+   * WCAG 2.1 AAA audit (bg = #ffffff):
+   *   --accent #6e4a00  contrast ≈ 8.0:1 AAA ✓
+   *   --primary-foreground #ffffff on #6e4a00 button: 8.0:1 ✓
+   *   worst text pairing --muted on --bg-muted: 9.72:1 ✓
+   *   worst status label on its neutral subtle tint: 7.02:1 ✓
+   */
+  --ring: #6e4a00;
+  --accent: #6e4a00;
+  --accent-hover: #573a00;
+  --accent-muted: #6e4a00;
+  --accent-subtle: rgba(0, 0, 0, 0.07);
+  --accent-glow: rgba(110, 74, 0, 0.2);
+  --primary: #6e4a00;
+  --primary-foreground: #ffffff;
+
+  --focus: rgba(110, 74, 0, 0.35);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 5px var(--ring);
+
+  --bg: #ffffff;
+  --bg-accent: #f4f4f4;
+  --bg-elevated: #ffffff;
+  --bg-hover: #ededed;
+  --bg-muted: #ededed;
+  --bg-content: #f4f4f4;
+
+  --card: #ffffff;
+  --card-foreground: #000000;
+  --card-highlight: rgba(0, 0, 0, 0.04);
+  --popover: #ffffff;
+  --popover-foreground: #000000;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: var(--bg-accent);
+
+  --panel: #ffffff;
+  --panel-strong: #f4f4f4;
+  --panel-hover: #e4e4e4;
+  --chrome: rgba(255, 255, 255, 0.98);
+  --chrome-strong: #ffffff;
+
+  --text: #000000;
+  --text-strong: #000000;
+  --chat-text: #000000;
+  --muted: #3a3a3a;
+  --muted-strong: #262626;
+  --muted-foreground: #3a3a3a;
+
+  --border: #8a8a8a;
+  --border-strong: #5a5a5a;
+  --border-hover: #2e2e2e;
+  --input: #8a8a8a;
+
+  --secondary: #f4f4f4;
+  --secondary-foreground: #000000;
+  --accent-2: #09428d;
+  --accent-2-muted: rgba(9, 66, 141, 0.85);
+  --accent-2-subtle: rgba(0, 0, 0, 0.07);
+
+  /* Neutral status tints — see the block comment above. */
+  --ok: #0c5024;
+  --ok-muted: rgba(12, 80, 36, 0.85);
+  --ok-subtle: rgba(0, 0, 0, 0.07);
+  --destructive: #8c0f0f;
+  --destructive-foreground: #ffffff;
+  --warn: #613d00;
+  --warn-muted: rgba(97, 61, 0, 0.85);
+  --warn-subtle: rgba(0, 0, 0, 0.07);
+  --danger: #8c0f0f;
+  --danger-muted: rgba(140, 15, 15, 0.85);
+  --danger-subtle: rgba(0, 0, 0, 0.07);
+  --info: #09428d;
+  --info-subtle: rgba(0, 0, 0, 0.07);
+  --run: #0c5024;
+
+  /* Diff ink is a status pair too: it sits on the same neutral tints. */
+  --hljs-deletion: #8b0c20;
+  --hljs-addition: #0e5021;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.28);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.3);
+  --overlay-shadow: var(--shadow-md);
+  --overlay-border: var(--border-strong);
+
+  --grid-line: rgba(0, 0, 0, 0.12);
+  /* Atkinson Hyperlegible Next everywhere, prose included: the face is part of
+     the accessibility contract, not an accent (see styles fonts/beacon.css). */
+  --font-body:
+    "Atkinson Hyperlegible Next", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-chat: var(--font-body);
+}

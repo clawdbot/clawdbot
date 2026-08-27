@@ -74,7 +74,7 @@ export async function readConfigFileSnapshotInternal(
         // Missing config is the fresh-install default path: materialize the
         // same runtime defaults an existing empty {} config gets, so snapshot
         // consumers see identical out-of-box behavior either way.
-        runtimeConfig: materializeRuntimeConfig(config, "snapshot", {
+        runtimeConfig: materializeRuntimeConfig(config, {
           manifestRegistry:
             context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined,
         }),
@@ -295,7 +295,7 @@ export async function readConfigFileSnapshotInternal(
       }
     }
     const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
-      materializeRuntimeConfig(validated.config, "snapshot", {
+      materializeRuntimeConfig(validated.config, {
         manifestRegistry:
           pluginMetadata.getSnapshot()?.manifestRegistry ??
           (context.options.pluginValidation === "core-only" ? { plugins: [] } : undefined),
@@ -454,7 +454,7 @@ export async function readBestEffortConfigSnapshotFromContext(
   }
   return {
     config: context.finalizeLoadedRuntimeConfig(
-      materializeRuntimeConfig(result.snapshot.sourceConfig, "load", {
+      materializeRuntimeConfig(result.snapshot.sourceConfig, {
         manifestRegistry: result.pluginMetadataSnapshot?.manifestRegistry,
       }),
     ),

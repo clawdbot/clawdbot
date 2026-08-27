@@ -152,7 +152,7 @@ private struct LocationAccessSettings: View {
     private func requestLocationAuthorization(mode: OpenClawLocationMode) async -> Bool {
         guard mode != .off else { return true }
         guard CLLocationManager.locationServicesEnabled() else {
-            await MainActor.run { LocationPermissionHelper.openSettings() }
+            await MainActor.run { SystemSettingsURLSupport.openPrivacySettings(for: .location) }
             return false
         }
 

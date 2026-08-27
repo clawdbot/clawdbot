@@ -10,7 +10,7 @@ const loadCodeModeTypeScriptRuntime = vi.hoisted(() =>
 vi.mock("./code-mode-typescript-runtime.js", () => ({
   loadCodeModeTypeScriptRuntime,
 }));
-import { applyCodeModeCatalog } from "./code-mode.js";
+import { applyCodeModeCatalog, runCodeModeScriptHeadless } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginTool,
@@ -19,6 +19,7 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { registerHeadlessToolSearchCatalog } from "./tool-search.js";
 
 describe("Code Mode TypeScript execution", () => {
   beforeEach(async () => {
@@ -114,6 +115,38 @@ describe("Code Mode TypeScript execution", () => {
     expect(typedShell.error).toMatch(/JavaScript or TypeScript, not shell commands/);
     expect(testing.activeRuns.size).toBe(0);
   });
+
+  it.each([-1, 1])(
+    "keeps the headless budget when TypeScript preparation shifts the wall clock by %i",
+    async (clockDirection) => {
+      const typescriptRuntime = await import("typescript");
+      const initialWallClockMs = Date.now();
+      let wallClockJumpMs = 0;
+      const wallClock = vi
+        .spyOn(Date, "now")
+        .mockImplementation(() => initialWallClockMs + wallClockJumpMs);
+      try {
+        loadCodeModeTypeScriptRuntime.mockImplementation(async () => {
+          wallClockJumpMs = clockDirection * 60_000;
+          return typescriptRuntime;
+        });
+        const { ctx, catalogRef } = createCodeModeHarness();
+        registerHeadlessToolSearchCatalog({ catalogRef, tools: [] });
+
+        const result = await runCodeModeScriptHeadless({
+          ctx,
+          language: "typescript",
+          code: "const value: number = 42; return value;",
+          wallClockMs: 30_000,
+        });
+
+        expect(result).toMatchObject({ status: "completed", value: 42 });
+        expect(loadCodeModeTypeScriptRuntime).toHaveBeenCalledOnce();
+      } finally {
+        wallClock.mockRestore();
+      }
+    },
+  );
 
   it("times out an unfinished TypeScript runtime load without starting a worker", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();

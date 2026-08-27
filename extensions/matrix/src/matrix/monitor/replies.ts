@@ -8,6 +8,7 @@ import {
   listMessageReceiptPlatformIds,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -140,12 +141,12 @@ export async function deliverMatrixReplies(params: {
   try {
     for (const reply of params.replies) {
       const visibleText = resolveVisibleMatrixReplyText(reply.text);
-      const hasMedia = Boolean(reply?.mediaUrl) || (reply?.mediaUrls?.length ?? 0) > 0;
+      const { hasMedia, hasText, mediaUrls } = resolveSendableOutboundReplyParts(reply);
       if (reply.isReasoning === true || (!hasMedia && reply.text && visibleText === undefined)) {
         logVerbose("matrix reply suppressed as reasoning-only");
         continue;
       }
-      if (!reply?.text && !hasMedia) {
+      if (!hasText && !hasMedia) {
         if (reply?.audioAsVoice) {
           logVerbose("matrix reply has audioAsVoice without media/text; skipping");
           continue;
@@ -153,22 +154,16 @@ export async function deliverMatrixReplies(params: {
         params.runtime.error?.("matrix reply missing text/media");
         continue;
       }
-      const replyToIdRaw = (reply.replyToId ?? params.replyToId)?.trim();
-      const replyToId = params.threadId
-        ? replyToIdRaw
-        : params.replyToMode === "off"
-          ? undefined
-          : replyToIdRaw;
+      const explicitReplyToId =
+        reply.replyToTag || reply.replyToCurrent ? reply.replyToId?.trim() : undefined;
       const rawText = visibleText ?? "";
-      const mediaList = reply.mediaUrls?.length
-        ? reply.mediaUrls
-        : reply.mediaUrl
-          ? [reply.mediaUrl]
-          : [];
 
-      const shouldIncludeReply = (id?: string) =>
-        Boolean(id) && (params.threadId || params.replyToMode === "all" || !hasRepliedRef.value);
-      const replyToIdForReply = shouldIncludeReply(replyToId) ? replyToId : undefined;
+      const replyToIdForReply =
+        explicitReplyToId ||
+        (params.threadId ||
+        (params.replyToMode !== "off" && (params.replyToMode === "all" || !hasRepliedRef.value))
+          ? (reply.replyToId ?? params.replyToId)?.trim()
+          : undefined);
       const onDeliveryResult = (result: MatrixSendResult) => {
         // A concrete event consumes the first-reply slot even when a later event fails.
         acceptedResults.push(result);
@@ -177,7 +172,7 @@ export async function deliverMatrixReplies(params: {
         }
       };
 
-      if (mediaList.length === 0) {
+      if (mediaUrls.length === 0) {
         const { chunks } = chunkMatrixText(rawText, {
           cfg: params.cfg,
           accountId: params.accountId,
@@ -201,7 +196,7 @@ export async function deliverMatrixReplies(params: {
       }
 
       let first = true;
-      for (const mediaUrl of mediaList) {
+      for (const mediaUrl of mediaUrls) {
         const caption = first ? rawText : "";
         await sendMessageMatrix(params.roomId, caption, {
           client: params.client,

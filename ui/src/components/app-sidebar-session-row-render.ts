@@ -1,17 +1,25 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
+import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../app/control-ui-auth.ts";
 import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
-import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
+import {
+  restartHoverMarqueeIfHovered,
+  startHoverMarqueeFromEvent,
+  stopHoverMarqueeFromEvent,
+} from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { projectPresencePayload } from "../lib/presence-users.ts";
+import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -19,6 +27,7 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
 } from "./app-sidebar-session-catalogs.ts";
+import type { SidebarSessionProjection } from "./app-sidebar-session-projection.ts";
 import {
   rowDemandsVisibility,
   sidebarSessionMetaId,
@@ -35,10 +44,7 @@ import {
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
 import type { SessionOrganizerController } from "./session-organizer-controller.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
-import {
-  renderSidebarSessionSubtitle,
-  resolveSidebarSessionSubtitle,
-} from "./session-row-subtitle.ts";
+import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
@@ -51,19 +57,21 @@ export interface SessionListHost {
   readonly sessionsShowPreview: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
+  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
     SessionDataController,
     | "approvalBadgeSnapshot"
+    | "childSessionErrorsByParent"
     | "loadMoreSessionCatalog"
     | "presenceInstanceId"
     | "presencePayload"
     | "refreshSessionCatalogs"
+    | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
   >;
-  readonly fullyShownChildSessionKeys: ReadonlySet<string>;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
@@ -100,7 +108,9 @@ export interface SessionListHost {
     sessionKey: string,
     worktreeId: string,
   ): SessionPullRequestIndicatorState;
+  mainSessionRow(): { key: string } | null;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
+  isSessionChildrenFullyShown(sessionKey: string): boolean;
   startSessionDrag(session: SidebarRecentSession): void;
   finishSessionDrag(): void;
   handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession): void;
@@ -134,15 +144,15 @@ export interface SessionListHost {
     y: number,
     trigger?: HTMLElement,
   ): void;
+  retargetCatalogMenuTrigger(key: CatalogSessionKey, element: Element | undefined): void;
 }
 
 export function visibleSessionChildren(params: {
   session: SidebarRecentSession;
-  fullyShownChildSessionKeys: ReadonlySet<string>;
+  fullyShown: boolean;
 }): readonly SidebarRecentSession[] {
-  const showAllChildren = params.fullyShownChildSessionKeys.has(params.session.key);
   // Active, running, and attention-bearing branches must bypass the quiet-child cap.
-  return showAllChildren
+  return params.fullyShown
     ? params.session.children
     : params.session.children.filter(
         (child, index) =>
@@ -162,7 +172,7 @@ export function renderRecentSession(params: {
     params: { key: session.key, pinned: !session.pinned },
   });
   const label = display?.label ?? session.label;
-  const { subtitle, narration } = resolveSidebarSessionSubtitle({
+  const { subtitle, narration } = host.sessionProjection.resolveSubtitle({
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
@@ -237,7 +247,8 @@ export function renderRecentSession(params: {
   const pinLabel = `${t(session.pinned ? "sessionsView.unpinSession" : "sessionsView.pinSession")}: ${label}`;
   const menuTooltip = t("chat.sidebar.openSessionMenu");
   const menuLabel = `${menuTooltip}: ${label}`;
-  const menuOpen = host.sidebarMenus.sessionMenu?.session.key === session.key;
+  const menuOpen =
+    host.sidebarMenus.sessionMenu?.session.key === session.key || display?.catalogMenuOpen === true;
   const rowClass = [
     "sidebar-recent-session",
     "session-row-host",
@@ -271,11 +282,43 @@ export function renderRecentSession(params: {
     requiredScope: "operator.write",
   });
   const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const marqueeLabelTemplate = html`<span
+    ${display ? ref(restartHoverMarqueeIfHovered) : nothing}
+    class="sidebar-recent-session__name hover-marquee"
+    >${session.archived
+      ? html`<span
+          class="sidebar-session__archive-glyph"
+          aria-label=${t("sessionsView.archived")}
+          title=${t("sessionsView.archived")}
+          >${icons.archive}</span
+        >`
+      : nothing}${session.forkSource
+      ? html`<span
+          class="sidebar-session-fork-indicator"
+          role="img"
+          aria-label=${t("sessionsView.forkedSession")}
+          >${icons.gitFork}</span
+        >`
+      : nothing}${label}</span
+  >`;
+  const marqueeLabel = display
+    ? keyed(
+        JSON.stringify([
+          label,
+          session.archived === true,
+          session.forkSource !== undefined,
+          session.pullRequest ?? display.pullRequest,
+        ]),
+        marqueeLabelTemplate,
+      )
+    : marqueeLabelTemplate;
   // Always reserve the lead so every title shares the section-label text line.
   const row = html`
     <div
+      ${display?.rowRef ? ref(display.rowRef) : nothing}
       class=${rowClass}
       data-session-key=${session.key}
+      data-catalog-session-key=${display?.catalogIdentityKey ?? nothing}
       role=${ifDefined(listItem ? "listitem" : undefined)}
       draggable=${rowDraggable ? "true" : "false"}
       @dragstart=${!rowDraggable
@@ -293,11 +336,11 @@ export function renderRecentSession(params: {
           }}
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
-      @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
-      @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
+      @mouseenter=${startHoverMarqueeFromEvent}
+      @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
-        href=${session.href}
+        href=${withSidebarNavCollapseIntent(session.href)}
         class="sidebar-recent-session__link"
         draggable="false"
         aria-current=${session.visuallyActive ? "page" : nothing}
@@ -313,23 +356,7 @@ export function renderRecentSession(params: {
             : nothing}</span
         >
         <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.archived
-              ? html`<span
-                  class="sidebar-session__archive-glyph"
-                  aria-label=${t("sessionsView.archived")}
-                  title=${t("sessionsView.archived")}
-                  >${icons.archive}</span
-                >`
-              : nothing}${session.forkSource
-              ? html`<span
-                  class="sidebar-session-fork-indicator"
-                  role="img"
-                  aria-label=${t("sessionsView.forkedSession")}
-                  >${icons.gitFork}</span
-                >`
-              : nothing}${label}</span
-          >
+          <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>
           <span class="sidebar-recent-session__details">
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
             <span class="sidebar-recent-session__details-endcap">
@@ -459,6 +486,28 @@ export function renderRecentSession(params: {
   return keyed(session.key, row);
 }
 
+export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
+  const error = host.sessionData.childSessionErrorsByParent.get(parentKey);
+  if (!error) {
+    return nothing;
+  }
+  return html`<div
+    class="sidebar-session-error callout danger"
+    data-child-session-error=${parentKey}
+    role="alert"
+  >
+    <span>${error}</span>
+    <button
+      class="sidebar-session-tree__show-more"
+      type="button"
+      data-retry-child-sessions=${parentKey}
+      @click=${() => host.sessionData.retryChildSessions(parentKey)}
+    >
+      ${t("common.retry")}
+    </button>
+  </div>`;
+}
+
 export function renderSessionTree(params: {
   host: SessionListHost;
   session: SidebarRecentSession;
@@ -468,7 +517,7 @@ export function renderSessionTree(params: {
   const expanded = host.isSessionChildrenExpanded(session);
   const visibleChildren = visibleSessionChildren({
     session,
-    fullyShownChildSessionKeys: host.fullyShownChildSessionKeys,
+    fullyShown: host.isSessionChildrenFullyShown(session.key),
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
   return html`<div
@@ -485,8 +534,10 @@ export function renderSessionTree(params: {
                 role=${ifDefined(listItem ? "list" : undefined)}
                 aria-label=${ifDefined(listItem ? t("sessionsView.childSessions") : undefined)}
               >
-                ${visibleChildren.map((child) =>
-                  renderSessionTree({ host, session: child, listItem }),
+                ${repeat(
+                  visibleChildren,
+                  (child) => child.key,
+                  (child) => renderSessionTree({ host, session: child, listItem }),
                 )}
               </div>`
             : nothing}
@@ -503,6 +554,7 @@ export function renderSessionTree(params: {
                 ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
               </button>`
             : nothing}
+          ${renderChildSessionLoadError(host, session.key)}
           ${session.loadingChildren && session.children.length === 0
             ? html`<span class="sidebar-session-tree__loading">${t("common.loading")}</span>`
             : nothing}

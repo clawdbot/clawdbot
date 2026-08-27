@@ -43,8 +43,6 @@ const offeredSlotLabels = [
 type OfferedSlotLabel = (typeof offeredSlotLabels)[number];
 
 const actionlessEmptyStateAllowlist = new Set<OfferedSlotLabel>([
-  // Review: no git checkout, nothing to diff.
-  "Review",
   // Tasks: no background tasks, nothing to inspect.
   "Tasks",
   // Discussion: no external URL, nothing to open.
@@ -231,10 +229,11 @@ async function openColdSidebar(page: Page, scenario = coldOpenScenario()) {
   await waitForControlUiGatewayReady(page);
   await gateway.waitForRequest("session.discussion.info");
   await gateway.waitForRequest("sessions.companion.state");
-  await gateway.waitForRequest("sessions.files.list");
+  expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   await page.getByRole("button", { name: "Side panel", exact: true }).first().click();
   const choices = page.locator(".side-panel-empty__type");
   await choices.first().waitFor();
+  expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   return choices;
 }
 
@@ -408,6 +407,9 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
 
       const panel = page.locator(".sidebar-region__right-runtime .side-panel");
+      await expect.poll(() => panel.count()).toBe(0);
+
+      await page.locator(".chat-side-panel-toggle").click();
       await panel.locator(".side-panel-empty--selector").waitFor();
       expect(await panel.locator("wa-tab").count()).toBe(0);
 

@@ -212,7 +212,9 @@ describe("node host invoke", () => {
       | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
       | undefined;
     const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
-      async (_paramsJSON, _io, context) => {
+      async (paramsJSON, _io, context) => {
+        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
+        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
         const acquire = context?.acquireManagedWorkspace;
         if (!acquire) {
           throw new Error("managed workspace authority missing");
@@ -245,7 +247,7 @@ describe("node host invoke", () => {
         id: "invoke-workspace",
         nodeId: "node-1",
         command: "workspace.claim",
-        paramsJSON: "{}",
+        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
         sessionKey: workspaceRequest.sessionKey,
       },
       { request } as unknown as GatewayClient,

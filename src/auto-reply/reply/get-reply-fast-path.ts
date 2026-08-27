@@ -247,6 +247,7 @@ export function initFastReplySessionState(params: {
           createdVia: existingEntry.createdVia,
           createdActor: existingEntry.createdActor,
           createdAt: existingEntry.createdAt,
+          ...(existingEntry.sandbox === "required" ? { sandbox: "required" as const } : {}),
           spawnDepth: existingEntry.spawnDepth,
           subagentRole: existingEntry.subagentRole,
           subagentControlScope: existingEntry.subagentControlScope,

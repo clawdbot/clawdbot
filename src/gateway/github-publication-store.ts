@@ -94,6 +94,39 @@ export function claimGitHubPublicationExecution(
   );
 }
 
+export function deferGitHubPublicationRequests(requestIds: string[]): void {
+  if (requestIds.length === 0) {
+    return;
+  }
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const query = githubPublicationDatabase(db);
+      const updatedAtMs = Date.now();
+      for (const requestId of requestIds) {
+        executeSqliteQuerySync(
+          db,
+          query
+            .updateTable("github_publication_requests")
+            .set({
+              claim_id: null,
+              run_id: null,
+              environment_id: null,
+              owner_epoch: null,
+              placement_generation: null,
+              status: "requested",
+              gateway_instance_id: null,
+              updated_at_ms: updatedAtMs,
+            })
+            .where("request_id", "=", requestId)
+            .where("status", "in", ["requested", "publishing"]),
+        );
+      }
+    },
+    undefined,
+    { operationLabel: "github-publication.defer" },
+  );
+}
+
 export function isGitHubPublicationExecutionOwner(
   requestId: string,
   gatewayInstanceId: string,

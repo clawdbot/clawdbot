@@ -1,5 +1,6 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { ApprovalScope } from "./approval-scope.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -175,6 +176,12 @@ export type ExecApprovalCommandSpan = {
   endIndex: number;
 };
 
+/** Cron job identity recorded at approval creation for a cron isolated run. */
+type ExecApprovalCronExecutionSource = {
+  jobId: string;
+  jobConfigRevision: string;
+};
+
 export type ExecApprovalRequestPayload = {
   command: string;
   commandPreview?: string | null;
@@ -189,6 +196,8 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  /** Owner-declared blast-radius facts; display-only, never authorization. */
+  scope?: ApprovalScope | null;
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
@@ -203,6 +212,10 @@ export type ExecApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
+  /** Gateway-recorded cron source; never taken from client request params. */
+  cronExecutionSource?: ExecApprovalCronExecutionSource | null;
+  /** Exact operation binding prepared at creation for standing-grant minting. */
+  cronOperationBinding?: string | null;
 };
 
 export type ExecApprovalRequest = {
