@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => ({
     size: 0,
   })),
   rootWrite: vi.fn(async (_params?: unknown) => {}),
+  rootRemove: vi.fn(async (_params?: unknown) => {}),
   migrateLegacyMainSessionKeys: vi.fn(),
   purgeAgentSessionStoreEntries: vi.fn(async () => false),
 }));
@@ -336,6 +337,7 @@ vi.mock("../../infra/fs-safe.js", async () => {
           data,
           ...options,
         }),
+      remove: async (relativePath: string) => await mocks.rootRemove({ rootDir, relativePath }),
     })),
   };
 });
@@ -450,6 +452,7 @@ beforeEach(() => {
     };
   });
   mocks.rootWrite.mockResolvedValue(undefined);
+  mocks.rootRemove.mockResolvedValue(undefined);
 });
 
 function makeRootForTest(overrides?: {
@@ -457,6 +460,7 @@ function makeRootForTest(overrides?: {
   read?: (params: Record<string, unknown>) => Promise<unknown>;
   stat?: (params: Record<string, unknown>) => Promise<unknown>;
   write?: (params: Record<string, unknown>) => Promise<unknown>;
+  remove?: (params: Record<string, unknown>) => Promise<unknown>;
 }) {
   return async (rootDir: string) =>
     ({
@@ -478,6 +482,8 @@ function makeRootForTest(overrides?: {
           data,
           ...options,
         }),
+      remove: async (relativePath: string) =>
+        await (overrides?.remove ?? mocks.rootRemove)({ rootDir, relativePath }),
     }) as never;
 }
 
@@ -1494,6 +1500,45 @@ describe("agents.update", () => {
 
     expectRespondErrorContaining(respond, "unsafe workspace file");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("restores IDENTITY.md when config commit fails after a successful identity write", async () => {
+    const identityMarkdown = [
+      "# IDENTITY.md - Agent Identity",
+      "",
+      "Name: Current Agent",
+      "Emoji: 🐢",
+      "Avatar: https://example.com/avatar.png",
+      "Creature: Familiar",
+      "",
+    ].join("\n");
+    mocks.rootRead.mockResolvedValue({
+      buffer: Buffer.from(identityMarkdown),
+      realPath: "/workspace/test-agent/IDENTITY.md",
+      stat: { size: identityMarkdown.length, mtimeMs: 1 },
+    });
+    mocks.writeConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+
+    const { respond, promise } = makeCall("agents.update", {
+      agentId: "test-agent",
+      emoji: null,
+      avatar: null,
+    });
+
+    await expect(promise).rejects.toThrow("config write failed");
+    expect(respond).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    const clearedWrite = expectRecordFields(mockCallArg(mocks.rootWrite, 0), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(String(clearedWrite.data)).not.toMatch(/Emoji\s*:/);
+    expect(String(clearedWrite.data)).not.toMatch(/Avatar\s*:/);
+    const restoredWrite = expectRecordFields(mockCallArg(mocks.rootWrite, 1), {
+      rootDir: "/workspace/test-agent",
+      relativePath: "IDENTITY.md",
+    });
+    expect(String(restoredWrite.data)).toBe(identityMarkdown);
   });
 
   it("treats unsafe IDENTITY.md reads as invalid update requests", async () => {

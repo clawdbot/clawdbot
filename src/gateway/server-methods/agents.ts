@@ -816,6 +816,25 @@ async function writeWorkspaceFileOrRespond(params: {
   return true;
 }
 
+async function restoreWorkspaceFile(params: {
+  workspaceDir: string;
+  name: string;
+  previousContent: string | undefined;
+}): Promise<void> {
+  const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+  if (params.previousContent === undefined) {
+    try {
+      await workspaceRoot.remove(params.name);
+    } catch (err) {
+      if (!isMissingPathError(err)) {
+        throw err;
+      }
+    }
+    return;
+  }
+  await workspaceRoot.write(params.name, params.previousContent, { encoding: "utf8" });
+}
+
 async function readWorkspaceFileContent(
   workspaceDir: string,
   name: string,
@@ -1061,16 +1080,36 @@ export const agentsHandlers: GatewayRequestHandlers = {
           // persisted identity values exist. Clearing empty/null emoji/avatar must not
           // synthesize a header-only file in that case.
           const shouldWriteIdentityFile = builtIdentity.hadSourceFile || Boolean(persistedIdentity);
-          if (
-            shouldWriteIdentityFile &&
-            !(await writeWorkspaceFileOrRespond({
-              respond,
-              workspaceDir: identityWorkspaceDir,
-              name: DEFAULT_IDENTITY_FILENAME,
-              content: builtIdentity.content,
-            }))
-          ) {
-            return false;
+          if (shouldWriteIdentityFile) {
+            // Snapshot destination bytes before rewrite so a later config-commit
+            // failure can restore IDENTITY.md. File-first keeps unsafe writes from
+            // publishing config; without restore, config retains identity while the
+            // file is already cleared.
+            const previousIdentityContent = await readWorkspaceFileContent(
+              identityWorkspaceDir,
+              DEFAULT_IDENTITY_FILENAME,
+            );
+            if (
+              !(await writeWorkspaceFileOrRespond({
+                respond,
+                workspaceDir: identityWorkspaceDir,
+                name: DEFAULT_IDENTITY_FILENAME,
+                content: builtIdentity.content,
+              }))
+            ) {
+              return false;
+            }
+            try {
+              await updateAgentConfigEntry(agentConfigUpdate);
+            } catch (error) {
+              await restoreWorkspaceFile({
+                workspaceDir: identityWorkspaceDir,
+                name: DEFAULT_IDENTITY_FILENAME,
+                previousContent: previousIdentityContent,
+              });
+              throw error;
+            }
+            return true;
           }
         }
         await updateAgentConfigEntry(agentConfigUpdate);

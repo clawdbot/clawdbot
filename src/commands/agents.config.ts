@@ -134,14 +134,18 @@ export type AgentIdentityPatch = {
   [K in keyof IdentityConfig]?: IdentityConfig[K] | null;
 };
 
+const IDENTITY_PATCH_KEYS = ["name", "theme", "emoji", "avatar"] as const;
+
 function mergeAgentIdentity(
   base: IdentityConfig | undefined,
   patch: AgentIdentityPatch,
 ): IdentityConfig | undefined {
   const next: IdentityConfig = { ...base };
-  for (const [key, value] of Object.entries(patch) as Array<
-    [keyof IdentityConfig, IdentityConfig[keyof IdentityConfig] | null | undefined]
-  >) {
+  for (const key of IDENTITY_PATCH_KEYS) {
+    if (!Object.hasOwn(patch, key)) {
+      continue;
+    }
+    const value = patch[key];
     if (value === null || value === undefined || value === "") {
       delete next[key];
       continue;

@@ -28,19 +28,6 @@ describe("renderAgents identity avatar controls", () => {
     render(
       renderAgents(
         createProps({
-          agentsList: {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "workspace",
-            agents: [
-              { id: "alpha", name: "Alpha" } as never,
-              {
-                id: "beta",
-                name: "Beta",
-                identity: { avatar: "https://example.com/avatar.png" },
-              } as never,
-            ],
-          },
           agentIdentityById: {
             beta: {
               agentId: "beta",
