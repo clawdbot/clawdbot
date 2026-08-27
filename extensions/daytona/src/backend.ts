@@ -70,6 +70,11 @@ const UNUSABLE_SANDBOX_STATES = new Set(["destroyed", "destroying", "error", "bu
 // factory call; a fresh process re-probes, so stale entries only cost a probe.
 const seededDaytonaSandboxes = new Set<string>();
 
+// Factories for the same scope can be constructed concurrently from the same
+// empty registry snapshot. Share provisioning across implementations so only
+// one remote sandbox is created before core records the returned runtime id.
+const daytonaProvisioningByScope = new Map<string, Promise<Sandbox>>();
+
 function hashScopeKey(scopeKey: string): string {
   return createHash("sha256").update(scopeKey).digest("hex").slice(0, 32);
 }
@@ -228,16 +233,23 @@ class DaytonaSandboxBackendImpl {
     if (this.ensurePromise) {
       return await this.ensurePromise;
     }
-    // Concurrent exec/fs calls share one provisioning attempt; failures reset
-    // the promise so the next call can retry after transient API errors.
-    this.ensurePromise = this.ensureSandboxInner();
+    const scopeKey = this.params.createParams.scopeKey;
+    // Concurrent exec/fs calls and separate factory implementations share one
+    // provisioning attempt. Failures reset both owners for a later retry.
+    const pending = daytonaProvisioningByScope.get(scopeKey) ?? this.ensureSandboxInner();
+    this.ensurePromise = pending;
+    daytonaProvisioningByScope.set(scopeKey, pending);
     try {
-      const sandbox = await this.ensurePromise;
+      const sandbox = await pending;
       this.ensuredSandbox = sandbox;
       return sandbox;
     } catch (error) {
       this.ensurePromise = null;
       throw error;
+    } finally {
+      if (daytonaProvisioningByScope.get(scopeKey) === pending) {
+        daytonaProvisioningByScope.delete(scopeKey);
+      }
     }
   }
 
@@ -294,7 +306,14 @@ class DaytonaSandboxBackendImpl {
           { ...baseParams, snapshot: this.pluginConfig.snapshot },
           { timeout: this.timeoutSeconds },
         );
-    await this.seedWorkspace(sandbox);
+    try {
+      await this.seedWorkspace(sandbox);
+    } catch (error) {
+      // Core cannot register a handle until seeding succeeds, so a newly
+      // created runtime must be deleted here or it becomes undiscoverable.
+      await sandbox.delete(this.timeoutSeconds).catch(() => {});
+      throw error;
+    }
     seededDaytonaSandboxes.add(sandbox.id);
     return sandbox;
   }

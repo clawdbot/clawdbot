@@ -35,6 +35,19 @@ const loadLauncher = async () =>
         exit?: (code: number) => void;
       },
     ) => Promise<number>;
+    runPtyExec: (
+      sandbox: {
+        process: {
+          createPty: ReturnType<typeof vi.fn>;
+          killPtySession: ReturnType<typeof vi.fn>;
+        };
+      },
+      payload: { command: string; cwd: string; env: Record<string, string> },
+      options?: {
+        onSignal?: (signal: string, handler: () => void) => void;
+        exit?: (code: number) => void;
+      },
+    ) => Promise<number>;
   };
 
 describe("daytona exec launcher", () => {
@@ -144,5 +157,35 @@ describe("daytona exec launcher", () => {
 
     await expect(pending).resolves.toBe(143);
     expect(sandbox.process.executeSessionCommand).not.toHaveBeenCalled();
+  });
+
+  it("kills and disconnects a PTY when startup input fails", async () => {
+    const launcher = await loadLauncher();
+    const ptyHandle = {
+      waitForConnection: vi.fn(async () => {}),
+      sendInput: vi.fn(async () => {
+        throw new Error("send failed");
+      }),
+      disconnect: vi.fn(async () => {}),
+    };
+    const sandbox = {
+      process: {
+        createPty: vi.fn(async () => ptyHandle),
+        killPtySession: vi.fn(async () => {}),
+      },
+    };
+
+    await expect(
+      launcher.runPtyExec(
+        sandbox,
+        { command: "true", cwd: "/workspace", env: {} },
+        { onSignal: () => {}, exit: () => {} },
+      ),
+    ).rejects.toThrow("send failed");
+
+    const ptyId = sandbox.process.createPty.mock.calls[0]?.[0]?.id;
+    expect(ptyId).toMatch(/^openclaw-pty-/u);
+    expect(sandbox.process.killPtySession).toHaveBeenCalledWith(ptyId);
+    expect(ptyHandle.disconnect).toHaveBeenCalledTimes(1);
   });
 });

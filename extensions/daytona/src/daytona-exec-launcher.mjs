@@ -89,45 +89,56 @@ export function registerCleanupSignals(cleanup, options = {}) {
   return state;
 }
 
-async function runPtyExec(sandbox, payload, options = {}) {
+export async function runPtyExec(sandbox, payload, options = {}) {
   const ptyId = `openclaw-pty-${randomBytes(6).toString("hex")}`;
   // Cleanup is armed before the PTY exists; killing an id that was never
   // created fails harmlessly inside the catch.
   const signalState = registerCleanupSignals(() => sandbox.process.killPtySession(ptyId), options);
-  const ptyHandle = await sandbox.process.createPty({
-    id: ptyId,
-    cwd: payload.cwd,
-    envs: payload.env,
-    cols: process.stdout.columns ?? 80,
-    rows: process.stdout.rows ?? 24,
-    onData: (data) => {
-      process.stdout.write(Buffer.from(data));
-    },
-  });
-  await ptyHandle.waitForConnection();
-  if (signalState.interrupted) {
-    return signalExitCode(signalState.interrupted);
-  }
-  // `exec` replaces the interactive shell so the PTY session ends with the
-  // command and reports its exit code. The command stays single quoted, which
-  // keeps embedded newlines inside one shell word for the line-based PTY.
-  await ptyHandle.sendInput(`exec /bin/sh -c ${shellEscape(payload.command)}\n`);
+  let ptyHandle;
+  try {
+    ptyHandle = await sandbox.process.createPty({
+      id: ptyId,
+      cwd: payload.cwd,
+      envs: payload.env,
+      cols: process.stdout.columns ?? 80,
+      rows: process.stdout.rows ?? 24,
+      onData: (data) => {
+        process.stdout.write(Buffer.from(data));
+      },
+    });
+    await ptyHandle.waitForConnection();
+    if (signalState.interrupted) {
+      return signalExitCode(signalState.interrupted);
+    }
+    // `exec` replaces the interactive shell so the PTY session ends with the
+    // command and reports its exit code. The command stays single quoted, which
+    // keeps embedded newlines inside one shell word for the line-based PTY.
+    await ptyHandle.sendInput(`exec /bin/sh -c ${shellEscape(payload.command)}\n`);
 
-  process.stdin.on("data", (chunk) => {
-    void ptyHandle.sendInput(new Uint8Array(chunk)).catch(() => {});
-  });
-  process.stdin.resume();
-  process.stdout.on("resize", () => {
-    void ptyHandle.resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24).catch(() => {});
-  });
+    process.stdin.on("data", (chunk) => {
+      void ptyHandle.sendInput(new Uint8Array(chunk)).catch(() => {});
+    });
+    process.stdin.resume();
+    process.stdout.on("resize", () => {
+      void ptyHandle
+        .resize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
+        .catch(() => {});
+    });
 
-  const result = await ptyHandle.wait();
-  await ptyHandle.disconnect().catch(() => {});
-  if (result.error && result.exitCode === undefined) {
-    process.stderr.write(`[daytona-sandbox] pty failed: ${result.error}\n`);
-    return 1;
+    const result = await ptyHandle.wait();
+    if (result.error && result.exitCode === undefined) {
+      process.stderr.write(`[daytona-sandbox] pty failed: ${result.error}\n`);
+      return 1;
+    }
+    return result.exitCode ?? 0;
+  } catch (error) {
+    // A rejected connection, input, or wait does not prove the remote process
+    // stopped. Kill by id before reporting failure, then release the socket.
+    await sandbox.process.killPtySession(ptyId).catch(() => {});
+    throw error;
+  } finally {
+    await ptyHandle?.disconnect().catch(() => {});
   }
-  return result.exitCode ?? 0;
 }
 
 export async function runSessionExec(sandbox, payload, options = {}) {

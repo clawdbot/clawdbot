@@ -289,6 +289,21 @@ describe("daytona backend provisioning", () => {
     ).resolves.toBe("nested");
   });
 
+  it("serializes provisioning across factories for the same scope", async () => {
+    const setup = await createTestSetup({ workspaceFiles: { "seed.txt": "shared" } });
+    const created = createFakeSandbox();
+    const client = installFakeClient({ created });
+
+    const [first, second] = await Promise.all([
+      createFactory(setup.pluginConfig)(setup.createParams),
+      createFactory(setup.pluginConfig)(setup.createParams),
+    ]);
+
+    expect(client.create).toHaveBeenCalledTimes(1);
+    expect(first.runtimeId).toBe(created.id);
+    expect(second.runtimeId).toBe(created.id);
+  });
+
   it("adopts a registered sandbox, skipping missing and unusable candidates", async () => {
     const setup = await createTestSetup({
       registeredRuntimeIds: ["missing-id", "errored-id", "usable-id"],
@@ -371,6 +386,7 @@ describe("daytona backend provisioning", () => {
     created.process.executeSessionCommand.mockRejectedValue(new Error("api 502"));
 
     await expect(createFactory(setup.pluginConfig)(setup.createParams)).rejects.toThrow("api 502");
+    expect(created.delete).toHaveBeenCalledWith(120);
     const deletedPaths = created.fs.deleteFile.mock.calls.map((call) => call[0] as string);
     expect(deletedPaths.some((deletedPath) => deletedPath.startsWith("/tmp/openclaw-seed-"))).toBe(
       true,
