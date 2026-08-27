@@ -1133,7 +1133,12 @@ export async function runGlobalPackageUpdateSteps(params: {
         stderrTail: "could not identify a unique active pnpm replacement package",
       };
       steps.push(replacementStep);
-      return packageUpdateFailure(replacementStep, params.packageRoot ?? null, steps, Boolean(stagedInstall));
+      return packageUpdateFailure(
+        replacementStep,
+        params.packageRoot ?? null,
+        steps,
+        Boolean(stagedInstall),
+      );
     }
     const livePackageRoot =
       refreshedPnpmPackageRoot ??
@@ -1192,7 +1197,12 @@ export async function runGlobalPackageUpdateSteps(params: {
               stderrTail: formatErrorMessage(error),
             };
             steps.push(markerStep);
-            return packageUpdateFailure(markerStep, verifiedPackageRoot, steps, Boolean(stagedInstall));
+            return packageUpdateFailure(
+              markerStep,
+              verifiedPackageRoot,
+              steps,
+              Boolean(stagedInstall),
+            );
           }
         }
 
@@ -1212,7 +1222,12 @@ export async function runGlobalPackageUpdateSteps(params: {
           });
           steps.push(lifecycleStep);
           if (lifecycleStep.exitCode !== 0) {
-            return packageUpdateFailure(lifecycleStep, verifiedPackageRoot, steps, Boolean(stagedInstall));
+            return packageUpdateFailure(
+              lifecycleStep,
+              verifiedPackageRoot,
+              steps,
+              Boolean(stagedInstall),
+            );
           }
         }
 
@@ -1228,7 +1243,12 @@ export async function runGlobalPackageUpdateSteps(params: {
             stderrTail: formatErrorMessage(error),
           };
           steps.push(finalizeStep);
-          return packageUpdateFailure(finalizeStep, verifiedPackageRoot, steps, Boolean(stagedInstall));
+          return packageUpdateFailure(
+            finalizeStep,
+            verifiedPackageRoot,
+            steps,
+            Boolean(stagedInstall),
+          );
         }
       }
     }

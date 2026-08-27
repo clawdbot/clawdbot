@@ -505,9 +505,7 @@ export async function startGatewayServiceAfterFailedUpdate(
   await service.start(args);
   const postState = await readGatewayServiceState(service, { env: args.env });
   if (postState.loadState.status === "unknown") {
-    throw new Error(
-      `Service status inspection failed after start: ${postState.loadState.detail}`,
-    );
+    throw new Error(`Service status inspection failed after start: ${postState.loadState.detail}`);
   }
   assertGatewayServiceStarted(preState, postState, "start after update recovery");
 }
