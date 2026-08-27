@@ -507,7 +507,9 @@ export interface ContextEngine {
      * advancement (per chunk summarized, per streamed response). Each call
      * re-arms the host's compaction safety timeout, so a reporting engine is
      * bounded by maximum silence instead of total time — a legitimately slow
-     * compaction finishes while a hung one still aborts.
+     * compaction finishes while a hung one still aborts. Host-injected like the
+     * other lifecycle fields: engines with a declared `acceptedHostParams` list
+     * must include `onProgress` to receive it.
      */
     onProgress?: () => void;
   }): Promise<CompactResult>;

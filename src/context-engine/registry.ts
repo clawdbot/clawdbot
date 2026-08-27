@@ -46,7 +46,7 @@ const GUARDED_CONTEXT_ENGINE_METHODS = new Set<PropertyKey>(
   ),
 );
 export const CONTEXT_ENGINE_HOST_PARAMS = new Set(
-  "sessionKey prompt runtimeSettings sessionTarget runtimeContext".split(" "),
+  "sessionKey prompt runtimeSettings sessionTarget runtimeContext onProgress".split(" "),
 );
 type ResolvedContextEngineMetadata = {
   owner: string;
