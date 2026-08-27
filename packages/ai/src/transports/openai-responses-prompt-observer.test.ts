@@ -280,9 +280,12 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses provider prompt observer", () => {
-  // Every non-Codex Responses request now carries the system prompt via
-  // `instructions`, not an `input.developer`/`input.system` message -- see
-  // resolveOpenAIResponsesInstructions in openai-responses-params-internal.ts.
+  // createModel() defaults to a verified native OpenAI route (see
+  // usesVerifiedInstructionsEndpoint in openai-responses-payload-policy.ts),
+  // so this request carries the system prompt via top-level `instructions`
+  // rather than an `input.developer`/`input.system` message. That default is
+  // route-specific, not universal -- see the Azure test below, which is on
+  // an unverified route and falls back to input.developer.
   // The reasoning flag no longer changes promptSource (it used to select
   // between the developer/system input roles); both cases stay in the table
   // to confirm reasoning=true/false doesn't regress instructions delivery.
@@ -326,7 +329,11 @@ describe("OpenAI Responses provider prompt observer", () => {
     expect(run.observations[0]).toMatchObject({
       egress: "responses-sdk",
       payloadVariant: "initial",
-      promptSource: "instructions",
+      // Azure is not a verified instructions-field route (see
+      // usesVerifiedInstructionsEndpoint in openai-responses-payload-policy.ts)
+      // -- it falls back to embedding the prompt in input, same as any other
+      // unverified route.
+      promptSource: "input.developer",
       matchesAssembledPrompt: true,
     });
   });
