@@ -818,8 +818,9 @@ the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and the full
 `pnpm test` suite under the bounded remote profile
 `CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1`,
 then dispatches the protected-main
-`pr-crabbox-gate-publisher.yml` workflow. That workflow rereads the live PR and
-the exact active organization-admin membership object using the repo-native
+`pr-crabbox-gate-publisher.yml` workflow. That workflow accepts an open draft
+because proof runs during prepare-push, then rereads the live same-repository
+PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates the authenticated immutable broker
 run, ordered complete events, canonical command and bootstrap upload hash, and
@@ -830,7 +831,8 @@ run. The local `.local/gates.env` provider/run/lease/URL fields are recovery
 metadata, not publication authority.
 
 The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
-verification permits the server ruleset bypass only when the Crabbox check is
+verification still rejects draft PRs and permits the server ruleset bypass only
+when the Crabbox check is
 completed successfully by GitHub Actions on the prepared SHA, the authenticated
 actor is still an active organization admin, and the sole unsatisfied required
 check is the normal CI gate with a recognized hosted-runner infrastructure

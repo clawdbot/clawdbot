@@ -128,8 +128,8 @@ function validatePullRequest(value, context) {
   const pull = record(value, "pull request");
   const head = record(pull.head, "pull request.head");
   const base = record(pull.base, "pull request.base");
-  if (pull.number !== context.prNumber || pull.state !== "open" || pull.draft !== false) {
-    throw new Error("gate target must be the requested open, non-draft pull request");
+  if (pull.number !== context.prNumber || pull.state !== "open") {
+    throw new Error("gate target must be the requested open pull request");
   }
   if (
     head.sha !== context.headSha ||

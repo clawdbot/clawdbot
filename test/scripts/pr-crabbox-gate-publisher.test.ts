@@ -291,7 +291,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
     expect(github.request).not.toHaveBeenCalled();
   });
 
-  it("revalidates admin, PR, and protected main before publishing the exact check", async () => {
+  it("accepts an open draft and revalidates before publishing the exact check", async () => {
     const calls: Array<{ body?: unknown; method: string; path: string }> = [];
     const orderedCalls: string[] = [];
     const github = {
@@ -299,7 +299,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
         orderedCalls.push(`github:${method}:${path}`);
         calls.push({ body, method, path });
         if (path === "/repos/openclaw/openclaw/pulls/130481") {
-          return pullRequest();
+          return pullRequest({ draft: true });
         }
         if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
           return { object: { sha: workflowSha }, ref: "refs/heads/main" };
@@ -377,6 +377,37 @@ describe("Crabbox gate publisher mutation boundary", () => {
       method: "POST",
       path: "/repos/openclaw/openclaw/check-runs",
     });
+  });
+
+  it("rejects a closed pull request before reading broker evidence", async () => {
+    const broker = { request: vi.fn() };
+    const github = {
+      request: vi.fn(async (_method: string, path: string) => {
+        if (path === "/repos/openclaw/openclaw/pulls/130481") {
+          return pullRequest({ draft: true, state: "closed" });
+        }
+        throw new Error(`unexpected GitHub call: ${path}`);
+      }),
+    };
+    const organization = {
+      request: vi.fn(async () => ({
+        role: "admin",
+        state: "active",
+        user: { login: "maintainer" },
+      })),
+    };
+
+    await expect(
+      runPublisher({
+        broker,
+        env: env(),
+        event: event(),
+        github,
+        now: Date.parse("2026-08-27T02:00:00Z"),
+        organization,
+      }),
+    ).rejects.toThrow(/requested open pull request/u);
+    expect(broker.request).not.toHaveBeenCalled();
   });
 
   it("rejects protected main moving after broker validation", async () => {
