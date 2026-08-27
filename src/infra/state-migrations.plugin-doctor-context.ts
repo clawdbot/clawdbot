@@ -210,18 +210,22 @@ function buildChannelIngressQueueAccess(
 ): PluginDoctorChannelIngressQueueAccess[] {
   const { channelIds, stateDir, mutation } = options;
   return channelIds.map((channelId) => {
-    const open = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(openOptions?: {
-      accountId?: string;
-    }) =>
+    const open = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      openOptions: { accountId?: string } | undefined,
+      access: "read-write" | "read-only",
+    ) =>
       createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
         channelId,
         ...(openOptions?.accountId === undefined ? {} : { accountId: openOptions.accountId }),
         stateDir,
+        access,
       });
     const access: PluginDoctorChannelIngressQueueAccess = {
       channelId,
+      // Detection runs before exclusive ownership, so it reads through the
+      // non-creating read-only opener as well as a listing-only projection.
       openChannelIngressQueueForInspection: (openOptions) =>
-        projectIngressQueueForInspection(open(openOptions)),
+        projectIngressQueueForInspection(open(openOptions, "read-only")),
       listChannelIngressQueueAccountIds: () =>
         listChannelIngressQueueAccountIds({ channelId, stateDir }),
     };
@@ -229,7 +233,7 @@ function buildChannelIngressQueueAccess(
       const assertCurrent = () => mutation.assertCurrent();
       access.openChannelIngressQueue = (openOptions) => {
         assertCurrent();
-        return guardIngressQueueMutations(open(openOptions), assertCurrent);
+        return guardIngressQueueMutations(open(openOptions, "read-write"), assertCurrent);
       };
     }
     return access;
