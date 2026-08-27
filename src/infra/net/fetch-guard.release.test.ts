@@ -34,7 +34,7 @@ describe("guarded request release", () => {
     const releases: Array<() => Promise<void>> = [];
     const fetchImpl = async (input: RequestInfo | URL, init?: DispatcherAwareRequestInit) => {
       dispatchers.push(init?.dispatcher);
-      const url = String(input);
+      const url = input instanceof Request ? input.url : input.toString();
       const captured = createDeferredCore<CaptureEventRecord>();
       captures.set(new URL(url).pathname, captured);
       const response = await fetchWithRuntimeDispatcher(input, init);
@@ -59,9 +59,8 @@ describe("guarded request release", () => {
               }
             },
           }),
-          persistEventPayload: (_store, { data }) => ({
-            ...(Buffer.isBuffer(data) ? { dataText: data.toString("utf8") } : {}),
-          }),
+          persistEventPayload: (_store, { data }) =>
+            Buffer.isBuffer(data) ? { dataText: data.toString("utf8") } : {},
         },
       );
       return response;
@@ -140,9 +139,13 @@ describe("guarded request release", () => {
     );
   });
 
-  it.each(["signal", "init"] as const)(
-    "preserves cancellation from %s without a guard timeout",
-    async (source) => {
+  it.each(
+    (["signal", "init"] as const).flatMap((source) =>
+      [undefined, 5_000].map((timeoutMs) => ({ source, timeoutMs })),
+    ),
+  )(
+    "preserves cancellation from $source with timeout $timeoutMs",
+    async ({ source, timeoutMs }) => {
       const parent = new AbortController();
       const reason = new Error("caller stopped");
       await withServer(
@@ -150,6 +153,7 @@ describe("guarded request release", () => {
         async (baseUrl) => {
           const result = await fetchWithSsrFGuard({
             url: baseUrl,
+            timeoutMs,
             ...(source === "signal"
               ? { signal: parent.signal }
               : { init: { signal: parent.signal } }),
@@ -169,4 +173,31 @@ describe("guarded request release", () => {
       );
     },
   );
+
+  it("gives the explicit caller signal precedence over init.signal with a timeout", async () => {
+    const parent = new AbortController();
+    const ignored = new AbortController();
+    const reason = new Error("explicit caller stopped");
+    await withServer(
+      (_request, response) => response.write("unfinished"),
+      async (baseUrl) => {
+        const result = await fetchWithSsrFGuard({
+          url: baseUrl,
+          signal: parent.signal,
+          init: { signal: ignored.signal },
+          timeoutMs: 5_000,
+          policy: { allowPrivateNetwork: true },
+        });
+        const body = result.response.text();
+        try {
+          ignored.abort(new Error("ignored init signal"));
+          parent.abort(reason);
+          await expect(withinDeadline(body)).rejects.toBe(reason);
+        } finally {
+          parent.abort();
+          await result.release();
+        }
+      },
+    );
+  });
 });

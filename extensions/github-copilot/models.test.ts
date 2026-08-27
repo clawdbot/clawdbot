@@ -460,7 +460,9 @@ describe("github-copilot runtime auth", () => {
       try {
         const error = await Promise.race([
           rejection,
-          new Promise<undefined>((resolve) => setImmediate(() => resolve(undefined))),
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
         ]);
         expect(error).toBeInstanceOf(CopilotRuntimeAuthError);
         expect(error).toMatchObject({

@@ -517,9 +517,10 @@ async function fetchWithSsrFGuardInternal(
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
+  // Compose the caller signal before the deadline can mask init.signal.
   const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
-    signal: params.signal,
+    signal: params.signal ?? params.init?.signal ?? undefined,
     operation: "fetchWithSsrFGuard",
     url: params.url,
   });
@@ -685,23 +686,20 @@ async function fetchWithSsrFGuardInternal(
                 timeoutMs,
               ),
           });
-          if (!dispatcherLease) {
-            dispatcher = createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
-          } else {
-            dispatcher = dispatcherLease.dispatcher;
-          }
+          dispatcher = dispatcherLease
+            ? dispatcherLease.dispatcher
+            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
         } else {
           dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
         }
       }
 
-      const requestSignal = signal ?? currentInit?.signal;
       const init: DispatcherAwareRequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
-        signal: requestSignal
-          ? AbortSignal.any([requestSignal, requestController.signal])
+        signal: signal
+          ? AbortSignal.any([signal, requestController.signal])
           : requestController.signal,
       };
 

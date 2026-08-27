@@ -142,7 +142,9 @@ describe("cancelUnreadResponseBody", () => {
     try {
       const completed = await Promise.race([
         cleanup.then(() => true),
-        new Promise<boolean>((resolve) => setImmediate(() => resolve(false))),
+        new Promise<boolean>((resolve) => {
+          setImmediate(() => resolve(false));
+        }),
       ]);
       expect(completed).toBe(true);
       expect(response.bodyUsed).toBe(true);
