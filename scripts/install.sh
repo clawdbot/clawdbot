@@ -2641,7 +2641,7 @@ checkout_git_openclaw_ref() {
     fi
 
     if [[ "$ref" == "main" ]]; then
-        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin main
+        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
         run_quiet_step "Checking out main" git -C "$repo_dir" checkout main
         if [[ "$GIT_UPDATE" == "1" ]]; then
             if ! run_quiet_step "Updating repository" git -C "$repo_dir" rebase origin/main; then

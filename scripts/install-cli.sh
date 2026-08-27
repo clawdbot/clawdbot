@@ -1030,7 +1030,7 @@ checkout_git_openclaw_ref() {
   fi
 
   if [[ "$ref" == "main" ]]; then
-    git -C "$repo_dir" fetch --no-tags origin main
+    git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"
     git -C "$repo_dir" checkout main
     if [[ "$GIT_UPDATE" == "1" ]]; then
       if ! git -C "$repo_dir" rebase origin/main; then

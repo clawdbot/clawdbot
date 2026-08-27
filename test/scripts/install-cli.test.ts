@@ -997,7 +997,9 @@ describe("install-cli.sh", () => {
   });
 
   it("fetches exact git refs and avoids redundant update probes", () => {
-    expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+    expect(script).toContain(
+      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/main:refs/remotes/origin/main"',
+    );
     expect(script).toContain(
       'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
     );
@@ -1006,6 +1008,7 @@ describe("install-cli.sh", () => {
     );
     expect(script).toContain('git -C "$repo_dir" checkout --detach "refs/tags/${ref}"');
     expect(script).toContain('git -C "$repo_dir" rebase origin/main');
+    expect(script).not.toContain('git -C "$repo_dir" fetch --no-tags origin main');
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
 
     const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
@@ -1047,6 +1050,48 @@ describe("install-cli.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("checkout=refs/tags/v2026.5.12");
+  });
+
+  it("updates a stale existing main checkout from the remote tracking ref", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      remote="$tmp/remote.git"
+      source_repo="$tmp/source"
+      repo="$tmp/repo"
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$source_repo"
+      git -C "$source_repo" config user.email test@example.invalid
+      git -C "$source_repo" config user.name test
+      printf 'base\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" add state.txt
+      git -C "$source_repo" commit -qm base
+      git -C "$source_repo" remote add origin "$remote"
+      git -C "$source_repo" push -q -u origin main
+      git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+      git clone -q "$remote" "$repo"
+      git -C "$repo" config user.email test@example.invalid
+      git -C "$repo" config user.name test
+      printf 'target\\n' > "$source_repo/state.txt"
+      git -C "$source_repo" commit -qam target
+      git -C "$source_repo" push -q origin main
+      base="$(git -C "$repo" rev-parse HEAD)"
+      stale_tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      [[ "$base" == "$stale_tracking" ]]
+      GIT_UPDATE=1
+      checkout_git_openclaw_ref "$repo" main
+      head="$(git -C "$repo" rev-parse HEAD)"
+      tracking="$(git -C "$repo" rev-parse refs/remotes/origin/main)"
+      remote_head="$(git --git-dir="$remote" rev-parse refs/heads/main)"
+      printf 'head=%s\\ntracking=%s\\nremote=%s\\n' "$head" "$tracking" "$remote_head"
+      [[ "$head" == "$remote_head" && "$tracking" == "$remote_head" && "$head" != "$base" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("head=");
+    expect(result.stdout).toContain("tracking=");
+    expect(result.stdout).toContain("remote=");
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
