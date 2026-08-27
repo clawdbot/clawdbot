@@ -680,7 +680,12 @@ describe("Pi session catalog", () => {
       ]);
       expect(new Set(buffers).size).toBe(1);
       expect(buffers[0]?.length).toBe(content.length);
-      expect((await fs.stat(file)).size).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
+const finalSize = (await fs.stat(file)).size;
+      expect(finalSize).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
+      const message = transcript.items.find((item) => item.type === "agentMessage");
+      console.log(
+        `[acpx-runtime-proof] growth read type=${message?.type ?? "none"} text=${JSON.stringify(message?.text ?? "")} snapshotBytes=${content.length} finalBytes=${finalSize} capBytes=${PI_SESSION_READ_LIMIT_BYTES}`,
+      );
     } finally {
       openSpy.mockRestore();
     }
@@ -709,7 +714,11 @@ describe("Pi session catalog", () => {
         readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
       ).rejects.toThrow("Pi session is unavailable");
       expect(openFlags).not.toStrictEqual([]);
-      expect(openFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+      const nonBlocking = openFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0);
+      expect(nonBlocking).toBe(true);
+      console.log(
+        `[acpx-runtime-proof] fifo result=Pi session is unavailable nonblocking=${nonBlocking}`,
+      );
     } finally {
       openSpy.mockRestore();
     }
