@@ -8088,6 +8088,19 @@ describe("right-click Reply", () => {
     return event;
   }
 
+  function getContextMenuAction(name: string): HTMLButtonElement {
+    const matches = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.chat-reply-context-menu button[role="menuitem"]',
+      ),
+    ].filter((button) => button.textContent?.trim() === name);
+    expect(matches).toHaveLength(1);
+    const button = expectDefined(matches[0], `${name} context-menu action`);
+    expect(button.getAttribute("aria-label")).toBeNull();
+    expect(button.getAttribute("aria-labelledby")).toBeNull();
+    return button;
+  }
+
   function renderChatBubble(
     chatOverrides: Partial<ChatProps> = {},
     bubbleOverrides: Parameters<typeof appendChatBubble>[1] = {},
@@ -8117,7 +8130,7 @@ describe("right-click Reply", () => {
       button.textContent?.trim(),
     );
     expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
-    document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
+    getContextMenuAction("Fork from here").click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
@@ -8141,7 +8154,7 @@ describe("right-click Reply", () => {
     ).toBeNull();
 
     dispatchContextMenu(bubble);
-    document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
+    getContextMenuAction("Copy as markdown").click();
     expect(onCopy).toHaveBeenCalledOnce();
   });
 
@@ -8197,17 +8210,11 @@ describe("right-click Reply", () => {
 
     dispatchContextMenu(bubble);
 
-    expect(
-      document.querySelector<HTMLButtonElement>('[aria-label="Rewind to here"]')?.disabled,
-    ).toBe(true);
-    expect(
-      document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.disabled,
-    ).toBe(true);
-    expect(
-      document
-        .querySelector<HTMLElement>('[aria-label="Rewind to here"]')
-        ?.closest("openclaw-tooltip")?.content,
-    ).toBe("Rewind is unavailable while the agent is working");
+    expect(getContextMenuAction("Rewind to here").disabled).toBe(true);
+    expect(getContextMenuAction("Fork from here").disabled).toBe(true);
+    expect(getContextMenuAction("Rewind to here").closest("openclaw-tooltip")?.content).toBe(
+      "Rewind is unavailable while the agent is working",
+    );
   });
 
   it("opens context menu and calls onSetReply when Reply is selected", () => {
@@ -8308,11 +8315,9 @@ describe("right-click Reply", () => {
 
     dispatchContextMenu(bubble);
     flushFrames();
-    const rewindButton = document.querySelector<HTMLButtonElement>(
-      '.chat-reply-context-menu [aria-label="Rewind to here"]',
-    );
+    const rewindButton = getContextMenuAction("Rewind to here");
     expect(rewindButton).toBeInstanceOf(HTMLButtonElement);
-    rewindButton!.click();
+    rewindButton.click();
     flushFrames();
 
     const cancel = document.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel");
@@ -8348,9 +8353,7 @@ describe("right-click Reply", () => {
 
     dispatchContextMenu(bubble);
     flushFrames();
-    document
-      .querySelector<HTMLButtonElement>('.chat-reply-context-menu [aria-label="Rewind to here"]')!
-      .click();
+    getContextMenuAction("Rewind to here").click();
     flushFrames();
 
     resetThreadPresentation("pane-b");
@@ -8494,7 +8497,7 @@ describe("right-click Reply", () => {
         button.textContent?.trim(),
       ),
     ).toEqual(["Copy", "Reply"]);
-    document.querySelector<HTMLButtonElement>('[aria-label="Copy"]')!.click();
+    getContextMenuAction("Copy").click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("selectable"));
 
     selectedRange = document.createRange();
