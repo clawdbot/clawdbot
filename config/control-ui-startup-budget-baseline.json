@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 342930,
-  "reason": "per-profile appearance preferences: profile-scoped resolution, users.prefs routing, and live cross-device sync on the boot path; measured 342875 B on the tide/beacon/phosphor base, pinned with jitter headroom",
-  "updatedAt": "2026-08-26"
+  "startupJsGzipBytes": 344044,
+  "reason": "mobile drawer modal ownership and breakpoint-gated swipe loader; measured 344044 B with desktop request and modal regression coverage",
+  "updatedAt": "2026-08-27"
 }

@@ -94,6 +94,8 @@ Use another supported backend, such as the AWS profile in [Configuration](/gatew
 
 Manage profiles in the Control UI under **Settings → Connections → Cloud workers**, or edit `cloudWorkers.profiles` directly in `openclaw.json` — both write the same config keys. The settings page lists each profile's backend, class, lifetime, and idle-stop in plain language, and shows whether it is advertised to `environments.list` or waiting on a Gateway restart. With no profiles configured it explains the feature, links back to this page, and starts the add flow.
 
+**Machine class** is a required text field. Enter a class accepted by the selected Crabbox backend and binary; the provider determines its effective sizing. Changing the backend or binary leaves the class unchanged, so verify that it is accepted before saving.
+
 Add a profile under `cloudWorkers.profiles` in `openclaw.json`:
 
 ```json
@@ -305,6 +307,8 @@ openclaw gateway call sessions.dispatch \
 ```
 
 The bundled Crabbox provider advertises usable legacy `classes` reported by `crabbox providers --json` for the selected backend, preserving their order and marking the configured class as the default. The picker includes at most 32 options; it appends the configured class only when a usable advertised list exists. Reported vCPU and RAM appear independently; missing dimensions stay unknown. An explicit `classCatalog.disposition: unmapped` suppresses class choices even if legacy `classes` are also present. Missing, failed, empty, or unusable metadata produces no machine selector, not generic fallback choices. The cloud profile remains selectable, and dispatch or Move without an override preserves its configuration.
+
+Successful catalogs, including valid empty catalogs, are cached for the Gateway lifetime. Failed probes are retried by the next discovery request; a Gateway restart is not needed to recover.
 
 A rich static `classCatalog` or a provider-native size catalog alone does not establish a usable picker override. For example, newer Crabbox versions report mapped Machine0 aliases but deliberately omit legacy `classes` because an explicitly configured native size takes precedence. OpenClaw does not flatten those profiles or translate native sizes into classes. Keep native size selection in Crabbox's configuration; the picker cannot override it or promise a resize. Acceptance of native server types through `machineClass` is backend-specific, not a universal Crabbox contract. An admitted machine choice remains fixed for that placement and is reused by provisioning retries; catalog changes do not rewrite it. `machineClass` is valid only with `profileId`, not `deviceId`.
 

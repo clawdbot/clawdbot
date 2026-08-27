@@ -82,6 +82,7 @@ const TRAIN_2026_7_METHODS = [
 
 const CURRENT_TRAIN_METHODS = [
   "diagnostics.lanes",
+  "plugins.inspect",
   "device.pair.setupStatus",
   "sessions.patchMany",
   "sessions.groups.update",

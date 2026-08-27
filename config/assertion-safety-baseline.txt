@@ -3340,7 +3340,7 @@ src/logging/config.ts	2
 src/logging/console.ts	5
 src/logging/diagnostic-run-activity.ts	1
 src/logging/diagnostic-session-recovery-coordinator.ts	1
-src/logging/diagnostic-stability-bundle.ts	13
+src/logging/diagnostic-stability-bundle.ts	11
 src/logging/diagnostic-stability.ts	3
 src/logging/diagnostic-support-log-redaction.ts	1
 src/logging/diagnostic-support-redaction.ts	1
@@ -3916,7 +3916,7 @@ ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
 ui/src/app/app-host.ts	1
-ui/src/app/app-shell-chrome.ts	4
+ui/src/app/app-shell-chrome.ts	2
 ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2
 ui/src/app/browser.ts	1
@@ -4151,7 +4151,7 @@ ui/src/pages/chat/realtime-talk-webrtc.ts	3
 ui/src/pages/chat/realtime-talk.ts	7
 ui/src/pages/chat/route.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
-ui/src/pages/chat/scroll.ts	2
+ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
 ui/src/pages/chat/stream-reconciliation.ts	12
 ui/src/pages/chat/tool-stream.ts	5

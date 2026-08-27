@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import {
+  isForegroundGmailRunArgv,
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
@@ -120,7 +121,7 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   const env = params.env ?? process.env;
   const argv = params.argv ?? process.argv;
   const platform = params.platform ?? process.platform;
-  if (shouldKeepNativeHookRelayInProcess(argv, platform)) {
+  if (isForegroundGmailRunArgv(argv) || shouldKeepNativeHookRelayInProcess(argv, platform)) {
     return undefined;
   }
   if (!isSourceCheckoutInstallRoot(params.installRoot)) {

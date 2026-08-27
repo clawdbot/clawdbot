@@ -6,13 +6,12 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   CodexAppServerUnsafeSubscriptionError,
-  isCodexAppServerUnsafeSubscriptionError,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerLocalHomeDir } from "./auth-start-options.js";
 import {
   CodexAppServerRpcError,
-  isCodexAppServerConnectionClosedError,
+  isCodexAppServerOverloadError,
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
 import { isMessageOnlyCodexSourceReply } from "./dynamic-tool-profile.js";
@@ -28,10 +27,13 @@ import {
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import { assertCodexThreadStartResponse } from "./protocol-validators.js";
+import {
+  assertCodexThreadAcceptsDirectInput,
+  assertCodexThreadStartResponse,
+  CodexThreadDirectInputError,
+} from "./protocol-validators.js";
 import type { CodexThread, JsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
-import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
 import {
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
@@ -132,6 +134,9 @@ export async function resumeExistingCodexThread(
     clearCurrentBinding,
   } = context;
   let resumeReservation: { release: () => void } | undefined;
+  let resumeResponseAccepted = false;
+  const abandonClient =
+    params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client));
   try {
     const authProfileId =
       resumeBinding.connectionScope === "supervision"
@@ -190,36 +195,21 @@ export async function resumeExistingCodexThread(
     // Keep ownership accounting atomic with the resume request: a
     // pre-aborted request retains no subscription, so it must not reserve.
     throwIfAborted();
-    if (resumeBinding.preserveNativeModel === true) {
-      const current = await lifecycleTiming.measure("thread-read-adoption-status", () =>
-        params.client.request(
-          "thread/read",
-          { threadId: resumeBinding.threadId, includeTurns: false },
-          { signal: params.signal },
-        ),
-      );
-      throwIfAborted();
-      if (current.thread.status?.type === "active") {
-        throw new CodexAdoptedThreadActiveError();
-      }
-    }
     resumeReservation = params.reserveResumeThread?.(resumeBinding.threadId);
     const response = await lifecycleTiming.measure("thread-resume-request", () =>
       resumeCodexAppServerThread({
         client: params.client,
         // Retiring the exact client keeps an indeterminate resume
         // subscription from ever re-entering the shared pool.
-        abandonClient: async () => {
-          context.assertResumeOwnership?.();
-          await (
-            params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client))
-          )();
-        },
+        abandonClient,
         request: resumeParams,
         signal: params.signal,
         assertCurrent: context.assertResumeOwnership,
+        isPrewriteOwnershipError: (error) => error instanceof CodexAdoptedThreadActiveError,
       }),
     );
+    resumeResponseAccepted = true;
+    assertCodexThreadAcceptsDirectInput(response.thread);
     context.assertResumeConfiguration?.();
     if (resumeBinding.pendingResumeConfiguration) {
       await attestCodexPluginThreadApps({
@@ -245,7 +235,7 @@ export async function resumeExistingCodexThread(
         );
       } catch (error) {
         context.assertResumeOwnership?.();
-        await (params.abandonClient ?? (() => closeCodexStartupClientBestEffort(params.client)))();
+        await abandonClient();
         throw new CodexRestrictedToolSurfaceAttestationError(error);
       }
     }
@@ -360,7 +350,12 @@ export async function resumeExistingCodexThread(
     };
   } catch (error) {
     resumeReservation?.release();
-    if (isCodexAppServerStartSelectionChangedError(error)) {
+    // Pre-write ownership conflicts and unsafe helper outcomes cannot rotate
+    // the binding. Overload is an exact pre-enqueue rejection, not a stale thread.
+    if (
+      !resumeResponseAccepted &&
+      (!(error instanceof CodexAppServerRpcError) || isCodexAppServerOverloadError(error))
+    ) {
       throw error;
     }
     if (error instanceof CodexRestrictedToolSurfaceAttestationError) {
@@ -369,40 +364,32 @@ export async function resumeExistingCodexThread(
       }
       throw error;
     }
-    if (error instanceof CodexAdoptedThreadActiveError) {
-      // The passive preflight does not subscribe, so cleanup would target
-      // another runner's ownership and can turn a clear conflict into rotation.
-      throw error;
-    }
-    if (isCodexAppServerUnsafeSubscriptionError(error)) {
-      // The resume client is already retired; a fresh start here would
-      // race the possibly-live subscription on the abandoned process.
-      throw error;
-    }
-    // A structured RPC rejection proves Codex never subscribed the
-    // resume, so the best-effort unsubscribe below is cosmetic for that
-    // case. Only post-acceptance failures must prove the release.
-    const resumeRejected = error instanceof CodexAppServerRpcError;
-    context.assertResumeOwnership?.();
-    const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
-      threadId: resumeBinding.threadId,
-      timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-      assertCurrent: context.assertResumeOwnership,
-    });
-    if (
-      !subscriptionReleased &&
-      !resumeRejected &&
-      !isCodexAppServerConnectionClosedError(error) &&
-      !params.signal?.aborted
-    ) {
-      throw new CodexAppServerUnsafeSubscriptionError(
-        "Codex thread/resume subscription cleanup failed",
-        { cause: error },
-      );
+    if (resumeResponseAccepted) {
+      const subscriptionReleased = await unsubscribeCodexThreadBestEffort(params.client, {
+        threadId: resumeBinding.threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        assertCurrent: context.assertResumeOwnership,
+      }).catch(() => false);
+      if (!subscriptionReleased) {
+        // Revoked cleanup authority cannot block retiring the exact client;
+        // detachment leaves sibling leases alive while preventing that client from being reacquired.
+        try {
+          await abandonClient();
+        } catch (abandonError) {
+          throw new CodexAppServerUnsafeSubscriptionError(
+            "Codex thread/resume client could not be retired",
+            { cause: abandonError },
+          );
+        }
+        throw new CodexAppServerUnsafeSubscriptionError(
+          "Codex thread/resume subscription cleanup failed",
+          { cause: error },
+        );
+      }
     }
     if (
       resumeBinding.pendingResumeConfiguration ||
-      isCodexAppServerConnectionClosedError(error) ||
+      error instanceof CodexThreadDirectInputError ||
       params.signal?.aborted
     ) {
       throw error;

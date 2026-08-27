@@ -194,6 +194,8 @@ function resolveResolverPolicy(params: {
     groupAllowFromFallbackToAllowFrom:
       params.input.policy?.groupAllowFromFallbackToAllowFrom ??
       params.base.groupAllowFromFallbackToAllowFrom,
+    minIdentifierAuthentication:
+      params.input.policy?.minIdentifierAuthentication ?? params.base.minIdentifierAuthentication,
     mutableIdentifierMatching:
       params.input.policy?.mutableIdentifierMatching ?? params.base.mutableIdentifierMatching,
     ...(params.input.policy?.activation ? { activation: params.input.policy.activation } : {}),
@@ -691,5 +693,12 @@ export async function resolveChannelMessageIngress(
       !(isGroup
         ? state.allowlists.group.hasWildcard
         : state.allowlists.dm.hasWildcard || state.allowlists.pairingStore.hasWildcard),
+    identifierAuthentication: ingress.graph.gates.some(
+      (gate) => gate.identifierAuthentication?.affectedMatch,
+    )
+      ? "affected"
+      : ingress.graph.gates.some((gate) => gate.identifierAuthentication?.evaluated)
+        ? "evaluated"
+        : "not-evaluated",
   });
 }

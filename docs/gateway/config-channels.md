@@ -360,7 +360,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.intents.messageContent` defaults to `true`. Set it to `false` only for mention-only operation when Discord cannot grant the privileged Message Content intent; DMs and explicit bot mentions still carry message content, while other guild messages do not. Keep `requireMention: true` on every configured guild channel in this mode.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 - `channels.discord.execApprovals`: Discord-native exec approval delivery and approver authorization.
-  - `enabled`: `true`, `false`, or `"auto"` (default). In auto mode, exec approvals activate when approvers can be resolved from `approvers` or `commands.ownerAllowFrom`.
+  - `enabled`: `true`, `false`, or `"auto"`. Unset or `false` disables native delivery. Set `true` or `"auto"` to activate it when approvers resolve from `approvers` or `commands.ownerAllowFrom`.
   - `approvers`: Discord user IDs allowed to approve exec requests. Falls back to `commands.ownerAllowFrom` when omitted.
   - `agentFilter`: optional agent ID allowlist. Omit to forward approvals for all agents.
   - `sessionFilter`: optional session key patterns (substring or regex).

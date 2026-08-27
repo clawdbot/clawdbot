@@ -481,7 +481,10 @@ export function createEmbeddedRunAuthController(params: {
       });
     if (params.fallbackConfigured) {
       const authMode =
-        reason === "billing"
+        reason === "billing" ||
+        reason === "auth" ||
+        reason === "auth_permanent" ||
+        reason === "session_expired"
           ? resolveSubscriptionAuthModeForProfiles({
               store: params.authStore,
               profileIds: failoverParams.allInCooldown

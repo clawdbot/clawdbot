@@ -5,7 +5,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  computeDeclaredSurfaceHash,
+  resolvePluginArtifactDeclaredSurface,
+} from "./capability-consent.js";
 import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const APP_ROOT = "/app";
@@ -54,6 +59,25 @@ const withClawPackageLifecycleLeaseMock = vi.fn(
     await operation(),
 );
 const tempDirs: string[] = [];
+const capabilityConsentMode = vi.hoisted(() => ({ real: false }));
+
+vi.mock("./update-capability-consent.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./update-capability-consent.js")>();
+  return {
+    preparePluginUpdateCapabilityConsent: (
+      params: Parameters<typeof actual.preparePluginUpdateCapabilityConsent>[0],
+    ) => {
+      // Routing fixtures stub installers; capability cases below exercise the real staged owner.
+      if (capabilityConsentMode.real) {
+        return actual.preparePluginUpdateCapabilityConsent(params);
+      }
+      return {
+        onBeforePluginArtifactCommit: async () => {},
+        acceptInstallRecord: <T extends PluginInstallRecord>(record: T): T => record,
+      };
+    },
+  };
+});
 
 vi.mock("./install.js", () => ({
   installPluginFromNpmSpec: (...args: unknown[]) => installPluginFromNpmSpecMock(...args),
@@ -382,6 +406,46 @@ function createInstalledPackageDir(params: {
   return dir;
 }
 
+function createCapabilityConsentPackage(params: {
+  pluginId: string;
+  version: string;
+  childProviders: string[];
+}): string {
+  const packageName = `@acme/${params.pluginId}`;
+  const rootDir = createInstalledPackageDir({ name: packageName, version: params.version });
+  const childDir = path.join(rootDir, "children", "addon");
+  fs.mkdirSync(childDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(rootDir, "package.json"),
+    JSON.stringify({
+      name: packageName,
+      version: params.version,
+      openclaw: { extensions: ["./index.js", "./children/addon/addon.js"] },
+    }),
+  );
+  fs.writeFileSync(path.join(rootDir, "index.js"), "export default () => {};\n");
+  fs.writeFileSync(path.join(childDir, "addon.js"), "export default () => {};\n");
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: params.pluginId,
+      name: "Consent fixture",
+      version: params.version,
+      providers: ["root-provider"],
+      configSchema: { type: "object" },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(childDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: `${params.pluginId}-addon`,
+      providers: params.childProviders,
+      configSchema: { type: "object" },
+    }),
+  );
+  return rootDir;
+}
+
 function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packageName: string }>) {
   const stateDir = makeTrackedTempDir("openclaw-plugin-update-owner", tempDirs);
   const peerTarget = fs.realpathSync(process.cwd());
@@ -606,8 +670,6 @@ function createBundledSource(params?: { pluginId?: string; localPath?: string; n
 type ExternalizedPluginBridge = NonNullable<
   Parameters<typeof syncPluginsForUpdateChannel>[0]["externalizedBundledPluginBridges"]
 >[number];
-type PluginInstallRecord = NonNullable<NonNullable<OpenClawConfig["plugins"]>["installs"]>[string];
-
 function createDisabledPluginConfig(install: PluginInstallRecord): OpenClawConfig {
   return {
     plugins: {
@@ -768,6 +830,348 @@ describe("updateNpmInstalledPlugins", () => {
     validatePackageExtensionEntriesForInstallMock.mockReset();
   });
 
+  it.each<{
+    label: string;
+    nextProviders: string[];
+    review: string;
+    priorAcceptance: string;
+    rejected: boolean;
+    ownerEnabled: boolean;
+    childEnabled: boolean;
+    previousPayload?: string;
+    disableOnFailure?: boolean;
+    omitStageReview?: boolean;
+    reviewRetryStage?: boolean;
+  }>([
+    {
+      label: "rejects widened sibling capabilities before replacing the installed artifact",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: true,
+      ownerEnabled: false,
+      childEnabled: true,
+    },
+    {
+      label: "accepts widened sibling capabilities and refreshes the artifact-bound acceptance",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "accept",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "silently refreshes existing acceptance when package capabilities are unchanged",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "rejects an unchanged replacement when prior acceptance has no artifact integrity",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "unanchored",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "accepts an unchanged unanchored replacement only after reviewing its token",
+      nextProviders: ["existing-child-provider"],
+      review: "accept",
+      priorAcceptance: "unanchored",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "rejects staged capabilities changed while the operator reviews the artifact",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "mutate",
+      priorAcceptance: "valid",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+    },
+    {
+      label: "preserves the previous enabled artifact when automatic update needs consent",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+      disableOnFailure: true,
+    },
+    ...(["missing", "corrupt"] as const).map((previousPayload) => ({
+      label: `repairs a ${previousPayload} previous payload only after fresh staged consent`,
+      nextProviders: ["existing-child-provider"],
+      review: "accept",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+      previousPayload,
+    })),
+    {
+      label: "keeps a missing-payload repair pending when no consent handler is available",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: true,
+      ownerEnabled: true,
+      childEnabled: false,
+      previousPayload: "missing",
+      disableOnFailure: true,
+    },
+    {
+      label: "repairs a disabled missing payload without retaining unverifiable acceptance",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: false,
+      childEnabled: false,
+      previousPayload: "missing",
+    },
+    {
+      label: "rejects a missing-payload replacement that omitted staged artifact review",
+      nextProviders: ["existing-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+      previousPayload: "missing",
+      omitStageReview: true,
+    },
+    {
+      label: "does not carry acceptance from an earlier stage into a widened disabled retry",
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review: "none",
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: false,
+      childEnabled: false,
+      reviewRetryStage: true,
+    },
+    ...(["throw", "throw-undefined"] as const).map((review) => ({
+      label: `preserves the original consent callback failure (${review})`,
+      nextProviders: ["existing-child-provider", "new-child-provider"],
+      review,
+      priorAcceptance: "valid",
+      rejected: false,
+      ownerEnabled: true,
+      childEnabled: false,
+      disableOnFailure: true,
+    })),
+  ])(
+    "$label",
+    async ({
+      nextProviders,
+      review,
+      priorAcceptance,
+      rejected,
+      ownerEnabled,
+      childEnabled,
+      previousPayload,
+      disableOnFailure = false,
+      omitStageReview = false,
+      reviewRetryStage = false,
+    }) => {
+      capabilityConsentMode.real = true;
+      const pluginId = "consent-fixture";
+      const rootPluginId = `${pluginId}/index`;
+      const packageName = `@acme/${pluginId}`;
+      const installedDir = createCapabilityConsentPackage({
+        pluginId,
+        version: "1.0.0",
+        childProviders: ["existing-child-provider"],
+      });
+      const stagedDir = createCapabilityConsentPackage({
+        pluginId,
+        version: "2.0.0",
+        childProviders: nextProviders,
+      });
+      const load = { paths: [path.join(installedDir, "children", "addon", "addon.js")] };
+      const previousDeclared = resolvePluginArtifactDeclaredSurface(installedDir, process.env, {
+        config: { plugins: { load } },
+      });
+      const previousAcceptedAt = "2026-01-01T00:00:00.000Z";
+      const childManifestPath = path.join(
+        installedDir,
+        "children",
+        "addon",
+        "openclaw.plugin.json",
+      );
+      const previousChildManifest = fs.readFileSync(childManifestPath, "utf8");
+      const config = {
+        plugins: {
+          load,
+          entries: {
+            [rootPluginId]: { enabled: ownerEnabled },
+            [`${pluginId}-addon`]: { enabled: childEnabled },
+          },
+          installs: {
+            [pluginId]: {
+              source: "npm" as const,
+              spec: packageName,
+              installPath: installedDir,
+              ...(priorAcceptance !== "unanchored" ? { integrity: "sha512-previous" } : {}),
+              acceptedSurface: previousDeclared,
+              acceptedSurfaceHash: computeDeclaredSurfaceHash(previousDeclared),
+              acceptedSurfaceAt: previousAcceptedAt,
+              ...(priorAcceptance !== "unanchored"
+                ? { acceptedSurfaceIntegrity: "sha512-previous" }
+                : {}),
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      if (previousPayload === "missing") {
+        fs.rmSync(installedDir, { recursive: true, force: true });
+      } else if (previousPayload === "corrupt") {
+        fs.writeFileSync(path.join(installedDir, "openclaw.plugin.json"), "{");
+      }
+      mockNpmViewMetadata({ name: packageName, version: "2.0.0", integrity: "sha512-next" });
+      installPluginFromNpmSpecMock.mockImplementationOnce(
+        async (options: {
+          onBeforePluginArtifactCommit?: (request: {
+            pluginId: string;
+            currentArtifactDir: string;
+            stagedArtifactDir: string;
+            mode: "update";
+          }) => Promise<void>;
+        }) => {
+          if (reviewRetryStage) {
+            await options.onBeforePluginArtifactCommit?.({
+              pluginId,
+              currentArtifactDir: installedDir,
+              stagedArtifactDir: createCapabilityConsentPackage({
+                pluginId,
+                version: "1.0.0",
+                childProviders: ["existing-child-provider"],
+              }),
+              mode: "update",
+            });
+          }
+          if (!omitStageReview) {
+            await options.onBeforePluginArtifactCommit?.({
+              pluginId,
+              currentArtifactDir: installedDir,
+              stagedArtifactDir: stagedDir,
+              mode: "update",
+            });
+          }
+          fs.cpSync(stagedDir, installedDir, { recursive: true });
+          return {
+            ok: true,
+            pluginId,
+            targetDir: installedDir,
+            version: "2.0.0",
+            extensions: ["index.js"],
+            npmResolution: {
+              name: packageName,
+              version: "2.0.0",
+              resolvedSpec: `${packageName}@2.0.0`,
+              integrity: "sha512-next",
+            },
+          };
+        },
+      );
+
+      const callbackFailure =
+        review === "throw-undefined" ? undefined : new Error("consent guard cancelled");
+      let reviewed = false;
+      const onCapabilityConsent: UpdateInstalledPluginParams["onCapabilityConsent"] =
+        review === "none"
+          ? undefined
+          : async (details) => {
+              reviewed = true;
+              if (review === "throw" || review === "throw-undefined") {
+                // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may throw undefined; preserve that exact failure.
+                throw callbackFailure;
+              }
+              expect(details.reviewToken).toBe(computeDeclaredSurfaceHash(details.declared));
+              expect(details.source?.integrity).not.toBe("sha512-previous");
+              if (review === "mutate") {
+                fs.writeFileSync(
+                  path.join(stagedDir, "children", "addon", "openclaw.plugin.json"),
+                  JSON.stringify({
+                    id: `${pluginId}-addon`,
+                    providers: [...nextProviders, "changed-during-review"],
+                    configSchema: { type: "object" },
+                  }),
+                );
+              }
+              return { reviewToken: details.reviewToken };
+            };
+      const pendingUpdate = updatePlugin(config, pluginId, {
+        onCapabilityConsent,
+        disableOnFailure,
+        packagePluginIds: { [pluginId]: [rootPluginId, `${pluginId}-addon`] },
+      });
+      if (omitStageReview) {
+        await expect(pendingUpdate).rejects.toThrow("did not review the staged artifact");
+        return;
+      }
+      if (review === "throw" || review === "throw-undefined") {
+        await expect(pendingUpdate).rejects.toBe(callbackFailure);
+        expect(fs.readFileSync(childManifestPath, "utf8")).toBe(previousChildManifest);
+        expect(config.plugins.entries[rootPluginId].enabled).toBe(ownerEnabled);
+        return;
+      }
+      const result = await pendingUpdate;
+      expect(reviewed).toBe(review !== "none");
+
+      if (rejected) {
+        expect(result.changed).toBe(false);
+        expect(result.outcomes).toEqual([
+          expect.objectContaining({
+            pluginId,
+            status: "error",
+            message: expect.stringContaining("--accept-capabilities"),
+          }),
+        ]);
+        if (previousPayload === "missing") {
+          expect(fs.existsSync(installedDir)).toBe(false);
+        } else {
+          expect(fs.readFileSync(childManifestPath, "utf8")).toBe(previousChildManifest);
+        }
+        expect(result.config).toBe(config);
+        expect(result.config.plugins?.installs?.[pluginId]).toBe(config.plugins.installs[pluginId]);
+        return;
+      }
+
+      const install = result.config.plugins?.installs?.[pluginId];
+      expect(result.outcomes).toEqual([expect.objectContaining({ pluginId, status: "updated" })]);
+      if (!ownerEnabled && !childEnabled) {
+        expect(result.config.plugins?.entries).toEqual(config.plugins.entries);
+        expect(install?.acceptedSurface).toBeUndefined();
+        expect(install?.acceptedSurfaceHash).toBeUndefined();
+        expect(install?.acceptedSurfaceAt).toBeUndefined();
+        expect(install?.acceptedSurfaceIntegrity).toBeUndefined();
+        return;
+      }
+      expect(install?.acceptedSurface?.providers).toEqual(
+        ["root-provider", ...nextProviders].toSorted(),
+      );
+      expect(install?.acceptedSurfaceHash).toBe(
+        computeDeclaredSurfaceHash(
+          resolvePluginArtifactDeclaredSurface(installedDir, process.env, {
+            config: result.config,
+          }),
+        ),
+      );
+      expect(install?.acceptedSurfaceAt).not.toBe(previousAcceptedAt);
+      expect(install?.acceptedSurfaceIntegrity).toBe("sha512-next");
+    },
+  );
+
   it("moves only the replaced npm plugin's exact explicit load path", async () => {
     const previousInstallPath = createInstalledPackageDir({
       name: "@acme/demo",
@@ -867,6 +1271,7 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   afterEach(() => {
+    capabilityConsentMode.real = false;
     vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });

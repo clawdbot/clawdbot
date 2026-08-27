@@ -73,6 +73,8 @@ export function appendSessionResults(
 
 type SessionChangedEventInfo = {
   key: string;
+  updatedAt: number | null;
+  thinkingLevel?: string | null;
   agentId: string | null;
   runId: string | null;
   clientRunId: string | null;
@@ -287,11 +289,12 @@ function sessionRunStatus(value: unknown): SessionRunStatus | null {
     : null;
 }
 
-type ParsedSessionChangedEvent = SessionChangedEventInfo & {
-  event: Record<string, unknown>;
-  source: Record<string, unknown>;
-  reason: string | null;
-};
+type ParsedSessionChangedEvent = readonly [
+  info: SessionChangedEventInfo,
+  event: Record<string, unknown>,
+  source: Record<string, unknown>,
+  reason: string | null,
+];
 
 function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent | null {
   const event = recordOrNull(payload);
@@ -314,51 +317,51 @@ function parseSessionChangedEvent(payload: unknown): ParsedSessionChangedEvent |
       : typeof recordValue(event, "hasActiveRun") === "boolean"
         ? (recordValue(event, "hasActiveRun") as boolean)
         : null;
-  return {
+  const updatedAt = recordValue(source, "updatedAt");
+  const thinkingLevel = recordValue(source, "thinkingLevel");
+  return [
+    {
+      key,
+      updatedAt: typeof updatedAt === "number" ? updatedAt : null,
+      thinkingLevel:
+        typeof thinkingLevel === "string"
+          ? thinkingLevel
+          : thinkingLevel === null
+            ? null
+            : undefined,
+      agentId: stringValue(recordValue(event, "agentId")) ?? null,
+      runId:
+        stringValue(recordValue(event, "runId")) ??
+        stringValue(recordValue(source, "runId")) ??
+        null,
+      clientRunId:
+        stringValue(recordValue(event, "clientRunId")) ??
+        stringValue(recordValue(source, "clientRunId")) ??
+        null,
+      hasActiveRun,
+      status:
+        sessionRunStatus(recordValue(source, "status")) ??
+        sessionRunStatus(recordValue(event, "status")),
+      archived:
+        typeof recordValue(source, "archived") === "boolean"
+          ? (recordValue(source, "archived") as boolean)
+          : null,
+      isChatTurn:
+        phase === "start" ||
+        phase === "message" ||
+        phase === "end" ||
+        phase === "error" ||
+        reason === "send" ||
+        reason === "steer",
+    },
     event,
     source,
-    key,
     reason,
-    agentId: stringValue(recordValue(event, "agentId")) ?? null,
-    runId:
-      stringValue(recordValue(event, "runId")) ?? stringValue(recordValue(source, "runId")) ?? null,
-    clientRunId:
-      stringValue(recordValue(event, "clientRunId")) ??
-      stringValue(recordValue(source, "clientRunId")) ??
-      null,
-    hasActiveRun,
-    status:
-      sessionRunStatus(recordValue(source, "status")) ??
-      sessionRunStatus(recordValue(event, "status")),
-    archived:
-      typeof recordValue(source, "archived") === "boolean"
-        ? (recordValue(source, "archived") as boolean)
-        : null,
-    isChatTurn:
-      phase === "start" ||
-      phase === "message" ||
-      phase === "end" ||
-      phase === "error" ||
-      reason === "send" ||
-      reason === "steer",
-  };
+  ];
 }
 
 export function readSessionChangedEvent(payload: unknown): SessionChangedEventInfo | null {
-  const parsed = parseSessionChangedEvent(payload);
-  if (!parsed) {
-    return null;
-  }
-  return {
-    key: parsed.key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    archived: parsed.archived,
-    isChatTurn: parsed.isChatTurn,
-  };
+  return parseSessionChangedEvent(payload)?.[0] ?? null;
 }
 
 // Null source confirms inheritance; omission on a lifecycle event preserves selection.
@@ -377,7 +380,8 @@ export function reconcileSessionChanged(
   if (!parsed) {
     return { applied: false, result };
   }
-  const { event, source, key, reason } = parsed;
+  const [info, event, source, reason] = parsed;
+  const { key } = info;
   const {
     agentId: _agentId,
     clientRunId: _clientRunId,
@@ -395,7 +399,7 @@ export function reconcileSessionChanged(
   // canonical roster; optimistic merging could apply a retired private owner's
   // lifecycle event to whichever agent is currently selected.
   if (
-    !parsed.agentId &&
+    !info.agentId &&
     (isUiGlobalSessionKey(key) || (!parseAgentSessionKey(key) && !Object.keys(rowFields).length))
   ) {
     return { applied: false, key, agentId: null, result };
@@ -404,7 +408,7 @@ export function reconcileSessionChanged(
     return {
       applied: true,
       key,
-      agentId: parsed.agentId,
+      agentId: info.agentId,
       deletedKey: key,
       result,
     };
@@ -412,7 +416,7 @@ export function reconcileSessionChanged(
   if (!result) {
     return { applied: false, result };
   }
-  const selectedGlobalAgentId = parsed.agentId ?? options.selectedGlobalAgentId ?? null;
+  const selectedGlobalAgentId = info.agentId ?? options.selectedGlobalAgentId ?? null;
   const existing = result.sessions.find((candidate) =>
     matchesExistingSession(
       candidate,
@@ -423,13 +427,13 @@ export function reconcileSessionChanged(
 
   if (reason === "delete") {
     if (!existing) {
-      return { applied: true, result, key, agentId: parsed.agentId, deletedKey: key };
+      return { applied: true, result, key, agentId: info.agentId, deletedKey: key };
     }
     const sessions = result.sessions.filter((candidate) => candidate !== existing);
     return {
       applied: true,
       key,
-      agentId: parsed.agentId,
+      agentId: info.agentId,
       result: {
         ...result,
         count: sessions.length,
@@ -456,12 +460,12 @@ export function reconcileSessionChanged(
   const eventResult = {
     applied: true as const,
     key,
-    agentId: parsed.agentId,
-    runId: parsed.runId,
-    clientRunId: parsed.clientRunId,
-    hasActiveRun: parsed.hasActiveRun,
-    status: parsed.status,
-    isChatTurn: parsed.isChatTurn,
+    agentId: info.agentId,
+    runId: info.runId,
+    clientRunId: info.clientRunId,
+    hasActiveRun: info.hasActiveRun,
+    status: info.status,
+    isChatTurn: info.isChatTurn,
   };
   // Events are broadcast independently of sessions.list filters and windows.
   // They may update listed rows, but only a canonical list may admit a new row.

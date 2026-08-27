@@ -1008,6 +1008,10 @@ if another turn or native child is active, wait for it to finish and retry.
 Use [Codex supervision](/plugins/codex-supervision) or native Codex to continue
 threads in a shared user home or on another app-server.
 
+Native child threads controlled by a parent cannot be attached with `/codex
+resume` or `/codex bind`. OpenClaw reports that restriction and keeps the current
+binding. Continue the child through its native parent instead.
+
 Codex cannot replace a thread's dynamic tool catalog during resume. If that
 catalog differs from the current harness tools, its metadata cannot be read,
 or Codex cannot confirm that it applied the configuration, OpenClaw reports

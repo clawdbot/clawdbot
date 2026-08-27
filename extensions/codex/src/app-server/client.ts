@@ -80,6 +80,13 @@ export function resolveCodexAppServerClientInstanceId(client: object): string {
 
 export { CodexAppServerRpcError } from "./rpc-error.js";
 
+/** Codex rejects this exact code before enqueueing, including mutating requests. */
+export function isCodexAppServerOverloadError(error: unknown): error is CodexAppServerRpcError {
+  return (
+    error instanceof CodexAppServerRpcError && error.code === CODEX_APP_SERVER_OVERLOADED_ERROR_CODE
+  );
+}
+
 class CodexAppServerLocalRequestCancellationError extends Error {
   readonly code = "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED";
 
@@ -501,8 +508,7 @@ export class CodexAppServerClient {
         // Codex emits -32001 only when ingress rejects a request before enqueue,
         // so retrying mutating methods cannot duplicate server-side work.
         if (
-          !(error instanceof CodexAppServerRpcError) ||
-          error.code !== CODEX_APP_SERVER_OVERLOADED_ERROR_CODE ||
+          !isCodexAppServerOverloadError(error) ||
           retry >= CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES
         ) {
           throw error;

@@ -4,6 +4,7 @@ import {
   type Journal,
   LLMock,
   type ChatCompletionRequest,
+  type Fixture,
   getTextContent,
   type JournalEntry,
   type Mountable,
@@ -141,7 +142,7 @@ function countImageInputs(value: unknown): number {
 function resolveProviderVariant(model: string): AimockRequestSnapshot["providerVariant"] {
   const normalized = model.trim().toLowerCase();
   const provider = /^([^/:]+)[/:]/.exec(normalized)?.[1] ?? normalized;
-  if (provider === "openai" || provider === "aimock" || provider === "openai") {
+  if (provider === "openai" || provider === "aimock") {
     return "openai";
   }
   if (provider === "anthropic" || provider === "claude-cli") {
@@ -415,6 +416,9 @@ export async function startQaAimockServer(params?: { host?: string; port?: numbe
   await mock.start();
   return {
     baseUrl: mock.baseUrl,
+    addFixture(fixture: Fixture): void {
+      mock.addFixture(fixture);
+    },
     async stop() {
       await mock.stop();
     },
