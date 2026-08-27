@@ -127,7 +127,7 @@ jobs:
       run_format_check: ${{ steps.manifest.outputs.run_format_check }}
       compatibility_target: ${{ steps.manifest.outputs.compatibility_target }}
       run_control_ui_i18n: ${{ steps.manifest.outputs.run_control_ui_i18n }}
-      strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
+      strict_control_ui_i18n: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       ui_e2e_matrix: ${{ steps.manifest.outputs.ui_e2e_matrix }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
@@ -2317,8 +2317,8 @@ jobs:
           fi
 
       - name: Check Control UI locale parity
-        # Source-only drift stays advisory because the post-merge bot owns
-        # repair. Generated locale changes and full release CI remain strict.
+        # Automatic source-only drift stays advisory because the post-merge bot owns
+        # repair. Generated locale changes and ordinary manual/release CI stay strict.
         continue-on-error: ${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}
         run: pnpm ui:i18n:check
 

@@ -8381,7 +8381,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(bunSmoke.run).toContain("bun openclaw.mjs status --json --timeout 1");
   });
 
-  it("keeps source-only Control UI locale drift advisory", () => {
+  it("keeps automatic source-only Control UI locale drift advisory and manual CI strict", () => {
     const workflow = readCiWorkflow();
     const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
@@ -8410,6 +8410,31 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(localeJob.env.COMPATIBILITY_TARGET).toBe(
       "${{ needs.preflight.outputs.compatibility_target }}",
     );
+    expect(workflow.jobs.preflight.outputs.strict_control_ui_i18n).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.strict_control_ui_i18n }}",
+    );
+    expect(
+      evaluateWorkflowExpression(
+        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || 'false' }}",
+        {
+          eventName: "workflow_dispatch",
+          releaseGate: false,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+      ),
+    ).toBe("true");
+    expect(
+      evaluateWorkflowExpression(
+        "${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || 'false' }}",
+        {
+          eventName: "workflow_dispatch",
+          releaseGate: true,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        },
+      ),
+    ).toBe("false");
     expect(sourceStep["continue-on-error"]).toBeUndefined();
     const compatibilityWithoutVerify = runControlUiI18nSourceFixture({
       compatibilityTarget: true,
