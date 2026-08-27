@@ -109,8 +109,8 @@ function buildStoredAriaRefs(
 
   for (const node of nodes) {
     const role = normalizeLowercaseStringOrEmpty(node.role) || "unknown";
-    const name = node.name.trim() || undefined;
-    const key = `${role}:${name ?? ""}`;
+    const name = node.name.trim();
+    const key = `${role}:${name}`;
     const nth = counts.get(key) ?? 0;
     counts.set(key, nth + 1);
     const refsForKey = refsByKey.get(key);
@@ -121,7 +121,7 @@ function buildStoredAriaRefs(
     }
     refs[node.ref] = {
       role,
-      ...(name ? { name } : {}),
+      name,
       ...(nth > 0 ? { nth } : {}),
       ...(markedRefs.has(node.ref) ? { domMarker: true } : {}),
     };
