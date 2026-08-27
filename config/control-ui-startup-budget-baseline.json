@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 342930,
-  "reason": "per-profile appearance preferences: profile-scoped resolution, users.prefs routing, and live cross-device sync on the boot path; measured 342875 B on the tide/beacon/phosphor base, pinned with jitter headroom",
-  "updatedAt": "2026-08-26"
+  "startupJsGzipBytes": 343463,
+  "reason": "Continuation current-floor repair restores the creation-time sandbox invariant; repeated exact-source builds measured 343428–343463 B, so this baseline records the maximum observed byte rather than laundering variance.",
+  "updatedAt": "2026-08-27"
 }
