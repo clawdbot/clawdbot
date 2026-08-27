@@ -691,6 +691,29 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
   });
 
+  it("uses cumulative partials when earlier fenced blocks were not streamed, even with a complete final line (#122513)", async () => {
+    // codex review: the test above happens to end its candidate on an INCOMPLETE last line
+    // ("```" with no trailing newline), which independently makes the fast path decline (it
+    // always declines on an unfinished line outside a fence) -- masking the real bug. With a
+    // complete last line, the fast path's carried state (empty, since block 0's "```json" was
+    // never streamed as its own delta) wrongly reports the candidate as NOT protected instead
+    // of falling through to the cumulative-partial/full-parse fallback that knows better.
+    const first = "```json\n";
+    const candidate = ["[read]", '{"path":"example.txt"}', "[/read]", "```", ""].join("\n");
+    const content = textContent(first, candidate);
+    const events = await normalize(
+      [
+        streamTextDelta(candidate, 1, assistantMessage(content)),
+        textEnd(candidate, 1, assistantMessage(content)),
+        doneAssistantEvent("stop", content, "stop"),
+      ],
+      { protectFences: true },
+    );
+
+    expect(textDeltas(events).join("")).toBe(candidate);
+    expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
+  });
+
   it("preserves candidate bytes after bounded protection history overflows", async () => {
     const opening = `\`\`\`text\n${"x".repeat(1_000_000)}`;
     const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");

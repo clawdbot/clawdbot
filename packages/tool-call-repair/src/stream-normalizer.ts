@@ -489,6 +489,23 @@ function findPotentialCallStart(
   return null;
 }
 
+/**
+ * True when `partial` shows more text preceding `contentIndex` than `trackedLength`
+ * accounts for -- an earlier content block that was never streamed as its own delta, so
+ * the carried fence-state scan (which only ever sees streamed text) cannot have tracked
+ * it. The fast path must not answer for a candidate in this position; only a check
+ * against the partial's own authoritative text, or a full parse, can.
+ */
+function hasUntrackedPrecedingContext(
+  partial: unknown,
+  contentIndex: number,
+  trackedLength: number,
+): boolean {
+  const candidate = extractStandaloneCandidate(partial);
+  const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
+  return part !== undefined && part.start > trackedLength;
+}
+
 function resolvePartialProtectionCheck(params: {
   authoritative: boolean;
   contentIndex: number;
@@ -1375,8 +1392,17 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // state, so an un-opted-in resolver always takes the full-parse path below
                 // and stays authoritative — the fast path must never silently stand in for it.
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
+                // protectionBlockStart is how much text the scan had tracked when this block
+                // began. If the partial shows more text preceding this block than that, an
+                // earlier block was never streamed as its own delta -- the scan never saw it
+                // and cannot be trusted here, whatever it claims for this block's own content.
+                const untrackedPrecedingContext = hasUntrackedPrecedingContext(
+                  incomingRecord.partial,
+                  eventContentIndex(incomingRecord),
+                  protectionBlockStart,
+                );
                 let isProtectedAt: ((offset: number) => boolean) | undefined =
-                  options.protectedRangesFenceCompatible
+                  !untrackedPrecedingContext && options.protectedRangesFenceCompatible
                     ? resolveProtectionFastPath(carriedScan, incoming)
                     : undefined;
                 if (!isProtectedAt) {
