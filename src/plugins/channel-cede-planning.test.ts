@@ -71,6 +71,38 @@ describe("collectCededChannelIdsByPlugin", () => {
     expect(cededChannelIdsByPlugin.get("zz-outside")).toEqual(["zzalpha"]);
   });
 
+  function memoryClaimant(id: string, preferOver?: string[]): PluginManifestRecord {
+    return { ...ringClaimant(id, preferOver), kind: ["memory"] } as PluginManifestRecord;
+  }
+
+  // Codex P2 3875710886. With `plugins.slots.memory` UNSET, the runtime slot goes to whichever
+  // single-kind memory plugin the load reaches first, and every later one is disabled by the
+  // `selectedId` arm of `resolveMemorySlotDecision` before it registers. Crowning a later declarer
+  // therefore cedes the earlier claimant to a winner the load then switches off, and the
+  // configured channel is left with no owner at all. No static policy can predict that order, so
+  // the cede is declined rather than guessed.
+  it("declines the cede when an unset memory slot decides the winner by load order", () => {
+    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor([
+      memoryClaimant("zz-mem-early"),
+      memoryClaimant("zz-mem-late", ["zz-mem-early"]),
+    ]);
+
+    expect(cededChannelOwners.has("zzalpha")).toBe(false);
+    expect(cededChannelIdsByPlugin.has("zz-mem-early")).toBe(false);
+  });
+
+  // The contest is only order-dependent while two single-kind memory plugins compete for the slot.
+  // A lone memory claimant always wins it, so its declaration must still cede normally.
+  it("still cedes when only one claimant competes for the memory slot", () => {
+    const { cededChannelIdsByPlugin, cededChannelOwners } = cededFor([
+      ringClaimant("zz-plain-early"),
+      memoryClaimant("zz-mem-solo", ["zz-plain-early"]),
+    ]);
+
+    expect(cededChannelOwners.get("zzalpha")).toBe("zz-mem-solo");
+    expect(cededChannelIdsByPlugin.get("zz-plain-early")).toEqual(["zzalpha"]);
+  });
+
   // The P1 shape (comment 3840887960): two independent declarations leave two active,
   // undisplaced claimants, and ceding only the displaced ids let registration order pick between
   // them while schema ownership named its one winner. Every active non-winner cedes.

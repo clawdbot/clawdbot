@@ -11,6 +11,7 @@ import { createConfiguredChannelOwnershipPolicy } from "../config/channel-owners
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeCededChannelId } from "./channel-validation.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { hasKind } from "./slots.js";
 
 export type AuthorizedDreamingSidecar = {
   engineId: string;
@@ -82,6 +83,25 @@ export function collectCededChannelIdsByPlugin(params: {
       claimants.push(record.id);
     }
   }
+  // With `plugins.slots.memory` unset, the runtime slot goes to whichever single-kind memory
+  // plugin the load reaches FIRST (`loader-runtime-candidate.ts` sets `selectedMemoryPluginId` on
+  // the first one and the `selectedId` arm of `resolveMemorySlotDecision` disables every later
+  // one). Load order is not knowable from manifests and config alone, so a winner drawn from that
+  // pool might be switched off after the claimants it displaced have already stood down, leaving
+  // the configured channel with no owner. The unset slot is the only order-dependent case: a slot
+  // that names a plugin, or is off, is decided by config and already filtered in
+  // `channel-ownership-policy.ts`. Declining the cede keeps the first-registrant rule, which is
+  // the same answer the runtime reaches on its own.
+  const memorySlotIsUnset = params.config.plugins?.slots?.memory === undefined;
+  const singleKindMemoryIds = new Set(
+    params.registry.plugins
+      .filter(
+        (entry) =>
+          hasKind(entry.kind, "memory") && !(Array.isArray(entry.kind) && entry.kind.length > 1),
+      )
+      .map((entry) => entry.id),
+  );
+  const memorySlotIsContested = memorySlotIsUnset && singleKindMemoryIds.size > 1;
   const cededChannelIdsByPlugin = new Map<string, string[]>();
   const cededChannelOwners = new Map<string, string>();
   for (const [channelId, pluginIds] of displaced) {
@@ -103,6 +123,10 @@ export function collectCededChannelIdsByPlugin(params: {
         ? winner
         : undefined;
     if (cededTo === undefined) {
+      continue;
+    }
+    // The winner may lose the unset memory slot to a claimant the load happens to reach first.
+    if (memorySlotIsContested && singleKindMemoryIds.has(cededTo)) {
       continue;
     }
     cededChannelOwners.set(claimedId, cededTo);
