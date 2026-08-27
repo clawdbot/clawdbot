@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import { parse as parseSemver } from "semver";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { SecretInput } from "../../config/types.secrets.js";
+import { isSecretRef, type SecretInput } from "../../config/types.secrets.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
@@ -75,19 +75,28 @@ import type { PreparedCliRunContext } from "./types.js";
 async function resolveCliBackendEnvValues(params: {
   config?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  values: Record<string, string | SecretInput>;
+  values: Record<string, SecretInput>;
 }): Promise<Record<string, string>> {
   const entries = await Promise.all(
     Object.entries(params.values).map(async ([key, value]) => {
+      // Preserve literal strings unchanged (including $NAME / ${NAME} text).
+      // Only structured SecretRef objects are materialized — materializeSecretInput
+      // would otherwise coerce env-template strings into host SecretRefs.
+      if (typeof value === "string") {
+        return [key, value] as const;
+      }
+      if (!isSecretRef(value)) {
+        return [key, ""] as const;
+      }
       if (!params.config) {
-        return [key, typeof value === "string" ? value : ""] as const;
+        return [key, ""] as const;
       }
       const resolved = await materializeSecretInput({
         config: params.config,
         value,
         env: params.env,
       });
-      return [key, resolved ?? (typeof value === "string" ? value : "")] as const;
+      return [key, resolved ?? ""] as const;
     }),
   );
   return Object.fromEntries(entries);

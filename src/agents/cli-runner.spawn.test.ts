@@ -1549,39 +1549,75 @@ describe("runCliAgent spawn path", () => {
 
   it("resolves a file SecretRef in backend.env to the token value at spawn time", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-secretref-"));
-    const tokenPath = path.join(dir, "notion-token");
-    await fs.writeFile(tokenPath, "resolved-notion-token\n");
-    mockSuccessfulCliRun();
+    try {
+      const tokenPath = path.join(dir, "notion-token");
+      await fs.writeFile(tokenPath, "resolved-notion-token\n");
+      mockSuccessfulCliRun();
 
-    await executePreparedCliRun(
-      buildPreparedCliRunContext({
-        provider: "codex-cli",
-        model: "gpt-5.5",
-        config: {
-          secrets: {
-            providers: {
-              "notion-file": {
-                source: "file",
-                path: tokenPath,
-                mode: "singleValue",
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          config: {
+            secrets: {
+              providers: {
+                "notion-file": {
+                  source: "file",
+                  path: tokenPath,
+                  mode: "singleValue",
+                },
               },
             },
           },
-        },
-        backend: {
-          env: {
-            NOTION_TOKEN: {
-              source: "file",
-              provider: "notion-file",
-              id: "value",
+          backend: {
+            env: {
+              NOTION_TOKEN: {
+                source: "file",
+                provider: "notion-file",
+                id: "value",
+              },
             },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
-    expect(input.env?.NOTION_TOKEN).toBe("resolved-notion-token");
+      const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+      expect(input.env?.NOTION_TOKEN).toBe("resolved-notion-token");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves literal backend.env strings including $NAME / ${NAME} text", async () => {
+    mockSuccessfulCliRun();
+    const previous = process.env.HOST_SECRET_FOR_CLI_ENV;
+    process.env.HOST_SECRET_FOR_CLI_ENV = "should-not-be-injected";
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "codex-cli",
+          model: "gpt-5.5",
+          backend: {
+            env: {
+              LITERAL_DOLLAR: "$HOST_SECRET_FOR_CLI_ENV",
+              LITERAL_BRACE: "${HOST_SECRET_FOR_CLI_ENV}",
+              LITERAL_PLAIN: "plain-value",
+            },
+          },
+        }),
+      );
+
+      const input = mockCallArg(supervisorSpawnMock) as { env?: Record<string, string> };
+      expect(input.env?.LITERAL_DOLLAR).toBe("$HOST_SECRET_FOR_CLI_ENV");
+      expect(input.env?.LITERAL_BRACE).toBe("${HOST_SECRET_FOR_CLI_ENV}");
+      expect(input.env?.LITERAL_PLAIN).toBe("plain-value");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.HOST_SECRET_FOR_CLI_ENV;
+      } else {
+        process.env.HOST_SECRET_FOR_CLI_ENV = previous;
+      }
+    }
   });
 
   it("captures a runtime artifact for a strict CLI credential", async () => {

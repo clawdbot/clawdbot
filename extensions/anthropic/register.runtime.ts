@@ -1046,7 +1046,15 @@ function resolveAnthropicCliAuthProbe(env: NodeJS.ProcessEnv): {
   env: NodeJS.ProcessEnv;
 } {
   const backend = buildAnthropicCliBackend().config;
-  const probeEnv = { ...env, ...backend.env };
+  // Auth probe has no OpenClaw config for SecretRef materialization; only
+  // literal string backend.env values are safe to merge into ProcessEnv.
+  // SecretRefs are resolved at spawn time in executePreparedCliRun instead.
+  const literalBackendEnv = Object.fromEntries(
+    Object.entries(backend.env ?? {}).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  const probeEnv = { ...env, ...literalBackendEnv };
   for (const name of backend.clearEnv ?? []) {
     delete probeEnv[name];
   }

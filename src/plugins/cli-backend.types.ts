@@ -22,7 +22,7 @@ export type CliBackendConfig = {
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
   maxPromptArgChars?: number;
   /** Extra env vars injected for this CLI. Values may be literal strings or SecretRefs resolved at spawn time. */
-  env?: Record<string, string | SecretInput>;
+  env?: Record<string, SecretInput>;
   /** Env vars to remove before launching this CLI. */
   clearEnv?: string[];
   /** Flag used to pass model id (e.g. --model). */
