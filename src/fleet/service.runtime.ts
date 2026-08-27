@@ -145,6 +145,7 @@ export type FleetLifecycleAction = "start" | "stop" | "restart";
 export type FleetLogsOptions = {
   tenant: string;
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
 };
@@ -540,6 +541,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
       // Pin the inspected generation so a concurrent restore cannot redirect the stream.
       await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
+        timestamps: logOptions.timestamps,
         tail: logOptions.tail,
         since: logOptions.since,
         redactValues: gatewayCredential ? [gatewayCredential] : [],

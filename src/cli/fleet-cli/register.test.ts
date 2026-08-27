@@ -134,11 +134,21 @@ describe("fleet cli", () => {
   });
 
   it("normalizes logs options", async () => {
-    await runFleetCli(["logs", "acme", "--follow", "--tail", "100", "--since", "10m"]);
+    await runFleetCli([
+      "logs",
+      "acme",
+      "--follow",
+      "--timestamps",
+      "--tail",
+      "100",
+      "--since",
+      "10m",
+    ]);
 
     expect(mocks.runFleetLogsCommand).toHaveBeenCalledWith({
       tenant: "acme",
       follow: true,
+      timestamps: true,
       tail: 100,
       since: "10m",
     });
@@ -183,6 +193,7 @@ describe("fleet cli", () => {
     expect(mocks.runFleetLogsCommand).toHaveBeenCalledWith({
       tenant: "tenant-a",
       follow: false,
+      timestamps: false,
       tail: 500,
       since: "10m",
     });

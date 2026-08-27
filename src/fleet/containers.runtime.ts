@@ -54,6 +54,7 @@ type FleetContainerStreamExecutor = (
 
 type FleetContainerLogsOptions = {
   follow?: boolean;
+  timestamps?: boolean;
   tail?: number;
   since?: string;
   redactValues: readonly string[];
@@ -574,6 +575,9 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
   const args = ["logs"];
   if (options.follow) {
     args.push("--follow");
+  }
+  if (options.timestamps) {
+    args.push("--timestamps");
   }
   if (options.tail !== undefined) {
     if (!Number.isSafeInteger(options.tail) || options.tail < 1) {

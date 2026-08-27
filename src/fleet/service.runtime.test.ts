@@ -554,11 +554,18 @@ describe("fleet service", () => {
     containers.inspect.mockResolvedValue(runningInspection());
 
     await expect(
-      service.logs({ tenant: "acme", follow: true, tail: 100, since: "10m" }),
+      service.logs({
+        tenant: "acme",
+        follow: true,
+        timestamps: true,
+        tail: 100,
+        since: "10m",
+      }),
     ).resolves.toBeUndefined();
 
     expect(containers.logs).toHaveBeenCalledWith("docker", "container-id", {
       follow: true,
+      timestamps: true,
       tail: 100,
       since: "10m",
       redactValues: ["old-token"],
