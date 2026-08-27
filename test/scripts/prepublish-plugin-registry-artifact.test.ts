@@ -1,8 +1,17 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.ts";
 import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
@@ -160,6 +169,16 @@ console.log("package manifest stdout");
 }
 
 describe("prepublish plugin registry artifact", () => {
+  it("can be imported from stdin without running the CLI", () => {
+    const result = spawnSync(process.execPath, ["--input-type=module", "-"], {
+      input: `import { PREPUBLISH_PLUGIN_REGISTRY_MANIFEST } from ${JSON.stringify(pathToFileURL(SCRIPT).href)};\nconsole.log(PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);\n`,
+      encoding: "utf8",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${PREPUBLISH_PLUGIN_REGISTRY_MANIFEST}\n`);
+  });
+
   it.runIf(process.platform !== "win32")(
     "serves a Parallels candidate with its companion packages and closes both endpoints",
     async () => {
@@ -323,36 +342,43 @@ describe("prepublish plugin registry artifact", () => {
     ).toThrow("tracked changes");
   });
 
-  it("keeps noisy package commands off the CLI JSON stdout contract", () => {
-    const { repoRoot, sourceSha } = cliFixture();
-    const artifactDir = path.join(repoRoot, "artifact");
-    const result = spawnSync(
-      process.execPath,
-      [
-        SCRIPT,
-        "create",
-        "--repo-root",
-        repoRoot,
-        "--artifact-dir",
-        artifactDir,
-        "--source-sha",
-        sourceSha,
-        "--candidate-version",
-        VERSION,
-        "--required-packages-json",
-        JSON.stringify([PACKAGE_NAME]),
-      ],
-      { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    );
+  it.each(process.platform === "win32" ? ["direct"] : ["direct", "symlink"])(
+    "keeps noisy package commands off the CLI JSON stdout contract (%s entrypoint)",
+    (entrypoint) => {
+      const { repoRoot, sourceSha } = cliFixture();
+      const artifactDir = path.join(repoRoot, "artifact");
+      const script = entrypoint === "symlink" ? path.join(repoRoot, "artifact-cli.mjs") : SCRIPT;
+      if (entrypoint === "symlink") {
+        symlinkSync(SCRIPT, script);
+      }
+      const result = spawnSync(
+        process.execPath,
+        [
+          script,
+          "create",
+          "--repo-root",
+          repoRoot,
+          "--artifact-dir",
+          artifactDir,
+          "--source-sha",
+          sourceSha,
+          "--candidate-version",
+          VERSION,
+          "--required-packages-json",
+          JSON.stringify([PACKAGE_NAME]),
+        ],
+        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
 
-    expect(result.status).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
-      packages: [PACKAGE_NAME],
-    });
-    expect(result.stderr).toContain("runtime build stdout");
-    expect(result.stderr).toContain("package manifest stdout");
-  });
+      expect(result.status).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        packages: [PACKAGE_NAME],
+      });
+      expect(result.stderr).toContain("runtime build stdout");
+      expect(result.stderr).toContain("package manifest stdout");
+    },
+  );
 
   it("rejects traversal and duplicate package entries", () => {
     const traversal = fixture();
