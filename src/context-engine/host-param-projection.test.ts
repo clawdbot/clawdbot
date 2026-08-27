@@ -136,9 +136,11 @@ describe("context-engine host parameter projection", () => {
     const undeclaredCalls: Array<Record<string, unknown>> = [];
     const declaredId = registerProbeEngine({
       acceptedHostParams: ["sessionKey", "onProgress"],
+      assembleCalls: [],
       compactCalls: declaredCalls,
     });
     const undeclaredId = registerProbeEngine({
+      assembleCalls: [],
       compactCalls: undeclaredCalls,
     });
 
@@ -158,14 +160,15 @@ describe("context-engine host parameter projection", () => {
       onProgress: () => {},
     });
 
-    expect(declaredCalls[0].onProgress).toBeInstanceOf(Function);
-    expect(undeclaredCalls[0].onProgress).toBeInstanceOf(Function);
+    expect(declaredCalls[0]?.onProgress).toBeInstanceOf(Function);
+    expect(undeclaredCalls[0]?.onProgress).toBeInstanceOf(Function);
   });
 
   it("strips onProgress from a declared engine that does not list it", async () => {
     const compactCalls: Array<Record<string, unknown>> = [];
     const engineId = registerProbeEngine({
       acceptedHostParams: ["sessionKey"],
+      assembleCalls: [],
       compactCalls,
     });
     const engine = await resolveContextEngine({
@@ -178,8 +181,8 @@ describe("context-engine host parameter projection", () => {
       onProgress: () => {},
     });
 
-    expect(compactCalls[0].sessionKey).toBe("agent:main:session-1");
-    expect(compactCalls[0].onProgress).toBeUndefined();
+    expect(compactCalls[0]?.sessionKey).toBe("agent:main:session-1");
+    expect(compactCalls[0]?.onProgress).toBeUndefined();
   });
 
   it("projects host parameters on fresh logical-turn engines", async () => {
