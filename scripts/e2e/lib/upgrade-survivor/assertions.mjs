@@ -1019,7 +1019,7 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
       String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
       `configured external ${pluginId} plugin npm spec changed`,
     );
-    return;
+    return packageJson;
   }
   assert(
     record.clawhubPackage === packageName,
@@ -1030,6 +1030,7 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     isPathInside(extensionsRoot, installPath),
     `configured external ${pluginId} ClawHub install path outside managed extensions root: ${installPath}`,
   );
+  return packageJson;
 }
 
 function pluginInstallIntegrity(record) {
@@ -1082,12 +1083,17 @@ function assertCompanionPluginInstalls([expectedVersion]) {
     ["whatsapp", "@openclaw/whatsapp", "clawhub"],
     ["codex", "@openclaw/codex", "npm"],
   ]) {
-    assertExternalPluginInstall(records, pluginId, packageName);
+    const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
     const record = records[pluginId];
     assert(record.source === source, `${pluginId} plugin source changed: ${record.source}`);
+    const installedVersion = source === "clawhub" ? record.version : record.resolvedVersion;
     assert(
-      record.resolvedVersion === expectedVersion,
-      `${pluginId} plugin version changed: ${String(record.resolvedVersion)}`,
+      installedVersion === expectedVersion,
+      `${pluginId} plugin version changed: ${String(installedVersion)}`,
+    );
+    assert(
+      packageJson.version === expectedVersion,
+      `${pluginId} installed package version changed: ${String(packageJson.version)}`,
     );
     assertCompanionPluginConsent(record, pluginId);
   }

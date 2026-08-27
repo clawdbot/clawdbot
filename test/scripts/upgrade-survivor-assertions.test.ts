@@ -314,7 +314,10 @@ function acceptedSurfaceHash(): string {
 }
 
 function assertCompanionPluginRecords(
-  mutate?: (records: Record<string, Record<string, unknown>>) => void,
+  mutate?: (
+    records: Record<string, Record<string, unknown>>,
+    installPaths: Record<"codex" | "discord" | "whatsapp", string>,
+  ) => void,
 ): void {
   const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-companions-"));
   try {
@@ -368,7 +371,7 @@ function assertCompanionPluginRecords(
       whatsapp: {
         source: "clawhub",
         spec: `clawhub:@openclaw/whatsapp@${version}`,
-        resolvedVersion: version,
+        version,
         clawhubPackage: "@openclaw/whatsapp",
         clawhubChannel: "official",
         artifactKind: "npm-pack",
@@ -386,7 +389,11 @@ function assertCompanionPluginRecords(
         ...consent(npmIntegrity),
       },
     };
-    mutate?.(records);
+    mutate?.(records, {
+      codex: codexInstallPath,
+      discord: discordInstallPath,
+      whatsapp: whatsappInstallPath,
+    });
     mkdirSync(join(stateDir, "plugins"), { recursive: true });
     writeJson(join(stateDir, "plugins", "installs.json"), { installRecords: records });
 
@@ -704,6 +711,43 @@ describe("upgrade survivor assertions", () => {
       }),
     ).toThrow(/discord plugin consent integrity/);
   });
+
+  it.each([
+    ["npm", "discord", "resolvedVersion", "version"],
+    ["ClawHub", "whatsapp", "version", "resolvedVersion"],
+  ] as const)(
+    "requires the source-native version field for %s companion installs",
+    (_sourceLabel, pluginId, requiredField, alternateField) => {
+      expect(() =>
+        assertCompanionPluginRecords((records) => {
+          const record = records[pluginId];
+          if (!record) {
+            throw new Error(`${pluginId} fixture missing`);
+          }
+          record[alternateField] = record[requiredField];
+          Reflect.deleteProperty(record, requiredField);
+        }),
+      ).toThrow(new RegExp(`${pluginId} plugin version changed`));
+    },
+  );
+
+  it.each([
+    ["npm", "discord"],
+    ["ClawHub", "whatsapp"],
+  ] as const)(
+    "requires the installed package version to match for %s companion installs",
+    (_sourceLabel, pluginId) => {
+      expect(() =>
+        assertCompanionPluginRecords((_records, installPaths) => {
+          const packageName = pluginId === "discord" ? "@openclaw/discord" : "@openclaw/whatsapp";
+          writeJson(join(installPaths[pluginId], "package.json"), {
+            name: packageName,
+            version: "2026.8.0",
+          });
+        }),
+      ).toThrow(new RegExp(`${pluginId} installed package version changed`));
+    },
+  );
 
   it("accepts official ClawHub npm-pack installs for configured external plugins", () => {
     expect(() => assertConfiguredPluginState()).not.toThrow();
