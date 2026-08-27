@@ -217,9 +217,8 @@ describe("CustodianSessionStore", () => {
     expect(store.messages[0]?.question?.id).toBe("repair");
   });
 
-  it("keeps the newest transcript when concurrent refreshes resolve out of order", async () => {
-    const older = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
-    const newer = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
+  it("coalesces concurrent transcript refreshes", async () => {
+    const pending = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
     let historyCall = 0;
     const request = vi.fn((method: string, params: { sessionId?: string }) => {
       if (method === "openclaw.chat.history") {
@@ -227,7 +226,7 @@ describe("CustodianSessionStore", () => {
         if (historyCall === 1) {
           return Promise.resolve({ turns: [] });
         }
-        return historyCall === 2 ? older.promise : newer.promise;
+        return pending.promise;
       }
       return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
     });
@@ -236,14 +235,47 @@ describe("CustodianSessionStore", () => {
     store.connect(context, "caretaker");
     await waitForFast(() => expect(store.sending).toBe(false));
 
-    const olderRefresh = store.refreshTranscriptIfIdle();
-    const newerRefresh = store.refreshTranscriptIfIdle();
-    newer.resolve({ turns: [{ role: "assistant", text: "Newest history", at: 2 }] });
-    await newerRefresh;
-    older.resolve({ turns: [{ role: "assistant", text: "Older history", at: 1 }] });
-    await olderRefresh;
+    const firstRefresh = store.refreshTranscriptIfIdle();
+    const secondRefresh = store.refreshTranscriptIfIdle();
+    expect(historyCall).toBe(2);
+    pending.resolve({ turns: [{ role: "assistant", text: "Fresh history", at: 2 }] });
+    await Promise.all([firstRefresh, secondRefresh]);
 
-    expect(store.messages.map((message) => message.text)).toEqual(["Newest history"]);
+    expect(store.messages.map((message) => message.text)).toEqual(["Fresh history"]);
+  });
+
+  it("keeps a transcript failure visible when a user turn invalidates its retry", async () => {
+    const retry = deferred<{ turns: Array<{ role: "assistant"; text: string; at: number }> }>();
+    const reply = deferred<{ sessionId: string; reply: string; action: "none" }>();
+    let historyCall = 0;
+    const request = vi.fn((method: string, params: { sessionId?: string; message?: string }) => {
+      if (method === "openclaw.chat.history") {
+        historyCall += 1;
+        if (historyCall === 1) {
+          return Promise.reject(new Error("history unavailable"));
+        }
+        return retry.promise;
+      }
+      if (params.message) {
+        return reply.promise;
+      }
+      return Promise.resolve({ sessionId: params.sessionId, reply: "Ready.", action: "none" });
+    });
+    const { context } = createContext(request, ["openclaw.chat", "openclaw.chat.history"]);
+    const store = new CustodianSessionStore();
+    store.connect(context, "caretaker");
+    await waitForFast(() => expect(store.sending).toBe(false));
+    expect(store.transcript.status.error).toContain("history unavailable");
+
+    const refresh = store.refreshTranscriptIfIdle();
+    const send = store.send("Continue");
+    retry.resolve({ turns: [{ role: "assistant", text: "Stale history", at: 2 }] });
+    await refresh;
+
+    expect(store.transcript.status.error).toContain("history unavailable");
+    expect(store.messages.some((message) => message.text === "Stale history")).toBe(false);
+    reply.resolve({ sessionId: "session-after-send", reply: "Continued.", action: "none" });
+    await send;
   });
 
   it("refreshes durable history after reconnect and clears the abandoned outcome", async () => {

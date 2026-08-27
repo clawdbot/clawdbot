@@ -4,7 +4,6 @@ import {
   type SystemAgentChatResult,
 } from "@openclaw/gateway-protocol";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { WizardStep } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -31,9 +30,9 @@ import {
   isCustodianSessionInvalidatedError,
   type CustodianSessionVariant,
 } from "./session-lifecycle.ts";
-import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
+import { parseCustodianQuestion } from "./structured-question.ts";
 import {
-  createCustodianTranscriptMessages,
+  createCustodianAssistantMessage,
   custodianErrorMessage,
   CustodianTranscriptLoader,
   hasUnresolvedCustodianQuestion,
@@ -58,7 +57,7 @@ export class CustodianSessionStore {
   wizardSecretVisible = false;
   questionReplyUncertain = false;
   error: string | null = null;
-  transcript = new CustodianTranscriptLoader();
+  transcript = new CustodianTranscriptLoader(() => this.emit());
   setupIssue: CustodianSetupIssue | null = null;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
@@ -80,7 +79,6 @@ export class CustodianSessionStore {
   // refresh and on any fresh mint.
   private rejoinBarrierPending = this.restoredIdentity.restored;
   private requestEpoch = 0;
-  private transcriptGeneration = 0;
   private requestAbort: AbortController | null = null;
   private nextMessageId = 1;
   private retryParams: SystemAgentChatParams | null = null;
@@ -171,8 +169,7 @@ export class CustodianSessionStore {
 
   async refreshTranscriptIfIdle(): Promise<void> {
     const client = this.activeClient;
-    // hasUnresolvedQuestion() also covers a pending wizard step.
-    if (!client || !this.sessionStarted || this.sending || this.hasUnresolvedQuestion()) {
+    if (!client || !this.canRefreshTranscript()) {
       return;
     }
     const refreshed = await this.refreshTranscriptHistory(client, this.requestEpoch);
@@ -180,6 +177,12 @@ export class CustodianSessionStore {
       this.abandonedTurnOutcomeUnknown = false;
       this.emit();
     }
+  }
+
+  canRefreshTranscript(): boolean {
+    // hasUnresolvedQuestion() also covers a pending wizard step.
+    const blocked = this.sending || this.hasUnresolvedQuestion() || this.transcript.refreshing;
+    return this.activeClient !== null && this.sessionStarted && this.chatAvailable && !blocked;
   }
 
   canRetry(): boolean {
@@ -381,11 +384,16 @@ export class CustodianSessionStore {
   private revokeNavigationAuthority(): void {
     this.requestAbort?.abort();
     this.requestAbort = null;
-    this.requestEpoch += 1;
+    this.advanceRequestEpoch();
     this.sending = false;
     this.questionReplyUncertain = false;
     this.retryParams = null;
     this.error = null;
+  }
+
+  private advanceRequestEpoch(): number {
+    this.transcript.invalidate();
+    return ++this.requestEpoch;
   }
 
   openModelSetup(): void {
@@ -490,7 +498,7 @@ export class CustodianSessionStore {
     const requestWasPending = this.sending && this.retryParams !== null;
     const pendingParams = requestWasPending ? this.retryParams : null;
     this.activeClient = client;
-    this.requestEpoch += 1;
+    this.advanceRequestEpoch();
     this.sending = false;
     this.chatAvailable = false;
     if (variantChanged || ownershipChanged) {
@@ -578,7 +586,7 @@ export class CustodianSessionStore {
     params: SystemAgentChatParams,
     loadTranscript = true,
   ): Promise<void> {
-    const epoch = ++this.requestEpoch;
+    const epoch = this.advanceRequestEpoch();
     this.sending = true;
     this.error = null;
     this.retryParams = params;
@@ -603,22 +611,16 @@ export class CustodianSessionStore {
     ) {
       return false;
     }
-    const generation = ++this.transcriptGeneration;
-    const result = await this.transcript.read(client);
-    // The request epoch fences session changes; this generation fences same-session Retry overlap.
-    if (
-      epoch !== this.requestEpoch ||
-      client !== this.activeClient ||
-      generation !== this.transcriptGeneration
-    ) {
+    const isCurrent = () => epoch === this.requestEpoch && client === this.activeClient;
+    const transcript = await this.transcript.loadMessages(
+      client,
+      epoch,
+      this.nextMessageId,
+      isCurrent,
+    );
+    if (!transcript) {
       return false;
     }
-    this.transcript.finish(result);
-    if (!result.ok) {
-      this.emit();
-      return false;
-    }
-    const transcript = createCustodianTranscriptMessages(result.turns, this.nextMessageId);
     [this.messages, this.nextMessageId] = [transcript.messages, transcript.nextMessageId];
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.emit();
@@ -639,24 +641,6 @@ export class CustodianSessionStore {
     this.earlierBoundaryAfterId = null;
   }
 
-  private appendAssistant(
-    reply: string,
-    question: CustodianStructuredQuestion | null,
-    step: WizardStep | null,
-  ): void {
-    this.messages = [
-      ...this.messages,
-      {
-        id: this.nextMessageId++,
-        role: "assistant",
-        text: reply,
-        at: Date.now(),
-        question,
-        step,
-      },
-    ];
-  }
-
   private async requestReply(
     client: GatewayBrowserClient,
     params: SystemAgentChatParams,
@@ -675,7 +659,7 @@ export class CustodianSessionStore {
     this.requestAbort?.abort();
     const requestAbort = new AbortController();
     this.requestAbort = requestAbort;
-    const epoch = ++this.requestEpoch;
+    const epoch = this.advanceRequestEpoch();
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
@@ -717,7 +701,13 @@ export class CustodianSessionStore {
       this.wizardSecretVisible = false;
       const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
       if (!silentReply || question || step) {
-        this.appendAssistant(silentReply ? "" : result.reply, question, step);
+        const message = createCustodianAssistantMessage(
+          this.nextMessageId++,
+          silentReply ? "" : result.reply,
+          question,
+          step,
+        );
+        this.messages = [...this.messages, message];
       }
       if (result.action === "open-agent") {
         const handoff = await performCustodianAgentHandoff({

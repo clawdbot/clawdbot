@@ -1,11 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders logs screen content.
 import { html, nothing } from "lit";
+import { renderLoadingState } from "../../components/loading-state.ts";
 import {
   renderPanelRefreshStatus,
   type PanelRefreshStatus,
 } from "../../components/panel-refresh-status.ts";
-import { renderPanelState } from "../../components/panel-state.ts";
 import {
   renderSettingsEmpty,
   renderSettingsRow,
@@ -21,6 +21,7 @@ type ExportFileLabel = "filtered" | "visible";
 
 type LogsProps = {
   loading: boolean;
+  refreshDisabled: boolean;
   status: PanelRefreshStatus;
   file: string | null;
   entries: LogEntry[];
@@ -70,7 +71,7 @@ export function renderLogs(props: LogsProps) {
   const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);
   const streamContent = !props.status.hasLoaded
     ? props.loading
-      ? renderPanelState({ kind: "loading" })
+      ? renderLoadingState()
       : nothing
     : filtered.length === 0
       ? renderSettingsEmpty(t("gatewayLogs.empty"))
@@ -92,7 +93,7 @@ export function renderLogs(props: LogsProps) {
     <div class="settings-section__header">
       <h2 class="settings-section__heading">${t("gatewayLogs.title")}</h2>
       <div class="settings-section__actions">
-        <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
+        <button class="btn" ?disabled=${props.refreshDisabled} @click=${props.onRefresh}>
           ${props.loading ? t("common.loading") : t("common.refresh")}
         </button>
         <button
@@ -112,6 +113,7 @@ export function renderLogs(props: LogsProps) {
     ${renderPanelRefreshStatus({
       status: props.status,
       onRetry: props.onRefresh,
+      retryDisabled: props.refreshDisabled,
       className: "logs-refresh-status",
     })}
     <div class="settings-group logs-card">
