@@ -1683,7 +1683,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         }
         expectInvokeErrorMessage(
           sendInvokeResult,
-          "SYSTEM_RUN_DENIED: approval cwd changed before execution — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+          "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
           true,
         );
       },
@@ -1717,7 +1717,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(
           sendInvokeResult,
-          "SYSTEM_RUN_DENIED: approval script operand changed before execution — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+          "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
           true,
         );
       } else {
@@ -1754,7 +1754,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(invoke.runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         invoke.sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval cwd changed before execution — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+        "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
     },
@@ -1787,7 +1787,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(invoke.runCommand).not.toHaveBeenCalled();
     expectInvokeErrorMessage(
       invoke.sendInvokeResult,
-      "SYSTEM_RUN_DENIED: approval script operand changed before execution — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+      "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
       true,
     );
   });
@@ -1811,7 +1811,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval script operand changed before execution — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+        "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
       const missingBindingTmp = createFixtureDir("openclaw-approval-tsx-missing-binding-");
@@ -1837,7 +1837,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect(missingBindingRun.runCommand).not.toHaveBeenCalled();
       expectInvokeErrorMessage(
         missingBindingRun.sendInvokeResult,
-        "SYSTEM_RUN_DENIED: approval missing script operand binding — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+        "SYSTEM_RUN_DENIED: approval missing script operand binding — the approved binding no longer matches this execution; request approval again for the current command",
         true,
       );
     });
@@ -3264,7 +3264,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(rerun.runCommand).not.toHaveBeenCalled();
           expectInvokeErrorMessage(
             rerun.sendInvokeResult,
-            "SYSTEM_RUN_DENIED: approval cwd changed before execution — to change this outcome, ask the operator to adjust the agent's exec policy; an identical retry will be denied again",
+            "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
             true,
           );
         },
