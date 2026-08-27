@@ -552,6 +552,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
         batchRunIds,
         state,
         transitionBatch: params.transitionBatch,
+        completeBatch,
       });
       logWarn(
         `requester settle wake is still in flight; replaying the same idempotency key in ${Math.round(REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[0] / 1000)}s: ${lastError}`,
