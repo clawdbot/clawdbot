@@ -41,7 +41,7 @@ function legacyStringValue(value: unknown): string {
 // A legacy cron reconciliation has no surviving runtime to finish it, so the
 // importer settles it as explicit historical evidence instead of carrying a
 // nonterminal row (and its actionable pending delivery) forward.
-export function isUnresumableCronReconcilingRow(row: Record<string, unknown>): boolean {
+function isUnresumableCronReconcilingRow(row: Record<string, unknown>): boolean {
   return row.runtime === "cron" && row.status === "reconciling";
 }
 
@@ -109,7 +109,7 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   };
 }
 
-export function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
+function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
   const db = openNodeSqliteDatabase(sourcePath, { readOnly: true });
   try {
     const columns = listSqliteColumns(db, "task_runs");
@@ -174,6 +174,7 @@ export function readLegacyTaskRowsWithSettlements(sourcePath: string): {
       return { rows: [], settledLostTaskIds };
     }
     for (const raw of db
+      // SAFETY: the SELECT projects only the two TEXT columns referenced below.
       .prepare(`SELECT task_id FROM task_runs WHERE runtime = 'cron' AND status = 'reconciling'`)
       .all() as Array<Record<string, unknown>>) {
       const taskId = legacyStringValue(raw.task_id);
