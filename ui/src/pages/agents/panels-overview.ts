@@ -1,4 +1,5 @@
 // Control UI view renders agents panels overview screen content.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing } from "lit";
 import type {
@@ -25,7 +26,6 @@ import {
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../../lib/avatar.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type AgentIdentityDraft = {
   name: string | null;
