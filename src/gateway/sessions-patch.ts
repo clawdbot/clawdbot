@@ -607,15 +607,6 @@ export async function projectSessionsPatchEntry(params: {
       if (!trimmed) {
         return invalid("invalid model: empty");
       }
-      if (!params.loadGatewayModelCatalog) {
-        return {
-          ok: false,
-          error: errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "model catalog is still loading; retry in a few seconds",
-          ),
-        };
-      }
       const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
