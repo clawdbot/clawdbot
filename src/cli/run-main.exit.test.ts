@@ -3504,13 +3504,15 @@ describe("runCli exit behavior", () => {
     const processOnceSpy = vi.spyOn(process, "once");
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
+      // Only the managed-proxy kill hook registers here: the debug-capture
+      // finalize hook stays unloaded unless the capture env requests it.
       await vi.waitFor(() => {
         expect(
           processOnceSpy.mock.calls.reduce(
             (count, [event]) => count + (event === "exit" ? 1 : 0),
             0,
           ),
-        ).toBe(2);
+        ).toBe(1);
       });
 
       const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
