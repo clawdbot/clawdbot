@@ -31,7 +31,7 @@ suite.define(() => {
     let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
     await expect
       .poll(async () => {
-        const state = await textarea.evaluate((element) => {
+        const state = await textarea.evaluate((element: HTMLTextAreaElement) => {
           const inputElement = element.closest<HTMLElement>(".agent-chat__input");
           const style = inputElement ? getComputedStyle(inputElement) : null;
           return {
