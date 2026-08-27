@@ -404,6 +404,7 @@ describe("discordMessageActions", () => {
 
     expect(discovery?.schema).toMatchObject({
       actions: expect.arrayContaining(["send"]),
+      visibility: "all-configured",
       properties: {
         components: {
           description: expect.stringContaining("Components V2 payload"),

@@ -217,6 +217,7 @@ function describeDiscordMessageTool({
           schema: {
             properties: schemaProperties,
             actions: schemaActions,
+            visibility: "all-configured",
           },
         }
       : {}),

@@ -201,6 +201,27 @@ describe("message action capability checks", () => {
     ).toHaveProperty("components");
   });
 
+  it("keeps all-configured schema visible from another current channel", () => {
+    activateDiscoveredMessageActionPlugin({
+      id: "demo-cross-channel",
+      label: "Demo Cross Channel",
+      describeMessageTool: () => ({
+        actions: ["send"],
+        schema: {
+          properties: { components: Type.Optional(Type.Object({})) },
+          visibility: "all-configured",
+        },
+      }),
+    });
+
+    expect(
+      resolveChannelMessageToolSchemaProperties({
+        cfg: {} as OpenClawConfig,
+        channel: "other-current-channel",
+      }),
+    ).toHaveProperty("components");
+  });
+
   it("keeps contributed schema properties optional so only action stays required", () => {
     activateDiscoveredMessageActionPlugin({
       id: "demo-contrib",
