@@ -136,6 +136,7 @@ describe("retired WhatsApp ack reaction migration", () => {
     {
       name: "a single representable scope",
       raw: whatsappAckConfig({ emoji: "👀", direct: true, group: "never" }),
+      finalScope: "direct",
       expectedChanges: [rootMove],
     },
     {
@@ -144,12 +145,21 @@ describe("retired WhatsApp ack reaction migration", () => {
         { emoji: "👀", direct: true, group: "never" },
         { emoji: "👀", direct: true, group: "never" },
       ),
+      finalScope: "direct",
       expectedChanges: [rootMove, accountMove],
     },
-  ])("keeps $name quiet", ({ raw, expectedChanges }) => {
+    {
+      name: 'equivalent "off" and "none" scopes',
+      raw: whatsappAckConfig({ emoji: "👀", direct: false, group: "never" }, undefined, {
+        ackReactionScope: "none",
+      }),
+      finalScope: "none",
+      expectedChanges: [rootMove],
+    },
+  ])("keeps $name quiet", ({ raw, finalScope, expectedChanges }) => {
     const result = applyRetired(raw);
 
-    expect(result.raw).toHaveProperty("messages.ackReactionScope", "direct");
+    expect(result.raw).toHaveProperty("messages.ackReactionScope", finalScope);
     expect(result.changes).toStrictEqual(expectedChanges);
   });
 });
