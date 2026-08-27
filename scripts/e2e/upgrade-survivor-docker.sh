@@ -278,7 +278,7 @@ fi
 
 PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 upgrade-survivor upgrade-survivor)"
+OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
 
@@ -287,7 +287,7 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/
 echo "Running upgrade survivor Docker E2E..."
 docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
-  -e OPENCLAW_TEST_STATE_SCRIPT_B64="$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  -e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64" \
   -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
   -e OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS="$ROOT_MANAGED_VPS" \
   -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
@@ -476,7 +476,22 @@ NODE
      "${registry_args[@]}"
  }
 
-openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
+if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+  if [ -z "$account_home" ]; then
+    echo "Could not resolve the current account home" >&2
+    exit 1
+  fi
+  openclaw_test_state_create "$account_home" upgrade-survivor
+  export HOME="$account_home"
+  export USERPROFILE="$account_home"
+  export OPENCLAW_STATE_DIR="$account_home/.openclaw"
+  export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
+  unset OPENCLAW_HOME
+else
+  openclaw_test_state_create upgrade-survivor upgrade-survivor
+fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 
 openclaw_e2e_install_package "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/install.log" "upgrade survivor package" "$npm_config_prefix"

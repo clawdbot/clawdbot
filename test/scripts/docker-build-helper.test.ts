@@ -3323,6 +3323,7 @@ printf '%s\n' "$status" >"$TMPDIR/status"
     expect(readFileSync(join(workDir, "status"), "utf8")).toBe("57\n");
     expect(existsSync(join(workDir, "gateway.log.authored-config"))).toBe(true);
     expect(JSON.parse(readFileSync(join(workDir, "state", "openclaw.json"), "utf8"))).toEqual({
+      plugins: { enabled: false },
       gateway: expect.objectContaining({ reload: { mode: "off" } }),
     });
   });
@@ -5383,8 +5384,16 @@ done
   });
 
   it("uses the account home for upgrade survivor auto-auth state", () => {
-    const runner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
-    expectTextToIncludeAll(runner, [
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+    const wrapper = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const directRunner = extractUpgradeSurvivorPayload(wrapper);
+
+    expectTextToIncludeAll(wrapper, [
+      'OPENCLAW_TEST_STATE_FUNCTION_B64="$(docker_e2e_test_state_function_b64)"',
+      '-e OPENCLAW_TEST_STATE_FUNCTION_B64="$OPENCLAW_TEST_STATE_FUNCTION_B64"',
+    ]);
+    expect(wrapper).not.toContain("OPENCLAW_TEST_STATE_SCRIPT_B64");
+    expectTextToIncludeAll(publishedRunner, [
       'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
       'account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"',
       'if [ -z "$account_home" ]; then',
@@ -5395,12 +5404,39 @@ done
       'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
     ]);
 
-    expect(runner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
-      runner.indexOf('export OPENCLAW_STATE_DIR="$account_home/.openclaw"'),
+    expect(publishedRunner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
+      publishedRunner.indexOf('export OPENCLAW_STATE_DIR="$account_home/.openclaw"'),
     );
     expect(
-      runner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
-    ).toBeLessThan(runner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"));
+      publishedRunner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
+    ).toBeLessThan(
+      publishedRunner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"),
+    );
+
+    expectTextToIncludeAll(directRunner, [
+      'openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"',
+      'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      'account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"',
+      'openclaw_test_state_create "$account_home" upgrade-survivor',
+      'export HOME="$account_home"',
+      'export USERPROFILE="$account_home"',
+      'export OPENCLAW_STATE_DIR="$account_home/.openclaw"',
+      'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
+      "unset OPENCLAW_HOME",
+      "else",
+      "openclaw_test_state_create upgrade-survivor upgrade-survivor",
+    ]);
+    expect(directRunner.indexOf('openclaw_test_state_create "$account_home"')).toBeLessThan(
+      directRunner.indexOf("unset OPENCLAW_HOME"),
+    );
+    expect(directRunner.indexOf("unset OPENCLAW_HOME")).toBeLessThan(
+      directRunner.indexOf("prepare_update_restart_probe_current_install"),
+    );
+    expect(
+      directRunner.indexOf('export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"'),
+    ).toBeLessThan(
+      directRunner.indexOf("node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed"),
+    );
   });
 
   it("bounds doctor install switch command log diagnostics", () => {
