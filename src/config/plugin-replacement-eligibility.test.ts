@@ -207,6 +207,116 @@ describe("isPluginExplicitlySelectedByAlias", () => {
     ).toBe(true);
   });
 
+  // Codex P1 3875870233. A non-empty `plugins.allow` that omits a BUNDLED plugin still disables it
+  // at startup as `not-in-allowlist`: the bypass in `config-activation-shared.ts` fires only for
+  // `bundled-channel-enabled-in-config`, never for an entry `enabled: true`. Exempting every
+  // bundled origin from the allowlist gate let such a fallback read as explicitly selected, which
+  // sets the replacement's `preferOver` aside and validates against a schema the runtime never
+  // loads. The genuine bypass returns true earlier in this function, so the gate needs no
+  // bundled exemption of its own.
+  const allowlistRegistry = {
+    diagnostics: [],
+    plugins: [
+      // A real built-in channel id: the bypass resolves the PLUGIN id through
+      // `normalizeChatChannelId`, so only a genuine bundled channel owner can reach it.
+      { id: "telegram", origin: "bundled", channels: ["telegram"] },
+      { id: "zzrepl", origin: "config", channels: ["telegram"] },
+    ],
+  } as unknown as PluginManifestRegistry;
+  const allowlistCanonicalId = createManifestPluginAliasResolver(allowlistRegistry);
+
+  it("applies a restrictive allowlist to a bundled entry selection", () => {
+    const config = {
+      plugins: {
+        allow: ["zzrepl"],
+        entries: { telegram: { enabled: true } },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        allowlistCanonicalId,
+        allowlistRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  // The bypass the exemption existed for must survive: a bundled owner whose CHANNEL the operator
+  // enabled in config really does escape the allowlist at startup.
+  it("keeps the bundled-channel-enabled bypass under a restrictive allowlist", () => {
+    const config = {
+      channels: { telegram: { enabled: true } },
+      plugins: { allow: ["zzrepl"] },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        allowlistCanonicalId,
+        allowlistRegistry,
+      ),
+    ).toBe(true);
+  });
+
+  // The realistic spelling of the same defect, found by adversarial review of the first fix: a
+  // fallback in a preferOver chain normally has BOTH `channels.<id>.enabled: true` and an entry.
+  // `resolveExplicitPluginSelectionShared` reads the entry first and returns `enabled-in-config`,
+  // and the allowlist bypass fires only for the exact cause `bundled-channel-enabled-in-config`,
+  // so writing both forfeits the bypass and startup still rejects the plugin.
+  it("applies the allowlist when an entry masks the bundled-channel bypass", () => {
+    const config = {
+      channels: { telegram: { enabled: true } },
+      plugins: { allow: ["zzrepl"], entries: { telegram: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        allowlistCanonicalId,
+        allowlistRegistry,
+      ),
+    ).toBe(false);
+  });
+
+  // The guard against the over-broad fix "a bundled plugin is never explicitly selected except
+  // through its channel config": with NO allowlist, an entry `enabled: true` is cause
+  // `enabled-in-config` and startup enables the plugin, so this must stay selected.
+  it("keeps a bundled entry selection when no allowlist restricts it", () => {
+    const config = {
+      plugins: { entries: { telegram: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        allowlistCanonicalId,
+        allowlistRegistry,
+      ),
+    ).toBe(true);
+  });
+
+  // `normalizeList` drops blank allow entries, so an all-blank allowlist is not restrictive at
+  // startup. Counting it made this predicate narrower than activation.
+  it("treats an all-blank allowlist as unrestricted", () => {
+    const config = {
+      plugins: { allow: ["", "   "], entries: { telegram: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      isPluginExplicitlySelectedByAlias(
+        config,
+        "telegram",
+        allowlistCanonicalId,
+        allowlistRegistry,
+      ),
+    ).toBe(true);
+  });
+
   // ClawSweeper P1 on #123209: folding alias spellings into one map by assignment let a later
   // empty alias overwrite an earlier material entry. Startup field-merges those collisions, so
   // every spelling has to be considered rather than the last one written.

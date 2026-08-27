@@ -143,7 +143,17 @@ export function isPluginExplicitlySelectedByAlias(
   // explicit selection. Omitting it here let the caller synthesize `plugins.entries.<id>.enabled:
   // false` over that choice while ownership ceded the channel, switching away from the operator's
   // pick. Gated on bundled origin so this stays exactly as wide as activation, no wider.
+  // `resolveExplicitPluginSelectionShared` reads `entries.<id>.enabled === true` FIRST and returns
+  // cause `enabled-in-config`, and the allowlist bypass fires only for the exact cause
+  // `bundled-channel-enabled-in-config`. So writing both forfeits the bypass at startup: an
+  // omitted plugin is rejected as `not-in-allowlist` even though its channel is enabled. Mirror
+  // that masking here, or this arm reports selected a plugin startup refuses to load.
+  const entryEnabledInConfig = Object.entries(cfg.plugins?.entries ?? {}).some(
+    ([writtenId, entry]) =>
+      canonicalId(writtenId) === target && isRecord(entry) && entry.enabled === true,
+  );
   if (
+    !entryEnabledInConfig &&
     manifestRegistry?.plugins.some(
       (plugin) => plugin.origin === "bundled" && canonicalId(plugin.id) === target,
     ) &&
@@ -230,8 +240,12 @@ export function isPluginExplicitlySelectedByAlias(
   // Both gates need `manifestRegistry` to see origin, and a caller without one keeps the wide
   // reading, as the arms above do.
   if (manifestRegistry) {
+    // `normalizeList` drops entries that normalize to empty, so an allowlist of only blanks is NOT
+    // restrictive at startup. Counting them made this predicate narrower than activation and
+    // reported a genuinely selected plugin unselected — the same disagreement, pointing the other
+    // way.
     const allowedIds = Array.isArray(allow)
-      ? allow.filter((id): id is string => typeof id === "string")
+      ? allow.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
       : [];
     const allowlisted = allowedIds.some((id) => canonicalId(id) === target);
     const hasOrigin = (origin: string): boolean =>
@@ -239,9 +253,14 @@ export function isPluginExplicitlySelectedByAlias(
         (plugin) => plugin.origin === origin && canonicalId(plugin.id) === target,
       );
     // `resolveManifestOwnerBasePolicyBlock` returns "not-in-allowlist" for any plugin a non-empty
-    // `plugins.allow` omits. Only a bundled channel owner bypasses it on explicit config, which is
-    // why this arm is gated on non-bundled origin exactly like the allowlist cause above.
-    if (!hasOrigin("bundled") && allowedIds.length > 0 && !allowlisted) {
+    // `plugins.allow` omits. The one bypass is a bundled channel owner the operator enabled in
+    // config, and that case already returned true at the top of this function, so no origin
+    // exemption belongs here: `config-activation-shared.ts` fires the bypass only for
+    // `bundled-channel-enabled-in-config`, never for an entry `enabled: true`. Exempting every
+    // bundled origin let an omitted bundled fallback read as explicitly selected, set the
+    // replacement's `preferOver` aside, and validate the operator's config against a schema
+    // startup never loads.
+    if (allowedIds.length > 0 && !allowlisted) {
       return false;
     }
     // A workspace plugin is disabled by default; startup returns "workspace-disabled-by-default"
