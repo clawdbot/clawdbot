@@ -45,16 +45,15 @@
   flex-direction: column;
 }
 
-/* The page headline adopts the column of the page below it; without this
-   top-level hubs and the settings shell can leave the title floating left of
-   the content. */
-.content:has(.settings-page) .content-header {
+/* The page headline adopts the column of the page below it; without this the
+   shell caps headers at 1120px while narrow pages use a 760px column, leaving
+   the title floating left of the content. */
+.shell--settings .content:has(.settings-page) .content-header {
   max-width: 760px;
-  margin-inline: auto;
   padding-inline: var(--space-4);
 }
 
-.content:has(.settings-page--wide) .content-header {
+.shell--settings .content:has(.settings-page--wide) .content-header {
   max-width: 1120px;
 }
 

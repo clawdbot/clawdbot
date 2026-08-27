@@ -23,7 +23,6 @@ export function renderPluginsHubHeader(props: PluginsHubHeaderProps): TemplateRe
       <div class="hub-page-header__tabs">
         ${renderPluginsHubTabs({ active: props.active, onSelect: props.onSelect })}
       </div>
-      <div class="hub-page-header__actions"></div>
     </section>
   `;
 }
