@@ -2304,10 +2304,10 @@ install_node() {
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
-                run_required_step "Installing Node.js" dnf install -y -q nodejs
+                run_required_step "Installing Node.js" dnf install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             else
                 run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_required_step "Installing Node.js" sudo dnf install -y -q nodejs
+                run_required_step "Installing Node.js" sudo dnf install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             fi
         elif command -v yum &> /dev/null; then
             local tmp setup_url
@@ -2316,10 +2316,10 @@ install_node() {
             run_required_step "Downloading NodeSource setup script" download_validated_script "$setup_url" "$tmp"
             if is_root; then
                 run_required_step "Configuring NodeSource repository" bash "$tmp"
-                run_required_step "Installing Node.js" yum install -y -q nodejs
+                run_required_step "Installing Node.js" yum install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             else
                 run_required_step "Configuring NodeSource repository" sudo bash "$tmp"
-                run_required_step "Installing Node.js" sudo yum install -y -q nodejs
+                run_required_step "Installing Node.js" sudo yum install -y -q --disablerepo='*' --enablerepo=nodesource-nodejs nodejs
             fi
         else
             ui_error "Could not detect package manager"
