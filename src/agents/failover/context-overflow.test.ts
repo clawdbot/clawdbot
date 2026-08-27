@@ -51,6 +51,29 @@ describe("isProviderRequestSizeCeilingError", () => {
     ).toBe(false);
   });
 
+  it("does not read an RPM pair when TPM is only mentioned elsewhere", () => {
+    // Groq states the throttled unit in the same clause as its figures. A message whose only
+    // stated pair is denominated in requests, with TPM named somewhere else, would otherwise
+    // compare a request count against a token budget and end a session waiting would clear.
+    expect(
+      isProviderRequestSizeCeilingError(
+        "429 Rate limit reached for model `openai/gpt-oss-120b` in organization `org_x` on " +
+          "requests per minute (RPM): Limit 30, Used 30, Requested 100, please try again in 2s. " +
+          "See the tokens per minute (TPM) guidance for details.",
+      ),
+    ).toBe(false);
+  });
+
+  it("reads the token pair when a request count is stated first", () => {
+    // Both units appear with figures; only the token-denominated pair may decide the ceiling.
+    expect(
+      isProviderRequestSizeCeilingError(
+        "429 Rate limit reached on requests per minute (RPM): Limit 30, Requested 1. " +
+          "Also on tokens per minute (TPM): Limit 8000, Requested 8098.",
+      ),
+    ).toBe(true);
+  });
+
   it.each([
     ["no message", undefined],
     ["a message without a TPM hint", "413 Request too large: Limit 8000, Requested 8098"],

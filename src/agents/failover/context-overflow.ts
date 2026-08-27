@@ -23,9 +23,11 @@ function hasRateLimitTpmHint(raw: string): boolean {
   return matchesContextOverflowMessage(raw, "tpm-rate-limit-hint");
 }
 
-// Both figures must come from one clause. Read separately, a message stating an RPM limit and a
-// TPM request size would pair numbers that describe different units.
-const STATED_TOKEN_SIZES_RE = /\blimit\s+([\d,]+)[^.\n]*?\brequested\s+([\d,]+)/i;
+// Both figures must be denominated in tokens and come from one clause. A message can state an RPM
+// limit and mention TPM elsewhere, and reading the pair on its own would compare a request count
+// against a token budget; requiring the unit to lead the clause keeps the numbers commensurable.
+const STATED_TOKEN_SIZES_RE =
+  /(?:\btpm\b|tokens per minute)[^.\n]*?\blimit\s+([\d,]+)[^.\n]*?\brequested\s+([\d,]+)/i;
 
 function readStatedTokenCount(digits: string | undefined): number | undefined {
   const parsed = Number(digits?.replaceAll(",", ""));
