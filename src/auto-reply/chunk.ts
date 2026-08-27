@@ -400,7 +400,8 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
   let reopenFence: ReturnType<typeof findFenceSpanAt> | undefined;
 
   while (start < text.length) {
-    const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
+    const reopenLine = reopenFence ? resolveFenceReopenLine(reopenFence, normalizedLimit) : "";
+    const reopenPrefix = reopenLine ? `${reopenLine}\n` : "";
     const contentLimit = Math.max(1, normalizedLimit - reopenPrefix.length);
     if (text.length - start <= contentLimit) {
       const finalChunk = `${reopenPrefix}${text.slice(start)}`;
@@ -425,6 +426,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
       if (maxIdxIfNeedNewline <= start) {
         breakIdx = windowEnd;
+        fenceToSplit = undefined;
       } else {
         const minProgressIdx = Math.min(
           text.length,
@@ -450,16 +452,16 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
         if (!pickedNewline) {
           if (minProgressIdx > maxIdxIfAlreadyNewline) {
-            breakIdx = windowEnd;
+            breakIdx = maxIdxIfNeedNewline;
           } else {
             breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);
           }
         }
-      }
 
-      const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
-      fenceToSplit =
-        fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
+        const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
+        fenceToSplit =
+          fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
+      }
     }
 
     const safeBreakIdx = avoidTrailingHighSurrogateBreak(text, start, breakIdx);
@@ -496,6 +498,18 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     start = nextStart;
   }
   return chunks;
+}
+
+function resolveFenceReopenLine(
+  fence: NonNullable<ReturnType<typeof findFenceSpanAt>>,
+  limit: number,
+): string {
+  const budget = Math.floor(limit / 2);
+  if (fence.openLine.length + 1 <= budget) {
+    return fence.openLine;
+  }
+  const markerLine = `${fence.indent}${fence.marker}`;
+  return markerLine.length + 1 <= budget ? markerLine : "";
 }
 
 function skipLeadingNewlines(value: string, start = 0): number {
