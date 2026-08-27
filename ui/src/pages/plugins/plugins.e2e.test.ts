@@ -372,14 +372,6 @@ async function clickRowAction(page: Page, rowSelector: string, buttonName: strin
   await page.locator(rowSelector).getByRole("button", { name: buttonName, exact: true }).click();
 }
 
-async function confirmPluginConsent(page: Page, buttonName: string): Promise<void> {
-  const confirm = page
-    .locator("[data-plugin-consent]")
-    .getByRole("button", { name: buttonName, exact: true });
-  await expect.poll(() => confirm.isEnabled()).toBe(true);
-  await confirm.click();
-}
-
 async function captureScreenshot(page: Page, name: string): Promise<void> {
   if (!updateScreenshots) {
     return;
@@ -656,7 +648,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       await captureScreenshot(page, "artifact-consent-desktop.png");
       await gateway.setMethodResponse("plugins.install", installResult);
       const installCountBeforeConsent = (await gateway.getRequests("plugins.install")).length;
-      await confirmPluginConsent(page, "Install Calendar Plus");
+      const confirm = consent.getByRole("button", { name: "Install Calendar Plus", exact: true });
+      await expect.poll(() => confirm.isEnabled()).toBe(true);
+      await confirm.click();
       expect(
         requestParams(
           await waitForNextRequest(gateway, "plugins.install", installCountBeforeConsent),
