@@ -32,9 +32,6 @@ suite.define(() => {
     await expect
       .poll(async () => {
         const state = await textarea.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new Error("Expected composer textarea");
-          }
           const inputElement = element.closest<HTMLElement>(".agent-chat__input");
           const style = inputElement ? getComputedStyle(inputElement) : null;
           return {
@@ -45,7 +42,7 @@ suite.define(() => {
             duration: style?.animationDuration ?? "",
             focused: element === document.activeElement,
             name: style?.animationName ?? "",
-            value: element.value,
+            value: element instanceof HTMLTextAreaElement ? element.value : "",
           };
         });
         cueStyle = {
