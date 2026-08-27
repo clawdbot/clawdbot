@@ -656,7 +656,7 @@ describe("Pi session catalog", () => {
     const buffers: Buffer[] = [];
     const actualOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
-      if (target !== file || flags !== "r") {
+      if (target !== file) {
         return await actualOpen(target, flags);
       }
       const actualHandle = await actualOpen(target, flags);
@@ -707,7 +707,7 @@ describe("Pi session catalog", () => {
     try {
       await expect(
         readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
-      ).rejects.toThrow("Pi session was not found");
+      ).rejects.toThrow("Pi session is unavailable");
       expect(openFlags).not.toStrictEqual([]);
       expect(openFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
     } finally {
