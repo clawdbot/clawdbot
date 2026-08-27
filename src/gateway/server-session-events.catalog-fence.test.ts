@@ -132,4 +132,51 @@ describe("transcript session-event catalog fencing", () => {
     expect(mocks.loadGatewaySessionRow).not.toHaveBeenCalled();
     expect(broadcastToConnIds).not.toHaveBeenCalled();
   });
+
+  it("keeps an event when an unrelated session changes during catalog loading", async () => {
+    let resolveCatalog: ((value: ModelCatalogEntry[]) => void) | undefined;
+    const loadModelCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          resolveCatalog = resolve;
+        }),
+    );
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map(),
+      loadModelCatalog,
+    });
+
+    const pending = handler({
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "updated",
+    });
+
+    await vi.waitFor(() => expect(loadModelCatalog).toHaveBeenCalledOnce());
+    emitSessionIdentityMutation({
+      kind: "reset",
+      previous: { sessionId: "sess-other", sessionKeys: ["agent:main:other"] },
+      current: { sessionId: "sess-other-next", sessionKeys: ["agent:main:other"] },
+    });
+    resolveCatalog?.([]);
+    await pending;
+
+    expect(mocks.loadGatewaySessionRow).toHaveBeenCalledWith("agent:main:main", {
+      agentId: "main",
+      modelCatalog: [],
+    });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        reason: "updated",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
 });
