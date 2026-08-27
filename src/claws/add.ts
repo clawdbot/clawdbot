@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Existing Claw add lifecycle exceeds the limit; this PR adds a narrow ownership guard. */
 // Applies the package, agent, workspace, and managed-file slices of a consented Claw add plan.
 import type { Stats } from "node:fs";
 import { lstat, mkdir, rmdir } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
-import { transformConfigFileWithRetry } from "../config/config.js";
+import { getRuntimeConfig, transformConfigFileWithRetry } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
@@ -59,6 +60,7 @@ type ClawAddApplyOptions = OpenClawStateDatabaseOptions & {
   resumeRecord?: PersistedClawInstall;
   resumePlan?: ClawAddPlan;
   commitConfig?: ConfigCommit;
+  readConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
   persistRecord?: typeof persistClawInstallRecord;
   deleteRecord?: typeof deleteClawInstallRecord;
   updateRecord?: typeof updateClawInstallRecordStatus;
@@ -137,6 +139,27 @@ function assertWorkspacePathUnchanged(workspace: string): void {
     throw new ClawAddMutationError(
       "workspace_path_changed",
       `Workspace ancestry changed after planning: expected ${JSON.stringify(workspace)}, resolved ${JSON.stringify(canonicalWorkspace)}.`,
+    );
+  }
+}
+
+function assertWorkspaceNotClaimedByAnotherAgent(
+  config: OpenClawConfig,
+  agentId: string,
+  workspace: string,
+): void {
+  const existingAgents = listAgentEntries(config);
+  const configWithPreservedAgents: OpenClawConfig = {
+    ...config,
+    agents: {
+      ...config.agents,
+      entries: Object.fromEntries(existingAgents.map(({ id, ...entry }) => [id, entry])),
+    },
+  };
+  if (findOverlappingWorkspaceAgentIds(configWithPreservedAgents, agentId, workspace).length > 0) {
+    throw new ClawAddMutationError(
+      "workspace_collision",
+      "Workspace " + JSON.stringify(workspace) + " is already assigned to an agent.",
     );
   }
 }
@@ -408,6 +431,40 @@ export async function applyClawAddPlan(
       }
       throw new ClawAddMutationError("provenance_failed", (error as Error).message);
     }
+  }
+
+  try {
+    assertWorkspaceNotClaimedByAnotherAgent(
+      await (options.readConfig ?? (() => getRuntimeConfig()))(),
+      plan.agent.finalId,
+      workspace,
+    );
+  } catch (error) {
+    if (packages.length > 0) {
+      const installStatus = preserveRecordedPhaseOrMarkPartial();
+      return partialResult({
+        plan,
+        installRecord,
+        workspaceCreated,
+        configCommitted,
+        packages,
+        installStatus,
+        error: {
+          code: error instanceof ClawAddMutationError ? error.code : "workspace_claim_check_failed",
+          message: coerceErrorMessage(error),
+        },
+        nowMs: options.nowMs,
+      });
+    }
+    clearUnownedInstallRecord(
+      plan.agent.finalId,
+      ["pending", "partial", "workspace_ready"],
+      options,
+    );
+    if (error instanceof ClawAddMutationError) {
+      throw error;
+    }
+    throw new ClawAddMutationError("workspace_claim_check_failed", coerceErrorMessage(error));
   }
 
   // Seed and attest the consented package bootstrap while the workspace is still

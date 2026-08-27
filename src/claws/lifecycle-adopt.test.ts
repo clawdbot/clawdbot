@@ -219,4 +219,34 @@ describe("applyClawAddPlan workspace adoption", () => {
     expect(installPackages).not.toHaveBeenCalled();
     expect(readInstallRow("worker", root)).toBeUndefined();
   });
+
+  it("rejects a live workspace claim before writing adopted workspace files", async () => {
+    const { source, workspace } = await createPlanSource();
+    await mkdir(workspace, { recursive: true });
+    await writeFile(join(workspace, "AGENTS.md"), "# Agent\n", "utf8");
+    const plan = await buildClawAddPlan({
+      manifest: requireManifest(),
+      source,
+      context: { workspace, adoptExistingWorkspace: true },
+    });
+    expect(plan.blockers).toEqual([]);
+    const seedPackageBootstrap = vi.fn(async () => undefined);
+    const createWorkspaceFiles = vi.fn();
+
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env: stateEnv(source.packageRoot),
+        readConfig: () => ({
+          agents: { entries: { other: { name: "Other", workspace } } },
+        }),
+        seedPackageBootstrap,
+        createWorkspaceFiles,
+      }),
+    ).rejects.toMatchObject({ code: "workspace_collision" });
+
+    expect(seedPackageBootstrap).not.toHaveBeenCalled();
+    expect(createWorkspaceFiles).not.toHaveBeenCalled();
+    expect(readInstallRow("adopt-agent", source.packageRoot)).toBeUndefined();
+  });
 });
