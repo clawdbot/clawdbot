@@ -10,6 +10,7 @@ import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js
 import { SessionManager } from "../../agents/sessions/index.js";
 import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -388,15 +389,26 @@ async function runSkillExperienceReviewInner(
 ): Promise<void> {
   const foregroundPromptContext = candidate.ctx.foregroundPromptContext;
   const workspaceDir = getCanonicalSkillWorkspace() ?? candidate.ctx.workspaceDir;
-  const sessionKey = candidate.ctx.sessionKey;
-  const sessionId = candidate.ctx.sessionId;
+  const foregroundSessionKey = candidate.ctx.sessionKey;
+  const foregroundSessionId = candidate.ctx.sessionId;
   const modelProviderId = candidate.ctx.modelProviderId?.trim();
   const modelId = candidate.ctx.modelId?.trim();
-  if (!workspaceDir || !sessionKey || !sessionId || !modelProviderId || !modelId) {
+  if (
+    !workspaceDir ||
+    !foregroundSessionKey ||
+    !foregroundSessionId ||
+    !modelProviderId ||
+    !modelId
+  ) {
     return;
   }
 
   const runId = `skill-workshop-review:${randomUUID()}`;
+  const reviewSession = resolveInternalSessionEffectsIdentity({
+    agentId: foregroundPromptContext.agentId,
+    incognito: true,
+    runId,
+  });
   const origin = foregroundPromptContext.cronCreatorCallerOrigin;
   const capability = origin ? createCronCreatorAuthorityCapability(runId, origin) : undefined;
   const config = candidate.config ?? getRuntimeConfig();
@@ -404,14 +416,14 @@ async function runSkillExperienceReviewInner(
     remaining: 1,
     readSkillHashes: new Map(),
   };
-  const sessionTarget = await resolveAgentRunSessionTarget({
+  const foregroundSessionTarget = await resolveAgentRunSessionTarget({
     agentId: foregroundPromptContext.agentId,
     config,
-    sessionId,
-    sessionKey,
+    sessionId: foregroundSessionId,
+    sessionKey: foregroundSessionKey,
     missingSessionKey: "resolve-existing",
   });
-  const foregroundSession = SessionManager.open(sessionTarget, workspaceDir);
+  const foregroundSession = SessionManager.open(foregroundSessionTarget, workspaceDir);
   const detachedSession = SessionManager.fromEntries(foregroundSession.getEntries(), workspaceDir);
   const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
   const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
@@ -429,12 +441,12 @@ async function runSkillExperienceReviewInner(
   let outcome: "applied" | "proposed" | "nothing";
   let proposalId: string | undefined;
   let usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number } | undefined;
-  // The warm review reuses the foreground session identity for prompt caching.
-  // Keep every review event and lifecycle transition out of that user-visible session.
+  // The review owns a private runtime identity while the explicit promptCacheKey
+  // keeps provider cache affinity with the foreground transcript it cloned.
   registerAgentRunContext(runId, {
     agentId: foregroundPromptContext.agentId,
-    sessionId,
-    sessionKey,
+    sessionId: reviewSession.sessionId,
+    sessionKey: reviewSession.sessionKey,
     isControlUiVisible: false,
     projectSessionActive: false,
     projectSessionLifecycle: false,
@@ -447,9 +459,8 @@ async function runSkillExperienceReviewInner(
         runEmbeddedAgent({
           ...foregroundPromptContext,
           preparedRunAdmission,
-          sessionId,
-          sessionKey,
-          sessionTarget,
+          sessionId: reviewSession.sessionId,
+          sessionKey: reviewSession.sessionKey,
           sessionManager: detachedSession,
           sessionPersistence: "detached",
           // Never occupy the foreground agent lane after the idle gate opens.
@@ -472,6 +483,7 @@ async function runSkillExperienceReviewInner(
           allowEmptyAssistantReplyAsSilent: true,
           terminalReplyExpectation: "optional",
           toolExecutionAllow: ["skill_workshop"],
+          cleanupBundleMcpOnRunEnd: true,
           disableTrajectory: true,
           skillWorkshopProposalOnly: true,
           skillWorkshopUpdateProposals: true,
@@ -479,10 +491,9 @@ async function runSkillExperienceReviewInner(
           skillWorkshopProposalMutationBudget: proposalMutationBudget,
           skillWorkshopOrigin: {
             agentId: foregroundPromptContext.agentId,
-            sessionKey,
+            sessionKey: foregroundSessionKey,
             ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
           },
-          // The review shares the foreground session, so its MCP runtime stays warm for the next turn.
           verboseLevel: "off",
           suppressToolErrorWarnings: true,
           ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
