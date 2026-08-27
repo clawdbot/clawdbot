@@ -849,6 +849,58 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(streamedText).toContain('{"path":"x"}');
   });
 
+  it("invalidates a cached preceding-context verdict when the earlier block grows (#122513)", async () => {
+    // codex review: an earlier block can itself still be actively streaming and grow
+    // between two candidate probes in a later block, without the content index ever
+    // switching away and back (which would otherwise reset the per-block cache via
+    // beginProtectionBlock). A cache keyed only on "have we checked this block yet"
+    // would reuse a verdict that predates that growth. Block 0 streams "~~~\n" for real
+    // (opening a tilde fence in event order); a first, complete call in block 1 confirms
+    // trust against that. A second candidate in block 1 then arrives with a partial
+    // reporting a LARGER block 0 ("~~~\n~~~\n", closing that same fence in content
+    // order) -- the cache must notice the preceding length changed and re-check, not
+    // reuse the first verdict.
+    const block0First = "~~~\n";
+    const firstCall = "[read]\n{}\n[/read]\n";
+    const secondCandidate = ["[read]", '{"path":"x"}', "[/read]", ""].join("\n");
+    const block0Grown = `${block0First}~~~\n`;
+    const events = await collectNormalizedEvents(
+      [
+        streamTextDelta(block0First, 0),
+        streamTextDelta(firstCall, 1, assistantMessage(textContent(block0First, firstCall))),
+        streamTextDelta(
+          secondCandidate,
+          1,
+          assistantMessage(textContent(block0Grown, `${firstCall}${secondCandidate}`)),
+        ),
+      ],
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: resolveTestFenceRanges,
+      },
+    );
+
+    // A stale cached "trusted" verdict evaluates the second candidate against the
+    // event-order scan, which never saw block 0's second "~~~\n" and so still thinks the
+    // tilde fence from the first "~~~\n" is open -- the real, unfenced call is wrongly
+    // buffered as protected content and (nothing here resolves it) silently vanishes.
+    // Correctly invalidated, the cache re-checks against the grown block 0, sees the
+    // fence actually closed in content order, and the real call is recognized.
+    const streamedText = events
+      .map((event) =>
+        typeof event.delta === "string"
+          ? event.delta
+          : typeof event.content === "string"
+            ? event.content
+            : "",
+      )
+      .join("");
+    expect(streamedText).not.toContain('{"path":"x"}');
+  });
+
   it("preserves candidate bytes after bounded protection history overflows", async () => {
     const opening = `\`\`\`text\n${"x".repeat(1_000_000)}`;
     const candidate = ["[read]", '{"path":"example.txt"}', "[/read]"].join("\n");

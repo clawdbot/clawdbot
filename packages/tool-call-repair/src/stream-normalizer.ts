@@ -489,46 +489,58 @@ function findPotentialCallStart(
   return null;
 }
 
+/** A confirmed preceding-context verdict, keyed by the partial's own reported length. */
+type PrecedingContextVerdict = { precedingLength: number; trusted: boolean };
+
 /**
- * True when `partial` shows different text preceding `contentIndex` than the carried
- * scan tracked. The scan advances in event order; `partial`'s own per-block offsets are
- * in content-index order. These normally agree, but not when a provider interleaves
- * active blocks (an earlier block can stream after a later one) or when an earlier
- * block was never streamed as its own delta at all -- either way the scan's state does
- * not correspond to "everything that precedes this block", so it must not be trusted
- * for a candidate here. Only a check against the partial's own authoritative text, or a
- * full parse, can be.
+ * Decides whether the carried fence-state scan can be trusted for a candidate in
+ * `contentIndex`, reusing a cached verdict from an earlier delta in the same block when
+ * it is still known to apply.
  *
- * A length mismatch alone already proves this (checked first, and cheaply, since it
- * needs no materialized prefix). Matching lengths do not prove agreement, though --
- * interleaved blocks of the same length streamed out of order produce the same tracked
- * length from different actual text (e.g. opposite fence state) -- so a same-length,
- * nonzero prefix still needs a real text comparison. `trackedPrefix` is called lazily:
- * only this rarer case pays for materializing it, and its cost is bounded by the
- * (typically small, fixed) preceding-block size, not by however large the current
- * block's own growing content is.
+ * The scan advances in event order; `partial`'s own per-block offsets are in
+ * content-index order. These normally agree, but not when a provider interleaves active
+ * blocks (an earlier block can stream after a later one), when an earlier block was
+ * never streamed as its own delta at all, or when an earlier block is itself still
+ * actively streaming and grows between two candidate checks in a later block -- so the
+ * scan's state does not correspond to "everything that precedes this block" and must
+ * not be trusted without checking the partial's own reported preceding text.
  *
  * `partial` is optional on every event, so a delta can arrive with none at all -- that
- * proves nothing either way, and returns `undefined` rather than `false`, so a caller
- * caching the verdict for reuse across a block's later deltas knows not to lock in
- * "trusted" from an absence of data; a later delta in the same block that does carry a
- * partial (interleaved content, or simply the first one to include it) still gets checked.
+ * proves nothing either way and, with no cache to fall back on either, defaults to
+ * trusting the scan (there is nothing to contradict it with; it remains the only source
+ * of truth this normalizer itself built, in order).
+ *
+ * A cached verdict is reused only when a later delta's own reported preceding length
+ * (`part.start`) exactly matches the length the cache was validated against -- a
+ * still-evolving earlier block changes that length, invalidating the cache and forcing
+ * a fresh comparison, rather than trusting a verdict that predates the earlier block's
+ * own growth. A length match alone does not otherwise prove agreement -- interleaved
+ * blocks of the same length streamed out of order can produce the same tracked length
+ * from different actual text (e.g. opposite fence state) -- so a fresh, same-length,
+ * nonzero-length comparison still needs a real text comparison. `trackedPrefix` is
+ * called lazily: only an uncached (or invalidated) comparison pays for materializing it,
+ * and its cost is bounded by the (typically small, fixed) preceding-block size, not by
+ * however large the current block's own growing content is.
  */
-function hasUntrackedPrecedingContext(
+function resolvePrecedingContextTrust(
   partial: unknown,
   contentIndex: number,
   trackedLength: number,
   trackedPrefix: () => string,
-): boolean | undefined {
+  cached: PrecedingContextVerdict | undefined,
+): { cache: PrecedingContextVerdict | undefined; trusted: boolean } {
   const candidate = extractStandaloneCandidate(partial);
   const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
   if (!candidate || !part) {
-    return undefined;
+    return { cache: cached, trusted: cached?.trusted ?? true };
   }
-  if (part.start !== trackedLength) {
-    return true;
+  if (cached && cached.precedingLength === part.start) {
+    return { cache: cached, trusted: cached.trusted };
   }
-  return part.start > 0 && candidate.text.slice(0, part.start) !== trackedPrefix();
+  const trusted =
+    part.start === trackedLength &&
+    (part.start === 0 || candidate.text.slice(0, part.start) === trackedPrefix());
+  return { cache: { precedingLength: part.start, trusted }, trusted };
 }
 
 function resolvePartialProtectionCheck(params: {
@@ -1171,11 +1183,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
   let protectionContextOverflow = false;
   let protectionBlockContentIndex: number | undefined;
   let protectionBlockStart = 0;
-  // Whether this block's preceding-context prefix has been validated against the
-  // partial's own content-order text (see hasUntrackedPrecedingContext). Reset per
-  // block so it is derived once and reused for every candidate within it, rather than
-  // re-materializing and re-comparing the same preceding text on every candidate.
-  let protectionBlockPrefixTrusted: boolean | undefined;
+  // This block's cached preceding-context trust verdict (see resolvePrecedingContextTrust),
+  // keyed by the preceding length it was validated against. Reset per block so it starts
+  // fresh for each one, and invalidated within a block if a later delta's partial reports
+  // a different preceding length than the cache was validated against (an earlier block
+  // that is itself still actively streaming can grow between two candidate checks here).
+  let protectionBlockPrefixVerdict: PrecedingContextVerdict | undefined;
   // Carried Markdown block state mirrors the protection context so a candidate delta can
   // skip re-parsing the whole response. `protectionScanAtBlockStart` matches the prefix an
   // authoritative delta uses (context sliced at protectionBlockStart); the live state
@@ -1191,7 +1204,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
     protectionBlockContentIndex = contentIndex;
     protectionBlockStart = protectionContextLength;
     protectionScanAtBlockStart = cloneProtectionScanState(protectionScan);
-    protectionBlockPrefixTrusted = undefined;
+    protectionBlockPrefixVerdict = undefined;
   };
   const truncateProtectionContext = (length: number) => {
     while (protectionContextLength > length) {
@@ -1441,34 +1454,24 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
                 // protectionBlockStart is how much text the scan had tracked (in event order)
                 // when this block began. If the partial's own content-order offset for this
-                // block disagrees, either an earlier block was never streamed as its own delta
-                // or blocks interleaved out of content-index order -- either way the scan's
-                // state does not correspond to this block's actual preceding text and cannot
-                // be trusted here, whatever it claims for this block's own content. The
-                // preceding text a block sees never changes across its own deltas, so a
-                // confirmed verdict is derived once per block (protectionBlockPrefixTrusted,
-                // reset in beginProtectionBlock) instead of re-materializing and re-comparing
-                // it for every candidate the current block's own growing content turns up. A
-                // delta with no partial at all proves nothing, so it is never cached as
-                // "trusted" -- the next candidate in this block gets a fresh chance to confirm
-                // it from a partial that does arrive, rather than locking in a default.
-                if (protectionBlockPrefixTrusted === undefined) {
-                  const untracked = hasUntrackedPrecedingContext(
-                    incomingRecord.partial,
-                    eventContentIndex(incomingRecord),
-                    protectionBlockStart,
-                    () => materializeBoundedPrefix(protectionBlockStart),
-                  );
-                  if (untracked !== undefined) {
-                    protectionBlockPrefixTrusted = !untracked;
-                  }
-                }
-                // No partial ever seen for this block is not evidence against the scan --
-                // there is nothing to contradict it with, so the scan (built only from what
-                // this normalizer itself advanced, in order) stays the sole source of truth
-                // and is trusted by default. Only an explicit mismatch, once confirmed and
-                // cached above, flips this to distrust.
-                const untrackedPrecedingContext = protectionBlockPrefixTrusted === false;
+                // block disagrees, either an earlier block was never streamed as its own delta,
+                // blocks interleaved out of content-index order, or an earlier block is itself
+                // still growing -- either way the scan's state does not correspond to this
+                // block's actual preceding text and cannot be trusted here, whatever it claims
+                // for this block's own content. resolvePrecedingContextTrust caches its
+                // verdict per block (reset in beginProtectionBlock) but invalidates it the
+                // moment a later delta's own reported preceding length changes, so an earlier
+                // block growing mid-stream still gets a fresh comparison rather than reusing a
+                // verdict that predates that growth.
+                const precedingContextTrust = resolvePrecedingContextTrust(
+                  incomingRecord.partial,
+                  eventContentIndex(incomingRecord),
+                  protectionBlockStart,
+                  () => materializeBoundedPrefix(protectionBlockStart),
+                  protectionBlockPrefixVerdict,
+                );
+                protectionBlockPrefixVerdict = precedingContextTrust.cache;
+                const untrackedPrecedingContext = !precedingContextTrust.trusted;
                 let isProtectedAt: ((offset: number) => boolean) | undefined =
                   !untrackedPrecedingContext && options.protectedRangesFenceCompatible
                     ? resolveProtectionFastPath(carriedScan, incoming)
