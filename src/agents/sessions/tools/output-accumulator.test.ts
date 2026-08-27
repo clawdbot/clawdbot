@@ -233,7 +233,9 @@ describe("OutputAccumulator", () => {
     const text = accumulator.append(cp936DirHeader, "stdout") + accumulator.finish();
 
     expect(text).toBe("\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer");
-    expect(accumulator.snapshot().content).toBe("\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer");
+    expect(accumulator.snapshot().content).toBe(
+      "\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer",
+    );
   });
   it("spills tagged streams in decoded delivery order", async () => {
     const accumulator = new OutputAccumulator({

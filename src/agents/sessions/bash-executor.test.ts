@@ -39,8 +39,8 @@ describe("executeBashWithOperations", () => {
 
   it("uses the operation owner's decoder while defaulting injected output to UTF-8", async () => {
     const cp936 = Buffer.from([
-      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65,
-      99, 101, 114,
+      199, 253, 182, 175, 198, 247, 32, 67, 32, 214, 208, 181, 196, 190, 237, 202, 199, 32, 65, 99,
+      101, 114,
     ]);
     const injectedOperations = operationsForChunks([[cp936]]);
     const localOperations = operationsForChunks([[cp936]], () =>
@@ -49,10 +49,15 @@ describe("executeBashWithOperations", () => {
 
     const utf8Result = await executeBashWithOperations("printf output", "/tmp", injectedOperations);
     const windowsResult = await executeBashWithOperations("printf output", "/tmp", localOperations);
-    const explicitResult = await executeBashWithOperations("printf output", "/tmp", injectedOperations, {
-      createTextDecoder: () =>
-        createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
-    });
+    const explicitResult = await executeBashWithOperations(
+      "printf output",
+      "/tmp",
+      injectedOperations,
+      {
+        createTextDecoder: () =>
+          createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+      },
+    );
 
     expect(utf8Result.output).toBe(new TextDecoder().decode(cp936));
     expect(windowsResult.output).toBe("\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer");

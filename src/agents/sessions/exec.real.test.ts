@@ -1,9 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
+import type { TextContent } from "../../llm/types.js";
 import { execCommand } from "./exec.js";
+import { createBashTool, createLocalBashOperations } from "./tools/bash.js";
 
 const cleanupPids = new Set<number>();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -82,4 +86,53 @@ describe("execCommand process-tree cleanup", () => {
       { timeout: 500, interval: 25 },
     );
   }, 12_000);
+});
+
+describe("Windows bash session output", () => {
+  it.runIf(process.platform === "win32")(
+    "proves readable CP936 output and decoded truncated spill through the local tool",
+    async () => {
+      const cp936Bytes =
+        "\\xC7\\xFD\\xB6\\xAF\\xC6\\xF7 C \\xD6\\xD0\\xB5\\xC4\\xBE\\xED\\xCA\\xC7 Acer";
+      const expected = "\u9a71\u52a8\u5668 C \u4e2d\u7684\u5377\u662f Acer";
+      const tool = createBashTool(process.cwd(), {
+        operations: {
+          ...createLocalBashOperations(),
+          createTextDecoder: () =>
+            createWindowsOutputDecoder({ platform: "win32", windowsEncoding: "gbk" }),
+        },
+      });
+      const decodedResult = await tool.execute("windows-cp936", {
+        command: `printf '${cp936Bytes}\\n'`,
+      });
+      const decoded =
+        decodedResult.content.find((item): item is TextContent => item.type === "text")?.text ?? "";
+      expect(decoded).toBe(`${expected}\n`);
+
+      const spillResult = await tool.execute("windows-cp936-spill", {
+        command: `for i in $(seq 1 9000); do printf '${cp936Bytes}\\n'; done`,
+      });
+      const fullOutputPath = (spillResult.details as { fullOutputPath?: string } | undefined)
+        ?.fullOutputPath;
+      expect(fullOutputPath).toBeDefined();
+      const fullOutput = await readFile(fullOutputPath!, "utf8");
+      expect(fullOutput.startsWith(`${expected}\n`)).toBe(true);
+      expect(fullOutput.includes("\ufffd")).toBe(false);
+
+      const utf8Result = await tool.execute("windows-utf8-control", {
+        command: "printf 'UTF8_OK_hello\\n'",
+      });
+      const utf8Output =
+        utf8Result.content.find((item): item is TextContent => item.type === "text")?.text ?? "";
+      expect(utf8Output).toBe("UTF8_OK_hello\n");
+      console.log(`WINDOWS_BASH_PROOF decoded=${decoded.trim()}`);
+      const spillDecoded = fullOutput.startsWith(`${expected}\n`);
+      const replacementCharacter = fullOutput.includes("\ufffd");
+      console.log(
+        `WINDOWS_BASH_PROOF spillDecoded=${spillDecoded} replacementCharacter=${replacementCharacter}`,
+      );
+      console.log(`WINDOWS_BASH_PROOF utf8=${utf8Output.trim()}`);
+      await rm(fullOutputPath!, { force: true });
+    },
+  );
 });
