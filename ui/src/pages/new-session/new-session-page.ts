@@ -481,7 +481,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       submitting,
       pendingPlacement,
       ...this.browser.popoverCallbacks("project"),
-      browserTarget: this.browser.browserTarget,
+      browserOpen: this.browser.browserOpen,
       browserListing: this.browser.browserListing,
       browserLoading: this.browser.browserLoading,
       browserError: this.browser.browserError,
@@ -496,11 +496,8 @@ export class NewSessionPage extends OpenClawLightDomElement {
         this.place.applyFolder(folder, this.browser.browserListing?.path === folder),
       onBaseRefInput: (baseRef) => this.place.setBaseRef(baseRef),
       onWorktreeNameInput: (worktreeName) => this.place.setWorktreeName(worktreeName),
-      onBrowse: (target) =>
-        this.browser.selectGatewayBrowser(
-          target.label,
-          this.place.folder.trim() || this.place.workspacePath(),
-        ),
+      onBrowse: () =>
+        this.browser.selectGatewayBrowser(this.place.folder.trim() || this.place.workspacePath()),
       onBrowserPathDraftChange: (value) => {
         this.browser.browserPathDraft = value;
       },

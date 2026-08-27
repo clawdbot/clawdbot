@@ -62,8 +62,6 @@ export type DraftEnvironment = {
   issues?: RuntimeTargetIssue[];
 };
 
-export type BrowserTarget = { nodeId: string; label: string };
-
 function normalizeTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.trunc(value)

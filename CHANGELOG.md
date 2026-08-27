@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI Gateway labels:** keep the discovered machine name through recovery initialization and refresh open folder-browser labels when name discovery finishes.
 - **Android settings:** keep form fields and actions reachable above the keyboard, and respect bottom system insets without duplicating navigation padding.
 - **Nextcloud Talk diagnostics:** redact reflected credentials before displaying send, reaction, and bot-preflight errors, and suppress incomplete error bodies. (#119976) Thanks @xialonglee.
 - Codex image attachments: decode mixed-case `file://` URLs as local image paths while preserving existing file URL validation and platform behavior. (#121611) Thanks @sunlit-deng.
