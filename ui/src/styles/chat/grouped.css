@@ -898,6 +898,13 @@ img.chat-avatar.chat-avatar--logo {
   color: var(--muted);
 }
 
+.chat-group:has([data-copy-feedback]:not([hidden])) {
+  --chat-footer-disclosure-opacity: 1;
+  --chat-footer-disclosure-pointer-events: auto;
+  --chat-footer-detail-position: static;
+  --chat-persistent-footer-opacity: 1;
+}
+
 .chat-copy-btn__icon {
   display: inline-flex;
   width: 14px;

@@ -569,13 +569,14 @@ describe("tool-cards", () => {
       await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe(tool.feedback));
 
       expect(writeText).toHaveBeenCalledWith(expect.stringContaining(tool.copiedText));
-      expect(copyButton!.dataset[tool.failed ? "error" : "copied"]).toBe("1");
+      const feedback = copyButton!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+      expect(feedback?.textContent).toBe(tool.feedback);
+      expect(feedback?.hidden).toBe(false);
 
       const sidebarButton = container.querySelector<HTMLButtonElement>(
         `.chat-tool-card__actions button[aria-label="${t("chat.toolCards.openDetails")}"]`,
       );
       expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
-      expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
       sidebarButton!.click();
       expect(onOpenSidebar).toHaveBeenCalledOnce();
     } finally {

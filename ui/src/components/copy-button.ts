@@ -11,16 +11,14 @@ export function copyMarkdownLabel(): string {
   return t("chat.actions.copyAsMarkdown");
 }
 
-type CopyButtonOptions = {
-  text: () => string;
-  label?: string;
-  // Chat message footers style their buttons as ghost icons; the .btn chrome
-  // (light-mode background overrides) would outrank those rules and box them.
-  bare?: boolean;
-};
-
 function setButtonLabel(button: HTMLButtonElement, label: string) {
   button.setAttribute("aria-label", label);
+  // Feedback sits beside fixed-size icons; actionable tooltips dismiss on click.
+  const feedback = button.parentElement?.querySelector<HTMLElement>("[data-copy-feedback]");
+  if (feedback) {
+    feedback.hidden = !button.dataset.copied && !button.dataset.error;
+    feedback.textContent = feedback.hidden ? "" : label;
+  }
   // Preserve Lit's marker nodes so a later locale change can rerender this label.
   const visibleLabel = button.querySelector("[data-copy-label]")?.lastChild;
   if (visibleLabel?.nodeType === Node.TEXT_NODE) {
@@ -40,6 +38,9 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   button.dataset.copying = "1";
   button.setAttribute("aria-busy", "true");
   button.disabled = true;
+  delete button.dataset.copied;
+  delete button.dataset.error;
+  setButtonLabel(button, idleLabel);
 
   // Retired buttons must not overwrite a newer copy through the legacy fallback.
   const isCurrent = () => button.isConnected && button.dataset.copyAttempt === attempt;
@@ -52,7 +53,6 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   }
 
   const feedback = copied ? "copied" : "error";
-  delete button.dataset[copied ? "error" : "copied"];
   button.dataset[feedback] = "1";
   const feedbackLabel = t(copied ? "common.copied" : "common.copyFailed");
   setButtonLabel(button, feedbackLabel);
@@ -74,29 +74,30 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   return copied;
 }
 
-function createCopyButton(options: CopyButtonOptions): TemplateResult {
-  const idleLabel = options.label ?? copyMarkdownLabel();
+function createCopyButton(text: string, idleLabel: string, bare = false): TemplateResult {
+  // Chat footers own their ghost chrome; .btn backgrounds would box the icon.
   return html`
     <openclaw-tooltip .content=${idleLabel}>
       <button
-        class=${options.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
+        class=${bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}
         type="button"
         aria-label=${idleLabel}
-        @click=${(event: Event) => void handleCopyButton(event, options.text(), idleLabel)}
+        @click=${(event: Event) => void handleCopyButton(event, text, idleLabel)}
       >
         <span class="chat-copy-btn__icon" aria-hidden="true">
           <span class="chat-copy-btn__icon-copy">${icons.copy}</span>
           <span class="chat-copy-btn__icon-check">${icons.check}</span>
         </span>
       </button>
+      <span data-copy-feedback role="status" hidden></span>
     </openclaw-tooltip>
   `;
 }
 
 export function renderCopyButton(text: string, label?: string): TemplateResult {
-  return createCopyButton({ text: () => text, label });
+  return createCopyButton(text, label ?? copyMarkdownLabel());
 }
 
 export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
-  return createCopyButton({ text: () => markdown, bare: true });
+  return createCopyButton(markdown, copyMarkdownLabel(), true);
 }
