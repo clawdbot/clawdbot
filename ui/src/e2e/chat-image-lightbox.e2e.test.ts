@@ -135,7 +135,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const dialog = page.getByRole("dialog", { name: "Image preview: OpenClaw banner" });
       await dialog.waitFor({ state: "visible" });
       const closeButton = page.getByRole("button", { name: "Close image preview" });
-      const openOriginal = page.getByRole("link", { name: "Open original" });
+      const openOriginal = page.getByRole("link", { name: "Open in new tab" });
       await openOriginal.waitFor({ state: "visible" });
       await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
       const focusIsInsideLightbox = () =>
@@ -167,8 +167,11 @@ describeControlUiE2e("Control UI image lightbox", () => {
         .toBeGreaterThan(0);
       await waitForLightboxAnimations(page);
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
-      expect(desktopBox?.width ?? 0).toBeGreaterThan(1000);
-      expect(desktopBox?.height ?? 0).toBeGreaterThan(700);
+      const viewport = page.viewportSize();
+      expect(desktopBox?.x).toBe(0);
+      expect(desktopBox?.y).toBe(0);
+      expect(desktopBox?.width).toBe(viewport?.width);
+      expect(desktopBox?.height).toBe(viewport?.height);
       const originalPopup = page.waitForEvent("popup");
       await openOriginal.click();
       const originalPage = await originalPopup;

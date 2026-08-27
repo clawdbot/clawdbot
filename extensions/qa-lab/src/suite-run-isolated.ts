@@ -114,7 +114,6 @@ export async function runQaFlowSuiteIsolated(
           concurrency,
           channel: params?.channelId ?? params?.channelDriverSelection?.channel ?? transport.id,
           channelDriver: transportFactoryResult.driver,
-          channelDriverSelection: params?.channelDriverSelection,
           isolatedWorkers: true,
           writeEvidenceFile: false,
           scenarioIds:

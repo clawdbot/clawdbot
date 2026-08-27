@@ -553,11 +553,12 @@ export type ProviderPlugin = {
    */
   loginOAuth?: (callbacks: OAuthLoginCallbacks) => Promise<SessionOAuthCredentials>;
   /**
-   * Legacy auth-profile ids that should be retired by `openclaw doctor`.
+   * Legacy auth-profile ids that generic auth must ignore and `openclaw doctor` should remove.
    *
    * Use this when a provider plugin replaces an older core-managed profile id
    * and wants cleanup/migration messaging to live with the provider instead of
-   * in hardcoded doctor tables.
+   * in hardcoded doctor tables. A runtime-only external CLI profile remains usable by its exact
+   * provider when it intentionally reuses a retired id.
    */
   deprecatedProfileIds?: string[];
   /**

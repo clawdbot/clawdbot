@@ -178,6 +178,14 @@ describe("hooks cli formatting", () => {
     expect(output).toContain("DEMO_HOOK_TOKEN");
   });
 
+  it("keeps the missing hook identifier beside the canonical JSON failure", () => {
+    expect(JSON.parse(formatHookInfo(report, "missing-hook", { json: true }))).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: 'Hook "missing-hook" not found.' },
+      hook: "missing-hook",
+    });
+  });
+
   it("labels hooks status output", () => {
     const output = formatHooksCheck(report, {});
     expect(output).toContain("Hooks Status");

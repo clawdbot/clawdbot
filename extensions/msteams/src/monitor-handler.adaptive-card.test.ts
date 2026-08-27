@@ -282,6 +282,39 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(payload));
   });
 
+  it.each([
+    { activity: "invoke", token: "unknown-token" },
+    { activity: "invoke", token: "" },
+    { activity: "message", token: "unknown-token" },
+    { activity: "message", token: undefined },
+  ])(
+    "does not dispatch a rejected approval submit from a $activity activity",
+    async ({ activity, token }) => {
+      const deps = createDeps();
+      const data = {
+        openclawAction: "approval",
+        ...(token !== undefined ? { token } : {}),
+      };
+
+      if (activity === "invoke") {
+        const handler = createActivityHandler();
+        const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+          run: NonNullable<MSTeamsActivityHandler["run"]>;
+        };
+        await runAdaptiveCardInvoke(registered, {
+          action: { type: "Action.Submit", data },
+        });
+      } else {
+        await runMessageActivity({ value: data, deps });
+      }
+
+      expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(deps.log.info).toHaveBeenCalledWith("msteams approval ignored", {
+        reason: token ? "unknown or expired card token" : "missing card token",
+      });
+    },
+  );
+
   it("routes message activities with submitted card values as message text", async () => {
     const data = { value: "button-submit-value", label: "Submit action" };
 

@@ -544,7 +544,7 @@ extension SettingsProTab {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if self.directRoute == nil {
+            if self.canOpenNotificationsRouteFromApprovals {
                 Button {
                     self.openNotificationsRouteFromApprovals()
                 } label: {

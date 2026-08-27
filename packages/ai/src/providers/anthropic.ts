@@ -291,7 +291,6 @@ async function* iterateAnthropicEvents(
     throw new Error("Attempted to iterate over an Anthropic response with no body");
   }
 
-  let sawMessageStart = false;
   let sawMessageEnd = false;
 
   for await (const sse of Stream.rawEvents(response)) {
@@ -305,9 +304,7 @@ async function* iterateAnthropicEvents(
 
     try {
       const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
-      if (event.type === "message_start") {
-        sawMessageStart = true;
-      } else if (event.type === "message_stop") {
+      if (event.type === "message_stop") {
         sawMessageEnd = true;
       }
       yield event;
@@ -321,7 +318,7 @@ async function* iterateAnthropicEvents(
     }
   }
 
-  if ((sawMessageStart || requireMessageStop) && !sawMessageEnd) {
+  if (requireMessageStop && !sawMessageEnd) {
     throw new Error("Anthropic stream ended before message_stop");
   }
 }
@@ -447,8 +444,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         contentIndex: number;
       }> = [];
       const compactionCapture = createCompactionCapture(output, model, requestOptions);
+      const requireMessageStop =
+        refusalBuffer !== undefined ||
+        (model.provider === "anthropic" && isAnthropicPublicEndpoint(model.baseUrl));
 
-      for await (const event of iterateAnthropicEvents(response, refusalBuffer !== undefined)) {
+      for await (const event of iterateAnthropicEvents(response, requireMessageStop)) {
         if (event.type === "message_start") {
           output.responseId = event.message.id;
           output.responseModel = event.message.model;

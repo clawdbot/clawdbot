@@ -215,6 +215,29 @@ export async function loadStatusScanModuleForTest(
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
     readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: async (readOptions: unknown) => {
+      const result = (await mocks.readBestEffortConfigSnapshot(readOptions)) as {
+        config: OpenClawConfig;
+        sourceConfig: OpenClawConfig;
+        configDiagnostics: { path: string; issues: unknown[] } | null;
+      };
+      return {
+        snapshot: {
+          path: result.configDiagnostics?.path ?? mocks.resolveConfigPath(),
+          exists: false,
+          raw: null,
+          parsed: result.sourceConfig,
+          sourceConfig: result.sourceConfig,
+          resolved: result.sourceConfig,
+          valid: result.configDiagnostics === null,
+          runtimeConfig: result.config,
+          config: result.config,
+          issues: result.configDiagnostics?.issues ?? [],
+          warnings: [],
+          legacyIssues: [],
+        },
+      };
+    },
     resolveGatewayPort: mocks.resolveGatewayPort,
   }));
   vi.doMock("../cli/command-secret-targets.js", () => ({

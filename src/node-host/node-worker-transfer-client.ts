@@ -173,6 +173,7 @@ async function captureManifest(params: {
   workspaceDir: string;
   manifestHome: string;
   baseCommit: string | null;
+  referenceManifestRef: string;
   signal?: AbortSignal;
 }): Promise<string> {
   return (
@@ -185,7 +186,14 @@ async function captureManifest(params: {
         REMOTE_WORKSPACE_MANIFEST_JS,
         params.workspaceDir,
         params.baseCommit ?? "",
-        ...(params.baseCommit ? ["eligible"] : []),
+        ...(process.platform === "win32"
+          ? [
+              params.baseCommit ? "eligible" : "all",
+              params.referenceManifestRef.slice("sha256:".length),
+            ]
+          : params.baseCommit
+            ? ["eligible"]
+            : []),
       ],
       signal: params.signal,
     })
@@ -417,6 +425,26 @@ async function downloadWorkspace(params: {
   });
   const staging = stagingWorkspace.dir;
   try {
+    if (process.platform === "win32") {
+      const published = await runWorkspaceCommand({
+        workspaceDir: staging,
+        homeDir: params.manifestHome,
+        argv: [
+          "node",
+          "-e",
+          REMOTE_WORKSPACE_MANIFEST_JS,
+          staging,
+          manifest.baseCommit ?? "",
+          "publish",
+          params.transfer.manifestRef.slice("sha256:".length),
+        ],
+        input: raw,
+        signal: params.signal,
+      });
+      if (published.trim() !== params.transfer.manifestRef) {
+        throw new Error("workspace transfer manifest publication acknowledgement is invalid");
+      }
+    }
     if (manifest.baseCommit) {
       const packPath = path.join(staging, ".openclaw-base.pack");
       const packStartedAt = performance.now();
@@ -451,7 +479,11 @@ async function downloadWorkspace(params: {
     }
     for (const entry of manifest.entries) {
       const destination = workspacePath(staging, entry.path);
-      if (manifest.baseCommit && (await absoluteEntryMatches(destination, entry))) {
+      const materializedEntry =
+        process.platform === "win32" && entry.type === "file" && entry.mode === 0o755
+          ? { ...entry, mode: 0o644 }
+          : entry;
+      if (manifest.baseCommit && (await absoluteEntryMatches(destination, materializedEntry))) {
         continue;
       }
       await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
@@ -481,6 +513,7 @@ async function downloadWorkspace(params: {
       workspaceDir: staging,
       manifestHome: params.manifestHome,
       baseCommit: manifest.baseCommit,
+      referenceManifestRef: params.transfer.manifestRef,
       signal: params.signal,
     });
     if (observed !== params.transfer.manifestRef) {
@@ -540,6 +573,7 @@ async function uploadWorkspace(params: {
     workspaceDir: params.workspaceDir,
     manifestHome: params.manifestHome,
     baseCommit: base.baseCommit,
+    referenceManifestRef: params.transfer.baseManifestRef,
     signal: params.signal,
   });
   const currentRaw = await fsp.readFile(

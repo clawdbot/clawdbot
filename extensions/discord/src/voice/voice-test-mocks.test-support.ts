@@ -125,9 +125,11 @@ const {
     createConnectionMock: createConnectionMockLocal,
     getVoiceConnectionMock: getVoiceConnectionMockLocal,
     joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
-    entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
-      return undefined;
-    }),
+    entersStateMock: vi.fn(
+      async (_target?: unknown, _state?: string, _timeoutOrSignal?: number | AbortSignal) => {
+        return undefined;
+      },
+    ),
     createAudioResourceMock: vi.fn(),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
@@ -428,6 +430,7 @@ vi.mock("./participant-context.js", async () => {
 
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
+    agent: { runCommandFromIngress: agentCommandMock },
     mediaUnderstanding: {
       transcribeAudioFile: transcribeAudioFileMock,
     },

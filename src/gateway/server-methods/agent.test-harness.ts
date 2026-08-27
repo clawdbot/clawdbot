@@ -6,9 +6,11 @@ import { expect, vi } from "vitest";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { setSubagentRegistryDepsForTest } from "../../agents/subagents/registry/subagent-registry-deps.js";
+import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -44,6 +46,7 @@ const mocks = vi.hoisted(() => ({
     sizeBytes: 0,
   })),
   agentCommand: vi.fn(),
+  agentCommandListeners: new Set<() => void>(),
   clearAgentRunContext: vi.fn(),
   registerAgentRunContext: vi.fn(),
   emitAgentEvent: vi.fn(),
@@ -56,7 +59,7 @@ const mocks = vi.hoisted(() => ({
   resolveAgentExplicitRecipientSession: vi.fn(async () => ({})),
   readAcpSessionMeta: vi.fn<typeof readAcpSessionMeta>(() => undefined),
   listAgentIds: vi.fn(() => ["main"]),
-  loadConfigReturn: {} as Record<string, unknown>,
+  loadConfigReturn: {} as OpenClawConfig,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
   getChannelPlugin: vi.fn(),
@@ -68,6 +71,7 @@ const mocks = vi.hoisted(() => ({
       lastInteractionAt: entry?.lastInteractionAt,
     }),
   ),
+  hasTerminalMainSessionTranscriptNewerThanRegistrySync: vi.fn(() => false),
   lifecycleGeneration: "test-generation",
 }));
 
@@ -75,11 +79,35 @@ export function getAgentTestMocks() {
   return mocks;
 }
 
+function resolveAgentTestConfig(cfg: OpenClawConfig = mocks.loadConfigReturn): OpenClawConfig {
+  if (cfg.agents?.list) {
+    return cfg;
+  }
+  const agentIds = mocks.listAgentIds();
+  if (agentIds.length === 1 && agentIds[0] === "main") {
+    return cfg;
+  }
+  const resolved = {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      list: agentIds.map((id) => ({ id })),
+    },
+  };
+  if (cfg === mocks.loadConfigReturn) {
+    mocks.loadConfigReturn = resolved;
+  }
+  return resolved;
+}
+
 vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadSessionEntry: mocks.loadSessionEntry,
+    loadSessionEntry: (...args: Parameters<typeof actual.loadSessionEntry>) => {
+      const loaded = mocks.loadSessionEntry(...args) as ReturnType<typeof actual.loadSessionEntry>;
+      return { ...loaded, cfg: resolveAgentTestConfig(loaded.cfg) };
+    },
     loadGatewaySessionRow: mocks.loadGatewaySessionRow,
   };
 });
@@ -97,6 +125,8 @@ vi.mock("../../config/sessions.js", async () => {
       return m?.[1] ?? "main";
     },
     resolveExplicitAgentSessionKey: mocks.resolveExplicitAgentSessionKey,
+    hasTerminalMainSessionTranscriptNewerThanRegistrySync:
+      mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync,
     resolveAgentMainSessionKey: ({
       cfg,
       agentId,
@@ -145,18 +175,27 @@ vi.mock("../../sessions/user-turn-transcript.js", async () => {
   };
 });
 
-vi.mock("../../commands/agent.js", () => ({
-  agentCommand: mocks.agentCommand,
-  agentCommandFromGatewayIngress: mocks.agentCommand,
-  agentCommandFromIngress: mocks.agentCommand,
-}));
+vi.mock("../../commands/agent.js", () => {
+  const agentCommand = (...args: Parameters<typeof mocks.agentCommand>) => {
+    const result = mocks.agentCommand(...args);
+    for (const listener of mocks.agentCommandListeners) {
+      listener();
+    }
+    return result;
+  };
+  return {
+    agentCommand,
+    agentCommandFromGatewayIngress: agentCommand,
+    agentCommandFromIngress: agentCommand,
+  };
+});
 
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   // Direct handler tests bypass Gateway startup, so provide the lifecycle fact
   // that production publishes before admitting agent RPCs.
   loadPublishedGatewayReplyDispatchRuntime: async ({ agentId }: { agentId: string }) => ({
     agentId,
-    config: mocks.loadConfigReturn,
+    config: resolveAgentTestConfig(),
     pluginGeneration: { pluginMetadataSnapshot: {} },
   }),
 }));
@@ -176,7 +215,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => resolveAgentTestConfig(),
   };
 });
 
@@ -353,7 +392,7 @@ export const makeContext = (): GatewayRequestContext =>
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
-    getRuntimeConfig: () => mocks.loadConfigReturn,
+    getRuntimeConfig: () => resolveAgentTestConfig(),
   }) as unknown as GatewayRequestContext;
 
 type AgentHandler = NonNullable<typeof agentHandlers.agent>;
@@ -686,7 +725,6 @@ export function setupNewYorkTimeConfig(isoDate: string) {
   vi.useFakeTimers({ toFake: ["Date"] });
   dateOnlyFakeClockActive = true;
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
-  mocks.agentCommand.mockClear();
   mocks.loadConfigReturn = {
     agents: {
       defaults: {
@@ -906,6 +944,29 @@ export async function waitForAgentCommandCall<
   return call as T;
 }
 
+export async function waitForAgentCommandCallAfter<T extends AgentCommandCall = AgentCommandCall>(
+  commandCallCount: number,
+): Promise<T> {
+  if (mocks.agentCommand.mock.calls.length <= commandCallCount) {
+    await new Promise<void>((resolve) => {
+      const onCommand = () => {
+        if (mocks.agentCommand.mock.calls.length <= commandCallCount) {
+          return;
+        }
+        mocks.agentCommandListeners.delete(onCommand);
+        resolve();
+      };
+      mocks.agentCommandListeners.add(onCommand);
+      onCommand();
+    });
+  }
+  const call = mocks.agentCommand.mock.calls[commandCallCount];
+  if (!call) {
+    throw new Error(`expected agentCommand call ${commandCallCount}`);
+  }
+  return call[0] as unknown as T;
+}
+
 export function mockSessionResetSuccess(params: {
   reason: "new" | "reset";
   key?: string;
@@ -1005,6 +1066,13 @@ export function applyGatewaySubagentRegistryTestDeps(
   overrides?: Parameters<typeof setSubagentRegistryDepsForTest>[0],
 ) {
   setSubagentRegistryDepsForTest({
+    // Direct handler tests have no live Gateway owner. Keep registry polling
+    // deterministic so a real connection timeout cannot cross test boundaries.
+    callGateway: (async () => ({
+      status: "ok",
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+    })) as SubagentRegistryDeps["callGateway"],
     loadAgentRuntimePluginRegistryHandle: () => undefined,
     ...overrides,
   });
@@ -1029,6 +1097,8 @@ export const describe0AfterEach0 = () => {
   resetAgentTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
   applyGatewaySubagentRegistryTestDeps();
+  mocks.agentCommand.mockReset();
+  mocks.updateSessionStore.mockReset().mockResolvedValue(undefined);
   mocks.loadConfigReturn = {};
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();
@@ -1048,6 +1118,7 @@ export const describe0AfterEach0 = () => {
         lastInteractionAt: entry?.lastInteractionAt,
       }),
     );
+  mocks.hasTerminalMainSessionTranscriptNewerThanRegistrySync.mockReset().mockReturnValue(false);
   mocks.lifecycleGeneration = "test-generation";
   dateOnlyFakeClockActive = false;
   vi.useRealTimers();

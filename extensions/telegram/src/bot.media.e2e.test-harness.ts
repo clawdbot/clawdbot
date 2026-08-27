@@ -360,4 +360,5 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
     provider: "openai",
     model: "gpt-test",
   })),
+  resolveHumanDelayConfig: vi.fn(() => undefined),
 }));

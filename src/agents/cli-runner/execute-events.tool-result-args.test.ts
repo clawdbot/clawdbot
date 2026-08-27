@@ -40,7 +40,7 @@ function buildContext(runId: string): PreparedCliRunContext {
     normalizedModel: "claude-haiku-4-5",
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
+    claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   } as PreparedCliRunContext;
 }

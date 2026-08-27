@@ -84,7 +84,7 @@ describe("AppSidebar session mutation feedback", () => {
     if (!link) {
       throw new Error(`expected row link for ${key}`);
     }
-    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
   }
 
   async function mountToastHost() {
@@ -143,7 +143,11 @@ describe("AppSidebar session mutation feedback", () => {
       3,
       archivedRow.key,
       { pinned: true },
-      { agentId: "main", deferListRefresh: true },
+      {
+        agentId: "main",
+        expectedSessionId: `session:${archivedRow.key}`,
+        deferListRefresh: true,
+      },
     );
     expect(harness.patchMany).not.toHaveBeenCalled();
     expect(harness.refreshReplacement).toHaveBeenCalledOnce();

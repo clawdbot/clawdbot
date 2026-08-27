@@ -6,7 +6,7 @@ import {
 import { objectFieldEquals, readFixtureLog } from "./tui-pty-harness-fixture-test-support.js";
 
 const slashHelpMarkers =
-  "Slash commands:,/help,/verbose <on|off|full>,/reasoning <on|off|stream>,/goal,/goal start <objective>,/btw <side question>,/queue,/stop,/exit".split(
+  "Slash commands:,/help,/think <max|default>,/verbose <on|off|full>,/reasoning <on|off|stream>,/goal,/goal start <objective>,/btw <side question>,/queue,/stop,/exit".split(
     ",",
   );
 const countHistoryLoads = async (logPath: string) =>
@@ -23,6 +23,7 @@ export async function exerciseTuiCommandSurface(
     env: {
       OPENCLAW_TUI_PTY_COLS: "100",
       OPENCLAW_TUI_PTY_ROWS: "24",
+      ...(surface === "slash-commands" ? { OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "max" } : {}),
       ...(surface === "pickers" ? { OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1" } : {}),
     },
   });
@@ -46,7 +47,8 @@ export async function exerciseTuiCommandSurface(
     if (surface === "pickers") {
       await fixture.run.write("/models\r", { delay: false });
       await fixture.waitForLogEntry((entry) => entry.method === "listModels");
-      await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
+      const pickerRows = await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
+      expect(pickerRows.some((row) => row.includes("loading models..."))).toBe(false);
       await fixture.run.write("\x1b[B\r", { delay: false });
       await fixture.waitForLogEntry(
         (entry) =>

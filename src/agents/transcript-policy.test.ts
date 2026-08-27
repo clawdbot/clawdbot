@@ -123,11 +123,16 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
                 allowSyntheticToolResults: true,
               };
             case "github-copilot":
-              return modelId.includes("claude")
+              return context?.modelApi === "anthropic-messages"
                 ? {
+                    sanitizeMode: "full",
+                    preserveSignatures: true,
+                    repairToolUseResultPairing: true,
+                    validateAnthropicTurns: true,
+                    allowSyntheticToolResults: true,
                     dropThinkingBlocks: true,
                   }
-                : {};
+                : undefined;
             case "mistral":
               return {
                 sanitizeToolCallIds: true,

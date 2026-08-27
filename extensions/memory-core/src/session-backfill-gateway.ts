@@ -98,12 +98,14 @@ function resolveExecutionContext(api: OpenClawPluginApi, agentId: string) {
     throw new InvalidSessionBackfillRequestError(`Unknown agent id "${agentId}".`);
   }
   const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(config, agentId);
+  const pluginConfig = resolvePluginConfigObject(config, "memory-core");
   const remConfig = resolveMemoryRemDreamingConfig({
     cfg: config,
-    pluginConfig: resolvePluginConfigObject(config, "memory-core"),
+    pluginConfig,
   });
   return {
     workspaceDir,
+    ...(pluginConfig ? { pluginConfig } : {}),
     ...(remConfig.timezone !== undefined ? { timezone: remConfig.timezone } : {}),
   };
 }

@@ -54,7 +54,8 @@ vi.mock("../../state/local-onboarding-state.js", () => ({
   readLocalOnboardingStateForConfig: mocks.readLocalOnboardingStateMock,
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   defaultRuntime: mocks.runtime,
 }));
 
@@ -384,6 +385,7 @@ describe("registerSetupCommand", () => {
 
   it.each([
     ["onboarding mode", ["--mode", "remote"]],
+    ["JSON onboarding mode", ["--mode", "remote", "--json"]],
     ["remote Gateway", ["--remote-url", "wss://example.invalid"]],
     ["remote Gateway password", ["--remote-password", "fixture-password"]],
     ["reset", ["--reset"]],
@@ -394,6 +396,19 @@ describe("registerSetupCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(args[0]!));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    if (args.includes("--json")) {
+      expect(runtime.log).toHaveBeenCalledWith(
+        JSON.stringify(
+          {
+            ok: false,
+            phase: "options",
+            message: "--baseline cannot be combined with: --mode.",
+          },
+          null,
+          2,
+        ),
+      );
+    }
     expect(setupCommandMock).not.toHaveBeenCalled();
     expect(setupWizardCommandMock).not.toHaveBeenCalled();
   });
@@ -435,16 +450,30 @@ describe("registerSetupCommand", () => {
     expect(setupCommandMock).not.toHaveBeenCalled();
   });
 
-  it("rejects conflicting custom model input capabilities", async () => {
-    await runCli(["setup", "--custom-image-input", "--custom-text-input"]);
+  it.each([false, true])(
+    "rejects conflicting custom model input capabilities (json: %s)",
+    async (json) => {
+      await runCli([
+        "setup",
+        "--custom-image-input",
+        "--custom-text-input",
+        ...(json ? ["--json"] : []),
+      ]);
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      "Use either --custom-image-input or --custom-text-input, not both.",
-    );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(setupWizardCommandMock).not.toHaveBeenCalled();
-    expect(setupCommandMock).not.toHaveBeenCalled();
-  });
+      const message = "Use either --custom-image-input or --custom-text-input, not both.";
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      if (json) {
+        expect(runtime.log).toHaveBeenCalledWith(
+          JSON.stringify({ ok: false, phase: "options", message }, null, 2),
+        );
+      } else {
+        expect(runtime.log).not.toHaveBeenCalled();
+      }
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(setupCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["not-a-port", "70000"])(
     "rejects invalid --gateway-port %s before onboarding dispatch",

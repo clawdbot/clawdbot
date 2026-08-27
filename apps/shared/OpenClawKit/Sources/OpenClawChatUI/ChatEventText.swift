@@ -12,7 +12,7 @@ public enum OpenClawChatEventText {
 
     private static func assistantText(fromValue value: Any) -> String? {
         if let text = value as? String {
-            return self.trimmed(text)
+            return ChatPayloadDecoding.trimmedNonEmptyString(text)
         }
 
         guard let object = self.dictionary(from: value) else { return nil }
@@ -29,7 +29,7 @@ public enum OpenClawChatEventText {
 
     private static func textContent(from value: Any) -> String? {
         if let text = value as? String {
-            return self.trimmed(text)
+            return ChatPayloadDecoding.trimmedNonEmptyString(text)
         }
 
         let parts: [String] = if let array = value as? [AnyCodable] {
@@ -40,19 +40,19 @@ public enum OpenClawChatEventText {
             self.textContentPart(from: value).map { [$0] } ?? []
         }
 
-        return self.trimmed(parts.joined(separator: "\n"))
+        return ChatPayloadDecoding.trimmedNonEmptyString(parts.joined(separator: "\n"))
     }
 
     private static func textContentPart(from value: Any) -> String? {
         if let text = value as? String {
-            return self.trimmed(text)
+            return ChatPayloadDecoding.trimmedNonEmptyString(text)
         }
         guard let object = self.dictionary(from: value) else { return nil }
         guard ChatMessageVisibleText.isVisibleContentType(
             self.stringValue(object["type"]),
             role: "assistant")
         else { return nil }
-        return self.trimmed(self.stringValue(object["text"]) ?? "")
+        return ChatPayloadDecoding.trimmedNonEmptyString(self.stringValue(object["text"]))
     }
 
     private static func dictionary(from value: Any) -> [String: Any]? {
@@ -71,10 +71,5 @@ public enum OpenClawChatEventText {
             return self.stringValue(wrapped.value)
         }
         return nil
-    }
-
-    private static func trimmed(_ text: String) -> String? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

@@ -1,9 +1,21 @@
 import type { SessionEntry } from "./types.js";
 
-type SqliteLifecycleTargetSnapshot = {
+export type SqliteLifecycleTargetSnapshot = {
   primary: { entry: SessionEntry; key: string } | undefined;
   rows: Array<{ entry: SessionEntry; sessionKey: string }>;
 };
+
+type SqliteSessionEntrySelectionSnapshot = {
+  selected: { entry: SessionEntry; row: { session_key: string } } | undefined;
+  selectedRows: Array<{ entry: SessionEntry; sessionKey: string }>;
+};
+
+class SqliteSessionMutationConflictError extends Error {
+  constructor(operationLabel: string) {
+    super(`SQLite session state changed while preparing ${operationLabel}`);
+    this.name = "SqliteSessionMutationConflictError";
+  }
+}
 
 export function sqliteSessionEntriesEqual(
   left: SessionEntry | undefined,
@@ -27,7 +39,7 @@ export function sqliteSessionEntriesEqual(
   return JSON.stringify(leftEntry) === JSON.stringify(rightEntry);
 }
 
-export function sqliteSessionSnapshotRowsEqual(
+function sqliteSessionSnapshotRowsEqual(
   left: Array<{ entry: SessionEntry; sessionKey: string }>,
   right: Array<{ entry: SessionEntry; sessionKey: string }>,
 ): boolean {
@@ -50,4 +62,30 @@ export function sqliteLifecycleTargetSnapshotsEqual(
     sqliteSessionEntriesEqual(expected.primary?.entry, current.primary?.entry) &&
     sqliteSessionSnapshotRowsEqual(expected.rows, current.rows)
   );
+}
+
+export function assertSessionEntrySelectionUnchanged(
+  expected: SqliteSessionEntrySelectionSnapshot,
+  current: SqliteSessionEntrySelectionSnapshot,
+  operationLabel: string,
+): void {
+  const selectedMatches =
+    expected.selected?.row.session_key === current.selected?.row.session_key &&
+    sqliteSessionEntriesEqual(expected.selected?.entry, current.selected?.entry);
+  if (
+    !selectedMatches ||
+    !sqliteSessionSnapshotRowsEqual(expected.selectedRows, current.selectedRows)
+  ) {
+    throw new SqliteSessionMutationConflictError(operationLabel);
+  }
+}
+
+export function assertLifecycleTargetSnapshotUnchanged(
+  expected: SqliteLifecycleTargetSnapshot,
+  current: SqliteLifecycleTargetSnapshot,
+  operationLabel: string,
+): void {
+  if (!sqliteLifecycleTargetSnapshotsEqual(expected, current)) {
+    throw new SqliteSessionMutationConflictError(operationLabel);
+  }
 }

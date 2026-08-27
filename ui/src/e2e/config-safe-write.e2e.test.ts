@@ -139,6 +139,67 @@ async function capture(page: Page, name: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("restores form values when a failed edit is reverted in Raw mode", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const initialConfig = {
+          laboratory: { endpoint: "saved-api", retryBudget: 2 },
+          tools: {},
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "revert-snapshot"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("saved-api");
+
+        await gateway.deferNext("config.set");
+        await endpoint.fill("discarded-api");
+        await gateway.waitForRequest("config.set");
+        await gateway.rejectDeferred("config.set", {
+          code: "UNAVAILABLE",
+          message: "QA configuration save failed",
+        });
+        const saveIndicator = page.locator("openclaw-settings-save-indicator");
+        await expect.poll(() => saveIndicator.textContent()).toContain("Save failed");
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        await page
+          .locator(".config-raw-field textarea")
+          .fill(JSON.stringify(initialConfig, null, 2));
+        await page.getByRole("button", { name: "Form", exact: true }).click();
+        await endpoint.waitFor();
+        await capture(page, "11-form-after-raw-revert.png");
+        expect.soft(await endpoint.inputValue()).toBe("saved-api");
+
+        const previousSaves = (await gateway.getRequests("config.set")).length;
+        await gateway.deferNext("config.set");
+        await page.getByRole("spinbutton", { name: "Retry budget", exact: true }).fill("3");
+        const save = mutationParams(
+          await gateway.waitForRequest("config.set", { after: previousSaves }),
+        );
+        expect(save.baseHash).toBe("revert-snapshot");
+        expect(JSON.parse(String(save.raw))).toEqual({
+          ...initialConfig,
+          laboratory: { endpoint: "saved-api", retryBudget: 3 },
+        });
+        await gateway.resolveDeferred("config.set");
+        await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
+      },
+    );
+  });
+
   it("edits schema and raw config with guarded set, patch, reload, and apply requests", async () => {
     await suite.withPage(
       {
@@ -244,11 +305,12 @@ suite.define(() => {
         await expect.poll(() => endpoint.inputValue()).toBe("external-api");
 
         const setRequestsBeforeRetry = (await gateway.getRequests("config.set")).length;
+        const retriedSetRequest = gateway.waitForRequest("config.set", {
+          after: setRequestsBeforeRetry,
+        });
         await endpoint.fill("form-api");
-        await expect
-          .poll(async () => (await gateway.getRequests("config.set")).length)
-          .toBe(setRequestsBeforeRetry + 1);
-        const retriedSetParams = mutationParams((await gateway.getRequests("config.set")).at(-1)!);
+        const retriedSetParams = mutationParams(await retriedSetRequest);
+        expect(await gateway.getRequests("config.set")).toHaveLength(setRequestsBeforeRetry + 1);
         expect(retriedSetParams.baseHash).toBe("snapshot-3");
         expect(JSON.parse(String(retriedSetParams.raw))).toMatchObject({
           laboratory: { endpoint: "form-api", retryBudget: 4 },
@@ -272,11 +334,12 @@ suite.define(() => {
         await capture(page, "02-raw-draft.png");
 
         const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
+        const rawSetRequest = gateway.waitForRequest("config.set", {
+          after: setRequestsBeforeRawSave,
+        });
         await rawSave.click();
-        await expect
-          .poll(async () => (await gateway.getRequests("config.set")).length)
-          .toBe(setRequestsBeforeRawSave + 1);
-        const rawSetParams = mutationParams((await gateway.getRequests("config.set")).at(-1)!);
+        const rawSetParams = mutationParams(await rawSetRequest);
+        expect(await gateway.getRequests("config.set")).toHaveLength(setRequestsBeforeRawSave + 1);
         expect(rawSetParams.baseHash).toBe("mock-config-hash-1");
         expect(rawSetParams.raw).toBe(rawDraft);
         await expect

@@ -211,6 +211,7 @@ describe("scanStatus", () => {
       mocks.callGateway.mock.calls.find(([call]) => call?.method === "channels.status")?.[0],
     ).toStrictEqual({
       config: cfg,
+      configPath: mocks.resolveConfigPath(),
       method: "channels.status",
       params: {
         probe: false,
@@ -349,13 +350,17 @@ describe("scanStatus", () => {
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledOnce();
-    expect(firstCallArg(mocks.probeGateway, "probeGateway args")).toStrictEqual({
+    const probeArgs = firstCallArg(mocks.probeGateway, "probeGateway args") as {
+      env?: NodeJS.ProcessEnv;
+    };
+    expect(probeArgs).toMatchObject({
       url: "ws://127.0.0.1:18789",
       config: resolvedConfig,
       auth: {},
       timeoutMs: 2500,
       detailLevel: "presence",
     });
+    expect(probeArgs.env).toBe(process.env);
     expect(
       mocks.callGateway.mock.calls.some(([call]) => {
         return (call as { method?: unknown } | undefined)?.method === "channels.status";

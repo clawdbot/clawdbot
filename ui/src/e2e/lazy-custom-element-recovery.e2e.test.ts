@@ -121,7 +121,13 @@ const focusedCases = [
       sessionKey,
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],
       methodResponses: {
-        "sessions.resolve": { ok: true, key: sessionKey },
+        "sessions.resolve": {
+          ok: true,
+          key: sessionKey,
+          agentId: "main",
+          boardFace: "dashboard",
+          displayName: "Lazy dashboard",
+        },
         "sessions.describe": {
           session: {
             key: sessionKey,

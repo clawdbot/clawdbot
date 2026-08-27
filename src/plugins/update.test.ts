@@ -4665,10 +4665,11 @@ describe("updateNpmInstalledPlugins", () => {
   });
 
   it("updates git installs and records resolved commit metadata", async () => {
+    const installPath = createInstalledPackageDir({ name: "demo", version: "1.3.0" });
     installPluginFromGitSpecMock.mockResolvedValue({
       ok: true,
       pluginId: "demo",
-      targetDir: "/tmp/demo",
+      targetDir: installPath,
       version: "1.3.0",
       extensions: ["index.ts"],
       git: {
@@ -4682,7 +4683,7 @@ describe("updateNpmInstalledPlugins", () => {
     const result = await updatePlugin(
       createGitInstallConfig({
         pluginId: "demo",
-        installPath: "/tmp/demo",
+        installPath,
         spec: "git:github.com/acme/demo@main",
         commit: "abc123",
       }),
@@ -4693,10 +4694,19 @@ describe("updateNpmInstalledPlugins", () => {
     expect(gitInstallCall()?.expectedPluginId).toBe("demo");
     expect(gitInstallCall()?.mode).toBe("update");
     expect(result.changed).toBe(true);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "updated",
+        currentVersion: "1.3.0",
+        nextVersion: "1.3.0",
+        message: "Updated demo: 1.3.0 -> 1.3.0.",
+      },
+    ]);
     expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "git",
       spec: "git:github.com/acme/demo@main",
-      installPath: "/tmp/demo",
+      installPath,
       version: "1.3.0",
       gitUrl: "https://github.com/acme/demo.git",
       gitRef: "main",

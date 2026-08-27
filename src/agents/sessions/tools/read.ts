@@ -5,7 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
-import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -141,6 +141,8 @@ export interface ReadToolOptions {
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
   maxBytes?: number;
+  /** Prepared capability for embedded calls, which carry no extension model context. */
+  modelHasVision?: boolean;
 }
 
 type ReadRenderArgs = {
@@ -177,13 +179,6 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
     end--;
   }
   return lines.slice(0, end);
-}
-
-function getNonVisionImageNote(model: Model | undefined): string | undefined {
-  if (!model || model.input.includes("image")) {
-    return undefined;
-  }
-  return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
 function getOpenClawDocsClassification(
@@ -553,7 +548,11 @@ export function createReadToolDefinition(
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
             let truncated: Parameters<typeof createReadToolDetails>[1];
-            const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+            const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
+            const nonVisionImageNote =
+              modelHasVision === false
+                ? "[Current model does not support images. The image will be omitted from this request.]"
+                : undefined;
             if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
@@ -574,7 +573,10 @@ export function createReadToolDefinition(
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
                 }
-                content = [{ type: "text", text: textNote }, processed.image];
+                content = [{ type: "text", text: textNote }];
+                if (!nonVisionImageNote) {
+                  content.push(processed.image);
+                }
               }
             } else {
               const decodedText =

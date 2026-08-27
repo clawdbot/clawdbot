@@ -722,12 +722,12 @@ describe("plugin status reports", () => {
     ]);
   });
 
-  it("builds inspect reports for every loaded plugin", () => {
+  it("prefers exact plugin ids over display names in individual and all inspect reports", () => {
     setPluginLoadResult({
       plugins: [
         createPluginRecord({
           id: "lca",
-          name: "LCA",
+          name: "microsoft",
           description: "Legacy hook plugin",
           hookCount: 1,
         }),
@@ -743,6 +743,9 @@ describe("plugin status reports", () => {
       hooks: [createCustomHook({ pluginId: "lca", events: ["message"] })],
     });
 
+    expect(expectInspectReport("microsoft").plugin.id).toBe("microsoft");
+    expect(expectInspectReport("Microsoft").plugin.id).toBe("microsoft");
+
     const inspect = buildAllPluginInspectReports();
 
     expect(inspect.map((entry) => entry.plugin.id)).toEqual(["lca", "microsoft"]);
@@ -751,6 +754,82 @@ describe("plugin status reports", () => {
       "text-inference",
       "web-search",
     ]);
+  });
+
+  it.each([
+    {
+      id: "extractor-only",
+      providers: { contracts: { webContentExtractors: ["readability"] } },
+      capabilities: [{ kind: "web-content-extractors", ids: ["readability"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+    {
+      id: "fetch-only",
+      providers: { webFetchProviderIds: ["fetch-only"] },
+      capabilities: [{ kind: "web-fetch", ids: ["fetch-only"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+    {
+      id: "firecrawl",
+      providers: {
+        webFetchProviderIds: ["firecrawl"],
+        webSearchProviderIds: ["firecrawl", "firecrawl-free"],
+      },
+      capabilities: [
+        { kind: "web-fetch", ids: ["firecrawl"] },
+        { kind: "web-search", ids: ["firecrawl", "firecrawl-free"] },
+      ],
+      shape: "hybrid-capability",
+      mode: "hybrid",
+    },
+    {
+      id: "migration-only",
+      providers: { migrationProviderIds: ["importer"] },
+      capabilities: [{ kind: "migration-provider", ids: ["importer"] }],
+      shape: "plain-capability",
+      mode: "plain",
+    },
+  ])(
+    "projects $id capabilities from cold metadata without a hook-only warning",
+    ({ id, providers, capabilities, shape, mode }) => {
+      setSinglePluginLoadResult(createPluginRecord({ id, ...providers }), {
+        hooks: [createCustomHook({ pluginId: id, events: ["message"] })],
+      });
+      const report = buildPluginSnapshotReport({ config: {} });
+      const inspect = expectInspectReport(id, { config: {}, report });
+      expect(inspect).toMatchObject({
+        shape,
+        capabilityMode: mode,
+        capabilityCount: capabilities.length,
+        capabilities,
+        compatibility: [],
+      });
+      expect(buildAllPluginInspectReports({ config: {}, report })).toEqual([inspect]);
+      expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("exposes gateway discovery only after its service is registered", () => {
+    setSinglePluginLoadResult(createPluginRecord({ id: "bonjour" }));
+    const report = buildPluginSnapshotReport({ config: {} });
+    expect(expectInspectReport("bonjour", { config: {}, report })).toMatchObject({
+      shape: "non-capability",
+      capabilityCount: 0,
+      capabilities: [],
+    });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    setSinglePluginLoadResult(
+      createPluginRecord({ id: "bonjour", gatewayDiscoveryServiceIds: ["bonjour"] }),
+    );
+    expect(expectInspectReport("bonjour", { config: {} })).toMatchObject({
+      shape: "plain-capability",
+      capabilityMode: "plain",
+      capabilityCount: 1,
+      capabilities: [{ kind: "gateway-discovery", ids: ["bonjour"] }],
+    });
+    expect(mockInput(loadOpenClawPluginsMock).activate).toBe(false);
   });
 
   it("treats a CLI-command-only plugin as a plain capability", () => {
