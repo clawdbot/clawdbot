@@ -430,10 +430,13 @@ export function resolveEffectiveToolPolicy(params: {
         explicitProfileAlsoAllow,
       );
       const matchesProfile = createToolPolicyMatcher(profilePolicy);
+      // Denied tools are unreachable via alsoAllow (deny wins), so don't advise them (#131102).
+      const denyPolicy = agentPolicy?.deny?.length ? { deny: agentPolicy.deny } : undefined;
+      const matchesDeny = createToolPolicyMatcher(denyPolicy);
       const uncoveredEntries = implicitGrants.entries
         .map((entry) => ({
           section: entry.section,
-          grants: entry.grants.filter((toolName) => !matchesProfile(toolName)),
+          grants: entry.grants.filter((toolName) => !matchesProfile(toolName) && matchesDeny(toolName)),
         }))
         .filter((entry) => entry.grants.length > 0);
       const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);

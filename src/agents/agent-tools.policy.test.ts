@@ -752,6 +752,36 @@ describe("resolveEffectiveToolPolicy", () => {
     }
   });
 
+  it("does not advise alsoAllow for a tool the agent explicitly denies (#131102)", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-agent-tools-policy-test");
+    try {
+      const cfg = {
+        agents: {
+          list: [
+            {
+              id: "sage",
+              tools: {
+                profile: "messaging",
+                exec: { mode: "allowlist" },
+                deny: ["exec"],
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      resolveEffectiveToolPolicy({ config: cfg, agentId: "sage" });
+
+      const warning = await warnLogs.findText('tools policy: profile "messaging"');
+      expect(warning).toContain('(agent "sage")');
+      expect(warning).toContain("configured tool sections (tools.exec)");
+      expect(warning).not.toContain('"exec"');
+      expect(warning).toContain('Add alsoAllow: ["process"]');
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
   it("explicit alsoAllow with exec still grants exec under messaging profile", () => {
     const cfg = {
       tools: {
