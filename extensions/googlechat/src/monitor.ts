@@ -283,15 +283,14 @@ async function processMessageWithPipeline(params: {
   const mediaInputs: ChannelInboundMediaInput[] = attachments.map((attachment) => ({
     contentType: attachment.contentType,
   }));
-  const first = attachments.at(0);
-  if (first) {
+  for (const [index, attachment] of attachments.entries()) {
     try {
-      const attachmentData = await downloadAttachment(first, account, mediaMaxMb, core);
+      const attachmentData = await downloadAttachment(attachment, account, mediaMaxMb, core);
       if (attachmentData) {
-        mediaInputs[0] = {
+        mediaInputs[index] = {
           path: attachmentData.path,
           url: attachmentData.path,
-          contentType: attachmentData.contentType ?? first.contentType,
+          contentType: attachmentData.contentType ?? attachment.contentType,
         };
       }
     } catch (error) {

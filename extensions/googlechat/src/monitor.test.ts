@@ -323,42 +323,26 @@ describe("googlechat monitor inbound space classification", () => {
     expect(runTurn).toHaveBeenCalledOnce();
   });
 
-  it("keeps media-only text empty and carries every native attachment fact", async () => {
+  it("keeps media-only text empty and downloads every available native attachment", async () => {
     const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
-    apiMocks.downloadGoogleChatMedia.mockResolvedValue({
-      buffer: Buffer.from("image"),
-      contentType: "image/png",
-    });
-    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
-      ok: true,
-      commandAuthorized: undefined,
-      effectiveWasMentioned: undefined,
-      groupBotLoopProtection: undefined,
-      groupSystemPrompt: undefined,
-    });
+    apiMocks.downloadGoogleChatMedia
+      .mockResolvedValueOnce({ buffer: Buffer.from("image"), contentType: "image/png" })
+      .mockResolvedValueOnce({ buffer: Buffer.from("document"), contentType: "application/pdf" });
+    saveMediaBuffer
+      .mockResolvedValueOnce({ path: "/tmp/first.png", contentType: "image/png" })
+      .mockResolvedValueOnce({ path: "/tmp/second.pdf", contentType: "application/pdf" });
+    allowGoogleChatMediaSender();
 
     await processGoogleChatTestEvent({
-      event: {
-        type: "MESSAGE",
-        space: { name: "spaces/MEDIA", type: "DM" },
-        message: {
-          name: "spaces/MEDIA/messages/1",
-          sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
-          attachment: [
-            {
-              contentType: "image/png",
-              contentName: "first.png",
-              attachmentDataRef: { resourceName: "media/first" },
-            },
-            { contentType: "application/pdf", contentName: "second.pdf" },
-          ],
-        },
-      },
-      account: {
-        accountId: "work",
-        config: { typingIndicator: "none" },
-        credentialSource: "inline",
-      } as ResolvedGoogleChatAccount,
+      event: createGoogleChatMediaTestEvent({
+        id: "all-attachments",
+        attachments: [
+          { contentType: "image/png", attachmentDataRef: { resourceName: "media/first" } },
+          { contentType: "application/pdf", attachmentDataRef: { resourceName: "media/second" } },
+          { contentType: "text/plain" },
+        ],
+      }),
+      account: googleChatMediaTestAccount,
       config: {},
       runtime: { error: vi.fn(), log: vi.fn() },
       core,
@@ -368,17 +352,25 @@ describe("googlechat monitor inbound space classification", () => {
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ rawBody: "" }),
     );
-    expect(saveMediaBuffer).toHaveBeenCalledOnce();
+    expect(
+      apiMocks.downloadGoogleChatMedia.mock.calls.map(([{ resourceName }]) => resourceName),
+    ).toEqual(["media/first", "media/second"]);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(2);
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         message: { body: "", bodyForAgent: "", rawBody: "", commandBody: "" },
         media: [
           expect.objectContaining({
-            path: "/tmp/googlechat-first.png",
-            url: "/tmp/googlechat-first.png",
+            path: "/tmp/first.png",
+            url: "/tmp/first.png",
             contentType: "image/png",
           }),
-          expect.objectContaining({ contentType: "application/pdf" }),
+          expect.objectContaining({
+            path: "/tmp/second.pdf",
+            url: "/tmp/second.pdf",
+            contentType: "application/pdf",
+          }),
+          expect.objectContaining({ contentType: "text/plain" }),
         ],
       }),
     );
@@ -392,7 +384,7 @@ describe("googlechat monitor inbound space classification", () => {
   it.each([
     { name: "a caption", text: "please summarize this" },
     { name: "no caption", text: "" },
-  ])("keeps $name and every attachment fact when the first file is oversized", async ({ text }) => {
+  ])("keeps $name and later files after an oversized attachment", async ({ text }) => {
     const { buildContext, core, runTurn, saveMediaBuffer } = createInboundClassificationHarness();
     const runtime = { error: vi.fn(), log: vi.fn() };
     const turnAdoptionLifecycle = {
@@ -402,9 +394,12 @@ describe("googlechat monitor inbound space classification", () => {
       onAbandoned: vi.fn(async () => {}),
       abortSignal: new AbortController().signal,
     } satisfies GoogleChatIngressLifecycle;
-    apiMocks.downloadGoogleChatMedia.mockRejectedValue(
-      new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
-    );
+    apiMocks.downloadGoogleChatMedia
+      .mockRejectedValueOnce(
+        new MediaFetchError("max_bytes", "Google Chat media exceeds max bytes (10485760)"),
+      )
+      .mockResolvedValueOnce({ buffer: Buffer.from("image"), contentType: "image/png" });
+    saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/second.png", contentType: "image/png" });
     allowGoogleChatMediaSender(true);
     runTurn.mockImplementation(
       async (params: { turnAdoptionLifecycle?: GoogleChatIngressLifecycle }) => {
@@ -422,7 +417,10 @@ describe("googlechat monitor inbound space classification", () => {
             contentName: "untrusted-filename.pdf",
             attachmentDataRef: { resourceName: "media/oversized" },
           },
-          { contentType: "image/png", contentName: "second.png" },
+          {
+            contentType: "image/png",
+            attachmentDataRef: { resourceName: "media/second" },
+          },
         ],
       }),
       account: googleChatMediaTestAccount,
@@ -438,7 +436,8 @@ describe("googlechat monitor inbound space classification", () => {
     expect(accessMocks.applyGoogleChatInboundAccessPolicy).toHaveBeenCalledWith(
       expect.objectContaining({ rawBody: text }),
     );
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(apiMocks.downloadGoogleChatMedia).toHaveBeenCalledTimes(2);
+    expect(saveMediaBuffer).toHaveBeenCalledOnce();
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         message: {
@@ -449,7 +448,12 @@ describe("googlechat monitor inbound space classification", () => {
         },
         media: [
           expect.objectContaining({ contentType: "application/pdf", kind: "document" }),
-          expect.objectContaining({ contentType: "image/png", kind: "image" }),
+          expect.objectContaining({
+            path: "/tmp/second.png",
+            url: "/tmp/second.png",
+            contentType: "image/png",
+            kind: "image",
+          }),
         ],
       }),
     );
