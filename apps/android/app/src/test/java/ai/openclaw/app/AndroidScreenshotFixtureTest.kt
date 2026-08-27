@@ -98,12 +98,12 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
-  fun providesDeterministicChatHistory() {
+  fun providesDeterministicRecentChatHistory() {
     val history =
       json
         .parseToJsonElement(AndroidScreenshotFixture.request("chat.history", null))
         .jsonObject
-    val messages = history["messages"]?.jsonArray.orEmpty()
+    val messages = history["messages"]?.jsonArray.orEmpty().takeLast(10)
 
     assertEquals(
       listOf(

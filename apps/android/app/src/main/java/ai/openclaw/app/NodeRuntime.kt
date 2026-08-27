@@ -12,6 +12,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatProgressCard
+import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
@@ -2900,12 +2901,17 @@ class NodeRuntime private constructor(
 
   fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
 
-  fun resolveChatQuestion(
-    id: String,
-    answers: Map<String, List<String>>,
-  ) = chat.resolveQuestion(id, answers)
+  fun updateChatQuestionDraft(
+    prompt: ChatQuestionPrompt,
+    update: (ChatQuestionDraft) -> ChatQuestionDraft,
+  ) = chat.updateQuestionDraft(prompt, update)
 
-  fun skipChatQuestion(id: String) = chat.skipQuestion(id)
+  fun resolveChatQuestion(
+    prompt: ChatQuestionPrompt,
+    answers: Map<String, List<String>>,
+  ) = chat.resolveQuestion(prompt, answers)
+
+  fun skipChatQuestion(prompt: ChatQuestionPrompt) = chat.skipQuestion(prompt)
 
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
