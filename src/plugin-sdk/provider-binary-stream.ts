@@ -10,7 +10,6 @@ export function createBoundedProviderBinaryStream(
   // Keep direct reader ownership: transform writer rejection can leak when
   // playback cancellation races overflow.
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined = source.getReader();
-  let cancelPromise: Promise<void> | undefined;
   let releasePromise: Promise<void> | undefined;
   let pendingError: Error | undefined;
   let totalBytes = 0;
@@ -23,19 +22,14 @@ export function createBoundedProviderBinaryStream(
     activeReader.releaseLock();
   };
 
-  const cancelReader = (reason?: unknown): Promise<void> => {
+  const cancelReader = async (reason?: unknown): Promise<void> => {
     const activeReader = reader;
     if (!activeReader) {
-      return Promise.resolve();
+      return;
     }
-    cancelPromise ??= (async () => {
-      try {
-        await activeReader.cancel(reason).catch(() => undefined);
-      } finally {
-        releaseReader(activeReader);
-      }
-    })();
-    return cancelPromise;
+    // Caller-owned request release must be able to abort a retained capture tee.
+    void activeReader.cancel(reason).catch(() => undefined);
+    releaseReader(activeReader);
   };
 
   const stream = new ReadableStream<Uint8Array>({

@@ -8,6 +8,7 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
+  cancelUnreadResponseBody,
   readChunkWithIdleTimeout,
   readResponseTextSnippet,
   readResponseWithLimit,
@@ -430,7 +431,7 @@ async function assertMediaContentLength(params: {
   try {
     length = parseMediaContentLength(params.res.headers.get("content-length"));
   } catch (err) {
-    await discardIgnoredResponseBody(params.res);
+    await cancelUnreadResponseBody(params.res);
     throw new MediaFetchError(
       "http_error",
       `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
@@ -441,23 +442,11 @@ async function assertMediaContentLength(params: {
     return;
   }
   if (length > params.maxBytes) {
-    await discardIgnoredResponseBody(params.res);
+    await cancelUnreadResponseBody(params.res);
     throw new MediaFetchError(
       "max_bytes",
       `Failed to fetch media from ${params.sourceUrl}: content length ${length} exceeds maxBytes ${params.maxBytes}`,
     );
-  }
-}
-
-async function discardIgnoredResponseBody(res: Response): Promise<void> {
-  const body = res.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
   }
 }
 
@@ -539,7 +528,8 @@ async function* responseBodyChunks(
     }
   } finally {
     if (!completed) {
-      await reader.cancel().catch(() => undefined);
+      // Let the file writer close its handle and the request owner abort any capture tee.
+      void reader.cancel().catch(() => undefined);
     }
     try {
       reader.releaseLock();

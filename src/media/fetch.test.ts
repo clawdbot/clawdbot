@@ -1691,6 +1691,49 @@ describe("readRemoteMediaBuffer", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["streamed", "content-length"])(
+    "cleans up %s media overflow before a response clone is released",
+    async (kind) => {
+      const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+      const response = new Response(body.stream, {
+        headers: kind === "content-length" ? { "content-length": "5" } : {},
+      });
+      const capture = response.clone();
+      const subdir = `captured-${kind}`;
+      let completed = false;
+      const operation = saveRemoteMedia({
+        url: "https://example.com/large.bin",
+        fetchImpl: async () => response,
+        lookupFn: makeLookupFn(),
+        maxBytes: 4,
+        subdir,
+      })
+        .catch((error: unknown) => error)
+        .finally(() => {
+          completed = true;
+        });
+      try {
+        await vi.waitFor(() => expect(completed).toBe(true), { timeout: 500 });
+        await expect(operation).resolves.toMatchObject({ code: "max_bytes" });
+        expect(response.body?.locked).toBe(false);
+        expect(body.wasCanceled()).toBe(false);
+        const dir = path.join(tempHome.home, ".openclaw", "media", subdir);
+        await expect(
+          fs.readdir(dir).catch((error: unknown) => {
+            if (hasErrnoCode(error, "ENOENT")) {
+              return [];
+            }
+            throw error;
+          }),
+        ).resolves.toEqual([]);
+      } finally {
+        await capture.body?.cancel();
+        await operation;
+      }
+      expect(body.wasCanceled()).toBe(true);
+    },
+  );
+
   it("retries saveRemoteMedia after a transient fetch failure", async () => {
     const transientError = Object.assign(new TypeError("socket reset"), { code: "ECONNRESET" });
     const fetchImpl = vi
