@@ -36,6 +36,10 @@ type CoreGatewayMethodSpecRow = readonly [
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
+  // talk.config projects the caller's profile accent; without this gate a
+  // client asking during the post-hello GitHub identity sync window would get
+  // the gateway-wide accent instead. Profile-less clients pass through.
+  "talk.config",
   "ui.command",
   "users.linkEmail",
   "users.setAvatar",

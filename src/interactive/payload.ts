@@ -825,15 +825,36 @@ export function normalizeLegacyInteractiveReply(raw: unknown): LegacyInteractive
 /** @deprecated Use normalizeMessagePresentation. */
 export const normalizeInteractiveReply = normalizeLegacyInteractiveReply;
 
-function normalizePresentationBlock(raw: unknown): MessagePresentationBlock | undefined {
+function isPresentationContinuation(raw: unknown): boolean {
+  const record = toRecord(raw);
+  return Boolean(
+    record &&
+    Object.getOwnPropertyDescriptor(record, PRESENTATION_FALLBACK_CONTINUATION)?.value === true,
+  );
+}
+
+function normalizePresentationBlock(
+  raw: unknown,
+  followedByContinuation: boolean,
+): MessagePresentationBlock | undefined {
   const record = toRecord(raw);
   if (!record) {
     return undefined;
   }
   const type = normalizeOptionalLowercaseString(record.type);
   if (type === "text" || type === "context") {
-    const text = normalizeOptionalString(record.text);
-    return text ? { type, text } : undefined;
+    const continuation = isPresentationContinuation(record);
+    // Adapted fragments share one authored paragraph; trimming either side loses
+    // whitespace at the split, and dropping the marker changes fallback layout.
+    const text =
+      (continuation || followedByContinuation) && typeof record.text === "string"
+        ? record.text
+        : normalizeOptionalString(record.text);
+    const block: MessagePresentationBlock | undefined = text ? { type, text } : undefined;
+    if (block && continuation) {
+      Object.defineProperty(block, PRESENTATION_FALLBACK_CONTINUATION, { value: true });
+    }
+    return block;
   }
   if (type === "divider") {
     return { type: "divider" };
@@ -866,8 +887,18 @@ export function normalizeMessagePresentation(raw: unknown): MessagePresentation 
   if (!record) {
     return undefined;
   }
-  const blocks = normalizeList(record.blocks, normalizePresentationBlock);
-  const title = normalizeOptionalString(record.title);
+  const rawBlocks: unknown[] = Array.isArray(record.blocks) ? record.blocks : [];
+  const blocks = rawBlocks.flatMap((block, index) => {
+    const normalized = normalizePresentationBlock(
+      block,
+      isPresentationContinuation(rawBlocks[index + 1]),
+    );
+    return normalized ? [normalized] : [];
+  });
+  const title =
+    isPresentationContinuation(rawBlocks[0]) && typeof record.title === "string"
+      ? record.title
+      : normalizeOptionalString(record.title);
   if (!title && blocks.length === 0) {
     return undefined;
   }
@@ -1129,11 +1160,7 @@ export function renderMessagePresentationFallbackText(params: {
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
       // Generated continuation blocks are bounded native fragments, not new paragraphs.
-      if (
-        Object.getOwnPropertyDescriptor(block, PRESENTATION_FALLBACK_CONTINUATION)?.value ===
-          true &&
-        lines.length
-      ) {
+      if (isPresentationContinuation(block) && lines.length) {
         lines[lines.length - 1] += block.text;
       } else {
         lines.push(block.text);

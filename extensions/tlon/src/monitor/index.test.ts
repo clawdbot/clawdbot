@@ -1,8 +1,12 @@
 // Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -48,7 +52,9 @@ const {
       dmScope: "main",
       sessionKey: "agent:main:main",
     })),
-    resolveEffectiveMessagesConfig: vi.fn(() => ({ responsePrefix: undefined })),
+    resolveEffectiveMessagesConfig: vi.fn((_cfg: OpenClawConfig, _agentId: string) => ({
+      responsePrefix: undefined as string | undefined,
+    })),
     shouldComputeCommandAuthorized: vi.fn(() => false),
   },
   settingsManagerMock: {
@@ -57,6 +63,7 @@ const {
     startSubscription: vi.fn().mockResolvedValue(undefined),
   },
   realUrbitFixture: {
+    config: undefined as OpenClawConfig | undefined,
     enabled: false,
     url: "https://urbit.example.com",
     client: null as {
@@ -90,17 +97,18 @@ vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
 vi.mock("../runtime.js", () => ({
   getTlonRuntime: () => ({
     config: {
-      current: () => ({
-        channels: {
-          tlon: {
-            code: "code",
-            ship: "~zod",
-            url: realUrbitFixture.url,
-            network: { dangerouslyAllowPrivateNetwork: true },
-            ownerShip: "~nec",
+      current: () =>
+        realUrbitFixture.config ?? {
+          channels: {
+            tlon: {
+              code: "code",
+              ship: "~zod",
+              url: realUrbitFixture.url,
+              network: { dangerouslyAllowPrivateNetwork: true },
+              ownerShip: "~nec",
+            },
           },
         },
-      }),
     },
     logging: {
       getChildLogger: () => ({}),
@@ -170,6 +178,7 @@ afterEach(async () => {
     await realClient.close().catch(() => undefined);
   }
   realUrbitFixture.enabled = false;
+  realUrbitFixture.config = undefined;
   realUrbitFixture.url = "https://urbit.example.com";
   realUrbitFixture.client = null;
   await Promise.all(
@@ -442,6 +451,93 @@ it("continues startup after an initial group invite write fails", async () => {
     sseClientMock.scry.mockReset().mockResolvedValue({});
     sseClientMock.poke.mockReset().mockResolvedValue(undefined);
   }
+});
+
+describe("monitorTlonProvider reply prefixes", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  it.each([
+    { name: "global fallback", root: undefined, account: undefined, expected: "[global] reply" },
+    { name: "channel override", root: "[root]", account: undefined, expected: "[root] reply" },
+    { name: "account override", root: "[root]", account: "[account]", expected: "[account] reply" },
+    { name: "empty account override", root: "[root]", account: "", expected: "reply" },
+    { name: "identity", root: "auto", account: undefined, expected: "[Test Bot] reply" },
+    {
+      name: "selected model",
+      root: "[{model}]",
+      account: undefined,
+      expected: "[gpt-5.6-luna] reply",
+    },
+  ])("delivers $name through the shared dispatcher", async ({ name, root, account, expected }) => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+      "openclaw/plugin-sdk/channel-inbound",
+    );
+    const stateDir = tempDirs.make("tlon-prefix-");
+    const controller = new AbortController();
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+    realUrbitFixture.config = {
+      session: { store: join(stateDir, "sessions.json") },
+      agents: { list: [{ id: "main", identity: { name: "Test Bot" } }] },
+      messages: { responsePrefix: "[global]" },
+      channels: {
+        tlon: {
+          code: "code",
+          ship: "~zod",
+          url: realUrbitFixture.url,
+          ownerShip: "~nec",
+          responsePrefix: root,
+          accounts: { default: { responsePrefix: account } },
+          showModelSignature: true,
+        },
+      },
+    };
+    authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+    ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
+    inboundRuntimeMock.buildContext.mockImplementationOnce(actual.buildChannelInboundEventContext);
+    inboundRuntimeMock.resolveEffectiveMessagesConfig.mockImplementationOnce((cfg, agentId) => ({
+      responsePrefix: createChannelMessageReplyPipeline({ cfg, agentId }).responsePrefix,
+    }));
+    inboundRuntimeMock.dispatch.mockImplementationOnce((params) =>
+      actual.dispatchChannelInboundTurn({
+        ...params,
+        // This test observes the native send boundary, not queue persistence.
+        delivery: { ...params.delivery, durable: false },
+        replyResolver: async (_ctx, options) => {
+          options?.onModelSelected?.({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            thinkLevel: "off",
+          });
+          return { text: "reply" };
+        },
+      }),
+    );
+    const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+    try {
+      await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+      const subscription = sseClientMock.subscribe.mock.calls
+        .map(([value]) => value)
+        .find((value) => value.app === "chat");
+      expect(subscription).toBeDefined();
+      await subscription.event({
+        whom: "~nec",
+        id: `dm-prefix-${name}`,
+        response: {
+          add: { essay: { author: "~nec", content: [{ inline: ["hello"] }], sent: Date.now() } },
+        },
+      });
+      const sends = sseClientMock.poke.mock.calls
+        .map(([value]) => value)
+        .filter((value) => value.mark === "chat-dm-action");
+      expect(sends).toHaveLength(1);
+      const text = extractMessageText(sends[0].json.diff.delta.add.memo.content);
+      expect(text.split("\n")[0]).toBe(expected);
+      expect(text).toContain("Generated by");
+      expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      await monitor;
+    }
+  });
 });
 
 describe("monitorTlonProvider inbound media truth", () => {

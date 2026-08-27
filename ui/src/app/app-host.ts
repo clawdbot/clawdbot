@@ -459,6 +459,7 @@ class OpenClawShell
       const runtimeConfig = this.context?.runtimeConfig;
       if (prefs && runtimeConfig) {
         pushServerUiPrefs(runtimeConfig, prefs, {
+          profile: this.context?.gateway.snapshot,
           afterCommit: ({ needsRefresh, retainedLocal }) =>
             this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh, retainedLocal),
         });

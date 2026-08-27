@@ -23,6 +23,7 @@ export async function handleBuzzInbound(params: {
   bus: BuzzBus;
   message: BuzzInboundMessage;
   signal: AbortSignal;
+  assertCurrent: () => void;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const runtime = getBuzzRuntime();
@@ -82,6 +83,8 @@ export async function handleBuzzInbound(params: {
         }
       : undefined,
   });
+  // Admission awaits policy; only the transport owner can confirm membership is still current.
+  params.assertCurrent();
   if (access.ingress.admission !== "dispatch") {
     return;
   }

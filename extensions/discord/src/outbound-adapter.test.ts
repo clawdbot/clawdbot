@@ -4,6 +4,8 @@ import {
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildDiscordComponentMessage } from "./components.builders.js";
+import type { DiscordComponentMessageSpec } from "./components.types.js";
 import {
   createDiscordOutboundHoisted,
   expectDiscordThreadBotSend,
@@ -1050,6 +1052,42 @@ describe("discordOutbound", () => {
       target: { kind: "channel", id: "ch-1" },
     });
   });
+
+  it.each(["title", "text", "context"] as const)(
+    "delivers complete authored %s through native presentation components",
+    async (kind) => {
+      const text = `${"x".repeat(1996)} \n  TAIL_NOT_DELIVERED`;
+      const presentation = adaptMessagePresentationForChannel({
+        capabilities: discordOutbound.presentationCapabilities,
+        presentation:
+          kind === "title" ? { title: text, blocks: [] } : { blocks: [{ type: kind, text }] },
+      });
+      const payload = await discordOutbound.renderPresentation?.({
+        payload: { presentation },
+        presentation,
+        ctx: { cfg: {}, to: "channel:123456", text: "", payload: { presentation } },
+      });
+      if (!payload) {
+        throw new Error("expected native Discord presentation");
+      }
+      await discordOutbound.sendPayload?.({ cfg: {}, to: "channel:123456", text: "", payload });
+      const spec = mockObjectArg(
+        hoisted.sendDiscordComponentMessageMock,
+        "component send",
+        0,
+        1,
+      ) as DiscordComponentMessageSpec;
+      const components = buildDiscordComponentMessage({ spec }).components;
+      const wire = JSON.stringify(components.map((component) => component.serialize()));
+      expect(wire).toContain("TAIL_NOT_DELIVERED");
+      expect(
+        (spec.blocks ?? [])
+          .flatMap((block) => (block.type === "text" ? [block.text.replace(/^-# /u, "")] : []))
+          .join(""),
+      ).toBe(text);
+      expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves disabled presentation buttons through channel adaptation", async () => {
     const adaptedPresentation = adaptMessagePresentationForChannel({

@@ -589,10 +589,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const dispatchStartTime = Date.now();
 
-    const responsePrefix = core.channel.reply.resolveEffectiveMessagesConfig(
-      cfg,
-      route.agentId,
-    ).responsePrefix;
     const humanDelay = resolveHumanDelayConfig(cfg, route.agentId);
     const deliveryTarget = isGroup ? groupChannel : senderShip;
 
@@ -637,6 +633,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       cfg,
       route: { agentId: route.agentId, dmScope: route.dmScope, sessionKey: route.sessionKey },
       ctxPayload,
+      replyPipeline: {},
       delivery: {
         preparePayload: prepareReplyPayload,
         durable: deliveryTarget
@@ -687,7 +684,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         },
       },
       dispatcherOptions: {
-        responsePrefix,
         humanDelay,
       },
       ...(turnAdoptionLifecycle || promptMedia.media.length > 0 ? { replyOptions } : {}),

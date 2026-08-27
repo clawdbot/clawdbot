@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { SkillSnapshot } from "../skills/types.js";
+import { bindAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
@@ -280,5 +281,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   }
   options.recordToolPrepStage?.("shell-tools");
 
+  base.forEach((tool) =>
+    bindAgentToolActionDescriptor(tool, { family: "data", operation: "filesystem" }),
+  );
+  shell.forEach((tool) =>
+    bindAgentToolActionDescriptor(tool, { family: "tool", operation: "process" }),
+  );
   return [...base, ...shell];
 }

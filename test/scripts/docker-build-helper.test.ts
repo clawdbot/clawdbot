@@ -3882,10 +3882,10 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
 
     expectTextToIncludeAll(runner, [
       "OPENCLAW_DOCKER_ALL_LANES=codex-on-demand",
-      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR=/tmp/openclaw-prepublish-plugin-registry",
       "source scripts/e2e/lib/prepublish-plugin-registry.sh",
-      "openclaw_prepublish_plugin_registry_start",
-      "OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_REQUIRED_PACKAGES_JSON='[\"@openclaw/codex\"]'",
+      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      "openclaw_prepublish_plugin_registry_start_mounted",
+      "'[\"@openclaw/codex\"]'",
     ]);
     expectTextToIncludeAll(registryHelper, [
       'OPENCLAW_NPM_REGISTRY_DIST_TAGS="$dist_tags"',
@@ -3896,6 +3896,20 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     );
     expect(runner.indexOf("\nconfigure_plugin_registry\n")).toBeLessThan(
       runner.indexOf("\nopenclaw onboard --non-interactive"),
+    );
+  });
+
+  it("reuses the candidate registry lifecycle for channel onboarding", () => {
+    const runner = readFileSync(NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH, "utf8");
+
+    expectTextToIncludeAll(runner, [
+      'source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"',
+      "openclaw_prepublish_plugin_registry_configure_docker_args",
+      "openclaw_prepublish_plugin_registry_start_mounted",
+      "'[\"@openclaw/codex\"]'",
+    ]);
+    expect(runner.indexOf("openclaw_prepublish_plugin_registry_start_mounted")).toBeLessThan(
+      runner.indexOf("\nopenclaw_e2e_install_package"),
     );
   });
 
@@ -4744,6 +4758,29 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
       '-v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"',
       '-v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"',
       '-v "$harness_root/test/helpers:/app/test/helpers:ro"',
+    ]);
+
+    const script = repoRootShell`
+export DOCKER_E2E_HARNESS_ROOT_DIR=/trusted-harness
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+docker_e2e_harness_mount_args
+for ((index = 1; index < \${#DOCKER_E2E_HARNESS_ARGS[@]}; index += 2)); do
+  printf "%s\\n" "\${DOCKER_E2E_HARNESS_ARGS[$index]}"
+done
+`;
+    const mounts = execFileSync("bash", ["-lc", script], { encoding: "utf8" }).trim().split("\n");
+
+    expect(mounts).toEqual([
+      "/trusted-harness/scripts/e2e:/app/scripts/e2e:ro",
+      "/trusted-harness/scripts/lib:/app/scripts/lib:ro",
+      "/trusted-harness/packages/gateway-client/src:/app/packages/gateway-client/src:ro",
+      "/trusted-harness/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro",
+      "/trusted-harness/packages/normalization-core/src:/app/packages/normalization-core/src:ro",
+      "/trusted-harness/tsconfig.json:/app/tsconfig.json:ro",
+      "/trusted-harness/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro",
+      "/trusted-harness/test/helpers:/app/test/helpers:ro",
+      "/trusted-harness/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro",
+      "/trusted-harness/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro",
     ]);
   });
 

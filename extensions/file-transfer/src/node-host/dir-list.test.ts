@@ -67,11 +67,6 @@ describe("handleDirList — happy path", () => {
       await fs.mkdir(replacement);
       await fs.writeFile(path.join(approved, "approved.txt"), "approved");
       await fs.writeFile(path.join(replacement, "secret.txt"), "secret");
-      await Promise.all(
-        Array.from({ length: 5000 }, (_, index) =>
-          fs.writeFile(path.join(approved, `f-${String(index).padStart(4, "0")}`), ""),
-        ),
-      );
       await fs.symlink(approved, current);
       const approvedStats = await fs.stat(approved, { bigint: true });
 
@@ -80,40 +75,50 @@ describe("handleDirList — happy path", () => {
         expectedCanonicalPath: approved,
         expectedDevice: String(approvedStats.dev),
         expectedInode: String(approvedStats.ino),
-        maxEntries: 5001,
+        maxEntries: 10,
         offset: 0,
       });
-      const child = spawn(command[0]!, command.slice(1), {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      // Retarget after the real chdir, before the unchanged worker checks and
+      // enumerates its bound directory. Polling /proc can miss the entire child.
+      const retargetAfterBinding = `(() => {
+        const fs = require("node:fs");
+        const chdir = process.chdir;
+        process.chdir = (directory) => {
+          chdir(directory);
+          process.chdir = chdir;
+          fs.unlinkSync(${JSON.stringify(current)});
+          fs.symlinkSync(${JSON.stringify(replacement)}, ${JSON.stringify(current)});
+        };
+      })();`;
+      const child = spawn(
+        command[0]!,
+        [command[1]!, retargetAfterBinding + command[2]!, ...command.slice(3)],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
       const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
       child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       const exit = new Promise<number | null>((resolve, reject) => {
         child.once("error", reject);
-        child.once("exit", resolve);
+        child.once("close", resolve);
       });
-
-      let observedBoundCwd = false;
-      for (let attempt = 0; attempt < 200 && child.exitCode === null; attempt += 1) {
-        const cwd = await fs.readlink(`/proc/${child.pid}/cwd`).catch(() => "");
-        if (cwd === approved) {
-          observedBoundCwd = true;
-          break;
+      try {
+        expect(await exit, Buffer.concat(stderr).toString("utf8")).toBe(0);
+        expect(await fs.readlink(current)).toBe(replacement);
+        const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
+          entries: Array<{ name: string }>;
+        };
+        expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
+        expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
         }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 1);
-        });
+        await exit.catch(() => undefined);
       }
-      expect(observedBoundCwd).toBe(true);
-      await fs.unlink(current);
-      await fs.symlink(replacement, current);
-
-      expect(await exit).toBe(0);
-      const result = JSON.parse(Buffer.concat(stdout).toString("utf8")) as {
-        entries: Array<{ name: string }>;
-      };
-      expect(result.entries.some((entry) => entry.name === "approved.txt")).toBe(true);
-      expect(result.entries.some((entry) => entry.name === "secret.txt")).toBe(false);
     },
   );
 
