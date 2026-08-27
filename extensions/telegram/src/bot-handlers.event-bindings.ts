@@ -84,15 +84,24 @@ export function createTelegramEventBindings({
       }
 
       const chatId = membership.chat.id;
+      const threadSpec = resolveTelegramThreadSpec({
+        isGroup: true,
+        isForum: membership.chat.is_forum === true,
+      });
       const currentCfg = telegramDeps.getRuntimeConfig();
       const telegramCfg = resolveTelegramAccount({ cfg: currentCfg, accountId }).config;
-      const { groupConfig } = params.resolveTelegramGroupConfig(chatId, undefined, currentCfg);
+      const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
+        chatId,
+        threadSpec.id,
+        currentCfg,
+      );
       const groupPolicyAccess = evaluateTelegramGroupPolicyAccess({
         isGroup: true,
         chatId,
         cfg: currentCfg,
         telegramCfg,
         groupConfig,
+        topicConfig,
         effectiveGroupAllow: normalizeAllowFrom(),
         resolveGroupPolicy: params.resolveGroupPolicy,
         enforcePolicy: true,
@@ -101,12 +110,15 @@ export function createTelegramEventBindings({
         requireSenderForAllowlistAuthorization: false,
         checkChatAllowlist: true,
       });
-      const roomAllowed = groupConfig?.enabled !== false && groupPolicyAccess.allowed;
+      const roomAllowed =
+        groupConfig?.enabled !== false &&
+        topicConfig?.enabled !== false &&
+        groupPolicyAccess.allowed;
       const inviter = membership.from;
       const inviterLabel =
         [inviter.first_name, inviter.last_name].filter(Boolean).join(" ") || inviter.username;
 
-      await reportChannelRoomJoin({
+      const outcome = await reportChannelRoomJoin({
         cfg: currentCfg,
         channel: "telegram",
         accountId,
@@ -117,7 +129,8 @@ export function createTelegramEventBindings({
           accountId,
           chatId,
           isGroup: true,
-          threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+          threadSpec,
+          topicAgentId: topicConfig?.agentId,
         }).route,
         inviterLabel,
         roomAllowed,
@@ -132,6 +145,12 @@ export function createTelegramEventBindings({
           };
         },
       });
+      if (outcome.kind === "failed") {
+        recordTelegramMessageProcessingResult({
+          kind: "failed-retryable",
+          error: new Error(outcome.reason),
+        });
+      }
     });
   };
 

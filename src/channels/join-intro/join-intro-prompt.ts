@@ -1,3 +1,5 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 export type ChannelJoinedRoomContext = {
   /** Human room name, e.g. "#deploys" or "Design Team". */
   title?: string;
@@ -11,9 +13,8 @@ export type ChannelJoinedRoomContext = {
   historyUnavailable?: boolean;
 };
 
-// Roughly 3K snapshot tokens. Characterizing a room needs enough traffic to see recurring
-// topics, and this turn runs once per room lifetime rather than on every message, so the
-// budget buys grounding quality instead of recurring context cost.
+// Keep enough history to show recurring room topics without unbounded context.
+// This is a UTF-16 code-unit cap; token usage varies by language.
 const CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS = 12_000;
 
 function formatChannelJoinRoomSnapshot(params: {
@@ -38,7 +39,9 @@ function formatChannelJoinRoomSnapshot(params: {
     roomFacts.push("Earlier room messages cannot be read on this platform.");
   }
 
-  let snapshot = roomFacts.join("\n").slice(0, CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
+  const metadata = truncateUtf16Safe(roomFacts.join("\n"), CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
+  const messageHeader = "\nRecent room messages:\n";
+  let remaining = CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS - metadata.length - messageHeader.length;
   const recentMessages: string[] = [];
   for (const message of (context.recentMessages ?? []).toReversed()) {
     const text = message.text.trim();
@@ -46,30 +49,22 @@ function formatChannelJoinRoomSnapshot(params: {
       continue;
     }
     const line = `${message.sender?.trim() || "Participant"}: ${text}`;
-    const messageHeader = recentMessages.length === 0 ? "\nRecent room messages:\n" : "\n";
-    const remaining =
-      CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS - snapshot.length - messageHeader.length;
     if (remaining <= 0) {
       break;
     }
     if (line.length > remaining) {
       if (recentMessages.length === 0) {
-        recentMessages.unshift(line.slice(0, remaining));
+        recentMessages.unshift(truncateUtf16Safe(line, remaining));
       }
       break;
     }
     recentMessages.unshift(line);
-    snapshot += messageHeader + line;
+    remaining -= line.length + 1;
   }
 
-  if (recentMessages.length > 0) {
-    const metadata = roomFacts.join("\n").slice(0, CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS);
-    return `${metadata}\nRecent room messages:\n${recentMessages.join("\n")}`.slice(
-      0,
-      CHANNEL_JOIN_INTRO_MAX_SNAPSHOT_CHARS,
-    );
-  }
-  return snapshot || "No room details or readable message history were provided.";
+  return recentMessages.length > 0
+    ? `${metadata}${messageHeader}${recentMessages.join("\n")}`
+    : metadata || "No room details or readable message history were provided.";
 }
 
 export function buildChannelJoinIntroPrompt(params: {

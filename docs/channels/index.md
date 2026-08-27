@@ -70,8 +70,7 @@ there, grounded in what that platform can actually show it.
 `channels.<channel>.joinIntro: false`, or override a single account with
 `channels.<channel>.accounts.<accountId>.joinIntro`. Resolution order is the
 account value, then the channel value, then the default of `true`. There is no
-per-room switch, because a room is only configurable after the bot has already
-joined it. Only Discord, Slack, and Telegram accept this option; other channels
+per-room introduction switch. Only Discord, Slack, and Telegram accept this option; other channels
 reject it rather than accepting a setting they never read.
 
 **What it reads.** Core requests up to 100 recent messages plus room metadata,
@@ -88,15 +87,17 @@ When history is unavailable or unreadable, the introduction is still posted from
 room metadata alone and says what it can see rather than inventing activity.
 
 **Where it posts.** Slack and Telegram introduce in the room that was joined.
+Slack excludes direct messages and group DMs. Telegram forum introductions use
+the General topic's access policy and configured agent.
 Discord joins a server rather than a channel, so it uses the system channel when
-it can both view and send there, otherwise the first text channel that qualifies;
+it can both view and send there and channel policy allows it, otherwise the first text channel that qualifies;
 if no channel qualifies, it records a skip instead of posting.
 
 **How often.** Once per room. A durable claim is recorded per channel, account,
 and room with a 90-day lifetime, so reconnects and gateway restarts do not repeat
-an introduction. Discord additionally ignores server-available events older than
-five minutes, so restarting never mass-introduces into servers the bot already
-belonged to. A re-invite after the claim expires introduces again.
+an introduction. Discord additionally ignores server-available events when the
+bot's native join timestamp is older than five minutes, avoiding introductions
+for longstanding memberships. A re-invite after the claim expires introduces again.
 
 **Safety.** Room titles, topics, pinned text, and message history are third-party
 content, so they are wrapped as untrusted external content and the introduction

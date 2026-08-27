@@ -666,7 +666,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
 <AccordionGroup>
   <Accordion title="Introductions when joining a server">
-    When the bot joins an allowed Discord server, OpenClaw posts one room-specific introduction. It prefers the server's system channel when the bot can view and send messages there; otherwise, it uses the first text channel with both **View Channel** and **Send Messages** permissions. If no eligible channel exists, no introduction is sent.
+    When the bot joins an allowed Discord server, OpenClaw posts one room-specific introduction. It prefers the server's system channel when channel policy allows it and the bot can view and send messages there; otherwise, it uses the first policy-allowed text channel with both **View Channel** and **Send Messages** permissions. If no eligible channel exists, no introduction is sent.
 
     Introductions use the channel name and topic, plus recent messages when available. Reading earlier messages also requires **Read Message History**; when that permission is missing, OpenClaw still introduces itself using channel metadata instead of failing.
 

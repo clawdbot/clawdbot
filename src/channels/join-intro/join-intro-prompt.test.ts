@@ -23,6 +23,22 @@ describe("buildChannelJoinIntroPrompt", () => {
     expect(snapshot?.indexOf("message-98")).toBeLessThan(snapshot?.indexOf("message-99") ?? -1);
   });
 
+  it.each([
+    { name: "room metadata", context: { title: `#a${"🙂".repeat(6_000)}` } },
+    {
+      name: "the newest message",
+      context: { title: "#a", recentMessages: [{ text: "🙂".repeat(6_000) }] },
+    },
+  ])("preserves Unicode when truncating $name", ({ context }) => {
+    const prompt = buildChannelJoinIntroPrompt({ context });
+    const snapshot = prompt.split("\n\nRoom context:\n")[1];
+
+    expect(snapshot?.length).toBeLessThanOrEqual(12_000);
+    expect(snapshot).toContain("🙂");
+    // In Unicode mode, this range matches only unpaired surrogate code units.
+    expect(/[\uD800-\uDFFF]/u.test(prompt)).toBe(false);
+  });
+
   it("grounds unreadable room history in visible room facts and asks what the room needs", () => {
     const prompt = buildChannelJoinIntroPrompt({
       context: { title: "Design Team", purpose: "Brand review", historyUnavailable: true },

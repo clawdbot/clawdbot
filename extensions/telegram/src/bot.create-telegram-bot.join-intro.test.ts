@@ -1,5 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  ensureTelegramMessageProcessingResult,
+  runWithTelegramSpooledReplayUpdate,
+  runWithTelegramUpdateProcessingFrame,
+} from "./bot-processing-outcome.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 
 type ReportChannelRoomJoin =
@@ -25,6 +30,7 @@ function createMembershipContext(params?: {
   newStatus?: "left" | "member";
   memberId?: number;
   contextBotId?: number;
+  isForum?: boolean;
 }) {
   const member = {
     id: params?.memberId ?? telegramBotInfoForTest.id,
@@ -36,6 +42,7 @@ function createMembershipContext(params?: {
       id: TELEGRAM_GROUP_CHAT_ID,
       type: params?.chatType ?? "supergroup",
       title: "Incident Response",
+      is_forum: params?.isForum,
     },
     from: { id: 12345, is_bot: false, first_name: "Sam", last_name: "Rivera" },
     date: 1736380800,
@@ -61,7 +68,7 @@ function registerJoinHandler(config: OpenClawConfig) {
 
 describe("Telegram group join introductions", () => {
   beforeEach(() => {
-    reportChannelRoomJoinMock.mockClear();
+    reportChannelRoomJoinMock.mockReset().mockResolvedValue({ kind: "posted" });
   });
 
   it("reports the bot's native group join with metadata-only room context", async () => {
@@ -99,13 +106,66 @@ describe("Telegram group join introductions", () => {
       roomAllowed: true,
       route: { agentId: "main" },
     });
-    await expect(params.resolveRoomContext({ messageLimit: 30 })).resolves.toEqual({
+    await expect(params.resolveRoomContext({ messageLimit: 100 })).resolves.toEqual({
       title: "Incident Response",
       purpose: "Coordinate production incidents",
       pinned: "Start with the incident checklist",
       historyUnavailable: true,
     });
     expect(getChatSpy).toHaveBeenCalledWith(TELEGRAM_GROUP_CHAT_ID);
+  });
+
+  it("keeps a failed introduction retryable for durable ingress", async () => {
+    const handler = registerJoinHandler({
+      channels: { telegram: { groupPolicy: "open" } },
+    });
+    reportChannelRoomJoinMock.mockResolvedValueOnce({
+      kind: "failed",
+      reason: "provider unavailable",
+    });
+    const context = createMembershipContext();
+
+    const { result } = await runWithTelegramUpdateProcessingFrame(() =>
+      runWithTelegramSpooledReplayUpdate(context.update, async () => {
+        await handler(context);
+        ensureTelegramMessageProcessingResult({ kind: "completed" });
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "failed-retryable",
+      error: expect.objectContaining({ message: "provider unavailable" }),
+    });
+  });
+
+  it("routes a forum introduction through the General topic's configured agent", async () => {
+    const handler = registerJoinHandler({
+      agents: { ownership: "explicit", list: [{ id: "main" }, { id: "triage" }] },
+      bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }],
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            [String(TELEGRAM_GROUP_CHAT_ID)]: {
+              topics: { "1": { agentId: "triage" } },
+            },
+          },
+        },
+      },
+    });
+
+    await handler(createMembershipContext({ isForum: true }));
+
+    expect(reportChannelRoomJoinMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliverTo: String(TELEGRAM_GROUP_CHAT_ID),
+        roomAllowed: true,
+        route: expect.objectContaining({
+          agentId: "triage",
+          sessionKey: expect.stringContaining(":topic:1"),
+        }),
+      }),
+    );
   });
 
   it.each([
@@ -144,17 +204,42 @@ describe("Telegram group join introductions", () => {
         groups: { "-1009999999999": { enabled: true } },
       },
     },
-  ])("passes a rejected conversation to the shared owner for $name", async ({ config }) => {
-    const handler = registerJoinHandler({ channels: { telegram: config } });
+    {
+      name: "a disabled General forum topic",
+      isForum: true,
+      config: {
+        groupPolicy: "open" as const,
+        groups: {
+          [String(TELEGRAM_GROUP_CHAT_ID)]: { topics: { "1": { enabled: false } } },
+        },
+      },
+    },
+    {
+      name: "disabled General forum topic policy",
+      isForum: true,
+      config: {
+        groupPolicy: "open" as const,
+        groups: {
+          [String(TELEGRAM_GROUP_CHAT_ID)]: {
+            topics: { "1": { groupPolicy: "disabled" as const } },
+          },
+        },
+      },
+    },
+  ])(
+    "passes a rejected conversation to the shared owner for $name",
+    async ({ config, isForum }) => {
+      const handler = registerJoinHandler({ channels: { telegram: config } });
 
-    await handler(createMembershipContext());
+      await handler(createMembershipContext({ isForum }));
 
-    expect(reportChannelRoomJoinMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: String(TELEGRAM_GROUP_CHAT_ID),
-        roomAllowed: false,
-      }),
-    );
-    expect(getChatSpy).not.toHaveBeenCalled();
-  });
+      expect(reportChannelRoomJoinMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          conversationId: String(TELEGRAM_GROUP_CHAT_ID),
+          roomAllowed: false,
+        }),
+      );
+      expect(getChatSpy).not.toHaveBeenCalled();
+    },
+  );
 });

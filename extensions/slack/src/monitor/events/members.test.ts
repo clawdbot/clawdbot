@@ -184,7 +184,7 @@ describe("registerSlackMemberEvents", () => {
     const request = memberMocks.reportJoin.mock.calls[0]?.[0] as Parameters<
       typeof import("openclaw/plugin-sdk/channel-join-intro-runtime").reportChannelRoomJoin
     >[0];
-    await expect(request.resolveRoomContext({ messageLimit: 30 })).resolves.toEqual({
+    await expect(request.resolveRoomContext({ messageLimit: 100 })).resolves.toEqual({
       title: "#deploys",
       purpose: "Coordinate production deployments\nCurrent release: 42",
       recentMessages: [
@@ -194,7 +194,7 @@ describe("registerSlackMemberEvents", () => {
     });
     expect(readHistory).toHaveBeenCalledWith({
       channel: "C1",
-      limit: 30,
+      limit: 100,
       latest: undefined,
       oldest: undefined,
     });
@@ -251,7 +251,7 @@ describe("registerSlackMemberEvents", () => {
     const request = memberMocks.reportJoin.mock.calls[0]?.[0] as Parameters<
       typeof import("openclaw/plugin-sdk/channel-join-intro-runtime").reportChannelRoomJoin
     >[0];
-    await expect(request.resolveRoomContext({ messageLimit: 30 })).resolves.toEqual({
+    await expect(request.resolveRoomContext({ messageLimit: 100 })).resolves.toEqual({
       title: "#general",
       purpose: undefined,
     });
@@ -270,13 +270,48 @@ describe("registerSlackMemberEvents", () => {
     );
   });
 
-  it("never introduces the bot into a direct-message conversation", async () => {
-    await runMemberCase({
-      overrides: { dmPolicy: "open" },
-      event: makeMemberEvent({ channel: "D1", user: "U_BOT" }),
+  it.each([
+    { name: "direct message", channelId: "D1", channelType: "im" as const },
+    { name: "group direct message", channelId: "G1", channelType: "mpim" as const },
+  ])(
+    "never introduces the bot into a $name with native member-event channel types",
+    async ({ channelId, channelType }) => {
+      await runMemberCase({
+        overrides: { dmPolicy: "open", channelType },
+        event: {
+          ...makeMemberEvent({ channel: channelId, user: "U_BOT" }),
+          channel_type: channelId[0],
+        },
+      });
+
+      expect(memberMocks.reportJoin).not.toHaveBeenCalled();
+    },
+  );
+
+  it("skips a self-join when lookup failure leaves the conversation type unknown", async () => {
+    const harness = initSlackHarness({ channelType: "mpim" });
+    harness.ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
+    harness.ctx.accountId = "default";
+    harness.ctx.resolveChannelName = vi.fn(async () => ({}));
+    harness.ctx.runtime.log = vi.fn();
+    registerSlackMemberEvents({ ctx: harness.ctx });
+    const handler = harness.getHandler("member_joined_channel");
+    if (!handler) {
+      throw new Error("expected Slack member joined handler");
+    }
+
+    await handler({
+      event: {
+        ...makeMemberEvent({ channel: "G1", user: "U_BOT" }),
+        channel_type: "G",
+      },
+      body: { event_id: "Ev-self-unknown-type" },
     });
 
     expect(memberMocks.reportJoin).not.toHaveBeenCalled();
+    expect(harness.ctx.runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("reason=channel-type-unavailable"),
+    );
   });
 
   it("does not track mismatched events", async () => {
@@ -385,6 +420,53 @@ describe("registerSlackMemberEvents", () => {
       expect.objectContaining({ teamId: "T111" }),
     );
     expect(resolveUserName).toHaveBeenCalledWith("U1", expect.objectContaining({ teamId: "T222" }));
+  });
+
+  it("qualifies enterprise self-join room and delivery targets by listener workspace", async () => {
+    const harness = initSlackHarness({ channelType: "channel" });
+    harness.ctx.cfg = { channels: { slack: { groupPolicy: "open" } } };
+    harness.ctx.accountId = "default";
+    harness.ctx.installationIdentity = {
+      kind: "enterprise",
+      apiAppId: "A_GRID",
+      enterpriseId: "E_GRID",
+    };
+    harness.ctx.resolveSlackSystemEventRoute = (input) => ({
+      agentId: "main",
+      sessionKey: `session:${input.eventScope?.teamId}`,
+    });
+    registerSlackMemberEvents({ ctx: harness.ctx });
+    const handler = harness.getHandler("member_joined_channel");
+    if (!handler) {
+      throw new Error("expected Slack member joined handler");
+    }
+
+    for (const teamId of ["T111", "T222"]) {
+      await handler({
+        event: makeMemberEvent({ channel: "C1", user: "U_BOT" }),
+        body: { api_app_id: "A_GRID", event_id: `Ev-self-join-${teamId}` },
+        context: {
+          isEnterpriseInstall: true,
+          enterpriseId: "E_GRID",
+          teamId,
+        } as AllMiddlewareArgs["context"],
+        client: { token: `listener-${teamId}` } as AllMiddlewareArgs["client"],
+      });
+    }
+
+    expect(memberMocks.reportJoin.mock.calls.map(([request]) => request)).toEqual([
+      expect.objectContaining({
+        conversationId: "team:T111:C1",
+        deliverTo: "team:T111:channel:C1",
+        route: { agentId: "main", sessionKey: "session:T111" },
+      }),
+      expect.objectContaining({
+        conversationId: "team:T222:C1",
+        deliverTo: "team:T222:channel:C1",
+        route: { agentId: "main", sessionKey: "session:T222" },
+      }),
+    ]);
+    expect(memberMocks.enqueue).not.toHaveBeenCalled();
   });
 
   it("rejects enterprise member events without validated listener scope", async () => {
