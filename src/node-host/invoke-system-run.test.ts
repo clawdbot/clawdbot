@@ -839,6 +839,43 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   });
 
+  it("gives mac binding-integrity denials renewal guidance, not policy relaxation", async () => {
+    // The mac host revalidates approved cwd/script snapshots with the same
+    // infra as the local path and returns the binding-denial message through
+    // an approval-required host response; parity says those teach renewal.
+    const drift = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: approval cwd changed before execution",
+          reason: "approval-required",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      drift.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: approval cwd changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
+      true,
+    );
+
+    const operand = await runMacSystemInvoke({
+      runViaMacAppExecHost: async () => ({
+        ok: false as const,
+        error: {
+          code: "POLICY",
+          message: "SYSTEM_RUN_DENIED: approval script operand changed before execution",
+          reason: "approval-required",
+        },
+      }),
+    });
+    expectInvokeErrorMessage(
+      operand.sendInvokeResult,
+      "SYSTEM_RUN_DENIED: approval script operand changed before execution — the approved binding no longer matches this execution; request approval again for the current command",
+      true,
+    );
+  });
+
   it("does not append the escalation hint to screen-recording permission denials", async () => {
     // The fix for a missing Screen Recording permission is granting the macOS
     // permission, not adjusting exec policy — the hint would misdirect.

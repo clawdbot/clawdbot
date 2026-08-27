@@ -1067,13 +1067,27 @@ async function executeSystemRunPhase(
         return;
       }
     } else if (!response.ok) {
+      const hostReason = response.error.reason ?? "";
+      const hostMessage = response.error.message;
+      // Structured binding-integrity failures come back through an
+      // approval-required host response carrying the binding-denial message
+      // (the mac host revalidates the approved cwd/script snapshots with the
+      // same infra); they teach renewal, not policy relaxation — parity with
+      // the local binding path.
+      const macBindingFailure =
+        normalizeDeniedReason(hostReason) === "approval-required" &&
+        (hostMessage === APPROVAL_CWD_DRIFT_DENIED_MESSAGE ||
+          hostMessage === APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE ||
+          hostMessage === APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE);
       await sendSystemRunDenied(opts, phase.execution, {
-        reason: normalizeDeniedReason(response.error.reason),
-        message: response.error.message,
+        reason: normalizeDeniedReason(hostReason),
+        message: hostMessage,
         // Freeform host-authored messages (cancelled prompt, temporarily
         // unavailable approval store, permission prompts) carry no policy
         // guarantee; the host's structured policy verdicts do.
-        suppressEscalationHint: !MAC_HOST_POLICY_OWNED_REASONS.has(response.error.reason ?? ""),
+        suppressEscalationHint:
+          !macBindingFailure && !MAC_HOST_POLICY_OWNED_REASONS.has(hostReason),
+        ...(macBindingFailure ? { escalationOwner: "binding" as const } : {}),
       });
       return;
     } else {
