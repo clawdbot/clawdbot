@@ -10,6 +10,7 @@ import {
 import type {
   OpenKeyedStoreOptions,
   PluginDoctorStateMigrationContext,
+  PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -41,6 +42,7 @@ import {
 } from "./src/polls.js";
 import {
   makeMSTeamsSsoTokenStoreKey,
+  MSTEAMS_MAX_SSO_TOKENS,
   MSTEAMS_SSO_TOKENS_NAMESPACE,
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
@@ -261,6 +263,105 @@ describe("msteams doctor state migration", () => {
     expect(result.warnings.join("\n")).not.toContain(token.token);
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
   });
+
+  it.each([
+    { scenario: "zero writes", writeLimit: 0, extraLegacy: 0, existing: false },
+    { scenario: "partial writes", writeLimit: 1, extraLegacy: 0, existing: false },
+    { scenario: "evicted imported token", extraLegacy: 1, existing: false },
+    { scenario: "evicted pre-existing token", extraLegacy: 0, existing: true },
+    { scenario: "complete import", extraLegacy: 0, existing: false },
+  ])(
+    "checks SSO survivors before archiving: $scenario",
+    async ({ writeLimit, extraLegacy, existing }) => {
+      const filePath = path.join(stateDir, "msteams-sso-tokens.json");
+      const tokens = Array.from({ length: MSTEAMS_MAX_SSO_TOKENS + extraLegacy }, (_, index) => ({
+        connectionName: "conn",
+        userId: `user-${index}`,
+        token: `test-token-${index}`,
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      }));
+      const source = JSON.stringify({
+        version: 1,
+        tokens: Object.fromEntries(tokens.map((token) => [token.userId, token])),
+      });
+      await fs.writeFile(filePath, source);
+      const context = createDoctorContext(env);
+      const store = context.openPluginStateKeyedStore<MSTeamsSsoStoredToken>({
+        namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
+        maxEntries: MSTEAMS_MAX_SSO_TOKENS,
+      });
+      if (existing) {
+        await store.register(makeMSTeamsSsoTokenStoreKey("conn", "existing"), {
+          ...tokens[0]!,
+          userId: "existing",
+        });
+      }
+      const migration = migrationById("msteams-sso-tokens-json-to-plugin-state");
+      const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
+      let writes = 0;
+      const result = await migration.migrateLegacyState({
+        ...params,
+        context: {
+          openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> {
+            const target = context.openPluginStateKeyedStore<T>(options);
+            return {
+              ...target,
+              registerIfAbsent: async (...args) =>
+                writeLimit === undefined || writes++ < writeLimit
+                  ? target.registerIfAbsent(...args)
+                  : false,
+            };
+          },
+        },
+      });
+      expect(await store.entries()).toHaveLength(writeLimit ?? MSTEAMS_MAX_SSO_TOKENS);
+      if (writeLimit !== undefined || extraLegacy || existing) {
+        await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
+        await expect(fs.access(`${filePath}.migrated`)).rejects.toThrow();
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([
+          expect.stringContaining("failed to retain every required entry"),
+        ]);
+        await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
+        return;
+      }
+
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toEqual([
+        expect.stringContaining(`Migrated ${tokens.length} Microsoft Teams SSO token entries`),
+        expect.stringContaining("Archived Microsoft Teams SSO-token legacy source"),
+      ]);
+      expect(new Map((await store.entries()).map(({ key, value }) => [key, value]))).toEqual(
+        new Map(
+          tokens.map((token) => [
+            makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
+            token,
+          ]),
+        ),
+      );
+      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+      await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+      await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+        changes: [],
+        warnings: [],
+      });
+
+      // A restored source must converge without replacing a newer canonical token.
+      const newerToken = { ...tokens[0]!, token: "test-newer-token" };
+      const key = makeMSTeamsSsoTokenStoreKey(newerToken.connectionName, newerToken.userId);
+      await store.register(key, newerToken);
+      await fs.writeFile(filePath, source);
+      const rerun = await migration.migrateLegacyState(params);
+      expect(rerun.warnings).toEqual([]);
+      expect(rerun.changes).toEqual([
+        expect.stringContaining("Migrated 0 Microsoft Teams SSO token entries"),
+        expect.stringContaining("Removed already-archived Microsoft Teams SSO-token legacy source"),
+      ]);
+      await expect(store.lookup(key)).resolves.toEqual(newerToken);
+      await expect(fs.access(filePath)).rejects.toThrow();
+      await expect(fs.readFile(`${filePath}.migrated`, "utf8")).resolves.toBe(source);
+    },
+  );
 
   it("imports delegated OAuth tokens into plugin state before archiving the file", async () => {
     const filePath = path.join(stateDir, "msteams-delegated.json");

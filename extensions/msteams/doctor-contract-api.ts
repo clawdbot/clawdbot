@@ -475,6 +475,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         namespace: MSTEAMS_SSO_TOKENS_NAMESPACE,
         maxEntries: MSTEAMS_MAX_SSO_TOKENS,
       });
+      const requiredKeys = new Set((await store.entries()).map((entry) => entry.key));
       let imported = 0;
       let skipped = 0;
       for (const token of Object.values(state.tokens)) {
@@ -483,22 +484,30 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           skipped++;
           continue;
         }
-        const didImport = await store.registerIfAbsent(
-          makeMSTeamsSsoTokenStoreKey(normalized.connectionName, normalized.userId),
-          normalized,
-        );
-        if (didImport) {
+        const key = makeMSTeamsSsoTokenStoreKey(normalized.connectionName, normalized.userId);
+        requiredKeys.add(key);
+        if (await store.registerIfAbsent(key, normalized)) {
           imported++;
         }
       }
-      changes.push(
-        `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} SSO token ${imported === 1 ? "entry" : "entries"} -> plugin state`,
-      );
       if (skipped > 0) {
         warnings.push(
           `Skipped ${skipped} malformed ${MSTEAMS_PLUGIN_ID} SSO token ${skipped === 1 ? "entry" : "entries"} during migration`,
         );
       }
+      // Later inserts can evict earlier or pre-existing tokens. Keep the source
+      // retryable until every required key survives the entire import.
+      const retainedKeys = new Set((await store.entries()).map((entry) => entry.key));
+      const missing = [...requiredKeys].filter((key) => !retainedKeys.has(key)).length;
+      if (missing > 0) {
+        warnings.push(
+          `Incomplete ${MSTEAMS_PLUGIN_ID} SSO token migration: plugin state failed to retain every required entry (${missing} missing); left legacy source in place`,
+        );
+        return { changes, warnings };
+      }
+      changes.push(
+        `Migrated ${imported} ${MSTEAMS_PLUGIN_ID} SSO token ${imported === 1 ? "entry" : "entries"} -> plugin state`,
+      );
       await archiveLegacyStateSource({
         filePath,
         label: `${MSTEAMS_PLUGIN_ID} SSO-token`,
