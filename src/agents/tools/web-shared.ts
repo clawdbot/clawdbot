@@ -53,7 +53,7 @@ export function readCache<T>(
     return null;
   }
   const now = asDateTimestampMs(Date.now());
-  if (now === undefined || now > entry.expiresAt) {
+  if (now === undefined || now >= entry.expiresAt) {
     cache.delete(key);
     return null;
   }

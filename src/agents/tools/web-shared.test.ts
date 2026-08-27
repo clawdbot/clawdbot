@@ -68,6 +68,7 @@ describe("web cache TTL", () => {
     { ttlMs: 60_000, ageMs: 59_999, hit: true },
     { ttlMs: 60_000, ageMs: 60_000, hit: false },
     { ttlMs: 900_000, ageMs: 60_000, hit: true },
+    { ttlMs: 1_800_000, ageMs: 900_000, hit: false },
     { ttlMs: 1_800_000, ageMs: 900_001, hit: false },
   ])("bounds reuse by current TTL $ttlMs at age $ageMs", ({ ttlMs, ageMs, hit }) => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);

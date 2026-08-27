@@ -561,6 +561,11 @@ every provider. xAI credentials are always required.
 it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
 public xAI endpoint (`https://api.x.ai/v1`).
 
+`plugins.entries.xai.config.xSearch.cacheTtlMinutes` controls OpenClaw's local
+`x_search` result cache. Set it to `0` to bypass reads and writes. A shorter TTL
+limits reuse of existing entries; a longer TTL does not extend their original
+expiry.
+
 ### x_search parameters
 
 | Parameter                    | Description                                            |
