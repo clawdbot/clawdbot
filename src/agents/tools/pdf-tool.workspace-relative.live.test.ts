@@ -8,7 +8,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as pdfNativeProviders from "./pdf-native-providers.js";
 import { withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const maybeNative =
@@ -16,32 +15,10 @@ const maybeNative =
     ? describe
     : describe.skip;
 
-maybeNative("PDF tool on a configured live provider", () => {
+describe("PDF tool on a configured live provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
-
-  it("answers a workspace-relative read_pdf with the document's marker via a real model", async () => {
-    const baseUrl = process.env.EVIDENCE_LLM_BASE_URL_ANTHROPIC!;
-    const markerValue = "evidence-live-90210";
-    await withTempPdfAgentDir(async (agentDir) => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-evidence-"));
-      try {
-        await fs.mkdir(path.join(workspaceDir, "docs"), { recursive: true });
-        const bytes = Buffer.from(
-          "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +
-            "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
-            "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 100]" +
-            "/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj\n" +
-            "4 0 obj<</Length 140>>stream\nBT /F1 14 Tf 10 50 Td (CONFIGURED-MARKER: " +
-            markerValue +
-            ") Tj ET\nendstream endobj\n" +
-            "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF",
-          "utf8",
-        );
-        await fs.writeFile(path.join(workspaceDir, "docs", "evidence.pdf"), bytes);
-        vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf");
-        const tool = (await import("./pdf-tool.js")).createPdfTool({
 
   it("answers a workspace-relative read_pdf with the document's marker via a real model", async () => {
     const baseUrl = process.env.EVIDENCE_LLM_BASE_URL_ANTHROPIC!;
@@ -92,8 +69,8 @@ maybeNative("PDF tool on a configured live provider", () => {
           throw new Error("expected PDF tool");
         }
 
-        // Runner cwd stays at the repo root; only workspaceDir anchors the
-        // relative reference.
+        // The runner cwd stays wherever the harness started; only
+        // options.workspaceDir may anchor the relative reference.
         const result = await tool.execute("t1", {
           prompt: "Report the exact CONFIGURED-MARKER value inside this PDF and nothing else.",
           pdf: "docs/evidence.pdf",
