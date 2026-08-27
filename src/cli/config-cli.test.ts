@@ -169,7 +169,7 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
     const hotReasons = changedPaths.filter(
       (changedPath) =>
         !restartReasons.includes(changedPath) &&
-        (changedPath.startsWith("agents.list.") ||
+        (changedPath.startsWith("agents.entries.") ||
           changedPath.startsWith("agents.defaults.models.") ||
           changedPath.startsWith("models.") ||
           changedPath.startsWith("plugins.")),
@@ -620,7 +620,7 @@ describe("config cli", () => {
     it("preserves existing config keys when setting a new value", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [{ id: "main" }, { id: "oracle", workspace: "~/oracle-workspace" }],
+          entries: { main: {}, oracle: { workspace: "~/oracle-workspace" } },
         },
         gateway: { port: 18789 },
         tools: { allow: ["group:fs"] },
@@ -978,18 +978,17 @@ describe("config cli", () => {
       ]);
     });
 
-    it("normalizes agent-list model refs before writing config mutations", async () => {
+    it("normalizes per-agent model refs before writing config mutations", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [
-            {
-              id: "tester",
+          entries: {
+            tester: {
               model: { primary: "google/gemini-3-pro-preview" },
               models: {
                 "google/gemini-3-pro-preview": { alias: "gemini" },
               },
             },
-          ],
+          },
         },
       };
       setSnapshot(resolved, resolved);
@@ -997,7 +996,7 @@ describe("config cli", () => {
       await runConfigSet("gateway.port", "18790");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const agent = firstWrittenConfig().agents?.list?.[0];
+      const agent = firstWrittenConfig().agents?.entries?.tester;
       expect(agent?.model).toEqual({ primary: "google/gemini-3.1-pro-preview" });
       expect(agent?.models).toEqual({
         "google/gemini-3.1-pro-preview": { alias: "gemini" },
@@ -2101,7 +2100,7 @@ describe("config cli", () => {
       expect(Array.isArray(written.channels?.telegram?.groups)).toBe(false);
     });
 
-    it("still creates arrays for schema-backed numeric list indexes", async () => {
+    it("canonicalizes schema-backed numeric agent list indexes before writing", async () => {
       setConfigMutationShapeSchema();
       const resolved: OpenClawConfig = {};
       setSnapshot(resolved, resolved);
@@ -2109,11 +2108,9 @@ describe("config cli", () => {
       await runConfigSet("agents.list.0.id", '"tech"', "--strict-json");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
-      const written = firstWrittenConfig() as {
-        agents?: { list?: unknown };
-      };
-      expect(written.agents?.list).toEqual([{ id: "tech" }]);
-      expect(Array.isArray(written.agents?.list)).toBe(true);
+      const written = firstWrittenConfig();
+      expect(written.agents?.entries).toEqual({ tech: {} });
+      expect(written.agents).not.toHaveProperty("list");
     });
 
     it("fails early when unsupported mutable paths are assigned SecretRef objects (builder mode)", async () => {
@@ -2660,7 +2657,7 @@ describe("config cli", () => {
       expect(written.gateway?.auth).toEqual({ mode: "token" });
     });
 
-    it("batch-file nested leaf updates preserve agents defaults and list siblings", async () => {
+    it("batch-file nested leaf updates preserve agents defaults and roster siblings", async () => {
       const resolved: OpenClawConfig = {
         agents: {
           defaults: {
@@ -2669,7 +2666,7 @@ describe("config cli", () => {
             },
             model: { primary: "openai/gpt-5.4" },
           },
-          list: [{ id: "main" }, { id: "ops" }],
+          entries: { main: {}, ops: {} },
         },
         plugins: {
           entries: {
@@ -2707,7 +2704,7 @@ describe("config cli", () => {
         provider: "gemini",
         sources: ["memory"],
       });
-      expect(written.agents?.list).toEqual(resolved.agents?.list);
+      expect(written.agents?.entries).toEqual(resolved.agents?.entries);
       expect(written.plugins).toEqual(resolved.plugins);
     });
 
@@ -4138,16 +4135,15 @@ describe("config cli", () => {
 
     it("preserves valid bracket path forms", async () => {
       const resolved: OpenClawConfig = {
-        agents: { list: [{ id: "main" }, { id: "other" }] },
+        agents: { entries: { main: {}, other: { name: "Other" } } },
       };
       setSnapshot(resolved, resolved);
 
-      await runConfigSet("agents.list[1].id", "renamed");
+      await runConfigSet("agents.list[1].name", "renamed");
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
-      expect(written.agents?.list?.[1]?.id).toBe("renamed");
-      expect(written.agents?.list?.[0]?.id).toBe("main");
+      expect(written.agents?.entries).toEqual({ main: {}, other: { name: "renamed" } });
     });
 
     it("preserves escaped dots inside path segments", async () => {
@@ -4205,7 +4201,7 @@ describe("config cli", () => {
       const written = firstWrittenConfig();
       expect(written.tools).not.toHaveProperty("alsoAllow");
       expect(written.agents).not.toHaveProperty("defaults");
-      expect(written.agents?.list).toEqual(resolved.agents?.list);
+      expect(written.agents?.entries).toEqual(resolved.agents?.entries);
       expect(written.gateway).toEqual(resolved.gateway);
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
@@ -4215,10 +4211,10 @@ describe("config cli", () => {
       });
     });
 
-    it("removes only the specified array element", async () => {
+    it("submits only the specified roster entry removal for writer validation", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [{ id: "agent-a" }, { id: "agent-b" }, { id: "agent-c" }],
+          entries: { "agent-a": {}, "agent-b": {}, "agent-c": {} },
         },
       };
       const runtimeMerged: OpenClawConfig = {
@@ -4230,7 +4226,8 @@ describe("config cli", () => {
 
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
-      expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
+      // The real writer's roster-loss guard is exercised by config-cli.integration.test.ts.
+      expect(written.agents?.entries).toEqual({ "agent-a": {}, "agent-c": {} });
       expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
     });
 
@@ -4272,13 +4269,12 @@ describe("config cli", () => {
         },
       };
       setSnapshot(resolved, resolved);
-      setSnapshot(resolved, resolved);
 
       await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
-      expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(2);
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(1);
     });
 
     it("rejects an unset that makes a dependent model reference unresolved", async () => {
@@ -4622,10 +4618,7 @@ describe("config cli", () => {
     it("prints a hot-reload hint for agents.list model changes", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [
-            { id: "main" },
-            { id: "mason-vale", model: { primary: "ollama/qwen3-coder-next" } },
-          ],
+          entries: { main: {}, "mason-vale": { model: { primary: "ollama/qwen3-coder-next" } } },
         },
       };
       setSnapshot(resolved, withRuntimeDefaults(resolved));
@@ -4646,13 +4639,12 @@ describe("config cli", () => {
     it("does not treat legacy per-agent agentRuntime as restart-required", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [
-            {
-              id: "codex-legacy",
+          entries: {
+            "codex-legacy": {
               agentRuntime: { id: "codex" },
               model: { primary: "openai/gpt-5.5" },
             },
-          ],
+          },
         },
       } as unknown as OpenClawConfig;
       setSnapshot(resolved, withRuntimeDefaults(resolved));
@@ -4672,7 +4664,7 @@ describe("config cli", () => {
     it("keeps the restart hint for hot-path edits when reload mode is off", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
+          entries: { main: { model: { primary: "openai/gpt-5.4" } } },
         },
         gateway: {
           reload: { mode: "off" },
@@ -4696,7 +4688,7 @@ describe("config cli", () => {
     it("normalizes legacy restart mode to hot apply semantics", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }],
+          entries: { main: { model: { primary: "openai/gpt-5.4" } } },
         },
         gateway: {
           reload: { mode: "restart" },
@@ -4720,12 +4712,11 @@ describe("config cli", () => {
     it("prints a hot-reload hint when removing legacy per-agent agentRuntime", async () => {
       const resolved: OpenClawConfig = {
         agents: {
-          list: [
-            {
-              id: "codex-legacy",
+          entries: {
+            "codex-legacy": {
               agentRuntime: { id: "codex" },
             },
-          ],
+          },
         },
       } as unknown as OpenClawConfig;
       setSnapshot(resolved, withRuntimeDefaults(resolved));
@@ -4807,7 +4798,7 @@ describe("config cli", () => {
 
     it("keeps the restart hint for restart-required config paths", async () => {
       const resolved: OpenClawConfig = {
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         gateway: { port: 18789 },
       };
       setSnapshot(resolved, withRuntimeDefaults(resolved));
@@ -4845,7 +4836,7 @@ describe("config cli", () => {
 
     it("keeps the restart hint for mixed hot and restart batch updates", async () => {
       const resolved: OpenClawConfig = {
-        agents: { list: [{ id: "main", model: { primary: "openai/gpt-5.4" } }] },
+        agents: { entries: { main: { model: { primary: "openai/gpt-5.4" } } } },
         gateway: { port: 18789 },
       };
       setSnapshot(resolved, withRuntimeDefaults(resolved));

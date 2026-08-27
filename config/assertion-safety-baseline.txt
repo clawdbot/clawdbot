@@ -2370,7 +2370,7 @@ src/cli/completion-runtime.ts	4
 src/cli/config-cli-input.ts	3
 src/cli/config-cli-path.ts	6
 src/cli/config-cli-runner.ts	7
-src/cli/config-cli.ts	11
+src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
 src/cli/config-set-input.ts	2
 src/cli/connect-cli.ts	1
@@ -2662,11 +2662,11 @@ src/config/io.snapshot.ts	1
 src/config/io.warnings.ts	2
 src/config/io.write-prepare.ts	16
 src/config/io.write-safety.ts	4
-src/config/io.write.ts	13
+src/config/io.write.ts	10
 src/config/issue-location.ts	2
 src/config/legacy-private-network-migration.ts	1
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.roster.ts	15
+src/config/legacy.roster.ts	13
 src/config/legacy.ts	3
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2

@@ -1,6 +1,6 @@
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConfigFileSnapshot } from "../config/config.js";
-import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../config/config.js";
+import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
@@ -66,18 +66,6 @@ export function ensureValidConfigSnapshotForCli(
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
   runtime.exit(1);
   return false;
-}
-
-export async function loadValidConfig(
-  runtime: RuntimeEnv = defaultRuntime,
-  options: { observe?: boolean; json?: boolean } = {},
-) {
-  const snapshot =
-    options.observe === false
-      ? await readConfigFileSnapshot({ observe: false })
-      : await readConfigFileSnapshot();
-  ensureValidConfigSnapshotForCli(snapshot, runtime, options);
-  return snapshot;
 }
 
 export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
