@@ -241,24 +241,17 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     await webAwesomeDialog?.updateComplete;
     const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
     expect(dialog).toBeInstanceOf(HTMLDialogElement);
-    const animationStarted = new Promise<Animation>((resolve) => {
-      dialog?.addEventListener("animationstart", (event) => {
-        if (event.animationName !== "openclaw-drawer-in") {
-          return;
-        }
-        const animation = (event.target as HTMLElement).getAnimations()[0];
-        if (animation) {
-          resolve(animation);
-        }
-      });
-    });
+    dialog!.style.animationPlayState = "paused";
     modal.show();
-    const animation = await animationStarted;
+    await modal.updateComplete;
+    await webAwesomeDialog?.updateComplete;
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    const animation = dialog!.getAnimations()[0];
 
-    expect(animation.effect).toBeInstanceOf(KeyframeEffect);
-    const keyframes = (animation.effect as KeyframeEffect | null)?.getKeyframes();
+    expect(animation?.effect).toBeInstanceOf(KeyframeEffect);
+    const keyframes = (animation?.effect as KeyframeEffect | null)?.getKeyframes();
     expect(keyframes?.[0]?.transform).toBe("translateX(100%)");
     expect(keyframes?.at(-1)?.transform).toBe("translateX(0px)");
-    expect(animation.effect?.getTiming().duration).toBe(200);
+    expect(animation?.effect?.getTiming().duration).toBe(200);
   });
 });
