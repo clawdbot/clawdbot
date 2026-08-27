@@ -2664,6 +2664,7 @@ describe("gateway server chat", () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
       const blockedReply = createDeferred();
+      const runtimeStarted = createDeferred();
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(runId);
         const runtimeOwner = claimAgentRunContext(
@@ -2677,6 +2678,7 @@ describe("gateway server chat", () => {
           { ownsContext: true, trackOwner: true },
         );
         expect(runtimeOwner).toBeDefined();
+        runtimeStarted.resolve();
         try {
           await blockedReply.promise;
         } finally {
@@ -2688,6 +2690,8 @@ describe("gateway server chat", () => {
         const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
         expect(subscribeRes.ok).toBe(true);
         await sendChatAndExpectStarted(runId, "hold chat run open");
+        // The ACK precedes dispatch; emit lifecycle only after the runtime owns this run.
+        await runtimeStarted.promise;
 
         const terminalSessionChange = onceMessage(
           ws,
