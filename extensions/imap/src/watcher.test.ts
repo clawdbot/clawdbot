@@ -259,7 +259,9 @@ describe("IMAP watcher protocol boundary", () => {
     dispatchHookAgentTurn.mockImplementationOnce(async () => {
       // Keep admission unresolved across subsequent mailbox notifications and polls.
       server.append("From: trusted@example.com\r\nSubject: Later\r\n\r\nWait for earlier mail");
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 100);
+      });
       return { ok: false, reason: "Gateway temporarily unavailable" };
     });
     server.disconnect();
@@ -291,7 +293,9 @@ describe("IMAP watcher protocol boundary", () => {
     await vi.waitFor(() => expect(context.logger.warn).toHaveBeenCalled());
     await watcher.stop();
     const attempts = dispatchHookAgentTurn.mock.calls.length;
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 150);
+    });
     expect(dispatchHookAgentTurn).toHaveBeenCalledTimes(attempts);
     expect(server.sockets.size).toBe(0);
   });
