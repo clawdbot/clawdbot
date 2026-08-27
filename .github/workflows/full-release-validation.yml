@@ -1393,6 +1393,7 @@ jobs:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ runner.temp }}/full-release-execution-plan
           if-no-files-found: error
+          overwrite: true
 
   release_decision:
     name: Release Decision

@@ -80,6 +80,7 @@ describe("full release continuation workflow", () => {
     });
     expect(upload.with).toMatchObject({
       name: "full-release-execution-plan-${{ github.run_id }}",
+      overwrite: true,
     });
     for (const job of ["release_decision", "diagnostic_drain", "summary"]) {
       expect(step(job, "Download immutable release execution plan").with).toMatchObject({
