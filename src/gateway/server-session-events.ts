@@ -19,7 +19,7 @@ import {
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
-  readSessionIdentityMutationVersionForTarget,
+  createSessionIdentityMutationFence,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -477,59 +477,60 @@ export function createLifecycleEventBroadcastHandler(params: {
       );
       return;
     }
-    const identityMutationVersion = readSessionIdentityMutationVersionForTarget({
+    const identityMutationFence = createSessionIdentityMutationFence({
       sessionKey: event.sessionKey,
     });
-    const modelCatalog = await params.loadModelCatalog?.(routingAgentId);
-    if (
-      readSessionIdentityMutationVersionForTarget({ sessionKey: event.sessionKey }) !==
-      identityMutationVersion
-    ) {
-      return;
-    }
-    const sessionRow = loadGatewaySessionRow(event.sessionKey, {
-      agentId: routingAgentId,
-      ...(modelCatalog !== undefined ? { modelCatalog } : {}),
-    });
-    const activeRunState =
-      sessionRow && (sessionRow.key !== "global" || routingAgentId)
-        ? resolveVisibleActiveSessionRunState({
-            context: params,
-            requestedKey: event.sessionKey,
-            canonicalKey: sessionRow.key,
-            sessionId: sessionRow.sessionId,
-            ...(routingAgentId ? { agentId: routingAgentId } : {}),
-            defaultAgentId: compatibilityOwnerAgentId,
-          })
-        : null;
-    params.broadcastToConnIds(
-      "sessions.changed",
-      {
-        sessionKey: event.sessionKey,
-        ...(eventAgentId ? { agentId: eventAgentId } : {}),
-        reason: event.reason,
-        parentSessionKey: event.parentSessionKey,
-        label: event.label,
-        displayName: event.displayName,
-        ts: Date.now(),
-        ...buildGatewaySessionSnapshot({
-          sessionRow,
-          agentId: eventAgentId,
+    try {
+      const modelCatalog = await params.loadModelCatalog?.(routingAgentId);
+      if (!identityMutationFence.isCurrent()) {
+        return;
+      }
+      const sessionRow = loadGatewaySessionRow(event.sessionKey, {
+        agentId: routingAgentId,
+        ...(modelCatalog !== undefined ? { modelCatalog } : {}),
+      });
+      const activeRunState =
+        sessionRow && (sessionRow.key !== "global" || routingAgentId)
+          ? resolveVisibleActiveSessionRunState({
+              context: params,
+              requestedKey: event.sessionKey,
+              canonicalKey: sessionRow.key,
+              sessionId: sessionRow.sessionId,
+              ...(routingAgentId ? { agentId: routingAgentId } : {}),
+              defaultAgentId: compatibilityOwnerAgentId,
+            })
+          : null;
+      params.broadcastToConnIds(
+        "sessions.changed",
+        {
+          sessionKey: event.sessionKey,
+          ...(eventAgentId ? { agentId: eventAgentId } : {}),
+          reason: event.reason,
+          parentSessionKey: event.parentSessionKey,
           label: event.label,
           displayName: event.displayName,
-          parentSessionKey: event.parentSessionKey,
-          activeRunState,
-        }),
-        ...(event.swarmGroupId
-          ? {
-              swarmGroupId: event.swarmGroupId,
-              kind: event.kind,
-              text: event.text,
-            }
-          : {}),
-      },
-      connIds,
-      { dropIfSlow: true },
-    );
+          ts: Date.now(),
+          ...buildGatewaySessionSnapshot({
+            sessionRow,
+            agentId: eventAgentId,
+            label: event.label,
+            displayName: event.displayName,
+            parentSessionKey: event.parentSessionKey,
+            activeRunState,
+          }),
+          ...(event.swarmGroupId
+            ? {
+                swarmGroupId: event.swarmGroupId,
+                kind: event.kind,
+                text: event.text,
+              }
+            : {}),
+        },
+        connIds,
+        { dropIfSlow: true },
+      );
+    } finally {
+      identityMutationFence.release();
+    }
   };
 }

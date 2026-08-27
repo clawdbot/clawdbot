@@ -40,14 +40,22 @@ const SESSION_IDENTITY_MUTATION_LISTENERS = resolveGlobalSet<SessionIdentityMuta
   Symbol.for("openclaw.sessionIdentityMutationListeners"),
   "close-and-restart",
 );
-type SessionIdentityMutationState = {
-  version: number;
-  versionsByIdentity: Map<string, number>;
+export type SessionIdentityMutationFence = {
+  isCurrent: () => boolean;
+  release: () => void;
 };
 
-const SESSION_IDENTITY_MUTATION_STATE = resolveGlobalSingleton<SessionIdentityMutationState>(
+type ActiveSessionIdentityMutationFence = SessionIdentityMutationFence & {
+  invalidate: () => void;
+};
+
+const SESSION_IDENTITY_MUTATION_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionIdentityMutationState"),
-  () => ({ version: 0, versionsByIdentity: new Map() }),
+  () => ({ version: 0 }),
+);
+const ACTIVE_SESSION_IDENTITY_MUTATION_FENCES = resolveGlobalSingleton(
+  Symbol.for("openclaw.activeSessionIdentityMutationFences"),
+  () => new Map<string, Set<ActiveSessionIdentityMutationFence>>(),
 );
 const SESSION_LIFECYCLE_STATE = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionLifecycleState"),
@@ -63,6 +71,23 @@ function listMutationIdentityKeys(target: SessionIdentityMutationTarget): string
     ...target.sessionKeys.map((sessionKey) => `key:${sessionKey}`),
     ...(target.sessionId ? [`id:${target.sessionId}`] : []),
   ];
+}
+
+function addFence(identityKey: string, fence: ActiveSessionIdentityMutationFence): void {
+  const fences = ACTIVE_SESSION_IDENTITY_MUTATION_FENCES.get(identityKey) ?? new Set();
+  fences.add(fence);
+  ACTIVE_SESSION_IDENTITY_MUTATION_FENCES.set(identityKey, fences);
+}
+
+function removeFence(identityKey: string, fence: ActiveSessionIdentityMutationFence): void {
+  const fences = ACTIVE_SESSION_IDENTITY_MUTATION_FENCES.get(identityKey);
+  if (!fences) {
+    return;
+  }
+  fences.delete(fence);
+  if (fences.size === 0) {
+    ACTIVE_SESSION_IDENTITY_MUTATION_FENCES.delete(identityKey);
+  }
 }
 
 /** Registers a session lifecycle listener. */
@@ -85,16 +110,36 @@ export function readSessionIdentityMutationVersion(): number {
   return SESSION_IDENTITY_MUTATION_STATE.version;
 }
 
-/** Monotonic fence scoped to one session key and optional concrete session identity. */
-export function readSessionIdentityMutationVersionForTarget(
-  target: Pick<SessionIdentityMutationTarget, "sessionId"> & { sessionKey: string },
-): number {
-  return Math.max(
-    SESSION_IDENTITY_MUTATION_STATE.versionsByIdentity.get(`key:${target.sessionKey}`) ?? 0,
-    target.sessionId
-      ? (SESSION_IDENTITY_MUTATION_STATE.versionsByIdentity.get(`id:${target.sessionId}`) ?? 0)
-      : 0,
-  );
+/** Registers a bounded fence for a projection currently reading one session identity. */
+export function createSessionIdentityMutationFence(target: {
+  sessionId?: string;
+  sessionKey: string;
+}): SessionIdentityMutationFence {
+  let current = true;
+  let released = false;
+  const identityKeys = [
+    `key:${target.sessionKey}`,
+    ...(target.sessionId ? [`id:${target.sessionId}`] : []),
+  ];
+  const fence: ActiveSessionIdentityMutationFence = {
+    isCurrent: () => current,
+    invalidate: () => {
+      current = false;
+    },
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      for (const identityKey of identityKeys) {
+        removeFence(identityKey, fence);
+      }
+    },
+  };
+  for (const identityKey of identityKeys) {
+    addFence(identityKey, fence);
+  }
+  return fence;
 }
 
 export function emitSessionIdentityMutation(mutation: SessionIdentityMutation): void {
@@ -102,10 +147,9 @@ export function emitSessionIdentityMutation(mutation: SessionIdentityMutation): 
   const targets =
     mutation.kind === "delete" ? [mutation.previous] : [mutation.previous, mutation.current];
   for (const identityKey of new Set(targets.flatMap(listMutationIdentityKeys))) {
-    SESSION_IDENTITY_MUTATION_STATE.versionsByIdentity.set(
-      identityKey,
-      SESSION_IDENTITY_MUTATION_STATE.version,
-    );
+    for (const fence of ACTIVE_SESSION_IDENTITY_MUTATION_FENCES.get(identityKey) ?? []) {
+      fence.invalidate();
+    }
   }
   notifyListeners(SESSION_IDENTITY_MUTATION_LISTENERS, mutation);
 }

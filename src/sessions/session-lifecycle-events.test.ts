@@ -1,6 +1,7 @@
 // Session lifecycle event tests cover lifecycle event ordering and serialization.
 import { describe, expect, it } from "vitest";
 import {
+  createSessionIdentityMutationFence,
   emitSessionIdentityMutation,
   emitSessionLifecycleEvent,
   onSessionIdentityMutation,
@@ -41,6 +42,21 @@ describe("session lifecycle events", () => {
 
     expect(readSessionIdentityMutationVersion()).toBe(previousVersion + 1);
     expect(observedVersions).toEqual([previousVersion + 1]);
+  });
+
+  it("removes released identity fences under session churn", () => {
+    const fences = Array.from({ length: 100 }, (_, index) => {
+      const sessionKey = `agent:main:churn-${index}`;
+      const fence = createSessionIdentityMutationFence({ sessionKey });
+      fence.release();
+      emitSessionIdentityMutation({
+        kind: "delete",
+        previous: { sessionId: `session-${index}`, sessionKeys: [sessionKey] },
+      });
+      return fence;
+    });
+
+    expect(fences.every((fence) => fence.isCurrent())).toBe(true);
   });
 
   it("delivers events to active listeners and stops after unsubscribe", () => {
