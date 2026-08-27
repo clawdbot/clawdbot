@@ -26,10 +26,17 @@ export default definePluginEntry({
       }),
       resolveWorkdir: () => pluginConfig.remoteWorkspaceDir,
     });
-    api.registerService({
+    // Eager CLI registrations must retire even if Gateway services never start.
+    api.lifecycle.registerRuntimeLifecycle({
       id: "openshell-sandbox-cleanup",
-      start: () => {},
-      stop: unregister,
+      cleanup: ({ reason, sessionKey, runId }) => {
+        if (sessionKey !== undefined || runId !== undefined) {
+          return;
+        }
+        if (reason === "disable" || reason === "restart") {
+          unregister();
+        }
+      },
     });
   },
 });
