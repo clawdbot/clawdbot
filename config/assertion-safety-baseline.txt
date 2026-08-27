@@ -3958,7 +3958,6 @@ ui/src/components/board/board-widget-cell.ts	1
 ui/src/components/board/board-widget-frame.ts	1
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
-ui/src/components/browser/browser-panel-controller-input.ts	1
 ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
 ui/src/components/command-palette.ts	2
