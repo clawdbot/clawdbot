@@ -20,8 +20,7 @@ type Swipe = {
 type NavDrawerHost = HTMLElement & {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
-  navDrawerOpen: boolean;
-  navDrawerTrigger: HTMLElement | null;
+  readonly navDrawerOpen: boolean;
 };
 
 export class NavDrawerSwipeOwner {
@@ -36,32 +35,17 @@ export class NavDrawerSwipeOwner {
     return isMobileNavLayout() && !this.host.navDrawerOpen && !this.host.onboardingMode;
   }
 
-  open(trigger?: HTMLElement): void {
-    if (!this.canOpen()) {
-      return;
-    }
-    this.host.navDrawerTrigger =
-      trigger ??
-      [
-        ...this.host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
-      ].find((candidate) => candidate.checkVisibility()) ??
-      null;
-    this.host.navDrawerOpen = true;
-    void this.host.updateComplete.then(() => this.opened());
-  }
-
   connect(): void {
     this.host.addEventListener("touchstart", this.handleStart, { passive: true });
     this.host.addEventListener("touchmove", this.handleMove, { passive: false });
     this.host.addEventListener("touchend", this.handleEnd, { passive: true });
     this.host.addEventListener("touchcancel", this.handleCancel, { passive: true });
+    if (this.host.navDrawerOpen) {
+      this.opened();
+    }
   }
 
   disconnect(): void {
-    this.host.removeEventListener("touchstart", this.handleStart);
-    this.host.removeEventListener("touchmove", this.handleMove);
-    this.host.removeEventListener("touchend", this.handleEnd);
-    this.host.removeEventListener("touchcancel", this.handleCancel);
     this.reset();
   }
 
@@ -78,13 +62,18 @@ export class NavDrawerSwipeOwner {
   }
 
   opened(): void {
-    this.reset();
-    const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-    const toastHost = this.host.querySelector<HTMLElement>("openclaw-toast-host");
-    if (drawer && toastHost && toastHost.parentElement !== drawer) {
-      drawer.moveBefore(toastHost, null);
-    }
-    (this.focusable()[0] ?? drawer)?.focus({ preventScroll: true });
+    void this.host.updateComplete.then(() => {
+      if (!this.host.isConnected || !this.host.navDrawerOpen) {
+        return;
+      }
+      this.reset();
+      const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
+      const toastHost = this.host.querySelector<HTMLElement>("openclaw-toast-host");
+      if (drawer && toastHost && toastHost.parentElement !== drawer) {
+        drawer.moveBefore(toastHost, null);
+      }
+      (this.focusable()[0] ?? drawer)?.focus({ preventScroll: true });
+    });
   }
 
   closed(): void {

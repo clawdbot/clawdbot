@@ -103,15 +103,14 @@ export class ShellChromeOwner {
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
   private navDrawerSwipeOwner?: NavDrawerSwipeOwner;
-  private readonly navDrawerSwipeOwnerLoad = import("./nav-drawer-swipe.ts").then(
-    ({ NavDrawerSwipeOwner }) => {
-      const owner = new NavDrawerSwipeOwner(this.host, () => this.toggleNavigationSurface());
-      this.navDrawerSwipeOwner = owner;
-      return owner;
-    },
-  );
 
-  constructor(private readonly host: ShellChromeHost) {}
+  constructor(private readonly host: ShellChromeHost) {
+    void import("./nav-drawer-swipe.ts").then(({ NavDrawerSwipeOwner }) => {
+      const owner = new NavDrawerSwipeOwner(host, () => this.toggleNavigationSurface());
+      this.navDrawerSwipeOwner = owner;
+      owner.connect();
+    }, Boolean);
+  }
 
   private isSessionRoute(): boolean {
     const locationRouteId = routeIdFromPath(
@@ -194,7 +193,9 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      void this.navDrawerSwipeOwnerLoad.then((owner) => host.isConnected && owner.open(trigger));
+      host.navDrawerTrigger = trigger ?? this.visibleNavDrawerToggle() ?? null;
+      host.navDrawerOpen = true;
+      this.navDrawerSwipeOwner?.opened();
       return;
     }
     // A responsive handoff expands this shell without overwriting the desktop preference.
@@ -224,9 +225,14 @@ export class ShellChromeOwner {
   }
 
   visibleNavDrawerToggle(): HTMLElement | undefined {
-    return [
-      ...this.host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
-    ].find((candidate) => candidate.checkVisibility());
+    for (const candidate of this.host.querySelectorAll<HTMLElement>(
+      ".topbar-nav-toggle, .chat-pane__nav-toggle",
+    )) {
+      if (candidate.checkVisibility()) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 
   closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {

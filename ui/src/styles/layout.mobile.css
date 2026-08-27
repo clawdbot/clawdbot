@@ -129,7 +129,7 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 
 .shell--mobile-nav .shell-nav-backdrop {
   position: fixed;
-  z-index: 60;
+  z-index: 65;
   inset: 0;
   display: block;
   width: auto;

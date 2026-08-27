@@ -640,6 +640,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ></openclaw-router-outlet>
       </main>
       <openclaw-terminal-panel
+        ?inert=${navDrawerOpen}
         .client=${gatewayConnected ? gatewaySnapshot.client : null}
         .available=${terminalAvailable}
         .agentId=${selectedAgentId}
@@ -652,6 +653,7 @@ export function renderApplicationShell(host: ShellViewHost) {
         ? nothing
         : html`
             <openclaw-browser-panel
+              ?inert=${navDrawerOpen}
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${browserPanelAvailable}
@@ -664,6 +666,7 @@ export function renderApplicationShell(host: ShellViewHost) {
               })}
             ></openclaw-browser-panel>
             <openclaw-desktop-panel
+              ?inert=${navDrawerOpen}
               data-chat-autotype-exempt
               .client=${gatewayConnected ? gatewaySnapshot.client : null}
               .available=${desktopPanelAvailable}
@@ -672,6 +675,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-desktop-panel>
           `}
       <openclaw-custodian-panel
+        ?inert=${navDrawerOpen}
         .available=${custodianPanelAvailable}
         .suppressed=${activeRoute === "custodian"}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
