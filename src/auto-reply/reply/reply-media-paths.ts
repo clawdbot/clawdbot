@@ -1,7 +1,7 @@
 // Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolvePathFromInput, toRelativeWorkspacePath } from "../../agents/path-policy.js";
 import {
@@ -38,7 +38,7 @@ function isLikelyLocalMediaSource(media: string): boolean {
 }
 
 function getPayloadMediaList(payload: ReplyPayload): string[] {
-  return resolveSendableOutboundReplyParts(payload).mediaUrls;
+  return resolveOutboundMediaUrls(payload);
 }
 
 export function createReplyMediaPathNormalizer(params: {

@@ -239,6 +239,27 @@ describe("createReplyMediaPathNormalizer", () => {
     expect(JSON.stringify(result)).not.toContain(sourcePath);
   });
 
+  it("keeps attachment metadata aligned when blank media entries are dropped", async () => {
+    const normalize = createTestReplyMediaNormalizer();
+
+    const result = await normalize({
+      mediaUrls: ["   ", "./out/report.csv"],
+      attachments: [
+        { name: "wrong.png", mimeType: "image/png" },
+        { name: "declared-report.csv", mimeType: "text/csv" },
+      ],
+    });
+
+    expectMedia(result, "/tmp/outbound-media/report.csv", ["/tmp/outbound-media/report.csv"]);
+    expect(result.attachments).toEqual([
+      {
+        url: "/tmp/outbound-media/report.csv",
+        name: "declared-report.csv",
+        mimeType: "text/csv",
+      },
+    ]);
+  });
+
   it("drops sandbox-mapped media when staging fails instead of retrying the workspace fallback", async () => {
     ensureSandboxWorkspaceForSession.mockResolvedValue({
       workspaceDir: "/tmp/sandboxes/session-1",
