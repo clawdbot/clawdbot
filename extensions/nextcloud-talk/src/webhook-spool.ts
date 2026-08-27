@@ -4,6 +4,7 @@ import {
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePersistentDedupePluginStateNamespace } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -33,12 +34,10 @@ const NEXTCLOUD_TALK_INGRESS_POLL_INTERVAL_MS = 500;
 function describeIgnoredWebhookEvent(rawEvent: string): string {
   try {
     const envelope = parseRawObject(rawEvent);
-    const object = envelope.object;
-    const objectType =
-      object !== null && typeof object === "object" && !Array.isArray(object)
-        ? (object as Record<string, unknown>).type
-        : undefined;
-    return `type=${String(envelope.type ?? "unknown")} objectType=${String(objectType ?? "unknown")}`;
+    const type = typeof envelope.type === "string" ? envelope.type : "unknown";
+    const object = isRecord(envelope.object) ? envelope.object : null;
+    const objectType = typeof object?.type === "string" ? object.type : "unknown";
+    return `type=${type} objectType=${objectType}`;
   } catch {
     return "unparseable payload";
   }
