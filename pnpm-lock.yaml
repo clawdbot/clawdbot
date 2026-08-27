@@ -146,6 +146,7 @@ overrides:
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
 patchedDependencies:
+  '@openclaw/fs-safe@0.5.6': 04671fa6d0126f36499e9a975650472815bde73a4034deded85eaa5dc21c1d0e
   '@vitest/runner@4.1.11': 55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93
   matrix-js-sdk@42.2.0: 9e97147d99b86977d6665a676cdf853434ef61eee7cfb176bb66c9c48da599b4
   vitest@4.1.11: c21477c229514823498ab3a08311070cec46b1811e866bc1b3f6ff3f5720da2e
@@ -201,7 +202,7 @@ importers:
         version: link:packages/ai
       '@openclaw/fs-safe':
         specifier: 0.5.6
-        version: 0.5.6
+        version: 0.5.6(patch_hash=04671fa6d0126f36499e9a975650472815bde73a4034deded85eaa5dc21c1d0e)
       '@openclaw/proxyline':
         specifier: 0.3.7
         version: 0.3.7(undici@8.10.0)
@@ -1633,7 +1634,7 @@ importers:
     dependencies:
       '@openclaw/fs-safe':
         specifier: 0.5.6
-        version: 0.5.6
+        version: 0.5.6(patch_hash=04671fa6d0126f36499e9a975650472815bde73a4034deded85eaa5dc21c1d0e)
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -11518,7 +11519,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@openclaw/fs-safe@0.5.6':
+  '@openclaw/fs-safe@0.5.6(patch_hash=04671fa6d0126f36499e9a975650472815bde73a4034deded85eaa5dc21c1d0e)':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.22

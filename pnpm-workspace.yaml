@@ -5,6 +5,9 @@ packages:
   - extensions/*
   - examples/*
 
+patchedDependencies:
+  "@openclaw/fs-safe@0.5.6": patches/@openclaw__fs-safe@0.5.6.patch
+
 minimumReleaseAge: 10080
 minimumReleaseAgeStrict: true
 
