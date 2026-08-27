@@ -60,6 +60,9 @@ export function listSlackMessageActions(
   if (isActionEnabled("memberInfo")) {
     actions.add("member-info");
   }
+  if (isActionEnabled("polls")) {
+    actions.add("poll");
+  }
   if (isActionEnabled("emojiList")) {
     actions.add("emoji-list");
   }

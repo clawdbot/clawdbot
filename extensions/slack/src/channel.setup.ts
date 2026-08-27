@@ -31,6 +31,7 @@ export const slackSetupPlugin: ChannelPlugin<ResolvedSlackAccount> = {
     reactions: true,
     threads: true,
     media: true,
+    polls: true,
     nativeCommands: true,
   },
   commands: {

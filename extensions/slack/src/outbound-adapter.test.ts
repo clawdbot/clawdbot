@@ -3,10 +3,19 @@ import { presentationToInteractiveControlsReply } from "openclaw/plugin-sdk/inte
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
+const createSlackPollStoreStateMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
 }));
+
+vi.mock("./polls.js", async (importActual) => {
+  const actual = await importActual<typeof import("./polls.js")>();
+  return {
+    ...actual,
+    createSlackPollStoreState: (...args: unknown[]) => createSlackPollStoreStateMock(...args),
+  };
+});
 
 const { slackOutbound } = await import("./outbound-adapter.js");
 
@@ -27,6 +36,7 @@ describe("slackOutbound", () => {
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
+    createSlackPollStoreStateMock.mockReset();
   });
 
   it("sends mirrored question controls once at the Slack message block limit", async () => {
@@ -404,6 +414,89 @@ describe("slackOutbound", () => {
         { type: "divider" },
         { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
       ],
+    });
+  });
+
+  it("preserves raw Unicode agent identity emoji", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "heartbeat alert",
+      accountId: "default",
+      identity: { name: "Pulse", emoji: "📟" },
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "heartbeat alert",
+      expect.objectContaining({
+        identity: {
+          username: "Pulse",
+          iconUrl: undefined,
+          iconEmoji: "📟",
+        },
+      }),
+    );
+  });
+
+  it("advertises the Slack poll option cap to core", () => {
+    expect(slackOutbound.pollMaxOptions).toBe(20);
+  });
+
+  it("forwards thread context when sending a poll inside a Slack thread", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({
+      messageId: "1710000001.000001",
+      channelId: "C123",
+    });
+    createSlackPollStoreStateMock.mockReturnValue({
+      createPoll: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await slackOutbound.sendPoll!({
+      cfg,
+      to: "C123",
+      poll: { question: "Lunch?", options: ["Tacos", "Sushi"], maxSelections: 1 },
+      accountId: "default",
+      threadId: "1710000000.000000",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).toMatchObject({
+      threadTs: "1710000000.000000",
+      cfg,
+      accountId: "default",
+    });
+  });
+
+  it("omits threadTs for a top-level poll and persists the sent message id", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({
+      messageId: "1710000002.000002",
+      channelId: "C123",
+    });
+    const createPoll = vi.fn().mockResolvedValue(undefined);
+    createSlackPollStoreStateMock.mockReturnValue({ createPoll });
+
+    const result = await slackOutbound.sendPoll!({
+      cfg,
+      to: "C123",
+      poll: { question: "Lunch?", options: ["Tacos", "Sushi"], maxSelections: 1 },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("threadTs");
+    expect(createPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "1710000002.000002",
+        conversationId: "C123",
+        maxSelections: 1,
+      }),
+    );
+    expect(result).toMatchObject({
+      pollId: expect.any(String),
+      messageId: "1710000002.000002",
+      chatId: "C123",
     });
   });
 });

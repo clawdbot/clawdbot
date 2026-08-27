@@ -216,6 +216,7 @@ describe("Slack message tools", () => {
       "unpin",
       "list-pins",
       "member-info",
+      "poll",
       "emoji-list",
     ]);
     expect(discovery.capabilities).toEqual(["presentation"]);
@@ -282,6 +283,7 @@ describe("Slack message tools", () => {
       "unpin",
       "list-pins",
       "member-info",
+      "poll",
       "emoji-list",
     ]);
   });
@@ -310,6 +312,7 @@ describe("Slack message tools", () => {
       "unpin",
       "list-pins",
       "member-info",
+      "poll",
       "emoji-list",
     ]);
   });
@@ -325,6 +328,7 @@ describe("Slack message tools", () => {
             pins: false,
             memberInfo: false,
             emojiList: false,
+            polls: false,
           },
           accounts: {
             default: {
@@ -335,6 +339,7 @@ describe("Slack message tools", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
+                polls: false,
               },
             },
             work: {
@@ -345,6 +350,7 @@ describe("Slack message tools", () => {
                 pins: false,
                 memberInfo: false,
                 emojiList: false,
+                polls: false,
               },
             },
           },
@@ -505,6 +511,7 @@ describe("Slack message tools", () => {
               pins: false,
               memberInfo: false,
               emojiList: false,
+              polls: false,
             },
           },
         },

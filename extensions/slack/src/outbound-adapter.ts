@@ -30,6 +30,11 @@ import {
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+import {
+  buildSlackPollMessage,
+  createSlackPollStoreState,
+  SLACK_POLL_MAX_OPTIONS,
+} from "./polls.js";
 import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import {
   resolveSlackQuestionActionIds,
@@ -257,6 +262,10 @@ export const slackOutbound: ChannelOutboundAdapter = {
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
   presentationCapabilities: SLACK_PRESENTATION_CAPABILITIES,
+  // Core normalizes poll input against this cap (src/infra/outbound/message.ts)
+  // before sendPoll runs, so over-limit option sets fail at the channel boundary
+  // instead of rendering an oversized Slack actions block (max 25 elements).
+  pollMaxOptions: SLACK_POLL_MAX_OPTIONS,
   renderPresentation: ({ payload }) => {
     const slackData = payload.channelData?.slack as SlackOutboundChannelData | undefined;
     const resolution = resolveSlackOutboundBlockResolution(payload);
@@ -414,5 +423,38 @@ export const slackOutbound: ChannelOutboundAdapter = {
   sendMedia: async (ctx) => {
     const send = await prepareSlackOutboundSend(ctx);
     return toSlackOutboundResult(await send({ ...ctx, deliveryQueueId: undefined }));
+  },
+  // Custom poll sender: renders Block Kit, forwards thread context, and
+  // persists vote state. Declared alongside sendText/sendMedia rather than via
+  // the generic channel-attach wrapper, which has no poll-aware slot.
+  sendPoll: async ({ cfg, to, poll, accountId, threadId }) => {
+    const maxSelections = poll.maxSelections ?? 1;
+    const built = buildSlackPollMessage({
+      question: poll.question,
+      options: poll.options,
+      maxSelections,
+    });
+    const { sendMessageSlack } = await loadSlackSendRuntime();
+    // A poll requested inside a Slack thread must inherit the same thread,
+    // matching the documented same-channel thread inheritance for sends.
+    const threadTs = resolveSlackThreadTsValue({ threadId });
+    const sent = await sendMessageSlack(to, built.text, {
+      cfg,
+      accountId: accountId ?? undefined,
+      blocks: built.blocks,
+      ...(threadTs ? { threadTs } : {}),
+    });
+    const pollStore = createSlackPollStoreState();
+    await pollStore.createPoll({
+      id: built.pollId,
+      question: poll.question,
+      options: poll.options,
+      maxSelections,
+      createdAt: new Date().toISOString(),
+      conversationId: sent.channelId,
+      messageId: sent.messageId,
+      votes: {},
+    });
+    return { pollId: built.pollId, messageId: sent.messageId, chatId: sent.channelId };
   },
 };

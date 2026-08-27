@@ -87,6 +87,7 @@ export type SlackActionConfig = {
   memberInfo?: boolean;
   channelInfo?: boolean;
   emojiList?: boolean;
+  polls?: boolean;
 };
 
 export type SlackSlashCommandConfig = {
