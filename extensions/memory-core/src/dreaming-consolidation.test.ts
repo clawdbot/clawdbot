@@ -79,6 +79,32 @@ function createSubagent(output: string, status = "ok", onWait?: () => Promise<vo
   };
 }
 
+async function recordConsolidationRecall(workspaceDir: string) {
+  await recordShortTermRecalls({
+    workspaceDir,
+    query: "tea preference",
+    results: [
+      {
+        path: "memory/2026-07-01.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "User prefers green tea.",
+        source: "memory",
+        provenance: candidate("agent").provenance,
+      },
+    ],
+    nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+  });
+  return rankShortTermPromotionCandidates({
+    workspaceDir,
+    minScore: 0,
+    minRecallCount: 0,
+    minUniqueQueries: 0,
+    nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+  });
+}
+
 const logger = { info: vi.fn(), warn: vi.fn() };
 
 describe("memory consolidation", () => {
@@ -606,29 +632,7 @@ describe("memory consolidation", () => {
     const notePath = path.join(workspaceDir, "memory", "2026-07-01.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "tea preference",
-      results: [
-        {
-          path: "memory/2026-07-01.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "User prefers green tea.",
-          source: "memory",
-          provenance: candidate("agent").provenance,
-        },
-      ],
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
+    const candidates = await recordConsolidationRecall(workspaceDir);
     const subagent = createSubagent("", "error");
     const applied = await applyShortTermPromotions({
       workspaceDir,
@@ -653,29 +657,7 @@ describe("memory consolidation", () => {
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "tea preference",
-      results: [
-        {
-          path: "memory/2026-07-01.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "User prefers green tea.",
-          source: "memory",
-          provenance: candidate("agent").provenance,
-        },
-      ],
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
+    const candidates = await recordConsolidationRecall(workspaceDir);
     const promoted = candidates[0];
     if (!promoted) {
       throw new Error("expected ranked candidate");
@@ -722,29 +704,7 @@ describe("memory consolidation", () => {
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "tea preference",
-      results: [
-        {
-          path: "memory/2026-07-01.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "User prefers green tea.",
-          source: "memory",
-          provenance: candidate("agent").provenance,
-        },
-      ],
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
+    const candidates = await recordConsolidationRecall(workspaceDir);
     const promoted = candidates[0];
     if (!promoted) {
       throw new Error("expected ranked candidate");
@@ -789,29 +749,7 @@ describe("memory consolidation", () => {
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
     await fs.writeFile(memoryPath, "# Memory\n\n- Original fact.\n", "utf8");
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "tea preference",
-      results: [
-        {
-          path: "memory/2026-07-01.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "User prefers green tea.",
-          source: "memory",
-          provenance: candidate("agent").provenance,
-        },
-      ],
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
+    const candidates = await recordConsolidationRecall(workspaceDir);
     const promoted = candidates[0];
     if (!promoted) {
       throw new Error("expected ranked candidate");
@@ -878,29 +816,7 @@ describe("memory consolidation", () => {
     const memoryPath = path.join(workspaceDir, "MEMORY.md");
     await fs.mkdir(path.dirname(notePath), { recursive: true });
     await fs.writeFile(notePath, "User prefers green tea.\n", "utf8");
-    await recordShortTermRecalls({
-      workspaceDir,
-      query: "tea preference",
-      results: [
-        {
-          path: "memory/2026-07-01.md",
-          startLine: 1,
-          endLine: 1,
-          score: 0.9,
-          snippet: "User prefers green tea.",
-          source: "memory",
-          provenance: candidate("agent").provenance,
-        },
-      ],
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
-    const candidates = await rankShortTermPromotionCandidates({
-      workspaceDir,
-      minScore: 0,
-      minRecallCount: 0,
-      minUniqueQueries: 0,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-    });
+    const candidates = await recordConsolidationRecall(workspaceDir);
     const promoted = candidates[0];
     if (!promoted) {
       throw new Error("expected ranked candidate");

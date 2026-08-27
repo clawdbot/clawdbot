@@ -323,7 +323,7 @@ describe("memory forget", () => {
       `[main/sessions/main/target#L1] ${quote}\n`,
     );
     const diaryPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(diaryPath, `## Memory Consolidation History\n  - ` + "`+ " + quote + "`\n");
+    await fs.writeFile(diaryPath, `## Memory Consolidation History\n  - \`+ ${quote}\`\n`);
     const report = await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: ["target"] });
     expect(report.refusals).toEqual([]);
     expect(await fs.readFile(diaryPath, "utf8")).not.toContain(quote);

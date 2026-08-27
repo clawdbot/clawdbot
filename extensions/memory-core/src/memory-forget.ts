@@ -457,7 +457,7 @@ async function forgetWorkspaceMemory(
       }
     }
     const scrubbed = scrub(content);
-    if (/^## Memory Consolidation History\r?$[\s\S]*^  - `[+-] /mu.test(scrubbed.content)) {
+    if (/^## Memory Consolidation History\r?$[\s\S]*^ {2}- `[+-] /mu.test(scrubbed.content)) {
       refusals.push(
         `Cannot trace historical consolidation highlights in ${path.relative(workspaceDir, absolutePath)}; review them manually.`,
       );
@@ -504,9 +504,11 @@ async function forgetWorkspaceMemory(
       !entryKeys.has(value.key) &&
       !referencesSession(`${value.path}\n${value.snippet}`, params.agentId, sessionIds),
   );
-  const removedSeenScopes = Object.keys(ingestionState.seenMessages).filter((scope) =>
-    referencesSession(scope, params.agentId, sessionIds),
+  const retainedSeenMessages = Object.entries(ingestionState.seenMessages).filter(
+    ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
   );
+  const removedSeenScopes =
+    Object.keys(ingestionState.seenMessages).length - retainedSeenMessages.length;
   const retainedFileStates = Object.fromEntries(
     Object.entries(ingestionState.files).filter(
       ([key]) => !referencesSession(key, params.agentId, sessionIds),
@@ -609,7 +611,7 @@ async function forgetWorkspaceMemory(
       vectorRows: indexPlan.vectorRows,
       embeddingCacheRows: indexPlan.embeddingCacheRows,
       shortTermEntries: shortTermEntries.length - retainedShortTerm.length,
-      seenHashScopes: removedSeenScopes.length,
+      seenHashScopes: removedSeenScopes,
       backups: rewrittenBackups,
       originRows: allOrigins.filter((origin) => entryKeys.has(origin.entryKey)).length,
     },
@@ -702,17 +704,13 @@ async function forgetWorkspaceMemory(
       });
     }
     if (
-      removedSeenScopes.length > 0 ||
+      removedSeenScopes > 0 ||
       Object.keys(retainedFileStates).length !== Object.keys(ingestionState.files).length
     ) {
       await writeSessionIngestionState(workspaceDir, {
         ...ingestionState,
         files: retainedFileStates,
-        seenMessages: Object.fromEntries(
-          Object.entries(ingestionState.seenMessages).filter(
-            ([scope]) => !referencesSession(scope, params.agentId, sessionIds),
-          ),
-        ),
+        seenMessages: Object.fromEntries(retainedSeenMessages),
       });
     }
     if (rewrittenBackups > 0) {
