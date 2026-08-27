@@ -179,10 +179,22 @@ export function resolveMattermostThreadSessionContext(params: {
 export function resolveMattermostPendingHistoryKey(params: {
   kind: ChatType;
   sessionKey: string;
+  /** Thread root for this turn; `undefined` for a top-level, non-threaded turn. */
+  threadRootId: string | undefined;
 }): string | null {
-  // DMs always dispatch immediately, so they do not need the pending-room
-  // history window. Keeping them out also avoids one empty bucket per DM thread.
-  return params.kind === "direct" ? null : params.sessionKey;
+  // A top-level DM always dispatches immediately, so it does not need the
+  // pending-room history window; keeping it out also avoids one empty bucket per
+  // DM conversation.
+  //
+  // A thread-scoped DM is not the same case. Opting a DM into threading gives
+  // each thread its own session with no parent inheritance, so this window is
+  // the only in-process record of that thread — and the one thing a restart or a
+  // session clear can rebuild it from (#93204). Excluding it here was written
+  // when every DM was flat and predates DM threading being configurable.
+  if (params.kind === "direct" && !params.threadRootId) {
+    return null;
+  }
+  return params.sessionKey;
 }
 
 export function resolveMattermostReactionChannelId(

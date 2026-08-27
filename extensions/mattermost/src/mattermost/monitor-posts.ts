@@ -20,6 +20,7 @@ import {
   formatMattermostDirectMessageDropLog,
   normalizeMattermostAllowEntry,
   resolveMattermostMonitorInboundAccess,
+  shouldRetainMattermostRecoveredSenderHistory,
 } from "./monitor-auth.js";
 import { resolveMattermostPendingHistoryKey } from "./monitor-context.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
@@ -36,12 +37,17 @@ import {
   formatMattermostInboundMediaText,
   formatMattermostPendingMediaText,
 } from "./monitor-resources.js";
+import {
+  createMattermostThreadBackfill,
+  createSessionIdResolver,
+} from "./monitor-thread-backfill.js";
 import { dispatchMattermostInboundTurn } from "./monitor-turn.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import {
   createChannelHistoryWindow,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  isDangerousNameMatchingEnabled,
   logInboundDrop,
   type HistoryEntry,
 } from "./runtime-api.js";
@@ -58,6 +64,37 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       cfg.messages?.groupChat?.historyLimit ??
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
+  // Recovery state lives exactly as long as the history map it repairs, so a
+  // restart resets both together.
+  const threadBackfill = createMattermostThreadBackfill({
+    client: monitor.client,
+    channelHistories,
+    historyLimit,
+    resolveSessionId: createSessionIdResolver(cfg.session?.store),
+    // Same boundary the inbound path applies to a denied sender below: a trigger
+    // allowlist does not hide history unless context visibility opts in. Routed
+    // through the shared ingress resolver so recovery reads the same effective
+    // policy the live path does, rather than becoming a second, unpoliced way
+    // into the window.
+    shouldRetainSenderHistory: ({ senderId, channelId, kind }) =>
+      shouldRetainMattermostRecoveredSenderHistory({
+        account,
+        cfg,
+        senderId,
+        // Name entries are an opt-in, dangerous matching mode, so the directory
+        // lookup only happens where it can change the decision.
+        resolveSenderName: async () =>
+          isDangerousNameMatchingEnabled(account.config)
+            ? normalizeOptionalString((await resolveUserInfo(senderId))?.username)
+            : undefined,
+        channelId,
+        kind,
+        groupPolicy,
+        readStoreAllowFrom: pairing.readAllowFromStore,
+        logVerboseMessage: (message) => monitor.logVerboseMessage(message),
+      }),
+    logVerboseMessage: (message) => monitor.logVerboseMessage(message),
+  });
 
   return async (
     post: MattermostIngressPost,
@@ -114,7 +151,11 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       agentId: route.agentId,
       sessionKey,
     });
-    const historyKey = resolveMattermostPendingHistoryKey({ kind, sessionKey });
+    const historyKey = resolveMattermostPendingHistoryKey({
+      kind,
+      sessionKey,
+      threadRootId: effectiveReplyToId,
+    });
     const fileIds = uniqueStrings(normalizeTrimmedStringList(post.file_ids ?? []));
     const nativeMedia = fileIds.map(() => ({}));
     const pendingBody = formatMattermostPendingMediaText({ body: rawText, media: nativeMedia });
@@ -355,6 +396,20 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       previousTimestamp,
       envelope: envelopeOptions,
     });
+    // A thread whose in-memory window did not survive a restart or a session
+    // clear is rebuilt from the server before the pending context is composed,
+    // so the agent sees the conversation the user is actually looking at.
+    if (historyKey && effectiveReplyToId) {
+      await threadBackfill.ensureThreadHistory({
+        historyKey,
+        threadRootId: effectiveReplyToId,
+        currentPostId: post.id,
+        agentId: route.agentId,
+        channelId,
+        kind,
+      });
+    }
+
     let combinedBody = body;
     if (historyKey) {
       const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });

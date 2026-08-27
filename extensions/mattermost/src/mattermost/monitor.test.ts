@@ -602,13 +602,26 @@ describe("resolveMattermostThreadSessionContext", () => {
 });
 
 describe("resolveMattermostPendingHistoryKey", () => {
-  it("does not retain pending history buckets for thread-scoped direct messages", () => {
+  it("does not retain pending history buckets for top-level direct messages", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "direct",
+        sessionKey: "agent:main:mattermost:direct:user-1",
+        threadRootId: undefined,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps a pending history bucket for thread-scoped direct messages", () => {
+    // A DM thread owns its session with no parent inheritance, so this window is
+    // the only in-process record of the thread and has to be recoverable.
     expect(
       resolveMattermostPendingHistoryKey({
         kind: "direct",
         sessionKey: "agent:main:mattermost:direct:user-1:thread:post-123",
+        threadRootId: "post-123",
       }),
-    ).toBeNull();
+    ).toBe("agent:main:mattermost:direct:user-1:thread:post-123");
   });
 
   it("keeps pending room history scoped to the active session", () => {
@@ -616,8 +629,21 @@ describe("resolveMattermostPendingHistoryKey", () => {
       resolveMattermostPendingHistoryKey({
         kind: "channel",
         sessionKey: "agent:main:mattermost:channel:chan-1:thread:post-123",
+        threadRootId: "post-123",
       }),
     ).toBe("agent:main:mattermost:channel:chan-1:thread:post-123");
+  });
+
+  it("keeps pending room history for top-level room posts", () => {
+    // Rooms batch their pending window whether or not the turn is threaded; only
+    // the direct case turns on the thread root.
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "channel",
+        sessionKey: "agent:main:mattermost:channel:chan-1",
+        threadRootId: undefined,
+      }),
+    ).toBe("agent:main:mattermost:channel:chan-1");
   });
 });
 

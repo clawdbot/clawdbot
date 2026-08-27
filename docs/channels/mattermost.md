@@ -201,6 +201,7 @@ Use `channels.mattermost.replyToModeByChatType` to override the mode for `direct
 Notes:
 
 - Thread-scoped sessions use the triggering post id as the thread root.
+- A thread whose in-process history window is empty — after a gateway restart, or after `/new` clears the session — is rebuilt once from the Mattermost thread itself, so the agent keeps the context the user is looking at. This applies to channel, group, and thread-scoped direct conversations.
 - `first` and `all` are currently equivalent because once Mattermost has a thread root, follow-up chunks and media continue in that same thread.
 - Per-chat-type overrides take precedence over `replyToMode`. Without a `direct` override, existing deployments keep flat, non-threaded DMs.
 
