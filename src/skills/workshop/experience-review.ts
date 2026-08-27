@@ -461,6 +461,8 @@ async function runSkillExperienceReviewInner(
           preparedRunAdmission,
           sessionId: reviewSession.sessionId,
           sessionKey: reviewSession.sessionKey,
+          // Delivery authority closes with the foreground turn and cannot be reused by this fork.
+          messageActionTurnCapability: undefined,
           sessionManager: detachedSession,
           sessionPersistence: "detached",
           // Never occupy the foreground agent lane after the idle gate opens.

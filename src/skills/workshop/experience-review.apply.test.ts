@@ -239,6 +239,7 @@ describe("experience review auto apply", () => {
           sandboxSessionKey: "agent:main:main",
           trigger: "user",
           promptCacheKey: foregroundPromptCacheKey,
+          messageActionTurnCapability: "closed-foreground-capability",
           reasoningLevel: "on",
         },
       },
@@ -286,6 +287,7 @@ describe("experience review auto apply", () => {
     const reviewSessionKey = runEmbeddedAgent.mock.calls[0]?.[0].sessionKey;
     expect(isIncognitoSessionKey(reviewSessionKey)).toBe(true);
     expect(reviewSessionKey).not.toBe("agent:main:main");
+    expect(runEmbeddedAgent.mock.calls[0]?.[0].messageActionTurnCapability).toBeUndefined();
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("sessionTarget");
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).not.toHaveProperty("disableMessageTool");
   });
