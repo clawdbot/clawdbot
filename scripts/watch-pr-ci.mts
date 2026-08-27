@@ -176,33 +176,6 @@ const isAutoResponse = (check: RollupCheck) =>
     .replaceAll(/[^a-z0-9]+/gu, " ")
     .trim() === "auto response";
 
-const PROCESS_IGNORED_CHECK = "clownfish/exact-merge";
-
-export function filterProcessIgnoredRollupChecks(rollup: RollupPage): RollupPage {
-  const contexts = rollup.statusCheckRollup?.contexts;
-  if (!contexts) {
-    return rollup;
-  }
-  const nodes = contexts.nodes ?? [];
-  const retainedNodes = nodes.filter((check) => checkName(check) !== PROCESS_IGNORED_CHECK);
-  if (retainedNodes.length === nodes.length) {
-    return rollup;
-  }
-  // Do not pretend unseen contexts were ignored. The count shrinks only when
-  // every context was visible, keeping an incomplete rollup conservatively failing.
-  const totalCount =
-    contexts.totalCount === undefined || contexts.totalCount === nodes.length
-      ? retainedNodes.length
-      : contexts.totalCount;
-  return {
-    ...rollup,
-    statusCheckRollup: {
-      ...rollup.statusCheckRollup,
-      contexts: { ...contexts, nodes: retainedNodes, totalCount },
-    },
-  };
-}
-
 // Run identity for supersession; undefined when any id is missing so ambiguous
 // nodes are never dropped (fails toward FAILING, never toward false GREEN).
 // These databaseIds are GraphQL Int fields, but GitHub serializes Actions-scale
@@ -580,7 +553,7 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        const pr = filterProcessIgnoredRollupChecks(readRollup(args.pr, args.repo));
+        const pr = readRollup(args.pr, args.repo);
         const blocked = precheck(pr, args.headSha, true);
         if (blocked !== null) {
           return blocked;

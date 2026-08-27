@@ -8,7 +8,6 @@ import {
   classifyRollup,
   classifyRunAttachment,
   collectRollupContexts,
-  filterProcessIgnoredRollupChecks,
   parseArgs,
   pollUntilDeadline,
   sanitizeCheckName,
@@ -199,66 +198,6 @@ esac
         },
       }).failingNames,
     ).toEqual(["deploy?prod", "unit?owned?"]);
-  });
-
-  it("only ignores the process-owned exact-merge check", () => {
-    const ignored = filterProcessIgnoredRollupChecks({
-      statusCheckRollup: {
-        state: "FAILURE",
-        contexts: {
-          totalCount: 1,
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "clownfish/exact-merge",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-            },
-          ],
-        },
-      },
-    });
-    expect(classifyRollup(ignored.statusCheckRollup).verdict).toBe("GREEN");
-
-    const otherFailure = filterProcessIgnoredRollupChecks({
-      statusCheckRollup: {
-        state: "FAILURE",
-        contexts: {
-          totalCount: 2,
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "clownfish/exact-merge",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-            },
-            { kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "FAILURE" },
-          ],
-        },
-      },
-    });
-    expect(classifyRollup(otherFailure.statusCheckRollup)).toMatchObject({
-      verdict: "FAILING",
-      failingNames: ["unit"],
-    });
-
-    const incomplete = filterProcessIgnoredRollupChecks({
-      statusCheckRollup: {
-        state: "FAILURE",
-        contexts: {
-          totalCount: 2,
-          nodes: [
-            {
-              kind: "CheckRun",
-              name: "clownfish/exact-merge",
-              status: "COMPLETED",
-              conclusion: "FAILURE",
-            },
-          ],
-        },
-      },
-    });
-    expect(classifyRollup(incomplete.statusCheckRollup).verdict).toBe("FAILING");
   });
 
   it("polls once more after the deadline-clamped final wait", async () => {
