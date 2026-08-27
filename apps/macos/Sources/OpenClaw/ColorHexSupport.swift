@@ -13,7 +13,7 @@ enum ColorHexSupport {
     /// Per-profile accent from a users.prefs.get entries payload. nil for
     /// missing or malformed values so callers fall back to the gateway accent.
     static func profileAccentHex(entries: [String: Any]?) -> String? {
-        normalizedHex(entries?["ui.accent"] as? String)
+        self.normalizedHex(entries?["ui.accent"] as? String)
     }
 
     static func color(fromHex raw: String?) -> Color? {
