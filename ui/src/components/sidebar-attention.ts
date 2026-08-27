@@ -467,12 +467,18 @@ class SidebarAttention extends OpenClawLightDomElement {
         ? event.key === "Escape" && !this.panelOpen && !event.defaultPrevented
         : !event.composedPath().includes(this);
     if (dismiss) {
+      if (event instanceof KeyboardEvent && this.panelTrigger) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
       this.closePanel(false);
     }
   };
 
   private async openPanel(trigger: HTMLElement) {
     const generation = ++this.panelGeneration;
+    // The pending open owns Escape before its lazy panel can handle keyboard events.
+    this.panelTrigger = trigger;
     this.panelLoad ??= import("./sidebar-attention-panel.runtime.ts");
     const panelRuntime = await this.panelLoad;
     if (!this.isConnected || generation !== this.panelGeneration) {
@@ -483,7 +489,6 @@ class SidebarAttention extends OpenClawLightDomElement {
     const width = Math.min(390, globalThis.innerWidth - 16);
     const preferredLeft = rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
-    this.panelTrigger = trigger;
     this.panelRenderer = panelRuntime.renderSidebarAttentionPanel;
     this.panelPosition =
       rect.top < globalThis.innerHeight / 2
@@ -500,18 +505,15 @@ class SidebarAttention extends OpenClawLightDomElement {
   private closePanel(restoreFocus: boolean) {
     // Closing also cancels an open that is still waiting for its runtime or render.
     const generation = ++this.panelGeneration;
-    if (!this.panelOpen) {
-      return;
-    }
-    const trigger = this.panelTrigger;
+    const trigger = restoreFocus && this.panelOpen ? this.panelTrigger : null;
     this.panelOpen = false;
     this.overflowAbove = false;
     this.overflowBelow = false;
     this.panelTrigger = null;
-    if (restoreFocus) {
+    if (trigger) {
       void this.updateComplete.then(() => {
         if (generation === this.panelGeneration) {
-          trigger?.focus();
+          trigger.focus();
         }
       });
     }

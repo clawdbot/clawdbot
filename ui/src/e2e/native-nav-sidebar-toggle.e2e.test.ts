@@ -14,7 +14,10 @@ import {
   failNextDeviceIdentityMint,
   openChatSidePanelType,
 } from "./chat-side-panel.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI native-nav sidebar toggle E2E",
@@ -64,27 +67,6 @@ const TOAST_SCENARIO: ControlUiMockGatewayScenario = {
 };
 
 let context: BrowserContext | undefined;
-
-async function holdModuleResponse(page: Page, module: RegExp) {
-  let release!: () => void;
-  let requested!: (url: string) => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const request = new Promise<string>((resolve) => {
-    requested = resolve;
-  });
-  let requests = 0;
-  await page.route(module, async (route) => {
-    requests += 1;
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    requested(route.request().url());
-    await gate;
-    await route.fulfill({ response });
-  });
-  return { request, release, requests: () => requests };
-}
 
 suite.define(() => {
   afterEach(async () => {
