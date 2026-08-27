@@ -13,12 +13,12 @@ import { finalizeAgentTools } from "../agents/agent-tools.finalize.js";
 import { isApplyPatchAllowedForModel } from "../agents/apply-patch-model-policy.js";
 import { buildBootstrapContextForFiles } from "../agents/bootstrap-files.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
+import { createEmbeddedAgentResourceLoader } from "../agents/embedded-agent-runner/resource-loader.js";
 import { createNativeModelOwnedRuntimeModel } from "../agents/embedded-agent-runner/run/setup.js";
 import { resolveSessionPermissionCoreToolPolicy } from "../agents/session-permission-exec-mode.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
-import { DefaultResourceLoader } from "../agents/sessions/resource-loader.js";
 import { createAgentSession } from "../agents/sessions/sdk.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { SettingsManager } from "../agents/sessions/settings-manager.js";
@@ -123,16 +123,13 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
     (file) => file.name === DEFAULT_AGENTS_FILENAME,
   );
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {});
-  const resourceLoader = new DefaultResourceLoader({
+  const resourceLoader = createEmbeddedAgentResourceLoader({
     cwd: params.cwd,
     agentDir: params.stateDir,
     settingsManager,
-    noExtensions: true,
-    noSkills: true,
-    noPromptTemplates: true,
-    noThemes: true,
-    noContextFiles: true,
-    ...(params.systemPrompt === undefined ? {} : { appendSystemPrompt: [params.systemPrompt] }),
+    // The Gateway supplies literal text, not a local prompt-file path.
+    appendSystemPromptTransform: () =>
+      params.systemPrompt === undefined ? [] : [params.systemPrompt],
     agentsFilesOverride: () => ({ agentsFiles: contextFiles }),
   });
   await resourceLoader.reload();

@@ -62,6 +62,10 @@ Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
 no standing provider or forge credentials.
 
+The worker loads workspace `AGENTS.md` through the bounded bootstrap loader and
+appends Gateway-supplied system instructions as literal text. It does not discover
+`SYSTEM.md` or `APPEND_SYSTEM.md` from the workspace or agent state directory.
+
 Worker-to-worker session dispatch is not exposed in this mode. Placement and
 dispatch remain gateway-owned: an operator can dispatch an existing local,
 managed-worktree session through the Gateway, while a worker process cannot

@@ -385,14 +385,17 @@ vi.mock("../../../trajectory/runtime.js", async () => {
   };
 });
 
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  class DefaultResourceLoader {
+vi.mock("../../sessions/resource-loader.js", () => ({
+  DefaultResourceLoader: class {
     constructor(...args: unknown[]) {
       hoisted.defaultResourceLoaderInitMock(...args);
     }
     async reload() {}
-  }
+  },
+}));
+
+vi.mock("../../sessions/index.js", () => {
+  function AuthStorage() {}
   function ModelRegistry() {}
   const estimateTokens = (value: unknown) =>
     Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
@@ -400,7 +403,6 @@ vi.mock("../../sessions/index.js", () => {
   return {
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
-    DefaultResourceLoader,
     estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
