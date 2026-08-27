@@ -42,10 +42,9 @@ export function parseReplyDirectives(
     stripReplyTags: true,
   });
 
-  if (replyParsed.hasReplyTag) {
-    text = replyParsed.text;
-  }
-  text = stripInlineDirectiveTagsForDelivery(text).text;
+  text = stripInlineDirectiveTagsForDelivery(
+    replyParsed.hasReplyTag ? replyParsed.text : text,
+  ).text;
 
   const silentToken = options.silentToken ?? SILENT_REPLY_TOKEN;
   const isSilent = isSilentReplyPayloadText(text, silentToken);
