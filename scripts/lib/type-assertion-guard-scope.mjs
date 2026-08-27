@@ -72,6 +72,7 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "extensions/matrix/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/matrix/src/matrix/client/logging.ts", // Matrix SDK logger singleton has an undeclared loglevel capability
   "extensions/matrix/src/test-runtime.ts", // test support
+  "extensions/msteams/src/approval-native.ts", // approval runtime dynamically implements the public channel adapter seam
   "extensions/msteams/src/attachments/shared.ts", // Vitest mock metadata is intentionally probed in production test support
   "extensions/msteams/src/sdk-proactive.ts", // proactive sends require private Teams app transport internals
   "extensions/msteams/src/sdk.ts", // Teams SDK public and deep-import types disagree across package boundaries

@@ -965,6 +965,28 @@ describe("normalizeInitialApplicationLocation", () => {
     }
   });
 
+  it("applies and refreshes the saved accent before the gateway connects", () => {
+    const previousSettings = loadSettings();
+    saveSettings({ ...previousSettings, accent: "#48D6C2" });
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: deferred<void>().promise });
+
+    try {
+      expect(runtime.context.gateway.snapshot.phase).toBe("stopped");
+      expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#48d6c2");
+      expect(runtime.context.theme.settings.accent).toBe("#48d6c2");
+
+      saveSettings({ ...loadSettings(), accent: "#f4b740" });
+      runtime.context.theme.refresh();
+
+      expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#f4b740");
+      expect(runtime.context.theme.settings.accent).toBe("#f4b740");
+    } finally {
+      saveSettings(previousSettings);
+      runtime.context.theme.refresh();
+      runtime.stop();
+    }
+  });
+
   it("synchronizes every theme-color meta with the resolved theme background", () => {
     const previousSettings = loadSettings();
     const style = document.createElement("style");

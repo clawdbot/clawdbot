@@ -229,6 +229,31 @@ describe("controlUi.sessionPullRequests.subscribe", () => {
     expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
   });
 
+  it("acknowledges a subscription before its cold snapshots finish loading", async () => {
+    let finishHydration!: () => void;
+    const hydration = new Promise<void>((resolve) => {
+      finishHydration = resolve;
+    });
+    const replace = vi.fn(() => hydration);
+    const handlers = createControlUiHandlers(vi.fn());
+    const respond = vi.fn<RespondFn>();
+
+    const request = expectDefined(
+      handlers["controlUi.sessionPullRequests.subscribe"],
+      'handlers["controlUi.sessionPullRequests.subscribe"] test invariant',
+    )(
+      requestOptions({ sessionKeys: ["agent:main:cold"] }, respond, {
+        client: { connId: "conn-control-ui" },
+        context: { controlUiSessionPullRequests: { replace } },
+      }),
+    );
+
+    expect(replace).toHaveBeenCalledWith("conn-control-ui", ["agent:main:cold"]);
+    expect(respond).toHaveBeenCalledWith(true, { subscribed: true }, undefined);
+    finishHydration();
+    await request;
+  });
+
   it("accepts an empty replace-set as unsubscribe", async () => {
     const replace = vi.fn().mockResolvedValue(undefined);
     const handlers = createControlUiHandlers(vi.fn());

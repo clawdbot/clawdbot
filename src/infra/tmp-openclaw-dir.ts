@@ -19,6 +19,7 @@ export type ResolvePreferredOpenClawTmpDirOptions = {
   lstatSync?: (path: string) => SecureDirStat;
   mkdirSync?: (path: string, opts: { recursive: boolean; mode?: number }) => void;
   platform?: NodeJS.Platform;
+  preferredDir?: string;
   tmpdir?: () => string;
   warn?: (message: string) => void;
 };
@@ -68,7 +69,7 @@ export function resolvePreferredOpenClawTmpDir(
 ): string {
   return loadResolveSecureTempRoot()({
     ...options,
-    preferredDir: DEFAULT_POSIX_TMP_ROOT,
+    preferredDir: options.preferredDir ?? DEFAULT_POSIX_TMP_ROOT,
     fallbackPrefix: "openclaw",
     warningPrefix: "[openclaw]",
     unsafeFallbackLabel: "OpenClaw temp dir",

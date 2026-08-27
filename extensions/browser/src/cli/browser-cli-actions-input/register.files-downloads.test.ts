@@ -93,7 +93,7 @@ describe("browser action input file/download commands", () => {
         timeoutMs: 45000,
       },
     });
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(45000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(50000);
   });
 
   it("keeps the outer waitfordownload request open for the advertised default wait", async () => {
@@ -101,7 +101,7 @@ describe("browser action input file/download commands", () => {
 
     await program.parseAsync(["browser", "waitfordownload"], { from: "user" });
 
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(120000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(125000);
   });
 
   it("accepts signed and zero-padded download timeouts", async () => {
@@ -111,7 +111,7 @@ describe("browser action input file/download commands", () => {
       from: "user",
     });
 
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25_000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(30000);
   });
 
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {
@@ -124,7 +124,7 @@ describe("browser action input file/download commands", () => {
       },
     );
 
-    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25000);
+    expect(getLastRequestOptions()?.timeoutMs).toBe(30000);
   });
 
   it("rejects non-decimal file and download timeouts before dispatch", async () => {

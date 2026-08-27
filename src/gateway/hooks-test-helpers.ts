@@ -9,6 +9,7 @@ export function createHooksConfig(): HooksConfigResolved {
     basePath: "/hooks",
     token: "hook-secret",
     maxBodyBytes: 1024,
+    maxBodyBytesByPath: new Map(),
     mappings: [],
     agentPolicy: {
       defaultAgentId: "main",

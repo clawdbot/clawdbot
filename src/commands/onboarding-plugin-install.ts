@@ -73,6 +73,8 @@ export type OnboardingPluginInstallEntry = {
   label: string;
   install: PluginPackageInstall;
   trustedSourceLinkedOfficialInstall?: boolean;
+  /** Keep this official runtime package on the same release cohort as OpenClaw. */
+  versionBoundToOpenClaw?: boolean;
   preferRemoteInstall?: boolean;
 };
 
@@ -1145,6 +1147,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           ? parseRegistryNpmSpec(npmSpec)?.name
           : undefined,
         coreVersion: VERSION,
+        versionBoundToCore: entry.versionBoundToOpenClaw,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;

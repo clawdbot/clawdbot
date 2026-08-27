@@ -53,16 +53,14 @@ suite.define(() => {
 
       const rowEditor = page.locator(".chat-queue__item").nth(1).locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
+      await rowEditor.press("ControlOrMeta+A");
       expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
       expect(await composer.inputValue()).toBe("a separate composer draft");
       // The row stays where it is, marked as the one being edited.
       expect(await queueText()).toEqual([...QUEUED]);
       expect(await page.locator(".chat-queue__item--editing").count()).toBe(1);
-      expect(
-        await page.locator(".chat-queue__item").nth(1).locator(".chat-queue__badge").textContent(),
-      ).toBe("Editing");
 
-      await rowEditor.fill("then update the docs and the changelog");
+      await page.keyboard.insertText("then update the docs and the changelog");
       await page.locator(".chat-queue__edit-submit").click();
 
       await expect
@@ -97,7 +95,7 @@ suite.define(() => {
 
       await composer.fill("a separate composer draft");
       const row = page.locator(".chat-queue__item").nth(1);
-      await row.locator(".chat-queue__edit").click();
+      await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.fill("a replacement the operator abandons");
@@ -137,7 +135,7 @@ suite.define(() => {
       }
 
       const row = page.locator(".chat-queue__item").nth(1);
-      await row.locator(".chat-queue__edit").click();
+      await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
       await composer.fill("a separate composer send");
@@ -202,17 +200,20 @@ suite.define(() => {
       }
       await gateway.setOnline(false);
       await gateway.closeLatest();
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const editRow = page.locator(".chat-queue__item", { hasText: "edit before send" });
-      const editButton = editRow.locator(".chat-queue__edit");
-      expect(await editButton.isDisabled()).toBe(false);
-      await editButton.click();
+      await editRow.dblclick();
       // `hasText` stops matching once the row text becomes a textarea value.
       const inlineEditor = page.locator(".chat-queue__edit-input");
       await inlineEditor.waitFor({ timeout: 10_000 });
-      await inlineEditor.fill("edited before send");
-      await page.locator(".chat-queue__edit-submit").click();
+      await inlineEditor.press("ControlOrMeta+A");
+      await page.keyboard.insertText("edited before send");
+      await inlineEditor.press("Control+Enter");
       await page.locator(".chat-queue__item", { hasText: "edited before send" }).waitFor();
 
       const lastGrip = page
@@ -341,7 +342,9 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
       await gateway.setOnline(true);
       await page
-        .locator(".agent-chat__offline-hint")
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
         .waitFor({ state: "detached", timeout: 10_000 });
       await gateway.emitChatFinal({ runId: activeRunId, text: "Initial run completed." });
       await gateway.emitGatewayEvent("sessions.changed", {

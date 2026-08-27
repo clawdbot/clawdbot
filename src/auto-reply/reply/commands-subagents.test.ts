@@ -494,6 +494,79 @@ describe("subagents log", () => {
     });
   });
 
+  it.each([
+    {
+      name: "hides signed commentary while retaining the final answer",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "PRIVATE_COMMENTARY",
+              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
+            },
+            {
+              type: "output_text",
+              text: "Visible final answer",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+      expectedText: "Assistant: Visible final answer",
+      unexpectedText: "PRIVATE_COMMENTARY",
+    },
+    {
+      name: "omits commentary-only history messages",
+      messages: [{ role: "assistant", phase: "commentary", content: "PRIVATE_COMMENTARY" }],
+      expectedText: "(no messages)",
+      unexpectedText: "PRIVATE_COMMENTARY",
+    },
+    {
+      name: "does not revive legacy text when the signed final answer is empty",
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "PRIVATE_LEGACY" },
+            {
+              type: "text",
+              text: "   ",
+              textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
+            },
+          ],
+        },
+      ],
+      expectedText: "(no messages)",
+      unexpectedText: "PRIVATE_LEGACY",
+    },
+    {
+      name: "renders persisted Responses output text",
+      messages: [
+        { role: "assistant", content: [{ type: "output_text", text: "Persisted output" }] },
+      ],
+      expectedText: "Assistant: Persisted output",
+      unexpectedText: "(no messages)",
+    },
+    {
+      name: "renders persisted assistant input text",
+      messages: [
+        { role: "assistant", content: [{ type: "input_text", text: "Persisted assistant input" }] },
+      ],
+      expectedText: "Assistant: Persisted assistant input",
+      unexpectedText: "(no messages)",
+    },
+  ])("$name", async ({ messages, expectedText, unexpectedText }) => {
+    callGatewayMock.mockResolvedValue({ messages });
+
+    const result = await handleSubagentsLogAction(buildLogContext(["1"], [makeRun()]));
+    const text = requireReplyText(result.reply);
+
+    expect(text).toContain(expectedText);
+    expect(text).not.toContain(unexpectedText);
+  });
+
   it("uses the numeric token after the target as the history limit", async () => {
     await handleSubagentsLogAction(buildLogContext(["1", "5"], [makeRun()]));
 

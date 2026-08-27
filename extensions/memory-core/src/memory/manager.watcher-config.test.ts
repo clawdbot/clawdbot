@@ -156,7 +156,6 @@ vi.mock("./sqlite-vec.js", () => ({
 }));
 
 vi.mock("./embeddings.js", () => ({
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
@@ -165,7 +164,7 @@ vi.mock("./embeddings.js", () => ({
     provider: {
       id: "mock",
       model: "mock-embed",
-      embedQuery: async () => [1, 0],
+      embed: async () => [1, 0],
       embedBatch: async (texts: string[]) => texts.map(() => [1, 0]),
     },
   }),

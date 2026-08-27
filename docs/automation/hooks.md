@@ -229,7 +229,7 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 | --------------------- | ---------------------------------------------------- | -------------------------------------------------------------- |
 | session-memory        | `command:new`, `command:reset`, `session:auto-reset` | Saves session context to `<workspace>/memory/`                 |
 | bootstrap-extra-files | `agent:bootstrap`                                    | Injects additional bootstrap files from glob patterns          |
-| command-logger        | `command`                                            | Logs all commands to `~/.openclaw/logs/commands.log`           |
+| command-logger        | `command`                                            | Logs emitted command events to `~/.openclaw/logs/commands.log` |
 | compaction-notifier   | `session:compact:before`, `session:compact:after`    | Sends visible chat notices when session compaction starts/ends |
 | boot-md               | `gateway:startup`                                    | Runs `BOOT.md` when the gateway starts                         |
 
@@ -284,7 +284,7 @@ when you intentionally want both representations.
 
 ### command-logger details
 
-Logs every slash command as a JSON line (timestamp, action, session key, sender ID, source) to `~/.openclaw/logs/commands.log`.
+Logs each emitted command event as a JSON line (timestamp, action, session key, sender ID, source) to `~/.openclaw/logs/commands.log`. Current core command events are `/new`, `/reset`, and `/stop`; plugins may emit additional actions.
 
 <a id="compaction-notifier"></a>
 

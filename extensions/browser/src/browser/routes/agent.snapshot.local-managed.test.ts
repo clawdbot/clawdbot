@@ -103,17 +103,17 @@ vi.mock("./agent.shared.js", () => ({
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
-function getSnapshotGetHandler() {
+function getSnapshotGetHandler(
+  state = {
+    resolved: {
+      actionTimeoutMs: 60_000,
+      extraArgs: [],
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+    },
+  },
+) {
   const { app, getHandlers } = createBrowserRouteApp();
-  registerBrowserAgentSnapshotRoutes(app, {
-    state: () => ({
-      resolved: {
-        actionTimeoutMs: 60_000,
-        extraArgs: [],
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
-      },
-    }),
-  } as never);
+  registerBrowserAgentSnapshotRoutes(app, { state: () => state } as never);
   const handler = getHandlers.get("/snapshot");
   expect(handler).toBeTypeOf("function");
   return handler;
@@ -242,6 +242,31 @@ describe("local-managed browser snapshot routes", () => {
 
     const secondCall = cdpMocks.snapshotRoleViaCdp.mock.calls[1]?.[0];
     expect(secondCall).toMatchObject({
+      delta: { mode: "role", previousKeys: expect.any(Set) },
+    });
+  });
+
+  it("reuses same-document delta keys across request contexts in one browser runtime", async () => {
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    const state = {
+      resolved: {
+        actionTimeoutMs: 60_000,
+        extraArgs: [],
+        ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      },
+    };
+    const firstHandler = getSnapshotGetHandler(state);
+    const secondHandler = getSnapshotGetHandler(state);
+    const first = createBrowserRouteResponse();
+    const second = createBrowserRouteResponse();
+    const request = { params: {}, query: { format: "ai", interactive: "true" } };
+
+    await firstHandler?.(request, first.res);
+    await secondHandler?.(request, second.res);
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(cdpMocks.snapshotRoleViaCdp.mock.calls[1]?.[0]).toMatchObject({
       delta: { mode: "role", previousKeys: expect.any(Set) },
     });
   });

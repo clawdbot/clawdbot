@@ -74,6 +74,39 @@ afterEach(async () => {
   await disposeActiveTuiFixtures();
 });
 
+it("submits provider-specific thinking labels with one Enter", async () => {
+  const fixture = await startTuiFixture({
+    env: {
+      OPENCLAW_TUI_PTY_THINKING_LABEL: "on",
+      OPENCLAW_TUI_PTY_SAFE_THINKING_LABEL: "always on",
+    },
+  });
+
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+
+    for (const [index, { label, id }] of [
+      { label: "on", id: "fixture-thinking" },
+      { label: "always on", id: "fixture-thinking-safe" },
+    ].entries()) {
+      await fixture.run.write(`/think ${label}`, { delay: false });
+      await fixture.run.waitForOutput(`→ ${label}`, STARTUP_TIMEOUT_MS);
+      await fixture.run.write("\r", { delay: false });
+      const entries = await waitForLogCount({
+        logPath: fixture.logPath,
+        predicate: (entry) => entry.method === "patchSession",
+        count: index + 1,
+      });
+      expect(entries.findLast((entry) => entry.method === "patchSession")?.payload).toMatchObject({
+        thinkingLevel: id,
+      });
+      await fixture.run.waitForOutput(`thinking set to ${label}`, STARTUP_TIMEOUT_MS);
+    }
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
 it("clears the previous display name when the selected session is unnamed", async () => {
   const fixture = await startTuiFixture();
   try {
@@ -100,6 +133,33 @@ it("clears the previous display name when the selected session is unnamed", asyn
     expect(fixture.run.visibleOutput().slice(targetOutputOffset)).not.toContain(
       "Production incident",
     );
+  } finally {
+    await fixture.cleanup();
+  }
+}, 65_000);
+
+it("keeps the active stream when the current session is selected again", async () => {
+  const fixture = await startTuiFixture();
+  try {
+    await fixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+    await fixture.run.write("streaming prompt\r", { delay: false });
+    await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt", STARTUP_TIMEOUT_MS);
+    const historyLoadsBefore = (await readFixtureLog(fixture.logPath)).filter(
+      (entry) => entry.method === "loadHistory",
+    ).length;
+
+    await fixture.run.write("/session main\r/think\r", { delay: false });
+    await fixture.run.waitForOutput("usage: /think", STARTUP_TIMEOUT_MS);
+    const rows = await waitForSynchronizedFrameRows(
+      fixture.run,
+      (frame) => frame.some((row) => row.includes("PTY_STREAMING: streaming prompt")),
+      STARTUP_TIMEOUT_MS,
+    );
+
+    expect(rows.join("\n")).not.toContain("local ready | idle");
+    expect(
+      (await readFixtureLog(fixture.logPath)).filter((entry) => entry.method === "loadHistory"),
+    ).toHaveLength(historyLoadsBefore);
   } finally {
     await fixture.cleanup();
   }

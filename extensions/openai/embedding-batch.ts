@@ -8,9 +8,9 @@ import {
   extractBatchErrorMessage,
   formatBatchErrorDetail,
   formatUnavailableBatchError,
-  normalizeBatchBaseUrl,
   postJsonWithRetry,
   readEmbeddingBatchJsonl,
+  resolveEmbeddingEndpointUrl,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
   runEmbeddingBatchGroups,
@@ -66,7 +66,6 @@ async function submitOpenAiBatch(params: {
   requests: OpenAiBatchRequest[];
   agentId: string;
 }): Promise<OpenAiBatchStatus> {
-  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   const inputFileId = await uploadBatchJsonlFile({
     client: params.openAi,
     requests: params.requests,
@@ -74,7 +73,7 @@ async function submitOpenAiBatch(params: {
   });
 
   return await postJsonWithRetry<OpenAiBatchStatus>({
-    url: `${baseUrl}/batches`,
+    url: resolveEmbeddingEndpointUrl(params.openAi.baseUrl, "batches"),
     headers: buildBatchHeaders(params.openAi, { json: true }),
     ssrfPolicy: params.openAi.ssrfPolicy,
     fetchImpl: params.openAi.fetchImpl,
@@ -143,9 +142,8 @@ async function fetchOpenAiBatchResource<T>(params: {
   signal?: AbortSignal;
   parse: (res: Response) => Promise<T>;
 }): Promise<T> {
-  const baseUrl = normalizeBatchBaseUrl(params.openAi);
   return await withRemoteHttpResponse({
-    url: `${baseUrl}${params.path}`,
+    url: resolveEmbeddingEndpointUrl(params.openAi.baseUrl, params.path),
     ssrfPolicy: params.openAi.ssrfPolicy,
     fetchImpl: params.openAi.fetchImpl,
     signal: params.signal,

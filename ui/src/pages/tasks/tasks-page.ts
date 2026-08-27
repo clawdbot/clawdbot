@@ -7,6 +7,7 @@ import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -416,40 +417,42 @@ class TasksPage extends OpenClawLightDomElement {
           </button>
         </div>
       </section>
-      ${renderTasks({
-        basePath: this.context.basePath,
-        agentId: fallbackAgentId,
-        mainKey: resolveUiConfiguredMainKey({
-          agentsList: this.context.agents.state.agentsList,
-          hello: this.context.gateway.snapshot.hello,
-        }),
-        connected: this.gateway.connected,
-        canCopy: hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-        // Task mutations need operator.write; read-only operators get no mutation buttons.
-        canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
-        loading: this.listTask.status === TaskStatus.PENDING,
-        error: this.error,
-        copyResultError: this.copyResultError,
-        tasks: this.tasks,
-        cancellingTaskIds: this.cancellingTaskIds,
-        sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),
-        onCancel: (taskId) => void this.cancelTask(taskId),
-        onRetry: (taskId) => void this.recoverTask(taskId, "retry"),
-        onDismiss: (taskId) => void this.recoverTask(taskId, "dismiss"),
-        onCopyResult: (taskId) => void this.copyTaskResult(taskId),
-        onNavigateToChat: (sessionKey) => {
-          const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
-          this.context.navigate(
-            face,
-            sessionNavigationTarget({
-              context: this.context,
+      ${renderSettingsWorkspace(
+        renderTasks({
+          basePath: this.context.basePath,
+          agentId: fallbackAgentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: this.context.agents.state.agentsList,
+            hello: this.context.gateway.snapshot.hello,
+          }),
+          connected: this.gateway.connected,
+          canCopy: hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+          // Task mutations need operator.write; read-only operators get no mutation buttons.
+          canCancel: hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null),
+          loading: this.listTask.status === TaskStatus.PENDING,
+          error: this.error,
+          copyResultError: this.copyResultError,
+          tasks: this.tasks,
+          cancellingTaskIds: this.cancellingTaskIds,
+          sessionRow: (sessionKey) => findUiSessionRow(this.context, sessionKey),
+          onCancel: (taskId) => void this.cancelTask(taskId),
+          onRetry: (taskId) => void this.recoverTask(taskId, "retry"),
+          onDismiss: (taskId) => void this.recoverTask(taskId, "dismiss"),
+          onCopyResult: (taskId) => void this.copyTaskResult(taskId),
+          onNavigateToChat: (sessionKey) => {
+            const face = resolveSessionPreferredFaceForKey(this.context, sessionKey);
+            this.context.navigate(
               face,
-              sessionKey,
-              preferenceDerivedFace: true,
-            }).options,
-          );
-        },
-      })}
+              sessionNavigationTarget({
+                context: this.context,
+                face,
+                sessionKey,
+                preferenceDerivedFace: true,
+              }).options,
+            );
+          },
+        }),
+      )}
     `;
   }
 }

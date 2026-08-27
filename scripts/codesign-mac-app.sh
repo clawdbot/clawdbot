@@ -162,7 +162,13 @@ case "$TIMESTAMP_MODE" in
     timestamp_arg="--timestamp=none"
     ;;
   auto)
-    if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
+    identity_name="$IDENTITY"
+    if [[ "$IDENTITY" =~ ^[[:xdigit:]]{40}$ ]]; then
+      # A hash selector conceals the certificate class required for notarization timestamps.
+      identity_name="$(security find-identity -p codesigning -v 2>/dev/null \
+        | awk -v hash="$IDENTITY" 'toupper($2) == toupper(hash) { print }')"
+    fi
+    if [[ "$identity_name" == *"Developer ID Application"* ]]; then
       timestamp_arg="--timestamp"
     fi
     ;;

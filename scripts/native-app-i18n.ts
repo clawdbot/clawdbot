@@ -1288,8 +1288,18 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
   return assignNativeI18nIds(entries);
 }
 
-function render(entries: NativeI18nEntry[]): string {
-  return `${JSON.stringify({ version: 2, entries }, null, 2)}\n`;
+export function serializeNativeI18nInventory(entries: readonly NativeI18nEntry[]): string {
+  return [
+    "{",
+    '  "version": 2,',
+    '  "entries": [',
+    ...entries.map(
+      (entry, index) => `    ${JSON.stringify(entry)}${index === entries.length - 1 ? "" : ","}`,
+    ),
+    "  ]",
+    "}",
+    "",
+  ].join("\n");
 }
 
 async function syncNativeI18n(options: {
@@ -1299,7 +1309,7 @@ async function syncNativeI18n(options: {
 }): Promise<NativeI18nEntry[]> {
   const currentInventory = await readNativeI18nInventory();
   const entries = await collectNativeI18nEntries();
-  const expected = render(entries);
+  const expected = serializeNativeI18nInventory(entries);
   const current = currentInventory.raw;
   if (options.checkInventory && current !== expected) {
     throw new Error(
