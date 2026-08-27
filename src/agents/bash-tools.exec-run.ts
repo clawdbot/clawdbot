@@ -580,7 +580,6 @@ export function createExecTool(
           });
         }
 
-        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,
@@ -604,13 +603,9 @@ export function createExecTool(
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
           processContinuationAvailable: allowBackground,
+          startupSignal: signal,
           onUpdate,
-          beforeSpawn: async () => {
-            signal?.throwIfAborted();
-            const denied = await revalidateGatewayApproval?.();
-            signal?.throwIfAborted();
-            return denied;
-          },
+          beforeSpawn: revalidateGatewayApproval,
           onSettledBeforeNotify: settlement.settle,
         });
         discardPreparedSandboxWorkdir = null;
