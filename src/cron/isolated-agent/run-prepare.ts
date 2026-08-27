@@ -9,6 +9,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { isCronSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -168,8 +169,7 @@ export async function prepareCronRunContext(params: {
         }
       : {}),
   });
-  const agentId = modelOwner.agentId;
-  const agentDir = modelOwner.agentDir;
+  const { agentId, agentDir } = modelOwner;
   const agentConfigOverride = requiredAgentId
     ? resolveAgentConfig(modelOwner.config, agentId)
     : undefined;
@@ -216,6 +216,7 @@ export async function prepareCronRunContext(params: {
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
+  const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
   const cronSession = resolveCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
@@ -317,6 +318,7 @@ export async function prepareCronRunContext(params: {
       cronSession,
       agentSessionKey,
       createdActor: input.job.createdActor,
+      sandbox,
       persistSessionEntry: persistCronSessionRow,
     });
     const withRunSession: WithRunSession = (result) => ({
@@ -363,8 +365,7 @@ export async function prepareCronRunContext(params: {
       typeof ownerAgentConfig?.model === "string" &&
       resolveAgentModelPrimaryValue(ownerAgentConfig.model) ===
         resolveAgentModelPrimaryValue(modelOwner.config.agents?.defaults?.model);
-    let provider = resolvedModelSelection.provider;
-    let model = resolvedModelSelection.model;
+    let { provider, model } = resolvedModelSelection;
     const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
     const inheritDefaultFallbacksForAgentStringModel =
       matchesDefaultFallbackAgentStringModel &&
@@ -600,6 +601,9 @@ export async function prepareCronRunContext(params: {
         throw err;
       }
       logWarn(`[cron:${input.job.id}] Failed to persist pre-run session entry: ${String(err)}`);
+      if (sandbox === "required" || cronSession.sessionEntry.sandbox === "required") {
+        throw err;
+      }
     }
     await retireRolledCronSessionMcpRuntime({
       job: input.job,
@@ -666,6 +670,7 @@ export async function prepareCronRunContext(params: {
           cronSession,
           runSessionKey,
           createdActor: input.job.createdActor,
+          sandbox,
           thinkingLevel: requestedThinkLevel,
           toolsAllow: agentPayload?.toolsAllow,
           toolsAllowIsDefault: agentPayload?.toolsAllowIsDefault,

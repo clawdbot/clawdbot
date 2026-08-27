@@ -97,6 +97,16 @@ export function preserveCreationStamp<
     : entry;
 }
 
+/** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
+export function inheritSessionCreationPolicy(
+  source: { createdActor?: SessionCreatedActor; sandbox?: "required" } | undefined,
+  actor?: SessionCreatedActor,
+): { actor?: SessionCreatedActor; sandbox?: "required" } {
+  return source?.sandbox === "required"
+    ? { actor: source.createdActor, sandbox: "required" }
+    : { actor };
+}
+
 export type SessionEntryProvenance = {
   /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;

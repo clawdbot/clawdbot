@@ -47,6 +47,7 @@ import {
   stopTalkTranscriptionRelaySession,
 } from "../talk-transcription-relay.js";
 import { formatForLog } from "../ws-log.js";
+import { resolveSandboxedSessionCreation } from "./session-creation-provenance.js";
 import { acknowledgeTalkSessionMark } from "./talk-session-mark.js";
 import {
   broadcastTalkRoomEvents,
@@ -305,6 +306,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         await ensureClientVoiceAgentSessionEntry({
           agentId: realtimeContext.agentId,
           sessionKey,
+          creation: resolveSandboxedSessionCreation(client, runtimeConfig),
         });
         const session = createTalkRealtimeRelaySession({
           context,

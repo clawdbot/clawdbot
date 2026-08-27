@@ -302,6 +302,8 @@ export type AgentHarnessSessionForkFailureCode =
 
 export type AgentHarnessSessionForkParams = {
   targetKey: string;
+  /** Creator-owned isolation floor resolved by the trusted Gateway request. */
+  sandbox?: "required";
   source: {
     agentId: string;
     sessionId: string;

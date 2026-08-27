@@ -67,6 +67,7 @@ import {
   flushTalkRealtimeRelayVoiceWrites,
 } from "../talk-realtime-relay.js";
 import { formatForLog } from "../ws-log.js";
+import { resolveSandboxedSessionCreation } from "./session-creation-provenance.js";
 import { hasOwnedActiveTalkClientRun } from "./talk-client-run-ownership.js";
 import {
   buildRealtimeInstructions,
@@ -373,9 +374,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             await ensureClientVoiceAgentSessionEntry({
               agentId,
               sessionKey,
-              ...(sessionEntryDeadlineAt !== undefined
-                ? { deadlineAt: sessionEntryDeadlineAt }
-                : {}),
+              creation: resolveSandboxedSessionCreation(client, runtimeConfig),
+              deadlineAt: sessionEntryDeadlineAt,
             });
           } catch (error) {
             try {
@@ -551,7 +551,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       if (relaySessionId && connId) {
         // Initialize the canonical session row BEFORE binding: the bind drains the
         // relay's buffered finals into transcript appends, which fail without it.
-        await ensureClientVoiceAgentSessionEntry({ agentId, sessionKey: params.sessionKey });
+        await ensureClientVoiceAgentSessionEntry({
+          agentId,
+          sessionKey: params.sessionKey,
+          creation: resolveSandboxedSessionCreation(request.client, config),
+        });
         ensureTalkRealtimeRelayVoiceSession({
           relaySessionId,
           connId,

@@ -238,6 +238,7 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
   deadlineAt?: number;
+  creation?: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
 }): Promise<string> {
   const created = await patchSessionEntryCore(
     params,
@@ -253,7 +254,11 @@ export async function ensureClientVoiceAgentSessionEntry(params: {
       if (context.existingEntry) {
         return { sessionId: randomUUID() };
       }
-      return buildSessionCreationStamp({ via: "talk", actor: { type: "human" } });
+      return buildSessionCreationStamp({
+        via: "talk",
+        actor: params.creation?.actor ?? { type: "human" },
+        sandbox: params.creation?.sandbox,
+      });
     },
     { fallbackEntry: mergeSessionEntry(undefined, {}) },
   );

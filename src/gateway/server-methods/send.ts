@@ -92,6 +92,7 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
+import { resolveSandboxedSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -1436,6 +1437,8 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: outboundRoute,
+              creation: resolveSandboxedSessionCreation(client, cfg),
+              sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });
           };
           const outboundSession = buildOutboundSessionContext({
