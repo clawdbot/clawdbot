@@ -1,5 +1,12 @@
 /** Manual cron wake helper for queueing system events into sessions. */
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
+import {
+  isSubagentSessionKey,
+  normalizeOptionalAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import { resolveCronDeliverySessionKey } from "../session-target.js";
+import type { CronJob } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
 export function enqueueCronSystemEvent(
@@ -12,15 +19,43 @@ export function enqueueCronSystemEvent(
 
 export function requestCronHeartbeat(
   state: CronServiceState,
-  opts: {
-    intent: "immediate" | "event";
-    reason: string;
-    agentId?: string;
-    sessionKey?: string;
-    heartbeat?: { target?: "last" };
-  },
+  opts: Omit<HeartbeatWakeRequest, "source"> & { source?: HeartbeatWakeRequest["source"] },
 ) {
   state.deps.requestHeartbeat({ source: "cron", ...opts });
+}
+
+/** Keeps safety notices with their creator and limits failure routes to explicit origins. */
+export function enqueueCronNotification(
+  state: CronServiceState,
+  job: CronJob,
+  text: string,
+  kind: "auto-disabled" | "failure-alert",
+): void {
+  const sessionKey = kind === "failure-alert" ? resolveCronDeliverySessionKey(job) : job.sessionKey;
+  const agentId =
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(parseAgentSessionKey(sessionKey)?.agentId) ??
+    normalizeOptionalAgentId(state.deps.resolveDefaultAgentId?.()) ??
+    normalizeOptionalAgentId(state.deps.defaultAgentId);
+  const deliveryContext =
+    sessionKey || (kind === "auto-disabled" && agentId)
+      ? state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
+      : undefined;
+  enqueueCronSystemEvent(state, text, {
+    agentId,
+    sessionKey,
+    contextKey: `cron:${job.id}:${kind}`,
+    ...(deliveryContext ? { deliveryContext } : {}),
+  });
+  if (kind === "auto-disabled" || job.wakeMode === "now" || sessionKey) {
+    requestCronHeartbeat(state, {
+      source: "notifications-event",
+      intent: "immediate",
+      reason: "wake",
+      agentId,
+      sessionKey,
+    });
+  }
 }
 
 /** Enqueues a manual cron wake event and optionally pokes the targeted heartbeat loop. */
@@ -73,33 +108,15 @@ export function wake(
           ...(originDeliveryContext ? { deliveryContext: originDeliveryContext } : {}),
         }
       : undefined;
-  state.deps.enqueueSystemEvent(text, enqueueOpts);
-  if (opts.mode === "now") {
-    state.deps.requestHeartbeat({
+  enqueueCronSystemEvent(state, text, enqueueOpts);
+  if (opts.mode === "now" || sessionKey) {
+    // Scheduled heartbeats only inspect the agent's main session, so a targeted
+    // next-heartbeat event needs an immediate wake to avoid being stranded.
+    requestCronHeartbeat(state, {
       source: "manual",
       intent: "immediate",
       reason: "wake",
       ...(sessionKey ? { sessionKey } : {}),
-      ...(agentId ? { agentId } : {}),
-    });
-  } else if (sessionKey) {
-    // next-heartbeat + sessionKey still needs a targeted immediate wake.
-    // Reasons:
-    //   1. The regularly-scheduled heartbeat fires for the agent's main
-    //      session, not the supplied sessionKey, so it never peeks the queue
-    //      we just enqueued - the event would sit stranded indefinitely.
-    //   2. An `intent: "event"` wake gets deferred by heartbeat-runner as
-    //      not-due and is not retried (only busy-skips are), so it cannot
-    //      stand in for the regular cadence either.
-    // Effectively, --session-key collapses --mode now and --mode next-heartbeat
-    // into the same targeted-immediate behavior - this matches the documented
-    // user intent (target a specific session for relay) better than silently
-    // dropping the event.
-    state.deps.requestHeartbeat({
-      source: "manual",
-      intent: "immediate",
-      reason: "wake",
-      sessionKey,
       ...(agentId ? { agentId } : {}),
     });
   }

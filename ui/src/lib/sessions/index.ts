@@ -1,6 +1,7 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
@@ -104,6 +105,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const createdListeners = new Set<(key: string) => void>();
   let canonicalListRevision = 0;
   let hydratedClient: SessionGateway["snapshot"]["client"] = null;
+  let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
   let publishedErrorSource: "session-observer" | "operation" | null = null;
@@ -132,19 +134,6 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const decorateRows = (result: SessionsListResult | null): SessionsListResult | null =>
     mutations.applyConfirmedArchives(mutations.applyPendingPins(swarmActivity.decorate(result)));
 
-  const roster = createSessionRosterRefresh({
-    connection,
-    snapshot: () => gateway.snapshot,
-    readState: () => state,
-    publish,
-    observerError: () => sessionEventSubscriptionError,
-    decorate: decorateRows,
-    onCanonicalList(result) {
-      mutations.settlePrepared(result);
-      canonicalListRevision += 1;
-    },
-  });
-
   const sessionEventSubscription = createSessionEventSubscriptionOwner({
     isCurrent: (scope) => connection.isCurrent(scope),
     retryDelayMs: sessionRetryDelayMs,
@@ -167,6 +156,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     },
   });
 
+  const roster = createSessionRosterRefresh({
+    connection,
+    snapshot: () => gateway.snapshot,
+    readState: () => state,
+    publish,
+    observerError: () => sessionEventSubscriptionError,
+    bootstrap: (scope, list) => sessionEventSubscription.ensure(scope, list),
+    decorate: decorateRows,
+    onCanonicalList(result) {
+      mutations.settlePrepared(result);
+      canonicalListRevision += 1;
+    },
+  });
+
   const groups = createSessionGroupCatalog({
     connection,
     snapshot: () => gateway.snapshot,
@@ -176,6 +179,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     retryDelayMs: sessionRetryDelayMs,
   });
 
+  const notifyCreated = (key: string) => {
+    for (const listener of createdListeners) {
+      listener(key);
+    }
+  };
+
   const mutations = createSessionMutations({
     connection,
     readState: () => state,
@@ -183,11 +192,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
     publishedRow: (key) => roster.publishedRow(key),
     redecorateLists: () => roster.redecorateLists(),
-    notifyCreated(key) {
-      for (const listener of createdListeners) {
-        listener(key);
-      }
-    },
+    notifyCreated,
     retirePullRequestSummary,
   });
 
@@ -195,6 +200,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connection,
     agentId: () => state.agentId,
     refreshReplacement: (agentId) => roster.refreshReplacement(agentId),
+    notifyCreated,
+    reportError: (error) => publish({ ...state, error: formatUiError(error) }, "operation"),
   });
 
   const pullRequestSummary = (key: string) => pullRequestSummaries.get(key.trim());
@@ -340,6 +347,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   const stopGateway = gateway.subscribe((next) => {
     const previousClient = connectionClient;
     const connected = next.phase === "connected";
+    const selfUserId = next.selfUser?.id.trim() || null;
     const connectionChanged = connection.transition(next);
     connectionClient = next.client;
     if (connectionChanged) {
@@ -360,6 +368,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
     if (!connected || !next.client) {
       hydratedClient = null;
+      hydratedSelfUserId = null;
       publish({
         result: null,
         agentId: null,
@@ -373,20 +382,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       });
       return;
     }
-    if (hydratedClient !== next.client) {
+    if (hydratedClient !== next.client || hydratedSelfUserId !== selfUserId) {
       const scope = connection.capture();
       if (!scope) {
         return;
       }
       hydratedClient = scope.client;
+      hydratedSelfUserId = selfUserId;
       void (async () => {
-        await sessionEventSubscription.ensure(scope);
         if (connection.isCurrent(scope)) {
           const sessionKey = gateway.snapshot.sessionKey?.trim();
           const agentScope = sessionKey
             ? scopedAgentListParamsForSession(gateway.snapshot, sessionKey)
             : { agentId: resolveUiSelectedGlobalAgentId(gateway.snapshot) };
-          await roster.refresh({
+          await roster.bootstrap({
             ...roster.lastOptions(), // Keep visible roster filters through reconnect hydration.
             ...agentScope,
             includeDerivedTitles: true,
@@ -415,22 +424,44 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       resultAgentId: state.agentId,
       archivedFilter: roster.lastOptions().archivedFilter,
     });
-    if (eventInfo?.archived !== null) {
+    const payload = event.payload as {
+      agentId?: unknown;
+      reason?: unknown;
+      session?: unknown;
+    } | null;
+    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
+    const status = reconciled.status ?? eventInfo?.status;
+    const runEnded =
+      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
+    const isTerminalMessage = event.event === "session.message" && runEnded;
+    // Only an existing Gateway roster member that remains active can be replaced directly.
+    const primarySnapshotApplied =
+      isTerminalMessage &&
+      reconciled.applied &&
+      eventInfo !== null &&
+      eventInfo.archived !== true &&
+      typeof payload?.session === "object" &&
+      payload.session !== null &&
+      roster.canApplyPrimarySnapshot() &&
+      state.result?.sessions.some((row) =>
+        uiSessionEventMatches(
+          { ...gateway.snapshot, sessionKey: row.key },
+          eventInfo.key,
+          eventInfo.agentId,
+        ),
+      ) === true;
+    if ((eventInfo?.archived !== null && !isTerminalMessage) || primarySnapshotApplied) {
       const result = decorateRows(reconciled.result);
       if (result !== state.result) {
         publishReconciledState({ ...state, result });
       }
     }
-    const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
-    const payloadAgentId = (event.payload as { agentId?: unknown } | null)?.agentId;
+    const eventReason = payload?.reason;
+    const payloadAgentId = payload?.agentId;
     if (eventReason === "groups") {
       groups.invalidate();
       void groups.load();
     }
-    const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
-    const status = reconciled.status ?? eventInfo?.status;
-    const runEnded =
-      hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     if (event.event === "session.message" && !runEnded) {
       return;
     }
@@ -463,12 +494,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         publish({ ...state, deletedSessions: remainingDeletedSessions });
       }
     }
-    // Gateway lists own filtering/order; authoritative events invalidate every matching roster.
     roster.scheduleEvent({
       agentId:
         eventInfo?.agentId ??
         parseAgentSessionKey(eventInfo?.key)?.agentId ??
         (typeof payloadAgentId === "string" ? payloadAgentId : undefined),
+      primarySnapshotApplied,
     });
   });
 
@@ -501,11 +532,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     refreshReplacement: roster.refreshReplacement,
     createResult: mutations.createResult,
     create: mutations.create,
-    recover: mutations.recover,
+    recover: operations.recover,
     patch: mutations.patch,
+    archiveVisibility: mutations.archiveVisibility,
+    setArchiveVisibility: mutations.setArchiveVisibility,
     assignOwner: mutations.assignOwner,
     retireModelOverride: mutations.retireModelOverride,
-    setModelOverride: mutations.setModelOverride,
     patchRowLocal: mutations.patchRowLocal,
     isPreparedWorkSession: mutations.isPreparedWorkSession,
     pullRequestSummary,
@@ -549,6 +581,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       connection.dispose();
       groups.dispose();
       hydratedClient = null;
+      hydratedSelfUserId = null;
       mutations.dispose();
       swarmActivity.clear();
       pullRequestSummaries.clear();

@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { formatDurationCompact } from "../src/infra/format-time/format-duration.ts";
 import {
@@ -532,8 +533,9 @@ export function appendBoundedProcessOutput(
   if (nextText.length <= maxChars) {
     return { text: nextText, truncatedChars: capture.truncatedChars };
   }
-  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
+  const text = sliceUtf16Safe(nextText, -maxChars);
+  const truncatedChars = capture.truncatedChars + nextText.length - text.length;
+  return { text, truncatedChars };
 }
 
 function formatProcessOutput(capture: ProcessOutputCapture): string {

@@ -29,6 +29,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -385,14 +386,17 @@ vi.mock("../../../trajectory/runtime.js", async () => {
   };
 });
 
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  class DefaultResourceLoader {
+vi.mock("../../sessions/resource-loader.js", () => ({
+  DefaultResourceLoader: class {
     constructor(...args: unknown[]) {
       hoisted.defaultResourceLoaderInitMock(...args);
     }
     async reload() {}
-  }
+  },
+}));
+
+vi.mock("../../sessions/index.js", () => {
+  function AuthStorage() {}
   function ModelRegistry() {}
   const estimateTokens = (value: unknown) =>
     Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
@@ -400,7 +404,6 @@ vi.mock("../../sessions/index.js", () => {
   return {
     AuthStorage,
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
-    DefaultResourceLoader,
     estimateTokens,
     generateSummary: async () => "",
     ModelRegistry,
@@ -968,6 +971,7 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
+  [agentSessionSetContextReplacementHook]: (callback: (() => void) | undefined) => void;
 };
 
 type SessionPromptOverride = (
@@ -1220,6 +1224,7 @@ export function createDefaultEmbeddedSession(params?: {
     abort: async () => {},
     dispose: () => {},
     steer: async () => {},
+    [agentSessionSetContextReplacementHook]: () => {},
   };
 
   return session;

@@ -163,7 +163,7 @@ describe("exec background task wiring", () => {
     abortController.abort();
 
     await expect
-      .poll(() => getFinishedSession(sessionId)?.status, {
+      .poll(() => getFinishedSession(sessionId)?.terminalStatus, {
         timeout: 5_000,
         interval: 10,
       })

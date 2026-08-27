@@ -11,13 +11,13 @@ vi.mock("./outbound.js", () => ({
   sendClickClackText: sendClickClackTextMock,
 }));
 
-function createRuntime(): PluginRuntime {
+function createRuntime(text = "service bot online"): PluginRuntime {
   return createPluginRuntimeMock({
     llm: {
-      complete: vi.fn().mockResolvedValue({
-        text: "service bot online",
+      complete: vi.fn<PluginRuntime["llm"]["complete"]>().mockResolvedValue({
+        text,
         provider: "openai",
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-luna",
         agentId: "service-bot",
         usage: {},
         execution: {
@@ -27,7 +27,7 @@ function createRuntime(): PluginRuntime {
         audit: { caller: { kind: "plugin", id: "clickclack" } },
       }),
     },
-  } as unknown as PluginRuntime);
+  });
 }
 
 function createAccount(): ResolvedClickClackAccount {
@@ -58,6 +58,108 @@ function createAccount(): ResolvedClickClackAccount {
     groups: {},
   };
 }
+
+describe("ClickClack direct-model response prefix", () => {
+  beforeEach(() => {
+    sendClickClackTextMock.mockClear();
+  });
+
+  function createMessage(): ClickClackMessage {
+    return {
+      id: "msg_01arz3ndektsv4rrffq69g5fca",
+      workspace_id: "wsp_model_loop",
+      direct_conversation_id: "dm_model_prefix",
+      author_id: "usr_model_sender",
+      thread_root_id: "msg_01arz3ndektsv4rrffq69g5fca",
+      body: "hello bot",
+      body_format: "markdown",
+      created_at: "2026-05-09T12:00:00.000Z",
+      author: {
+        id: "usr_model_sender",
+        kind: "human",
+        display_name: "Model sender",
+        handle: "model-sender",
+        avatar_url: "",
+        created_at: "2026-05-09T12:00:00.000Z",
+      },
+    };
+  }
+
+  it("renders root, account, and templated prefixes on model replies", async () => {
+    const cases = [
+      {
+        label: "root",
+        cfg: { channels: { clickclack: { responsePrefix: "[bot]" } } },
+        expected: "[bot] service bot online",
+      },
+      {
+        label: "account",
+        cfg: {
+          channels: {
+            clickclack: {
+              responsePrefix: "[root]",
+              accounts: { "model-loop-account": { responsePrefix: "[svc]" } },
+            },
+          },
+        },
+        expected: "[svc] service bot online",
+      },
+      {
+        label: "templated",
+        cfg: { channels: { clickclack: { responsePrefix: "[{model}]" } } },
+        expected: "[gpt-5.6-luna] service bot online",
+      },
+      {
+        label: "empty account override",
+        cfg: {
+          channels: {
+            clickclack: {
+              responsePrefix: "[root]",
+              accounts: { "model-loop-account": { responsePrefix: "" } },
+            },
+          },
+        },
+        expected: "service bot online",
+      },
+      {
+        label: "identity",
+        cfg: {
+          agents: { list: [{ id: "service-bot", identity: { name: "Service Bot" } }] },
+          channels: { clickclack: { responsePrefix: "auto" } },
+        },
+        expected: "[Service Bot] service bot online",
+      },
+    ];
+
+    for (const testCase of cases) {
+      sendClickClackTextMock.mockClear();
+      setClickClackRuntime(createRuntime());
+      await handleClickClackInbound({
+        account: createAccount(),
+        config: testCase.cfg,
+        message: createMessage(),
+      });
+
+      expect(sendClickClackTextMock.mock.calls[0]?.[0]?.text, testCase.label).toBe(
+        testCase.expected,
+      );
+    }
+  });
+
+  it("does not add a second prefix when the completion already opens with one", async () => {
+    sendClickClackTextMock.mockClear();
+    const runtime = createRuntime("[bot] service bot online");
+    setClickClackRuntime(runtime);
+    await handleClickClackInbound({
+      account: createAccount(),
+      config: {
+        channels: { clickclack: { responsePrefix: "[bot]" } },
+      },
+      message: createMessage(),
+    });
+    expect(sendClickClackTextMock.mock.calls[0]?.[0]?.text).toBe("[bot] service bot online");
+  });
+});
 
 describe("ClickClack direct-model bot loop protection", () => {
   beforeEach(() => {

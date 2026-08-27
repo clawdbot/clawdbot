@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile, resolveZaiReasoningEffort } from "./provider-policy-api.js";
 
 describe("zai provider thinking policy", () => {
-  it.each(["glm-5.3", "glm-5.3-preview"])(
+  it.each(["glm-5.3", "glm-5.3-flash", "glm-5.3-preview"])(
     "exposes GLM 5.3 effort levels and default for %s",
     (modelId) => {
       expect(resolveThinkingProfile({ provider: "zai", modelId })).toEqual({
@@ -40,6 +40,7 @@ describe("zai provider thinking policy", () => {
   });
 
   it.each([
+    ["glm-5.3", "off", "low"],
     ["glm-5.3", "minimal", "low"],
     ["glm-5.3", "low", "low"],
     ["glm-5.3", "medium", "high"],
@@ -47,6 +48,10 @@ describe("zai provider thinking policy", () => {
     ["glm-5.3", "adaptive", "max"],
     ["glm-5.3", "xhigh", "max"],
     ["glm-5.3", "max", "max"],
+    ["glm-5.3-flash", "off", "low"],
+    ["glm-5.3-flash", "low", "low"],
+    ["glm-5.3-flash", "high", "high"],
+    ["glm-5.3-flash", "max", "max"],
     ["glm-5.2", "low", "high"],
     ["glm-5.2", "max", "max"],
     ["glm-5.1", "high", undefined],

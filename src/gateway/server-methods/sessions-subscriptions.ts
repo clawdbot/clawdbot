@@ -4,6 +4,7 @@ import {
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
+  validateSessionsListParams,
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -14,17 +15,34 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
+import { sessionsListHandler } from "./sessions-read.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
-  "sessions.subscribe": ({ client, context, respond }) => {
+  "sessions.subscribe": async (options) => {
+    const { client, context, params, respond } = options;
+    if (!assertValidParams(params, validateSessionsListParams, "sessions.subscribe", respond)) {
+      return;
+    }
     const connId = client?.connId?.trim();
     if (connId) {
+      // Subscribe before projecting the snapshot so mutations during the read
+      // become live events; the UI queues one trailing refresh when needed.
       context.subscribeSessionEvents(connId);
     }
-    respond(true, { subscribed: Boolean(connId) }, undefined);
+    if (!connId || Object.keys(params).length === 0) {
+      respond(true, { subscribed: Boolean(connId) }, undefined);
+      return;
+    }
+    await sessionsListHandler({
+      ...options,
+      params,
+      respond: (ok, payload, error, meta) => {
+        respond(ok, ok ? { subscribed: true, list: payload } : undefined, error, meta);
+      },
+    });
   },
   "sessions.viewers.set": ({ params, client, context, respond }) => {
     if (

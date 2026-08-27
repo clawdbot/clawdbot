@@ -21,7 +21,7 @@ import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -61,23 +61,22 @@ export type VisibleSessionsSpawnDeps = {
   countActiveRuns?: typeof countActiveRunsForSession;
 };
 
-type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
-  agentSessionKey?: string;
-  requesterTurnRunId?: string;
-  completionOwnerKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  requesterAgentIdOverride?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
-};
+type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
+  SpawnedToolContext & {
+    agentSessionKey?: string;
+    requesterTurnRunId?: string;
+    completionOwnerKey?: string;
+    agentChannel?: string;
+    agentAccountId?: string;
+    agentTo?: string;
+    agentThreadId?: string | number;
+    currentMessagingTarget?: string;
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    sandboxed?: boolean;
+    config?: OpenClawConfig;
+    requesterAgentIdOverride?: string;
+  };
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
@@ -329,6 +328,9 @@ export async function maybeSpawnVisibleSession(params: {
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
+        ...(params.options?.sessionPermissionPolicy
+          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
+          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(worktree ? { worktree: true } : {}),

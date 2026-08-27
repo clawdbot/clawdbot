@@ -2,6 +2,7 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -24,10 +25,14 @@ const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
 const LINUX_SMB2_SUPER_MAGIC = 0xfe534d42;
+const LINUX_V9FS_SUPER_MAGIC = 0x01021997; // Linux 9p (V9FS)
 const PROC_MOUNTINFO_PATH = "/proc/self/mountinfo";
 // Filesystem classification runs during database open, so never let the fallback probe stall it.
 const MOUNT_COMMAND_TIMEOUT_MS = 1_000;
 const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
+// Cross-VM filesystems (virtiofs, 9p) cannot provide the shared-memory
+// coherence SQLite WAL requires; fall back to rollback journaling.
+const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9p2000.l"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
 const PROC_SELF_FD_PATH = "/proc/self/fd";
@@ -127,12 +132,6 @@ function findExistingVolumePaths(
   }
 }
 
-function decodeMountPath(value: string): string {
-  return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>
-    String.fromCharCode(Number.parseInt(octal, 8)),
-  );
-}
-
 function parseProcMountInfoEntries(contents: string): MountEntry[] {
   const entries: MountEntry[] = [];
   for (const line of contents.split("\n")) {
@@ -146,9 +145,9 @@ function parseProcMountInfoEntries(contents: string): MountEntry[] {
     const fsType = suffixFields[0];
     if (mountPoint && fsType) {
       entries.push({
-        mountPoint: decodeMountPath(mountPoint),
+        mountPoint: decodeMountInfoPath(mountPoint),
         fsType,
-        ...(suffixFields[1] ? { source: decodeMountPath(suffixFields[1]) } : {}),
+        ...(suffixFields[1] ? { source: decodeMountInfoPath(suffixFields[1]) } : {}),
       });
     }
   }
@@ -242,6 +241,9 @@ function resolveMountTypeJournalPolicy(entry: MountEntry): SqliteFilesystemJourn
   if (normalized.startsWith("nfs") || NETWORK_FILESYSTEM_TYPES.has(normalized)) {
     return "rollback";
   }
+  if (CROSS_VM_FILESYSTEM_TYPES.has(normalized) || normalized.startsWith("9p")) {
+    return "rollback";
+  }
   if (normalized === "fuse.sshfs") {
     return "unsupported";
   }
@@ -320,7 +322,8 @@ function resolvePathJournalPolicy(targetPath: string): SqliteFilesystemJournalPo
       filesystemType === LINUX_NFS_SUPER_MAGIC ||
       filesystemType === LINUX_SMB_SUPER_MAGIC ||
       filesystemType === LINUX_CIFS_SUPER_MAGIC ||
-      filesystemType === LINUX_SMB2_SUPER_MAGIC
+      filesystemType === LINUX_SMB2_SUPER_MAGIC ||
+      filesystemType === LINUX_V9FS_SUPER_MAGIC
     ) {
       return "rollback";
     }

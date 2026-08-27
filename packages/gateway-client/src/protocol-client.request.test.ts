@@ -512,4 +512,43 @@ describe("GatewayProtocolClient requests", () => {
     await expect(replacement).resolves.toEqual({ ok: true });
     client.stop();
   });
+
+  it("preserves requests started on a replacement socket by a close timing observer", async () => {
+    let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
+    const { client, connections } = createRequestHarness({
+      createRequestId: () => "same-id",
+      onRequestTiming: ({ method }) => {
+        if (method === "retired") {
+          client.start();
+          recoveredRequest = client.request("replacement", {}, { timeoutMs: null });
+          void recoveredRequest.catch(() => undefined);
+        }
+      },
+    });
+    const firstConnection = connections[0];
+    if (!firstConnection) {
+      throw new Error("expected initial request connection");
+    }
+    const retired = client.request("retired", {}, { timeoutMs: null });
+    void retired.catch(() => undefined);
+
+    firstConnection.close(1012, "service restart");
+
+    const replacementConnection = connections[1];
+    if (!replacementConnection) {
+      throw new Error("expected replacement request connection");
+    }
+    expect(latestFrame(replacementConnection)).toMatchObject({
+      id: "1:same-id",
+      method: "replacement",
+    });
+    expect(client.connected).toBe(true);
+    expect(client.hasPendingRequests).toBe(true);
+    respond(replacementConnection, "1:same-id", { healthy: true });
+
+    await expect(retired).rejects.toThrow("gateway closed (1012): service restart");
+    await expect(recoveredRequest).resolves.toEqual({ healthy: true });
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
 });

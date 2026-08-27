@@ -1728,5 +1728,119 @@ describe("imessage message actions", () => {
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );
+
+  it.each([
+    ["upload-file", "-_8="],
+    ["upload-file", "-_8"],
+    ["setGroupIcon", "-_8="],
+    ["setGroupIcon", "-_8"],
+    ["reply", "-_8="],
+    ["reply", "-_8"],
+  ])("preserves URL-safe base64 for %s (%s)", async (action, buffer) => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action,
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        text: "attachment",
+        filename: "photo.jpg",
+        buffer,
+      },
+      senderIsOwner: true,
+    } as never);
+
+    const expectedBuffer = Uint8Array.from([0xfb, 0xff]);
+    if (action === "reply") {
+      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachment: expect.objectContaining({ buffer: expectedBuffer }),
+        }),
+      );
+    } else {
+      const nativeAction =
+        action === "setGroupIcon" ? runtimeMock.setGroupIcon : runtimeMock.sendAttachment;
+      expect(nativeAction).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: expectedBuffer }),
+      );
+    }
+  });
+
+  it("rejects a malformed base64 buffer for upload-file instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          buffer: "!!!not-base64!!!",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendAttachment).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 buffer for setGroupIcon instead of setting a garbage icon", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "setGroupIcon",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "icon.png",
+          buffer: "!!!not-base64!!!",
+        },
+        senderIsOwner: true,
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.setGroupIcon).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 reply attachment instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "here it is",
+          buffer: "!!!not-base64!!!",
+          filename: "card.png",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

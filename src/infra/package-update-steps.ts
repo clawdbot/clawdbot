@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
@@ -910,9 +911,25 @@ export async function runGlobalPackageUpdateSteps(params: {
         packageName: params.packageName,
       });
     }
-    // Keep the preflight and mutation on the same pnpm executable. `pnpm bin -g`
-    // already verifies its reported bin is on PATH, so no PATH rewrite is needed.
-    const effectiveInstallEnv = params.env;
+    const bunOwner =
+      params.installTarget.manager === "bun"
+        ? resolveBunGlobalInstallOwner(
+            params.installTarget.packageRoot ?? params.packageRoot,
+            params.env ?? process.env,
+          )
+        : null;
+    // Bun's global project follows its environment, not the selected binary.
+    // Bind the mutation to the verified owner even when service settings drift.
+    const effectiveInstallEnv =
+      params.installTarget.manager === "bun" && params.installTarget.globalRoot
+        ? {
+            ...(params.env ?? process.env),
+            BUN_INSTALL_GLOBAL_DIR: path.dirname(params.installTarget.globalRoot),
+            ...(bunOwner?.bunInstall ? { BUN_INSTALL: bunOwner.bunInstall } : {}),
+          }
+        : params.env;
+    // Keep pnpm preflight and mutation on its verified executable without
+    // rewriting PATH; `pnpm bin -g` already checks the owning binary directory.
     const installEnv = effectiveInstallEnv === undefined ? {} : { env: effectiveInstallEnv };
     const resolvedInstallTarget =
       params.installTarget.pnpmIsolated && pnpmPreflight.globalBinDir

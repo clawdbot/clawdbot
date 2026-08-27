@@ -135,7 +135,7 @@ export function resolveConfiguredScopeHash(params: {
 
 export function resolveMemoryIndexIdentityState(params: {
   meta: MemoryIndexMeta | null;
-  provider: { id: string; model: string } | null;
+  provider: { id: string; model?: string } | null;
   providerKey?: string;
   providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
   providerKeyKnown?: boolean;
@@ -163,12 +163,15 @@ export function resolveMemoryIndexIdentityState(params: {
       reason: "index chunking implementation changed",
     };
   }
-  const expectedModel = params.provider?.model?.trim() || "fts-only";
+  const expectedModel =
+    params.provider && params.provider.model === undefined
+      ? undefined
+      : params.provider?.model?.trim() || "fts-only";
   const matchingModelIdentities = [
     { model: expectedModel, providerKey: params.providerKey },
     ...(params.providerAliases ?? []),
   ].filter((identity) => identity.model === meta.model);
-  if (matchingModelIdentities.length === 0) {
+  if (expectedModel !== undefined && matchingModelIdentities.length === 0) {
     return {
       status: "mismatched",
       reason: `index was built for model ${meta.model}, expected ${expectedModel}`,
@@ -182,6 +185,7 @@ export function resolveMemoryIndexIdentityState(params: {
     };
   }
   if (
+    expectedModel !== undefined &&
     params.providerKeyKnown !== false &&
     !matchingModelIdentities.some((identity) => identity.providerKey === meta.providerKey)
   ) {

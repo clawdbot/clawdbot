@@ -122,8 +122,8 @@ describe("EmbeddedBlockChunker", () => {
     });
     fencedChunker.append(`\`\`\`txt\n${"x".repeat(12)}😀tail`);
 
-    expect(drainChunks(fencedChunker)).toEqual([`\`\`\`txt\n${"x".repeat(12)}\n\`\`\`\n`]);
-    expect(fencedChunker.bufferedText).toBe("```txt\n😀tail");
+    expect(drainChunks(fencedChunker)).toEqual([`\`\`\`txt\n${"x".repeat(9)}\n\`\`\``]);
+    expect(fencedChunker.bufferedText).toBe("```txt\nxxx😀tail");
   });
 
   it("clamps long paragraphs to maxChars when flushOnParagraph is set", () => {
@@ -200,16 +200,140 @@ describe("EmbeddedBlockChunker", () => {
     chunker.append(`\`\`\`txt\n${"a".repeat(80)}\n\`\`\``);
     const chunks = drainChunks(chunker, true);
 
-    expect(chunks).toStrictEqual([
-      `\`\`\`txt\n${"a".repeat(23)}\n\`\`\`\n`,
-      `\`\`\`txt\n${"a".repeat(30)}\n\`\`\`\n`,
-      `\`\`\`txt\n${"a".repeat(27)}\n\`\`\`\n`,
-      "```txt\n```",
-    ]);
+    expectChunksWithinLength(chunks, 30);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("").match(/a/g)?.length).toBe(80);
     for (const chunk of chunks) {
       expect(chunk.startsWith("```txt")).toBe(true);
       expect(chunk.match(/```/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
       expect(chunk).not.toContain("``\n```");
+      expect(chunk).not.toMatch(/^```txt\n```\n?$/);
     }
   });
+
+  it.each([
+    { marker: "```", finalLine: "XXXXXXXX", force: true },
+    { marker: "~~~", finalLine: "XXXXXXXX", force: true },
+    { marker: "  ```", finalLine: "XXXXXXXX", force: true },
+    { marker: "````", finalLine: "XXXXXXXX", force: true },
+    { marker: "```", finalLine: "😀😀😀😀", force: true },
+    { marker: "```", finalLine: "``` XXXXXXXX", force: true },
+    { marker: "```", finalLine: "~~~ XXXXXXXX", force: true },
+    { marker: "```", finalLine: "    ``` XXXXXXXX", force: true },
+    { marker: "```", finalLine: "XXXXXXXX", force: false },
+    { marker: "~~~", finalLine: "XXXXXXXX", force: false },
+  ])(
+    "preserves the final content line in an unfinished $marker fence (force: $force)",
+    ({ marker, finalLine, force }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 1,
+        maxChars: 20,
+        breakPreference: "paragraph",
+      });
+      chunker.append(`${marker}txt\n12345678\n${finalLine}`);
+
+      const chunks = drainChunks(chunker, force);
+      if (!force) {
+        chunks.push(...drainChunks(chunker, true));
+      }
+
+      expectChunksWithinLength(chunks, 20);
+      const contentCodePoint = finalLine.includes("😀") ? "😀" : "X";
+      expect(
+        Array.from(chunks.join("")).filter((value) => value === contentCodePoint),
+      ).toHaveLength(Array.from(finalLine).filter((value) => value === contentCodePoint).length);
+      expect(chunker.bufferedText).toBe("");
+    },
+  );
+
+  it.each([
+    { marker: "```", closingMarker: "`````" },
+    { marker: "```", closingMarker: "   ``` \t" },
+    { marker: "~~~", closingMarker: " ~~~~\t" },
+    { marker: "  ```", closingMarker: "```" },
+    { marker: "```", closingMarker: "```\r" },
+  ])("recognizes valid $marker closing-fence variants", ({ marker, closingMarker }) => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      breakPreference: "paragraph",
+    });
+    chunker.append(`${marker}txt\n${"q".repeat(32)}\n${closingMarker}`);
+
+    const chunks = drainChunks(chunker, true);
+
+    expectChunksWithinLength(chunks, 20);
+    expect(chunks.join("").match(/q/g)).toHaveLength(32);
+    expect(chunks.every((chunk) => chunk.includes("q"))).toBe(true);
+    expect(chunker.bufferedText).toBe("");
+  });
+
+  it.each([
+    { name: "default", maxChars: 1_200, bodyChars: 2_383, marker: "```" },
+    { name: "Discord", maxChars: 2_000, bodyChars: 3_983, marker: "```" },
+    { name: "Telegram", maxChars: 4_000, bodyChars: 7_983, marker: "```" },
+    { name: "tilde", maxChars: 30, bodyChars: 83, marker: "~~~" },
+    { name: "indented", maxChars: 40, bodyChars: 83, marker: "  ```" },
+  ])(
+    "keeps $name fenced replies within their actual message budget",
+    ({ maxChars, bodyChars, marker }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: Math.min(800, maxChars),
+        maxChars,
+        breakPreference: "paragraph",
+      });
+      chunker.append(`${marker}typescript\n${"x".repeat(bodyChars)}\n${marker}`);
+
+      const chunks = drainChunks(chunker, true);
+
+      expectChunksWithinLength(chunks, maxChars);
+      expect(chunks.join("").match(/x/g)?.length).toBe(bodyChars);
+      expect(chunks).not.toContain(`${marker}typescript\n${marker}`);
+      for (const chunk of chunks) {
+        expect(chunk.startsWith(`${marker}typescript\n`)).toBe(true);
+        expect(chunk.trimEnd().endsWith(marker)).toBe(true);
+      }
+    },
+  );
+
+  it("degrades oversized fence language markers without turning them into code", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      breakPreference: "paragraph",
+    });
+    const body = "q".repeat(70);
+    chunker.append(`\`\`\`very-long-language-name\n${body}\n\`\`\``);
+
+    const chunks = drainChunks(chunker, true);
+
+    expectChunksWithinLength(chunks, 30);
+    expect(chunks[0]).toMatch(/^```\n/);
+    expect(
+      chunks.map((chunk) => chunk.trimEnd().split("\n").slice(1, -1).join("\n")).join(""),
+    ).toBe(body);
+  });
+
+  it.each([
+    { maxChars: 9, marker: "```", language: "" },
+    { maxChars: 11, marker: "```", language: "js" },
+    { maxChars: 11, marker: "````", language: "" },
+    { maxChars: 13, marker: "````", language: "js" },
+  ])(
+    "honors the smallest balanced $marker fence at $maxChars characters",
+    ({ maxChars, marker, language }) => {
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 1,
+        maxChars,
+        breakPreference: "paragraph",
+      });
+      chunker.append(`${marker}${language}\n${"a".repeat(21)}\n${marker}`);
+
+      const chunks = drainChunks(chunker, true);
+
+      expectChunksWithinLength(chunks, maxChars);
+      expect(chunks.join("").match(/a/g)?.length).toBe(21);
+      expect(chunks.every((chunk) => chunk.trimEnd() !== `${marker}\n${marker}`)).toBe(true);
+    },
+  );
 });

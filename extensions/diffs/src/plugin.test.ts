@@ -20,6 +20,23 @@ afterAll(() => {
 });
 
 describe("diffs plugin language-pack discovery", () => {
+  it("skips runtime registration while collecting CLI metadata", () => {
+    const registerTool = vi.fn();
+    const registerHttpRoute = vi.fn();
+    const on = vi.fn();
+    const api = createTestPluginApi({
+      registrationMode: "cli-metadata",
+      registerTool,
+      registerHttpRoute,
+      on,
+    });
+
+    expect(() => registerDiffsPlugin(api)).not.toThrow();
+    expect(registerTool).not.toHaveBeenCalled();
+    expect(registerHttpRoute).not.toHaveBeenCalled();
+    expect(on).not.toHaveBeenCalled();
+  });
+
   it.each(["assets", "dist/assets"])(
     "requires both the sibling manifest and generated runtime asset in %s",
     (assetDir) => {

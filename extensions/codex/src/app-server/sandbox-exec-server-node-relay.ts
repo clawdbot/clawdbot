@@ -47,7 +47,7 @@ export function createCodexNodeExecServerDisconnectError(reason: string, cause?:
           CODEX_NODE_EXEC_SERVER_MAX_FAILURE_DETAIL_CHARS,
         )}`;
   return new Error(
-    `Codex paired execution device disconnected; start a fresh attempt. (${reason}${detail})`,
+    `Codex execution node disconnected; start a fresh attempt. (${reason}${detail})`,
   );
 }
 
@@ -92,7 +92,7 @@ export async function startCodexNodeExecServerRelay(params: {
   params.lease.onChannelClosed = ({ failed, error }) =>
     failUnexpectedly(
       failed ? 1011 : 1001,
-      failed ? "execution device failed" : "execution device disconnected",
+      failed ? "execution node failed" : "execution node disconnected",
       error,
     );
   socket.once("close", () => failUnexpectedly(1001, "execution socket closed"));
@@ -456,7 +456,7 @@ function createCredentialedCodexNodeHttpRejection(request: Record<string, unknow
       error: {
         code: -32602,
         message:
-          "Authenticated remote HTTP is unavailable on paired devices; run on Gateway or use an intentionally credential-free endpoint.",
+          "Authenticated remote HTTP is unavailable on execution nodes; run on Gateway or use an intentionally credential-free endpoint.",
       },
     }),
   );

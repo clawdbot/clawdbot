@@ -45,8 +45,7 @@ export type CreateManagedWorktreeParams = {
   baseRef?: string;
   ownerKind?: ManagedWorktreeOwnerKind;
   ownerId?: string;
-  // Repository checkout hooks and .openclaw/worktree-setup.sh execute repo-local code, so
-  // callers reachable from less-privileged surfaces opt out; admin paths keep them on.
+  // Repository Git hooks are always disabled; only the setup script runs repo-local code.
   runSetupScript?: boolean;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;

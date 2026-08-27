@@ -301,6 +301,9 @@ openclaw doctor
   development fallback after the command says native bootstrap is ready.
 - **Extension was loaded before native setup:** restart Chrome once to clear its
   cached native-host miss, then rerun the ordered install flow.
+- **Extension version mismatch:** reload the unpacked OpenClaw extension from
+  `chrome://extensions`, then rerun browser doctor. Fully restart Chrome if the
+  running and bundled versions still differ.
 - **Waiting for local OpenClaw:** run `extension status`; install or repair the
   owned native host.
 - **Automatic setup disabled:** enable it in Settings or click **Use local

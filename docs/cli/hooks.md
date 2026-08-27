@@ -23,6 +23,13 @@ Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
 `openclaw hooks list`. The command discovers hooks from workspace, managed,
 extra, and bundled directories.
 
+Hook reports (`hooks`, `list`, `info`, and `check`) first request the selected
+Gateway's inventory. Configured remote Gateways and explicit
+`OPENCLAW_GATEWAY_URL` targets are authoritative: missing URLs, connection or
+authentication failures, and unsupported methods fail instead of showing
+client-local hooks. An implicitly selected local Gateway may fall back to local
+discovery when it is offline or does not support the current hook-report method.
+
 - `--eligible`: only hooks whose requirements are met.
 - `--agent <id>`: inspect hooks for that agent's workspace. Required when multiple agents are configured without an implicit owner.
 - `--json`: structured output.
@@ -34,7 +41,7 @@ Hooks (4/5 ready)
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📎 bootstrap-extra-files ✓ - Inject additional workspace bootstrap files during agent bootstrap
-  📝 command-logger ✓ - Log all command events to a centralized audit file
+  📝 command-logger ✓ - Log emitted command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
 ```
 
@@ -108,7 +115,7 @@ Hook packs install through the unified plugins installer/updater; `openclaw hook
 | --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
 | boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
 | bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
-| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                  |
+| command-logger        | `command`                                         | Logs emitted command events to `~/.openclaw/logs/commands.log`                          |
 | compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
 | session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 
@@ -125,7 +132,8 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 ## Notes
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
-- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when falling back to local read-only discovery against an older or unavailable Gateway.
+- Failed hook reports use the standard [CLI JSON failure envelope](/cli#json-failures); missing hook info also includes the requested `hook` name.
+- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when an implicit local Gateway requires older-version or offline read-only discovery.
 
 ## Related
 

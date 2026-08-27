@@ -438,10 +438,10 @@ struct OnboardingAISetupView: View {
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(Color.accentColor)
                         }
+                        .openClawSelectableRowChrome(selected: false)
                     }
                     .buttonStyle(.plain)
                     .disabled(self.model.isBusy)
-                    .openClawSelectableRowChrome(selected: false)
                 }
             }
             .padding(12)
@@ -511,10 +511,10 @@ struct OnboardingAISetupView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
+            .openClawSelectableRowChrome(selected: self.model.showManualEntry)
         }
         .buttonStyle(.plain)
         .disabled(self.model.isBusy)
-        .openClawSelectableRowChrome(selected: self.model.showManualEntry)
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
@@ -544,10 +544,10 @@ struct OnboardingAISetupView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
+            .openClawSelectableRowChrome(selected: false)
         }
         .buttonStyle(.plain)
         .disabled(self.model.isBusy)
-        .openClawSelectableRowChrome(selected: false)
     }
 
     private var providerAuthSheet: some View {
