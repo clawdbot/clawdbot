@@ -1,10 +1,10 @@
 // Bundled plugin root helpers resolve plugin root paths for contract test fixtures.
 import { relative, resolve } from "node:path";
-import { loadPluginManifestRegistry } from "../../manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../manifest-registry.js";
 
 const sourceExtensionsDir = resolve(process.cwd(), "extensions");
 const bundledPluginRoots = new Map(
-  loadPluginManifestRegistry({
+  loadPluginManifestRegistryCore({
     config: {},
     env: {
       ...process.env,
@@ -34,7 +34,7 @@ export function resolveBundledPluginFile(params: {
 }
 
 /** Resolves a bundled plugin file as a path relative to a contract test root. */
-export function bundledPluginFile(params: {
+export function contractPluginPath(params: {
   rootDir: string;
   pluginId: string;
   relativePath: string;

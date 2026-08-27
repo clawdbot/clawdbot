@@ -1,9 +1,18 @@
 // Discord tests cover retry plugin behavior.
-import { describe, expect, it, vi } from "vitest";
-import { RateLimitError } from "./internal/discord.js";
-import { createDiscordRetryRunner } from "./retry.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { DiscordError, RateLimitError } from "./internal/discord.js";
+import {
+  classifyDiscordDeliveryFailure,
+  createDiscordRetryRunner,
+  hasDiscordMessageCreateAmbiguity,
+  recordDiscordMessageCreateAmbiguity,
+} from "./retry.js";
 
 const ZERO_DELAY_RETRY = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createRateLimitError(retryAfter = 0): RateLimitError {
   const response = new Response(null, {
@@ -23,6 +32,85 @@ function createRateLimitError(retryAfter = 0): RateLimitError {
     global: false,
   });
 }
+
+describe("classifyDiscordDeliveryFailure", () => {
+  it.each([
+    ["actual rate-limit rejection", createRateLimitError(), "rejected"],
+    [
+      "actual rejected HTTP request",
+      new DiscordError(new Response(null, { status: 404 }), {}),
+      "rejected",
+    ],
+    [
+      "actual ambiguous HTTP request",
+      new DiscordError(new Response(null, { status: 502 }), {}),
+      "ambiguous",
+    ],
+    [
+      "HTTP request timeout",
+      Object.assign(new Error("request timeout"), { status: 408 }),
+      "ambiguous",
+    ],
+    [
+      "authoritative server status before a nested connection refusal",
+      Object.assign(new Error("bad gateway"), {
+        status: 503,
+        cause: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+      }),
+      "ambiguous",
+    ],
+    ["actual fetch failure", new TypeError("fetch failed"), "ambiguous"],
+    [
+      "wrapped fetch failure",
+      new Error("voice request failed", { cause: new TypeError("fetch failed") }),
+      "ambiguous",
+    ],
+    [
+      "response body timeout",
+      Object.assign(new Error("response stalled"), { code: "UND_ERR_BODY_TIMEOUT" }),
+      "ambiguous",
+    ],
+    ["aborted request", Object.assign(new Error("aborted"), { name: "AbortError" }), "ambiguous"],
+    [
+      "connection refusal",
+      Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+      "pre-connect",
+    ],
+    [
+      "fetch failure with an authoritative nested DNS cause",
+      new TypeError("fetch failed", {
+        cause: Object.assign(new Error("DNS lookup failed"), { code: "ENOTFOUND" }),
+      }),
+      "pre-connect",
+    ],
+    ["unavailable audio encoder", new Error("ffmpeg unavailable"), "unknown"],
+    ["unstructured text", "fetch failed", "unknown"],
+  ])("classifies %s as %s", (_label, error, expected) => {
+    expect(classifyDiscordDeliveryFailure(error)).toBe(expected);
+  });
+});
+
+describe("Discord message-create ambiguity", () => {
+  it("records the actual create failure without changing or retaining the error", () => {
+    const error = Object.freeze(new Error("voice creation timed out"));
+    const wrapped = new Error("voice delivery failed", { cause: error });
+
+    expect(hasDiscordMessageCreateAmbiguity(error)).toBe(false);
+    recordDiscordMessageCreateAmbiguity(error);
+
+    expect(hasDiscordMessageCreateAmbiguity(error)).toBe(true);
+    expect(hasDiscordMessageCreateAmbiguity(wrapped)).toBe(true);
+    expect(Object.isFrozen(error)).toBe(true);
+  });
+
+  it("never treats an unrelated preparation failure as a message create", () => {
+    const error = Object.assign(new Error("voice attachment unavailable"), { status: 503 });
+
+    expect(hasDiscordMessageCreateAmbiguity(error)).toBe(false);
+    recordDiscordMessageCreateAmbiguity("fetch failed");
+    expect(hasDiscordMessageCreateAmbiguity("fetch failed")).toBe(false);
+  });
+});
 
 describe("createDiscordRetryRunner error classification", () => {
   it.each([
@@ -75,6 +163,18 @@ describe("createDiscordRetryRunner error classification", () => {
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
     await expect(runner(fn, "create", { safety: "non-idempotent-create" })).rejects.toBe(error);
     expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mistake a nested pre-connect failure for a rejected server request", async () => {
+    const error = Object.assign(new Error("bad gateway"), {
+      status: 503,
+      cause: Object.assign(new Error("connect refused"), { code: "ECONNREFUSED" }),
+    });
+    const fn = vi.fn().mockRejectedValueOnce(error).mockResolvedValue("ok");
+    const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });
+
+    await expect(runner(fn, "create", { safety: "non-idempotent-create" })).rejects.toBe(error);
+    expect(fn).toHaveBeenCalledOnce();
   });
 });
 
@@ -138,6 +238,26 @@ describe("createDiscordRetryRunner create safety", () => {
 });
 
 describe("createDiscordRetryRunner", () => {
+  it("cancels retry backoff immediately when the request deadline aborts", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const timeout = Object.assign(new Error("request timed out"), { name: "TimeoutError" });
+    const fn = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const runner = createDiscordRetryRunner({
+      retry: { attempts: 2, minDelayMs: 60_000, maxDelayMs: 60_000, jitter: 0 },
+      signal: controller.signal,
+    });
+    const rejection = expect(runner(fn, "request")).rejects.toBe(timeout);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(1);
+    controller.abort(timeout);
+
+    await rejection;
+    expect(fn).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retries transient transport errors", async () => {
     const fn = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValue("ok");
     const runner = createDiscordRetryRunner({ retry: ZERO_DELAY_RETRY });

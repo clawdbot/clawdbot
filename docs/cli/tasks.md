@@ -19,9 +19,12 @@ openclaw tasks
 openclaw tasks list
 openclaw tasks list --runtime acp
 openclaw tasks list --status running
+openclaw tasks list --status blocked
 openclaw tasks show <lookup>
 openclaw tasks notify <lookup> state_changes
 openclaw tasks cancel <lookup>
+openclaw tasks retry <lookup> [lookup...]
+openclaw tasks dismiss <lookup> [lookup...]
 openclaw tasks audit
 openclaw tasks maintenance
 openclaw tasks maintenance --apply
@@ -32,11 +35,11 @@ openclaw tasks flow cancel <lookup>
 
 ## Root Options
 
-| Flag               | Description                                                                                        |
-| ------------------ | -------------------------------------------------------------------------------------------------- |
-| `--json`           | Output JSON.                                                                                       |
-| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                               |
-| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, or `lost`. |
+| Flag               | Description                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- |
+| `--json`           | Output JSON.                                                                                                  |
+| `--runtime <name>` | Filter by kind: `subagent`, `acp`, `cron`, or `cli`.                                                          |
+| `--status <name>`  | Filter by status: `queued`, `running`, `succeeded`, `failed`, `timed_out`, `cancelled`, `lost`, or `blocked`. |
 
 ## Subcommands
 
@@ -47,6 +50,11 @@ openclaw tasks list [--runtime <name>] [--status <name>] [--json]
 ```
 
 Lists tracked background tasks newest first.
+
+Use `--status blocked` to find completed tasks whose result delivery is blocked.
+These tasks retain their stored `succeeded` status and also remain included in
+`--status succeeded` results; JSON task records keep the same stored status and
+`terminalOutcome` fields.
 
 ### `show`
 
@@ -71,6 +79,27 @@ openclaw tasks cancel <lookup>
 ```
 
 Cancels a running background task.
+
+### `retry`
+
+```bash
+openclaw tasks retry <lookup> [lookup...]
+```
+
+Retries 1-10 blocked subagent completion deliveries. The child execution stays
+successful; retry creates a fenced delivery generation from the retained
+canonical result. An ambiguous earlier acknowledgement can still cause a
+duplicate visible result.
+
+### `dismiss`
+
+```bash
+openclaw tasks dismiss <lookup> [lookup...]
+```
+
+Records intentional non-delivery for 1-10 blocked subagent completions. The task
+continues to show a blocked terminal outcome and retains its result until the
+7-day completion-retention window expires.
 
 ### `audit`
 

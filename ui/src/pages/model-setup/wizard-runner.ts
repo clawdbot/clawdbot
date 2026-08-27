@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupAuthStartResult, WizardNextResult } from "../../api/types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isWizardNotFoundError } from "../../lib/gateway-errors.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
@@ -8,10 +9,19 @@ import {
   wizardStateFromResult,
 } from "./state.ts";
 
+export type ModelSetupWizardStartMethod =
+  | "openclaw.setup.auth.start"
+  | "openclaw.setup.prepare.start";
+
+export type ModelSetupWizardCompletion = {
+  startMethod: ModelSetupWizardStartMethod;
+  preparedModelRef?: string;
+};
+
 type WizardRunnerOptions = {
   getClient: () => GatewayBrowserClient | null;
+  getAgentId: () => string | null;
   onChange: (state: ModelSetupWizardState) => void;
-  onDone: () => void;
   requestFailedMessage: () => string;
   cancelledMessage: () => string;
   sessionExpiredMessage: () => string;
@@ -22,6 +32,7 @@ export class ModelSetupWizardRunner {
   private sessionId: string | null = null;
   private abortController: AbortController | null = null;
   private generation = 0;
+  private startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start";
 
   constructor(private readonly options: WizardRunnerOptions) {}
 
@@ -29,71 +40,80 @@ export class ModelSetupWizardRunner {
     return this.currentState;
   }
 
-  async start(authChoice: string): Promise<void> {
+  async start(
+    authChoice: string,
+    startMethod: ModelSetupWizardStartMethod = "openclaw.setup.auth.start",
+  ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     if (!client || this.currentState.phase !== "idle") {
-      return;
+      return null;
     }
     const generation = ++this.generation;
     const sessionId = crypto.randomUUID();
     const abortController = new AbortController();
     this.sessionId = sessionId;
     this.abortController = abortController;
+    this.startMethod = startMethod;
     this.setState({ phase: "starting", authChoice });
     try {
-      const started = await client.request<SystemAgentSetupAuthStartResult>(
-        "openclaw.setup.auth.start",
-        { sessionId, authChoice },
-        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS, signal: abortController.signal },
+      const agentId = this.options.getAgentId();
+      const request = client.request<SystemAgentSetupAuthStartResult>(
+        startMethod,
+        {
+          sessionId,
+          authChoice,
+          ...(agentId ? { agentId } : {}),
+        },
+        { timeoutMs: null },
       );
+      const started = await this.awaitWizardStart(client, request, sessionId, startMethod);
       if (generation !== this.generation) {
-        return;
+        if (!started.done) {
+          // Admission can finish after cancellation; release only this generation's original session.
+          await this.cancelSession(client, sessionId);
+        }
+        return null;
       }
       if (started.done) {
-        this.applyResult(authChoice, started);
-        return;
+        return this.applyResult(authChoice, started);
       }
-      await this.requestNext(authChoice, undefined, generation);
+      return await this.requestNext(authChoice, undefined, generation);
     } catch (error) {
       this.handleError(error, generation);
+      return null;
     }
   }
 
-  async answer(value: unknown, includeValue = true): Promise<void> {
+  async answer(value: unknown, includeValue = true): Promise<ModelSetupWizardCompletion | null> {
     const state = this.currentState;
     if (state.phase !== "step" || state.busy || !this.sessionId) {
-      return;
+      return null;
     }
     const generation = this.generation;
     this.setState({ ...state, busy: true, validationError: null });
     const answer = includeValue ? { stepId: state.step.id, value } : { stepId: state.step.id };
     try {
-      await this.requestNext(state.authChoice, answer, generation);
+      return await this.requestNext(state.authChoice, answer, generation);
     } catch (error) {
       this.handleError(error, generation);
+      return null;
     }
   }
 
-  async cancel(): Promise<void> {
+  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     this.generation += 1;
     this.sessionId = null;
-    this.abortController?.abort();
+    if (!options.settleActiveRequest) {
+      this.abortController?.abort();
+    }
     this.abortController = null;
     this.setState({ phase: "idle" });
     if (!client || !sessionId) {
       return;
     }
-    try {
-      await client.request(
-        "wizard.cancel",
-        { sessionId },
-        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
-      );
-    } catch {
-      // The gateway may have already completed or purged the session.
-    }
+    await this.cancelSession(client, sessionId);
   }
 
   close(): void {
@@ -110,29 +130,79 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "error", message });
   }
 
+  private async awaitWizardStart(
+    client: GatewayBrowserClient,
+    request: Promise<SystemAgentSetupAuthStartResult>,
+    sessionId: string,
+    startMethod: ModelSetupWizardStartMethod,
+  ): Promise<SystemAgentSetupAuthStartResult> {
+    let timedOut = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Gateway request abort/deadline retirement discards the late session needed for cleanup.
+    const retainedRequest = request.then(async (result) => {
+      if (timedOut && !result.done) {
+        await this.cancelSession(client, sessionId);
+      }
+      return result;
+    });
+    try {
+      return await Promise.race([
+        retainedRequest,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(
+              new Error(
+                `gateway request timed out after ${MODEL_SETUP_AUTH_START_TIMEOUT_MS}ms: ${startMethod}`,
+              ),
+            );
+          }, MODEL_SETUP_AUTH_START_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   private async requestNext(
     authChoice: string,
     answer: { stepId: string; value?: unknown } | undefined,
     generation: number,
-  ): Promise<void> {
+  ): Promise<ModelSetupWizardCompletion | null> {
     const client = this.options.getClient();
     const sessionId = this.sessionId;
     const signal = this.abortController?.signal;
     if (!client || !sessionId || !signal) {
-      return;
+      return null;
     }
-    const result = await client.request<WizardNextResult>(
-      "wizard.next",
-      { sessionId, ...(answer ? { answer } : {}) },
-      { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
-    );
-    if (generation !== this.generation) {
-      return;
+    let nextAnswer = answer;
+    while (true) {
+      const result = await client.request<WizardNextResult>(
+        "wizard.next",
+        { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
+        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+      );
+      if (generation !== this.generation) {
+        return null;
+      }
+      const completion = this.applyResult(authChoice, result);
+      if (completion) {
+        return completion;
+      }
+      const next = this.currentState;
+      if (next.phase !== "step" || next.step.executor !== "gateway") {
+        return null;
+      }
+      // Gateway-owned progress has no user control to trigger the next poll.
+      // Keep it in this request chain so its mutation owner settles with it.
+      nextAnswer = undefined;
     }
-    this.applyResult(authChoice, result);
   }
 
-  private applyResult(authChoice: string, result: WizardNextResult): void {
+  private applyResult(
+    authChoice: string,
+    result: WizardNextResult,
+  ): ModelSetupWizardCompletion | null {
     const next = wizardStateFromResult(
       authChoice,
       result,
@@ -141,11 +211,15 @@ export class ModelSetupWizardRunner {
         : this.options.requestFailedMessage(),
     );
     this.setState(next);
-    if (next.phase === "done") {
-      this.sessionId = null;
-      this.abortController = null;
-      this.options.onDone();
+    if (next.phase !== "done") {
+      return null;
     }
+    this.sessionId = null;
+    this.abortController = null;
+    return {
+      startMethod: this.startMethod,
+      ...(next.preparedModelRef ? { preparedModelRef: next.preparedModelRef } : {}),
+    };
   }
 
   private handleError(error: unknown, generation: number): void {
@@ -159,18 +233,24 @@ export class ModelSetupWizardRunner {
     this.abortController = null;
     const sessionExpired = isWizardNotFoundError(error);
     if (!sessionExpired && client && sessionId) {
-      void client
-        .request("wizard.cancel", { sessionId }, { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS })
-        .catch(() => {
-          // The failed request may have already completed or purged the session.
-        });
+      void this.cancelSession(client, sessionId);
     }
     const message = sessionExpired
       ? this.options.sessionExpiredMessage()
-      : error instanceof Error && error.message.trim()
-        ? error.message
-        : this.options.requestFailedMessage();
+      : formatUiError(error, this.options.requestFailedMessage());
     this.setState({ phase: "error", message });
+  }
+
+  private async cancelSession(client: GatewayBrowserClient, sessionId: string): Promise<void> {
+    try {
+      await client.request(
+        "wizard.cancel",
+        { sessionId },
+        { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+      );
+    } catch {
+      // The Gateway may already have completed or purged the session.
+    }
   }
 
   private setState(state: ModelSetupWizardState): void {

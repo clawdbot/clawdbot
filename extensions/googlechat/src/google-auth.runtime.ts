@@ -6,6 +6,7 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
@@ -76,10 +77,6 @@ function installGoogleAuthHeaderCompatibilityInterceptor(
     resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
   });
   return transport;
-}
-
-function asNullableObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {
@@ -264,8 +261,8 @@ function validateGoogleChatServiceAccountCredentials(
     throw new Error(`Google Chat credentials must use service_account auth, got "${type}" instead`);
   }
 
-  readRequiredTrimmedString(credentials, "client_email");
-  readRequiredTrimmedString(credentials, "private_key");
+  const clientEmail = readRequiredTrimmedString(credentials, "client_email");
+  const privateKey = readRequiredTrimmedString(credentials, "private_key");
 
   const universeDomain = readOptionalTrimmedString(credentials, "universe_domain");
   if (universeDomain && universeDomain !== GOOGLE_AUTH_UNIVERSE_DOMAIN) {
@@ -279,7 +276,11 @@ function validateGoogleChatServiceAccountCredentials(
   assertExactUrlField(credentials, "token_uri", GOOGLE_AUTH_TOKEN_URI);
   assertUrlPrefixField(credentials, "client_x509_cert_url", GOOGLE_CLIENT_CERTS_URL_PREFIX);
 
-  return credentials as unknown as GoogleChatServiceAccountCredentials;
+  return {
+    ...credentials,
+    client_email: clientEmail,
+    private_key: privateKey,
+  };
 }
 
 async function readCredentialsFile(filePath: string): Promise<Record<string, unknown>> {
@@ -432,6 +433,12 @@ function createGoogleAuthFetch(): FetchLike {
         statusText: response.statusText,
       });
     } finally {
+      // The size guard can reject before the stream is touched, leaving an
+      // unread body. Start cancellation before release; awaiting it can
+      // deadlock when debug capture tees the stream.
+      if (!response.bodyUsed) {
+        void response.body?.cancel().catch(() => undefined);
+      }
       await release();
     }
   };

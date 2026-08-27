@@ -1,8 +1,14 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 
 export { avoidTrailingHighSurrogateBreak };
 
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
+
+export function normalizeChunkLimit(limit: number): number {
+  // String slicing truncates fractional indexes, so positive limits need an integer progress step.
+  return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
+}
 
 function clampToCodePointBoundary(text: string, index: number): number {
   const boundary = Math.min(Math.max(0, index), text.length);
@@ -35,21 +41,22 @@ export function splitLongTextLine(
   limit: number,
   options: { preserveWhitespace: boolean },
 ): string[] {
-  if (limit <= 0 || line.length <= limit) {
+  const normalizedLimit = normalizeChunkLimit(limit);
+  if (normalizedLimit <= 0 || line.length <= normalizedLimit) {
     return [line];
   }
   const chunks: string[] = [];
   let remaining = line;
-  while (remaining.length > limit) {
-    let breakIndex = clampToCodePointBoundary(remaining, limit);
+  while (remaining.length > normalizedLimit) {
+    let breakIndex = clampToCodePointBoundary(remaining, normalizedLimit);
     if (!options.preserveWhitespace) {
-      const window = remaining.slice(0, limit);
+      const window = remaining.slice(0, normalizedLimit);
       breakIndex = findWhitespaceBreak(window);
       if (breakIndex <= 0) {
         breakIndex = findCjkPunctuationBreak(window);
       }
       if (breakIndex <= 0) {
-        breakIndex = clampToCodePointBoundary(remaining, limit);
+        breakIndex = clampToCodePointBoundary(remaining, normalizedLimit);
       }
     }
     chunks.push(remaining.slice(0, breakIndex));
@@ -75,19 +82,20 @@ export function chunkTextByBreakResolver(
   if (!text) {
     return [];
   }
-  if (limit <= 0 || text.length <= limit) {
+  const normalizedLimit = normalizeChunkLimit(limit);
+  if (normalizedLimit <= 0 || text.length <= normalizedLimit) {
     return [text];
   }
   const chunks: string[] = [];
   let remaining = text;
-  while (remaining.length > limit) {
-    const window = remaining.slice(0, limit);
+  while (remaining.length > normalizedLimit) {
+    const window = remaining.slice(0, normalizedLimit);
     const candidateBreak = resolveBreakIndex(window);
-    // Invalid or zero-width soft breaks would stall the loop, so fall back to the hard limit.
+    // Invalid, fractional, or zero-width soft breaks would stall the loop.
     const breakIdx =
-      Number.isFinite(candidateBreak) && candidateBreak > 0 && candidateBreak <= limit
+      Number.isInteger(candidateBreak) && candidateBreak > 0 && candidateBreak <= normalizedLimit
         ? candidateBreak
-        : limit;
+        : normalizedLimit;
     const safeBreakIdx = avoidTrailingHighSurrogateBreak(remaining, 0, breakIdx);
     const rawChunk = remaining.slice(0, safeBreakIdx);
     const chunk = rawChunk.trimEnd();
@@ -101,8 +109,9 @@ export function chunkTextByBreakResolver(
     const nextStart = Math.min(remaining.length, safeBreakIdx + (brokeOnSeparator ? 1 : 0));
     remaining = remaining.slice(nextStart).trimStart();
   }
-  if (remaining.length) {
-    chunks.push(remaining);
+  const finalChunk = remaining.trimEnd();
+  if (finalChunk.length) {
+    chunks.push(finalChunk);
   }
   return chunks;
 }

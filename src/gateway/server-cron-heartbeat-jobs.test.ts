@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { reconcileHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import type { CronJob } from "../cron/types.js";
-import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 
 const logger = { warn: vi.fn() };
 
@@ -87,14 +87,16 @@ describe("reconcileHeartbeatMonitorJobs", () => {
     // Declarative matching is scoped to real monitors so a colliding user job
     // is never adopted by the system upsert.
     for (const call of add.mock.calls) {
+      const input = call[0] as { agentId: string };
       const opts = call[1];
       if (!opts) {
         throw new Error("expected system-owned add options");
       }
-      expect(opts.matchesExisting?.(monitorJob("x"))).toBe(true);
+      expect(opts.matchesExisting?.(monitorJob(input.agentId))).toBe(true);
+      expect(opts.matchesExisting?.(monitorJob("another-agent"))).toBe(false);
       expect(
         opts.matchesExisting?.({
-          ...monitorJob("x"),
+          ...monitorJob(input.agentId),
           payload: { kind: "systemEvent", text: "user" },
         } as CronJob),
       ).toBe(false);
@@ -145,5 +147,38 @@ describe("reconcileHeartbeatMonitorJobs", () => {
 
     expect(add).toHaveBeenCalledTimes(2);
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it("keeps removing stale monitors when one removal fails", async () => {
+    const add = vi.fn(async () => ({}));
+    const remove = vi
+      .fn(async (_jobId: string) => ({ ok: true }))
+      .mockRejectedValueOnce(new Error("store busy"));
+    const list = vi.fn(async () => [
+      monitorJob("stale-first"),
+      monitorJob("stale-second"),
+      monitorJob("stale-third"),
+    ]);
+    const cleanupLogger = { warn: vi.fn() };
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "30m" } } },
+    } as OpenClawConfig;
+
+    await expect(
+      reconcileHeartbeatMonitorJobs({
+        cron: { add, list, remove } as never,
+        cfg,
+        logger: cleanupLogger,
+      }),
+    ).resolves.toEqual({ ok: false });
+
+    expect(remove).toHaveBeenCalledTimes(3);
+    expect(remove).toHaveBeenNthCalledWith(1, "job-stale-first", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(2, "job-stale-second", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(3, "job-stale-third", { systemOwned: true });
+    expect(cleanupLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      { agentId: "stale-first", err: "Error: store busy" },
+      "cron-heartbeat: stale monitor cleanup failed",
+    );
   });
 });

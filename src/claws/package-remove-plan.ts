@@ -52,6 +52,7 @@ export function projectClawPackageRemovePlan(params: {
         status: pkg.status,
         relationship: pkg.relationship,
         origin: pkg.origin,
+        introducedByClawAdd: pkg.origin === "claw-introduced",
         independentOwner: pkg.independentOwner,
         affectedClawAgentIds: decision.affectedClawAgentIds,
         cleanupMode: params.cleanup?.mode ?? "retain",

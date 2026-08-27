@@ -2,7 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearAuthProfileMigrationDiagnostics } from "./legacy-source-diagnostic.js";
 import { hasAuthProfileStoreSourceForProvider } from "./source-check.js";
+import { readPersistedAuthProfileStoreRaw, writePersistedAuthProfileStoreRaw } from "./sqlite.js";
+import { loadAuthProfileStoreForRuntime, updateAuthProfileStoreWithLock } from "./store.js";
 
 describe("hasAuthProfileStoreSourceForProvider", () => {
   afterEach(() => {
@@ -16,10 +19,7 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     await fs.mkdir(agentDir, { recursive: true });
     await fs.mkdir(stateDir, { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    await fs.writeFile(
-      path.join(agentDir, "auth-profiles.json"),
-      JSON.stringify({ version: 1, profiles }),
-    );
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles }, agentDir);
     return { agentDir };
   }
 
@@ -48,6 +48,12 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     });
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
+    expect(() => loadAuthProfileStoreForRuntime(agentDir)).toThrow(
+      "requires legacy credential migration",
+    );
+    await fs.rename(path.join(agentDir, "auth.json"), path.join(agentDir, "auth.json.migrated"));
+    clearAuthProfileMigrationDiagnostics();
+    expect(loadAuthProfileStoreForRuntime(agentDir).profiles).toEqual({});
   });
 
   it("ignores malformed provider fields instead of throwing", async () => {
@@ -57,6 +63,58 @@ describe("hasAuthProfileStoreSourceForProvider", () => {
     });
 
     expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(false);
+  });
+
+  it("routes structurally unreadable SQLite rows through the fail-closed loader", async () => {
+    const { agentDir } = await withAgentStore({});
+    writePersistedAuthProfileStoreRaw({ version: 1, profiles: "invalid-profile-map" }, agentDir);
+
+    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
+    expect(() => loadAuthProfileStoreForRuntime(agentDir)).toThrow("is unreadable");
+  });
+
+  it("rejects structurally unreadable rows inside write transactions", async () => {
+    const { agentDir } = await withAgentStore({});
+    const unreadableStore = { version: 1, profiles: "invalid-profile-map" };
+    writePersistedAuthProfileStoreRaw(unreadableStore, agentDir);
+    const updater = vi.fn(() => true);
+
+    // The unreadable store names its own remediation; a null return would make
+    // callers report generic lock contention instead.
+    await expect(updateAuthProfileStoreWithLock({ agentDir, updater })).rejects.toThrow(
+      "is unreadable; run openclaw doctor --fix",
+    );
+    expect(updater).not.toHaveBeenCalled();
+    expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
+  });
+
+  it("returns null for classified SQLite lock contention", async () => {
+    const { agentDir } = await withAgentStore({});
+    const lockError = Object.assign(new Error("database is locked"), { errcode: 5 });
+
+    await expect(
+      updateAuthProfileStoreWithLock({
+        agentDir,
+        updater: () => {
+          throw lockError;
+        },
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("detects a legacy credential source that appears after an earlier clean load", async () => {
+    const { agentDir } = await withAgentStore({});
+    expect(loadAuthProfileStoreForRuntime(agentDir).profiles).toEqual({});
+
+    await fs.writeFile(
+      path.join(agentDir, "auth.json"),
+      JSON.stringify({ openai: { type: "api_key", key: "fake-late-key" } }),
+    );
+
+    expect(hasAuthProfileStoreSourceForProvider("openai", agentDir)).toBe(true);
+    expect(() => loadAuthProfileStoreForRuntime(agentDir)).toThrow(
+      "requires legacy credential migration",
+    );
   });
 
   it("does not count profile ids that are bound to a different credential provider", async () => {

@@ -43,9 +43,25 @@ function writeJson(file, value) {
 }
 
 function seedInstallState() {
-  writeJson(openclawPath("extensions", "lossless-claw", "package.json"), {
+  const pluginRoot = openclawPath("extensions", "lossless-claw");
+  const pluginSource = path.join(pluginRoot, "index.js");
+  const pluginManifest = path.join(pluginRoot, "openclaw.plugin.json");
+  writeJson(path.join(pluginRoot, "package.json"), {
     name: "@example/lossless-claw",
     version: "0.9.0",
+    type: "module",
+    openclaw: {
+      extensions: ["./index.js"],
+    },
+  });
+  fs.writeFileSync(
+    pluginSource,
+    'export default { id: "lossless-claw", register() {} };\n',
+    "utf8",
+  );
+  writeJson(pluginManifest, {
+    id: "lossless-claw",
+    configSchema: { type: "object" },
   });
   writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: {} });
   writePluginInstallIndexForE2E({
@@ -68,7 +84,36 @@ function seedInstallState() {
         shasum: "same",
       },
     },
-    plugins: [],
+    plugins: [
+      {
+        pluginId: "lossless-claw",
+        manifestPath: pluginManifest,
+        manifestHash: "docker-e2e",
+        source: pluginSource,
+        rootDir: pluginRoot,
+        origin: "global",
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          agentHarnesses: [],
+          configPaths: [],
+        },
+        contributions: {
+          channels: [],
+          channelConfigs: [],
+          providers: [],
+          modelCatalogProviders: [],
+          modelSupportPrefixes: [],
+          modelSupportPatterns: [],
+          autoEnableProviderIds: [],
+          commandAliases: [],
+          contracts: {},
+        },
+        compat: [],
+        installOwner: "lossless-claw",
+      },
+    ],
     diagnostics: [],
   });
 }

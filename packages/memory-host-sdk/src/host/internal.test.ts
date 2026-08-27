@@ -12,11 +12,14 @@ import {
   ensureDir,
   isMemoryPath,
   listMemoryFiles,
+  normalizeExtraMemoryPathEntries,
   normalizeExtraMemoryPaths,
   remapChunkLines,
   runWithConcurrency,
+  stripMemoryAnnotationCarriers,
 } from "./internal.js";
 import { normalizeMemoryMultimodalSettings, type MemoryMultimodalSettings } from "./multimodal.js";
+import { readMemoryFile } from "./read-file.js";
 
 type FileEntry = NonNullable<Awaited<ReturnType<typeof buildFileEntry>>>;
 type MultimodalIndexingChunk = NonNullable<
@@ -56,6 +59,19 @@ function expectFileEntry(entry: Awaited<ReturnType<typeof buildFileEntry>>): Fil
   return entry;
 }
 
+function tryCreateSymlink(target: string, linkPath: string, type?: "dir"): boolean {
+  try {
+    fsSync.symlinkSync(target, linkPath, type);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 function expectMultimodalIndexingChunk(
   built: Awaited<ReturnType<typeof buildMultimodalChunkForIndexing>>,
 ): MultimodalIndexingChunk {
@@ -78,6 +94,22 @@ const multimodal: MemoryMultimodalSettings = normalizeMemoryMultimodalSettings({
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
+
+  it.skipIf(process.platform === "win32")(
+    "rejects an uppercase explicit extra file on case-sensitive hosts",
+    async () => {
+      const tmpDir = getTmpDir();
+      const workspaceDir = path.join(tmpDir, "workspace");
+      const upperPath = path.join(tmpDir, "NOTES.MD");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(upperPath, "not lowercase Markdown", "utf8");
+
+      await expect(listMemoryFiles(workspaceDir, [upperPath])).resolves.toEqual([]);
+      await expect(
+        readMemoryFile({ workspaceDir, extraPaths: [upperPath], relPath: upperPath }),
+      ).rejects.toThrow("path required");
+    },
+  );
 
   it("drains in-flight work before propagating a concurrency failure", async () => {
     const failure = new Error("embedding failed");
@@ -149,12 +181,26 @@ describe("memory host SDK package internals", () => {
       path.join(os.homedir(), "shared-notes"),
       os.homedir(),
     ]);
+    expect(
+      normalizeExtraMemoryPathEntries(workspaceDir, [
+        { path: " notes ", pattern: " runbooks/**/*.md " },
+        { path: "notes", pattern: "runbooks/**/*.md" },
+        { path: "notes", pattern: "archive/**/*.md" },
+      ]),
+    ).toEqual([
+      { path: path.resolve(workspaceDir, "notes"), pattern: "runbooks/**/*.md" },
+      { path: path.resolve(workspaceDir, "notes"), pattern: "archive/**/*.md" },
+    ]);
   });
 
   it("lists canonical markdown and enabled multimodal files", async () => {
     const tmpDir = getTmpDir();
     fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# User profile");
     fsSync.writeFileSync(path.join(tmpDir, "memory.md"), "# Legacy memory");
+    const defaultMemoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(defaultMemoryDir, { recursive: true });
+    fsSync.writeFileSync(path.join(defaultMemoryDir, "default-diagram.png"), Buffer.from("png"));
     const extraDir = path.join(tmpDir, "extra");
     fsSync.mkdirSync(extraDir, { recursive: true });
     fsSync.writeFileSync(path.join(extraDir, "note.md"), "# Note");
@@ -170,13 +216,106 @@ describe("memory host SDK package internals", () => {
 
     expect(files.map((file) => path.relative(tmpDir, file)).toSorted()).toEqual([
       "MEMORY.md",
+      "USER.md",
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
       path.join("extra", "recording.m2a"),
     ]);
   });
 
+  it.each([
+    {
+      label: "primary memory file",
+      target: (workspaceDir: string) => path.join(workspaceDir, "USER.md"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "workspace memory directory",
+      target: (workspaceDir: string) => path.join(workspaceDir, "memory"),
+      extraPaths: (_workspaceDir: string) => undefined,
+    },
+    {
+      label: "configured extra path",
+      target: (workspaceDir: string) => path.join(workspaceDir, "extra"),
+      extraPaths: (workspaceDir: string) => [path.join(workspaceDir, "extra")],
+    },
+  ])("propagates operational scan failures for $label", async ({ target, extraPaths }) => {
+    const workspaceDir = getTmpDir();
+    const failedPath = target(workspaceDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${failedPath}`), { code: "EIO" });
+    const realLstat = fs.lstat;
+    vi.spyOn(fs, "lstat").mockImplementation(
+      async (...args: Parameters<typeof fs.lstat>): ReturnType<typeof fs.lstat> => {
+        if (path.resolve(String(args[0])) === failedPath) {
+          throw scanError;
+        }
+        return await realLstat(...args);
+      },
+    );
+
+    await expect(listMemoryFiles(workspaceDir, extraPaths(workspaceDir))).rejects.toBe(scanError);
+  });
+
+  it("propagates operational failures while discovering the canonical memory file", async () => {
+    const workspaceDir = getTmpDir();
+    const scanError = Object.assign(new Error(`I/O failure: ${workspaceDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === workspaceDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+  });
+
+  it("propagates operational failures while traversing a memory directory", async () => {
+    const workspaceDir = getTmpDir();
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir);
+    const scanError = Object.assign(new Error(`I/O failure: ${memoryDir}`), { code: "EIO" });
+    const realReaddir = fs.readdir;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+      if (path.resolve(String(args[0])) === memoryDir) {
+        throw scanError;
+      }
+      return await realReaddir(...args);
+    });
+
+    await expect(listMemoryFiles(workspaceDir)).rejects.toBe(scanError);
+  });
+
+  it("filters extra directories by glob while preserving symlink skips", async () => {
+    const tmpDir = getTmpDir();
+    const extraDir = path.join(tmpDir, "extra");
+    const outsideDir = path.join(tmpDir, "outside");
+    fsSync.mkdirSync(path.join(extraDir, "notes", "nested"), { recursive: true });
+    fsSync.mkdirSync(path.join(extraDir, "drafts"), { recursive: true });
+    fsSync.mkdirSync(outsideDir, { recursive: true });
+    fsSync.writeFileSync(path.join(extraDir, "root.md"), "root");
+    fsSync.writeFileSync(path.join(extraDir, "notes", "keep.md"), "keep");
+    fsSync.writeFileSync(path.join(extraDir, "notes", "nested", "keep.md"), "nested");
+    fsSync.writeFileSync(path.join(extraDir, "drafts", "skip.md"), "skip");
+    fsSync.writeFileSync(path.join(extraDir, "notes", "ignore.txt"), "ignore");
+    fsSync.writeFileSync(path.join(outsideDir, "linked.md"), "linked");
+    tryCreateSymlink(path.join(outsideDir, "linked.md"), path.join(extraDir, "notes", "linked.md"));
+    tryCreateSymlink(outsideDir, path.join(extraDir, "notes", "linked-dir"), "dir");
+
+    const files = await listMemoryFiles(tmpDir, [
+      { path: extraDir, pattern: "root.md" },
+      { path: extraDir, pattern: "notes/**/*.md" },
+    ]);
+
+    expect(files.map((file) => path.relative(extraDir, file)).toSorted()).toEqual([
+      path.join("notes", "keep.md"),
+      path.join("notes", "nested", "keep.md"),
+      "root.md",
+    ]);
+  });
+
   it("allows top-level dreams path casing variants", () => {
+    expect(isMemoryPath("USER.md")).toBe(true);
     expect(isMemoryPath("dreams.md")).toBe(true);
     expect(isMemoryPath("DREAMS.md")).toBe(true);
   });
@@ -282,6 +421,81 @@ describe("memory host SDK package internals", () => {
     for (const chunk of chunks) {
       expect(() => encodeURIComponent(chunk.text)).not.toThrow();
     }
+  });
+
+  it("chunks top-level curated entries without carrying neighboring bullets", () => {
+    const text = [
+      "# Curated memory",
+      "",
+      "- Alpha entry",
+      "  alpha continuation",
+      "- Beta entry",
+      "  beta continuation",
+      "- Global entry",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(text, { tokens: 400, overlap: 40, perEntry: true });
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "# Curated memory\n",
+      "- Alpha entry\n  alpha continuation",
+      "- Beta entry\n  beta continuation",
+      "- Global entry",
+    ]);
+    expect(chunks.map((chunk) => [chunk.startLine, chunk.endLine])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, 6],
+      [7, 7],
+    ]);
+    expect(chunks.map((chunk) => [chunk.entryStartLine, chunk.entryEndLine])).toEqual([
+      [undefined, undefined],
+      [3, 4],
+      [5, 6],
+      [7, 7],
+    ]);
+  });
+
+  it("strips recall annotation carriers while preserving source line positions", () => {
+    const text = [
+      "- Keep the gateway local. <!-- trigger: gateway setup --> <!-- importance: 9 -->",
+      "  <!-- project: github.com/openclaw/openclaw -->",
+      "  Keep this ordinary <!-- note: visible --> comment.",
+    ].join("\n");
+
+    const stripped = stripMemoryAnnotationCarriers(text);
+
+    expect(stripped).toBe(
+      [
+        "- Keep the gateway local.",
+        "",
+        "  Keep this ordinary <!-- note: visible --> comment.",
+      ].join("\n"),
+    );
+    expect(stripped.split("\n")).toHaveLength(text.split("\n").length);
+  });
+
+  it("keeps promotion headings and markers out of neighboring entries", () => {
+    const text = [
+      "- Alpha entry <!-- project: github.com/acme/alpha -->",
+      "### Project: github.com/acme/beta",
+      "",
+      "<!-- openclaw-memory-promotion:memory:beta -->",
+      "- Beta entry <!-- project: github.com/acme/beta -->",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(text, { tokens: 400, overlap: 40, perEntry: true });
+
+    expect(chunks.map((chunk) => chunk.text)).toEqual([
+      "- Alpha entry <!-- project: github.com/acme/alpha -->",
+      "### Project: github.com/acme/beta\n\n<!-- openclaw-memory-promotion:memory:beta -->",
+      "- Beta entry <!-- project: github.com/acme/beta -->",
+    ]);
+    expect(chunks.map((chunk) => [chunk.entryStartLine, chunk.entryEndLine])).toEqual([
+      [1, 1],
+      [undefined, undefined],
+      [5, 5],
+    ]);
   });
 
   it("remaps chunk lines using JSONL source line maps", () => {

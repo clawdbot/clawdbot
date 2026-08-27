@@ -1,9 +1,9 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
 const AUTH_REQUIRED_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_REQUIRED,

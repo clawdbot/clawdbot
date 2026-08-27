@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { isVitestRuntimeEnv } from "../infra/env.js";
+import { isTruthyEnvValue, isVitestRuntimeEnv } from "../infra/env.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
@@ -39,11 +39,6 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
-function isTruthyEnvValue(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
 function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
   const isVitestProcess = isVitestRuntimeEnv(env) || isVitestRuntimeEnv(process.env);
   return (
@@ -53,7 +48,7 @@ function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boole
   );
 }
 
-function hasUsableBundledPluginTree(pluginsDir: string): boolean {
+export function hasUsableBundledPluginTree(pluginsDir: string): boolean {
   if (!fs.existsSync(pluginsDir)) {
     return false;
   }
@@ -75,6 +70,8 @@ function hasUsableBundledPluginTree(pluginsDir: string): boolean {
 
 function safeRealpathSync(targetPath: string): string | null {
   try {
+    // Trusted-root containment requires native platform canonicalization here.
+    // The shared plain-realpath helper must not replace this security boundary.
     return fs.realpathSync.native(targetPath);
   } catch {
     return null;

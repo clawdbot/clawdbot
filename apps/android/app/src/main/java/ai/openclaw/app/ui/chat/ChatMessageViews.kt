@@ -1,38 +1,17 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
-import ai.openclaw.app.chat.ChatPendingToolCall
-import ai.openclaw.app.chat.MessageSpeechPhase
-import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
 import ai.openclaw.app.chat.chatOutboxDisplayError
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
+import ai.openclaw.app.gateway.GatewayLoadedImage
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
-import ai.openclaw.app.tools.ToolDisplayRegistry
-import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCaption2
-import ai.openclaw.app.ui.mobileCardSurface
-import ai.openclaw.app.ui.mobileCodeBg
-import ai.openclaw.app.ui.mobileCodeBorder
-import ai.openclaw.app.ui.mobileCodeText
-import ai.openclaw.app.ui.mobileDanger
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileWarning
-import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -49,10 +28,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -71,171 +48,48 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
-
-private data class ChatBubbleStyle(
-  val alignEnd: Boolean,
-  val containerColor: Color,
-  val borderColor: Color,
-  val roleColor: Color,
-)
-
-/** Renders one persisted chat message as text and image parts. */
-@Composable
-internal fun ChatMessageBubble(
-  message: ChatMessage,
-  onReplyMessage: (String) -> Unit = {},
-  sessionActionsEnabled: Boolean = false,
-  onRewindMessage: (String) -> Unit = {},
-  onForkMessage: (String) -> Unit = {},
-  speechState: MessageSpeechState? = null,
-  onToggleListen: ((String, String) -> Unit)? = null,
-) {
-  val role = normalizeVisibleChatMessageRole(message.role) ?: return
-  val style = bubbleStyle(role)
-
-  // Filter to only displayable content parts (text with content, or base64 images).
-  val displayableContent =
-    message.content.filter { part ->
-      when (part.type) {
-        "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank()
-        else -> part.isAudioAttachment()
-      }
-    }
-
-  if (displayableContent.isEmpty()) return
-
-  val messageText = chatMessagePlainText(displayableContent)
-  val messageSpeech = speechState?.takeIf { it.messageId == message.id }
-  val canListen = role == "assistant" && messageText.isNotBlank() && onToggleListen != null
-  val toggleListen: (() -> Unit)? =
-    if (canListen) {
-      { checkNotNull(onToggleListen).invoke(message.id, messageText) }
-    } else {
-      null
-    }
-  ChatMessageActionHost(
-    text = messageText,
-    onReply = onReplyMessage,
-    showSessionActions = role == "user" && message.entryId != null && sessionActionsEnabled,
-    onRewind = message.entryId?.let { entryId -> { onRewindMessage(entryId) } },
-    onFork = message.entryId?.let { entryId -> { onForkMessage(entryId) } },
-    listenActive = messageSpeech != null,
-    onToggleListen = toggleListen,
-    modifier = Modifier.fillMaxWidth(),
-  ) {
-    ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
-      ChatMessageBody(content = displayableContent, textColor = mobileText)
-      ChatMessageLinkPreview(messageId = message.id, role = role, content = displayableContent)
-      messageSpeech?.let { speech ->
-        MessageSpeechIndicator(
-          phase = speech.phase,
-          onStop = { checkNotNull(onToggleListen).invoke(message.id, messageText) },
-        )
-      }
-    }
-  }
-}
-
-@Composable
-private fun MessageSpeechIndicator(
-  phase: MessageSpeechPhase,
-  onStop: () -> Unit,
-) {
-  Surface(
-    onClick = onStop,
-    shape = RoundedCornerShape(999.dp),
-    color = mobileAccentSoft,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Icon(
-        imageVector =
-          if (phase == MessageSpeechPhase.Preparing) {
-            Icons.Default.HourglassEmpty
-          } else {
-            Icons.AutoMirrored.Filled.VolumeUp
-          },
-        contentDescription = null,
-        modifier = Modifier.size(14.dp),
-        tint = mobileTextSecondary,
-      )
-      Text(
-        text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
-        style = mobileCaption1,
-        color = mobileTextSecondary,
-      )
-    }
-  }
-}
 
 @Composable
 private fun ChatBubbleContainer(
-  style: ChatBubbleStyle,
-  roleLabel: String,
+  user: Boolean,
+  speaker: String,
   modifier: Modifier = Modifier,
+  borderColor: Color? = null,
   content: @Composable () -> Unit,
 ) {
   Row(
     modifier = modifier.fillMaxWidth(),
-    horizontalArrangement = if (style.alignEnd) Arrangement.End else Arrangement.Start,
+    horizontalArrangement = if (user) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
       shape = RoundedCornerShape(12.dp),
-      border = BorderStroke(1.dp, style.borderColor),
-      color = style.containerColor,
+      border = BorderStroke(1.dp, borderColor ?: if (user) ClawTheme.colors.accentBorder else ClawTheme.colors.borderStrong),
+      color = if (user) ClawTheme.colors.accentSoft else ClawTheme.colors.surfaceRaised,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier =
+        Modifier
+          .fillMaxWidth(0.90f)
+          .semantics(mergeDescendants = true) { contentDescription = speaker },
     ) {
       Column(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(
-          text = nativeString(roleLabel),
-          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-          color = style.roleColor,
-        )
         content()
-      }
-    }
-  }
-}
-
-@Composable
-private fun ChatMessageBody(
-  content: List<ChatMessageContent>,
-  textColor: Color,
-) {
-  Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    for (part in content) {
-      when {
-        part.type == "text" -> {
-          val text = part.text ?: continue
-          ChatMarkdown(text = text, textColor = textColor)
-        }
-        part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
-        else -> {
-          val b64 = part.base64 ?: continue
-          ChatBase64Image(base64 = b64, mimeType = part.mimeType)
-        }
       }
     }
   }
@@ -275,8 +129,8 @@ private fun ChatLinkPreview(
     Surface(
       onClick = { expanded = true },
       shape = RoundedCornerShape(8.dp),
-      color = mobileCardSurface,
-      border = BorderStroke(1.dp, mobileBorder),
+      color = ClawTheme.colors.surfaceRaised,
+      border = BorderStroke(1.dp, ClawTheme.colors.border),
     ) {
       Row(
         modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -285,8 +139,8 @@ private fun ChatLinkPreview(
       ) {
         Text(
           text = nativeString("Preview · \$domain", domain),
-          style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-          color = mobileTextSecondary,
+          style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
+          color = ClawTheme.colors.textMuted,
           modifier = Modifier.weight(1f),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
@@ -294,7 +148,7 @@ private fun ChatLinkPreview(
         androidx.compose.material3.Icon(
           imageVector = Icons.Default.ExpandMore,
           contentDescription = nativeString("Expand link preview"),
-          tint = mobileTextSecondary,
+          tint = ClawTheme.colors.textMuted,
         )
       }
     }
@@ -318,8 +172,8 @@ private fun ChatLinkPreview(
   Surface(
     onClick = { uriHandler.openUri(url) },
     shape = cardShape,
-    color = mobileCardSurface,
-    border = BorderStroke(1.dp, mobileBorder),
+    color = ClawTheme.colors.surfaceRaised,
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Column(modifier = Modifier.fillMaxWidth()) {
       previewImage?.let { image ->
@@ -334,16 +188,16 @@ private fun ChatLinkPreview(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(domain, style = mobileCaption2, color = mobileTextSecondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(domain, style = ClawTheme.type.captionSmall, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         when (val preview = result) {
-          null -> Text(nativeString("Loading preview…"), style = mobileCaption1, color = mobileTextSecondary)
-          LinkPreviewResult.Failed -> Text(nativeString("No preview available"), style = mobileCallout, color = mobileTextSecondary)
+          null -> Text(nativeString("Loading preview…"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+          LinkPreviewResult.Failed -> Text(nativeString("No preview available"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           is LinkPreviewResult.Loaded -> {
             preview.metadata.title?.let { title ->
               Text(
                 text = title,
-                style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-                color = mobileText,
+                style = ClawTheme.type.body.copy(fontWeight = FontWeight.SemiBold),
+                color = ClawTheme.colors.text,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -351,8 +205,8 @@ private fun ChatLinkPreview(
             preview.metadata.description?.let { description ->
               Text(
                 text = description,
-                style = mobileCaption1,
-                color = mobileTextSecondary,
+                style = ClawTheme.type.caption,
+                color = ClawTheme.colors.textMuted,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
               )
@@ -376,69 +230,31 @@ private fun linkPreviewDomain(url: String): String =
 fun ChatTypingIndicatorBubble(
   runKey: String,
   observedAtElapsedMs: Long,
+  outputTokens: Long? = null,
 ) {
   val elapsedMs = rememberWorkingElapsedMs(observedAtElapsedMs)
   val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
+  val tokens = outputTokens?.let { localizedChatOutputTokens(it) }
   ChatBubbleContainer(
-    style = bubbleStyle("assistant"),
-    roleLabel = roleLabel("assistant"),
+    user = false,
+    speaker = nativeString("OpenClaw"),
   ) {
     Row(
-      modifier = Modifier.clearAndSetSemantics { contentDescription = nativeString("Working") },
+      modifier = Modifier.semantics(mergeDescendants = true) { contentDescription = nativeString("Working") },
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      WorkingClawIcon(runKey = runKey, color = mobileAccent)
+      WorkingClawIcon(runKey = runKey, color = ClawTheme.colors.accent)
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        Text(formatLocalizedChatDurationCompact(elapsedMs), style = mobileCallout, color = mobileTextSecondary)
-        phrase?.let { Text(nativeStringResource("· \$phrase", it), style = mobileCallout, color = mobileTextSecondary) }
-      }
-    }
-  }
-}
-
-/** Tool progress bubble resolved through Android's tool display registry. */
-@Composable
-fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
-  val context = LocalContext.current
-  val displays =
-    remember(toolCalls, context) {
-      toolCalls.map { ToolDisplayRegistry.resolve(context, it.name, it.args) }
-    }
-
-  ChatBubbleContainer(
-    style = bubbleStyle("assistant"),
-    roleLabel = "Tools",
-  ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text(nativeString("Running tools..."), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-      for (display in displays.take(6)) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(
-            nativeString("\${display.emoji} \${display.label}", display.emoji, display.label),
-            style = mobileCallout,
-            color = mobileTextSecondary,
-            fontFamily = FontFamily.Monospace,
-          )
-          display.detailLine?.let { detail ->
-            Text(
-              detail,
-              style = mobileCaption1,
-              color = mobileTextSecondary,
-              fontFamily = FontFamily.Monospace,
-            )
-          }
+        Text(formatLocalizedChatDurationCompact(elapsedMs), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        tokens?.let {
+          Text(nativeStringResource("·"), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Text(it, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      }
-      if (toolCalls.size > 6) {
-        Text(
-          text = nativeString("... +\${toolCalls.size - 6} more", toolCalls.size - 6),
-          style = mobileCaption1,
-          color = mobileTextSecondary,
-        )
+        phrase?.let { Text(nativeStringResource("· \$phrase", it), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) }
       }
     }
   }
@@ -453,7 +269,7 @@ fun ChatOutboxBubble(
   onDelete: () -> Unit,
 ) {
   val failed = item.status == ChatOutboxStatus.Failed
-  val statusColor = if (failed) mobileDanger else mobileWarning
+  val statusColor = if (failed) ClawTheme.colors.danger else ClawTheme.colors.warning
   val statusLabel =
     when (item.status) {
       ChatOutboxStatus.Queued -> nativeString("Queued — sends when reconnected")
@@ -475,17 +291,18 @@ fun ChatOutboxBubble(
     }
 
   ChatBubbleContainer(
-    style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
-    roleLabel = nativeString("You"),
+    user = true,
+    speaker = nativeString("You"),
+    borderColor = statusColor.copy(alpha = 0.6f),
   ) {
     if (item.text.isNotBlank()) {
-      ChatMarkdown(text = item.text, textColor = mobileText)
+      ChatMarkdown(text = item.text, textColor = ClawTheme.colors.text)
     }
     item.attachments.forEach { attachment ->
       Text(
         text = nativeString("📎 \${attachment.fileName}", attachment.fileName),
-        style = mobileCaption1,
-        color = mobileTextSecondary,
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
       )
     }
     Row(
@@ -494,17 +311,17 @@ fun ChatOutboxBubble(
     ) {
       Text(
         text = statusLabel,
-        style = mobileCaption1,
+        style = ClawTheme.type.caption,
         color = statusColor,
         modifier = Modifier.weight(1f),
       )
       if (failed && retryEnabled) {
-        ChatOutboxAction(label = nativeString("Retry"), color = mobileAccent, onClick = onRetry)
+        ChatOutboxAction(label = nativeString("Retry"), color = ClawTheme.colors.accent, onClick = onRetry)
       }
       // Sending rows are mid-dispatch and accepted rows may already be delivered; both stay
       // action-free until reconciliation resolves them, so a delete can never race a send.
       if (item.status == ChatOutboxStatus.Queued || failed) {
-        ChatOutboxAction(label = nativeString("Delete"), color = mobileTextSecondary, onClick = onDelete)
+        ChatOutboxAction(label = nativeString("Delete"), color = ClawTheme.colors.textMuted, onClick = onDelete)
       }
     }
   }
@@ -525,57 +342,11 @@ private fun ChatOutboxAction(
   ) {
     Text(
       text = label,
-      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
     )
   }
 }
-
-/** Live assistant stream bubble shown before the final message is committed. */
-@Composable
-fun ChatStreamingAssistantBubble(text: String) {
-  ChatBubbleContainer(
-    style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
-    roleLabel = "OpenClaw · Live",
-  ) {
-    ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
-  }
-}
-
-@Composable
-private fun bubbleStyle(role: String): ChatBubbleStyle =
-  when (role) {
-    "user" ->
-      ChatBubbleStyle(
-        alignEnd = true,
-        containerColor = mobileAccentSoft,
-        borderColor = mobileAccent,
-        roleColor = mobileAccent,
-      )
-
-    "system" ->
-      ChatBubbleStyle(
-        alignEnd = false,
-        containerColor = mobileWarningSoft,
-        borderColor = mobileWarning.copy(alpha = 0.45f),
-        roleColor = mobileWarning,
-      )
-
-    else ->
-      ChatBubbleStyle(
-        alignEnd = false,
-        containerColor = mobileCardSurface,
-        borderColor = mobileBorderStrong,
-        roleColor = mobileTextSecondary,
-      )
-  }
-
-private fun roleLabel(role: String): String =
-  when (role) {
-    "user" -> nativeString("You")
-    "system" -> nativeString("System")
-    else -> nativeString("OpenClaw")
-  }
 
 @Composable
 internal fun ChatBase64Image(
@@ -583,75 +354,138 @@ internal fun ChatBase64Image(
   mimeType: String?,
 ) {
   val imageState = rememberBase64ImageState(base64)
-  var previewVisible by rememberSaveable(base64) { mutableStateOf(false) }
   val image = imageState.image
 
   if (image != null) {
-    Surface(
-      onClick = { previewVisible = true },
-      shape = RoundedCornerShape(10.dp),
-      border = BorderStroke(1.dp, mobileBorder),
-      color = mobileCardSurface,
-      modifier = Modifier.fillMaxWidth(),
+    ChatImagePreview(image = image, description = mimeType ?: nativeString("Attachment"), stateKey = base64)
+  } else if (imageState.failed) {
+    Text(nativeString("Unsupported attachment"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+  }
+}
+
+@Composable
+internal fun ChatManagedImage(
+  artifactId: String,
+  label: String,
+  resolverReady: Boolean,
+  loadImage: suspend (String) -> GatewayLoadedImage?,
+) {
+  var image by remember(artifactId) { mutableStateOf<ImageBitmap?>(null) }
+  var failed by remember(artifactId) { mutableStateOf(false) }
+  var retryGeneration by rememberSaveable(artifactId) { mutableStateOf(0) }
+
+  LaunchedEffect(artifactId, resolverReady, retryGeneration) {
+    if (!resolverReady) {
+      failed = true
+      image = null
+      return@LaunchedEffect
+    }
+    failed = false
+    image = null
+    val loaded = runCatching { loadImage(artifactId) }.getOrNull()
+    image =
+      loaded?.let { value ->
+        withContext(Dispatchers.Default) { decodeImageBytes(value.bytes)?.asImageBitmap() }
+      }
+    failed = image == null
+  }
+
+  when {
+    image != null -> ChatImagePreview(image = checkNotNull(image), description = label, stateKey = artifactId)
+    failed ->
+      Surface(
+        onClick = { retryGeneration += 1 },
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, ClawTheme.colors.border),
+        color = ClawTheme.colors.surfaceRaised,
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Text(
+          nativeString("Image unavailable · Tap to retry"),
+          modifier = Modifier.padding(12.dp),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
+    else ->
+      Text(
+        nativeString("Loading image…"),
+        modifier = Modifier.padding(12.dp),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+  }
+}
+
+@Composable
+private fun ChatImagePreview(
+  image: ImageBitmap,
+  description: String,
+  stateKey: String,
+) {
+  var previewVisible by rememberSaveable(stateKey) { mutableStateOf(false) }
+  Surface(
+    onClick = { previewVisible = true },
+    shape = RoundedCornerShape(10.dp),
+    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    color = ClawTheme.colors.surfaceRaised,
+    modifier = Modifier.fillMaxWidth(),
+  ) {
+    Box {
+      Image(
+        bitmap = image,
+        contentDescription = description,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.fillMaxWidth(),
+      )
+      Surface(
+        modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
+        shape = CircleShape,
+        color = Color.Black.copy(alpha = 0.62f),
+        contentColor = Color.White,
+      ) {
+        Box(contentAlignment = Alignment.Center) {
+          Icon(
+            imageVector = Icons.Default.OpenInFull,
+            contentDescription = nativeString("Open image preview"),
+            modifier = Modifier.size(17.dp),
+          )
+        }
+      }
+    }
+  }
+  if (previewVisible) {
+    Dialog(
+      onDismissRequest = { previewVisible = false },
+      properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
-      Box {
+      Box(
+        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
+        contentAlignment = Alignment.Center,
+      ) {
         Image(
           bitmap = image,
-          contentDescription = mimeType ?: nativeString("Attachment"),
+          contentDescription = nativeString("Image preview"),
           contentScale = ContentScale.Fit,
-          modifier = Modifier.fillMaxWidth(),
+          modifier = Modifier.fillMaxSize().padding(20.dp),
         )
         Surface(
-          modifier = Modifier.align(Alignment.BottomEnd).padding(8.dp).size(32.dp),
+          onClick = { previewVisible = false },
+          modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(44.dp),
           shape = CircleShape,
           color = Color.Black.copy(alpha = 0.62f),
           contentColor = Color.White,
         ) {
           Box(contentAlignment = Alignment.Center) {
             Icon(
-              imageVector = Icons.Default.OpenInFull,
-              contentDescription = nativeString("Open image preview"),
-              modifier = Modifier.size(17.dp),
+              imageVector = Icons.Default.Close,
+              contentDescription = nativeString("Close image preview"),
+              modifier = Modifier.size(22.dp),
             )
           }
         }
       }
     }
-    if (previewVisible) {
-      Dialog(
-        onDismissRequest = { previewVisible = false },
-        properties = DialogProperties(usePlatformDefaultWidth = false),
-      ) {
-        Box(
-          modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
-          contentAlignment = Alignment.Center,
-        ) {
-          Image(
-            bitmap = image,
-            contentDescription = nativeString("Image preview"),
-            contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxSize().padding(20.dp),
-          )
-          Surface(
-            onClick = { previewVisible = false },
-            modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(44.dp),
-            shape = CircleShape,
-            color = Color.Black.copy(alpha = 0.62f),
-            contentColor = Color.White,
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = nativeString("Close image preview"),
-                modifier = Modifier.size(22.dp),
-              )
-            }
-          }
-        }
-      }
-    }
-  } else if (imageState.failed) {
-    Text(nativeString("Unsupported attachment"), style = mobileCaption1, color = mobileTextSecondary)
   }
 }
 
@@ -663,14 +497,14 @@ fun ChatCodeBlock(
   isComplete: Boolean = true,
 ) {
   val display = code.trimEnd()
-  // Token colors come from the theme's code palette so light/dark both keep readable contrast.
-  val palette = MobileColorsAccessor.current
+  // Syntax roles reuse semantic colors that keep at least 4.5:1 contrast against codeBg;
+  // changing these mappings can make highlighted code less readable than plain code.
   val tokenColors =
     CodeTokenColors(
-      keyword = palette.codeKeyword,
-      string = palette.codeString,
-      comment = palette.codeComment,
-      number = palette.codeNumber,
+      keyword = ClawTheme.colors.accent,
+      string = ClawTheme.colors.success,
+      comment = ClawTheme.colors.textMuted,
+      number = ClawTheme.colors.danger,
     )
   // Keyed on content: streaming re-renders of unchanged blocks reuse the tokenized result,
   // and still-open fences stay plain until the closing fence arrives.
@@ -680,23 +514,23 @@ fun ChatCodeBlock(
     }
   Surface(
     shape = RoundedCornerShape(8.dp),
-    color = mobileCodeBg,
-    border = BorderStroke(1.dp, mobileCodeBorder),
+    color = ClawTheme.colors.codeBg,
+    border = BorderStroke(1.dp, ClawTheme.colors.codeBorder),
     modifier = Modifier.fillMaxWidth(),
   ) {
     Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
       if (!language.isNullOrBlank()) {
         Text(
           text = language.uppercase(Locale.US),
-          style = mobileCaption2.copy(letterSpacing = 0.4.sp),
-          color = mobileTextSecondary,
+          style = ClawTheme.type.captionSmall,
+          color = ClawTheme.colors.textMuted,
         )
       }
       Text(
         text = highlighted,
         fontFamily = FontFamily.Monospace,
-        style = mobileCallout,
-        color = mobileCodeText,
+        style = ClawTheme.type.body,
+        color = ClawTheme.colors.codeText,
       )
     }
   }

@@ -1,6 +1,7 @@
 // IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -15,9 +16,6 @@ import type { IrcInboundMessage } from "./types.js";
 
 const IRC_INGRESS_PAYLOAD_VERSION = 1;
 const IRC_INGRESS_POLL_INTERVAL_MS = 1_000;
-const IRC_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const IRC_INGRESS_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const IRC_INGRESS_TOMBSTONE_MAX_ENTRIES = 1_000;
 
 type IrcIngressPayload = {
   version: 1;
@@ -40,12 +38,7 @@ type IrcIngressDispatch = (
   context: { connectedNick: string; connectionEpoch: string },
 ) => Promise<IrcIngressDispatchResult | void> | IrcIngressDispatchResult | void;
 
-class IrcIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "IrcIngressPayloadError";
-  }
-}
+const IrcIngressPayloadError = createChannelIngressError("IrcIngressPayloadError");
 
 function inspectRawPrivmsg(rawLine: string): {
   laneKey: string;
@@ -78,6 +71,11 @@ function inspectRawPrivmsg(rawLine: string): {
     },
   };
 }
+
+type IrcIngressRaw = {
+  body: IrcIngressBody;
+  claimedProjection?: ReturnType<typeof inspectRawPrivmsg>;
+};
 
 function decodeIrcIngressPayload(
   payload: unknown,
@@ -115,15 +113,19 @@ function decodeIrcIngressPayload(
 }
 
 function inspectIrcIngress(
-  raw: IrcIngressBody,
+  raw: IrcIngressRaw,
   phase: "admission" | "claim",
 ): { eventId: string; laneKey: string } {
   try {
-    return { eventId: raw.eventId, laneKey: inspectRawPrivmsg(raw.rawLine).laneKey };
+    const projection = inspectRawPrivmsg(raw.body.rawLine);
+    if (phase === "claim") {
+      raw.claimedProjection = projection;
+    }
+    return { eventId: raw.body.eventId, laneKey: projection.laneKey };
   } catch (error) {
     if (phase === "admission" && error instanceof IrcIngressPayloadError) {
       // IRC cannot replay a rejected socket line; persist it for claim-side dead-lettering.
-      return { eventId: raw.eventId, laneKey: `invalid:${raw.eventId}` };
+      return { eventId: raw.body.eventId, laneKey: `invalid:${raw.body.eventId}` };
     }
     throw error;
   }
@@ -156,7 +158,7 @@ export function createIrcIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
 }): IrcIngressMonitor {
-  const monitor = createChannelIngressMonitor<IrcIngressBody, IrcIngressBody, IrcIngressPayload>({
+  const monitor = createChannelIngressMonitor<IrcIngressRaw, IrcIngressBody, IrcIngressPayload>({
     queue:
       options.queue ??
       (() =>
@@ -166,32 +168,31 @@ export function createIrcIngressMonitor(options: {
     inspect: (raw, context) => inspectIrcIngress(raw, context.phase),
     payload: {
       version: IRC_INGRESS_PAYLOAD_VERSION,
-      serialize: (raw) => raw,
-      deserialize: (body) => body,
+      serialize: (raw) => raw.body,
+      deserialize: (body) => ({ body }),
       encode: ({ body }) => ({ version: IRC_INGRESS_PAYLOAD_VERSION, ...body }),
       decode: (payload, { claim }) => decodeIrcIngressPayload(payload, claim.id),
       createClaimError: (_kind, claim) =>
         new IrcIngressPayloadError(`IRC ingress row ${claim.id} has invalid metadata.`),
     },
     deliver: (raw, lifecycle, claim) => {
-      const inspected = inspectRawPrivmsg(raw.rawLine);
+      // Claim inspection populates this on the same transient raw object immediately before
+      // delivery; malformed or identity-mismatched rows exit before reaching this callback.
+      const projection = raw.claimedProjection!;
       const message: IrcInboundMessage = {
-        ...inspected.message,
+        ...projection.message,
         messageId: claim.id,
-        timestamp: raw.receivedAt,
+        timestamp: raw.body.receivedAt,
       };
       return options.dispatch(message, lifecycle, {
-        connectedNick: raw.connectedNick.trim(),
-        connectionEpoch: raw.connectionEpoch.trim(),
+        connectedNick: raw.body.connectedNick.trim(),
+        connectionEpoch: raw.body.connectionEpoch.trim(),
       });
     },
     pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: IRC_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
-      completedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
-      failedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
@@ -229,11 +230,13 @@ export function createIrcIngressMonitor(options: {
           return monitor
             .admit(
               {
-                eventId,
-                rawLine,
-                receivedAt,
-                connectionEpoch: epoch,
-                connectedNick: normalizedNick,
+                body: {
+                  eventId,
+                  rawLine,
+                  receivedAt,
+                  connectionEpoch: epoch,
+                  connectedNick: normalizedNick,
+                },
               },
               { receivedAt },
             )

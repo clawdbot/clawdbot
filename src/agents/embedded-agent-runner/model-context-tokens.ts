@@ -1,6 +1,7 @@
 /**
  * Reads normalized context-token metadata from resolved model definitions.
  */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Model } from "../../llm/types.js";
 
 /**
@@ -14,5 +15,5 @@ type AgentModelWithOptionalContextTokens = Model & {
 /** Prefer contextTokens, then contextWindow, when present on model metadata. */
 export function readAgentModelContextTokens(model: Model | null | undefined): number | undefined {
   const value = (model as AgentModelWithOptionalContextTokens | null | undefined)?.contextTokens;
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }

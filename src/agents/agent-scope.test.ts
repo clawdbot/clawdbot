@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { withEnv } from "../test-utils/env.js";
+import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -17,26 +18,17 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
-  resolveFallbackAgentId,
   resolveEffectiveModelFallbacks,
   resolveAgentModelFallbacksOverride,
   resolveRunModelFallbacksOverride,
-  resolveSubagentModelConfigSelection,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
-  resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
 
 describe("resolveAgentConfig", () => {
-  it("should return undefined when no agents config exists", () => {
-    const cfg: OpenClawConfig = {};
-    const result = resolveAgentConfig(cfg, "main");
-    expect(result).toBeUndefined();
-  });
-
   it("should return undefined when agent id does not exist", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -101,8 +93,6 @@ describe("resolveAgentConfig", () => {
         defaults: {
           contextLimits: {
             memoryGetMaxChars: 20_000,
-            memoryGetDefaultLines: 180,
-            toolResultMaxChars: 18_000,
           },
         },
         list: [
@@ -121,8 +111,6 @@ describe("resolveAgentConfig", () => {
 
     expect(resolveAgentConfig(cfg, "main")?.contextLimits).toEqual({
       memoryGetMaxChars: 24_000,
-      memoryGetDefaultLines: 180,
-      toolResultMaxChars: 18_000,
     });
   });
 
@@ -427,23 +415,6 @@ describe("resolveAgentConfig", () => {
     });
   });
 
-  it("resolves fallback agent id from explicit agent id first", () => {
-    expect(
-      resolveFallbackAgentId({
-        agentId: "Support",
-        sessionKey: "agent:main:session",
-      }),
-    ).toBe("support");
-  });
-
-  it("resolves fallback agent id from session key when explicit id is missing", () => {
-    expect(
-      resolveFallbackAgentId({
-        sessionKey: "agent:worker:session",
-      }),
-    ).toBe("worker");
-  });
-
   it("resolves run fallback overrides via shared helper", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -728,9 +699,12 @@ describe("resolveAgentConfig", () => {
       authProfileOverride: "fallback-key",
       authProfileOverrideSource: "auto",
       authProfileOverrideCompactionCount: 1,
-      fallbackNoticeSelectedModel: "google/gemini-3-pro",
-      fallbackNoticeActiveModel: "google/gemini-3-pro",
-      fallbackNoticeReason: "rate_limit",
+      fallbackNotice: {
+        kind: "active",
+        selectedModel: "google/gemini-3-pro",
+        activeModel: "google/gemini-3-pro",
+        reason: "rate_limit",
+      },
     };
 
     clearAutoFallbackPrimaryProbeSelection(entry, 2);
@@ -894,7 +868,8 @@ describe("resolveAgentConfig", () => {
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
-      "google/gemini-3-pro",
+      "openai/gpt-5.4",
+      "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([
       "openai/gpt-5.4",
@@ -973,57 +948,6 @@ describe("resolveAgentConfig", () => {
         modelOverrideSource: "auto",
       }),
     ).toEqual(["zai/glm-5"]);
-  });
-
-  it("resolves the subagent model config selected for isolated runs", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          subagents: { model: "openai/gpt-5.4" },
-        },
-        list: [
-          {
-            id: "agent-model",
-            model: {
-              primary: "anthropic/claude-sonnet-4-6",
-              fallbacks: ["google/gemini-3-pro"],
-            },
-          },
-          {
-            id: "subagent-model",
-            model: "anthropic/claude-sonnet-4-6",
-            subagents: {
-              model: {
-                primary: "kimi/kimi-code",
-                fallbacks: ["openai/gpt-5.4"],
-              },
-            },
-          },
-          {
-            id: "fallback-only-subagent",
-            model: "anthropic/claude-sonnet-4-6",
-            subagents: {
-              model: { fallbacks: [] },
-            },
-          },
-        ],
-      },
-    };
-
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "agent-model" })).toEqual({
-      primary: "anthropic/claude-sonnet-4-6",
-      fallbacks: ["google/gemini-3-pro"],
-    });
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "subagent-model" })).toEqual({
-      primary: "kimi/kimi-code",
-      fallbacks: ["openai/gpt-5.4"],
-    });
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "fallback-only-subagent" })).toBe(
-      "anthropic/claude-sonnet-4-6",
-    );
-    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "default-subagent" })).toBe(
-      "openai/gpt-5.4",
-    );
   });
 
   it("should return agent-specific sandbox config", () => {
@@ -1122,7 +1046,10 @@ describe("resolveAgentConfig", () => {
   it("uses OPENCLAW_HOME for default agent workspace", () => {
     const home = path.join(path.sep, "srv", "openclaw-home");
     withEnv({ OPENCLAW_HOME: home }, () => {
-      const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+      const workspace = resolveAgentWorkspaceDir(
+        { agents: { entries: { main: { default: true } } } },
+        "main",
+      );
       expect(workspace).toBe(path.join(path.resolve(home), ".openclaw", "workspace"));
     });
   });
@@ -1135,7 +1062,10 @@ describe("resolveAgentConfig", () => {
         OPENCLAW_HOME: path.join(path.sep, "srv", "openclaw-home"),
       },
       () => {
-        const workspace = resolveAgentWorkspaceDir({} as OpenClawConfig, "main");
+        const workspace = resolveAgentWorkspaceDir(
+          { agents: { entries: { main: { default: true } } } },
+          "main",
+        );
         expect(workspace).toBe(path.resolve(workspaceDir));
       },
     );
@@ -1199,6 +1129,34 @@ describe("resolveAgentConfig", () => {
 });
 
 describe("resolveAgentIdByWorkspacePath", () => {
+  it.runIf(process.platform === "linux")(
+    "keeps distinct Unicode workspace directories under their own agents",
+    () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-unicode-")));
+      const composed = path.join(root, "caf\u00e9");
+      const decomposed = path.join(root, "cafe\u0301");
+      try {
+        fs.mkdirSync(composed);
+        fs.mkdirSync(decomposed);
+        const cfg: OpenClawConfig = {
+          agents: {
+            entries: {
+              composed: { workspace: composed },
+              decomposed: { workspace: decomposed },
+            },
+          },
+        };
+
+        expect(fs.statSync(composed).ino).not.toBe(fs.statSync(decomposed).ino);
+        expect(resolveAgentIdByWorkspacePath(cfg, composed)).toBe("composed");
+        expect(resolveAgentIdByWorkspacePath(cfg, decomposed)).toBe("decomposed");
+        expect(findOverlappingWorkspaceAgentIds(cfg, "composed", composed)).toEqual([]);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("returns the most specific workspace match for a directory", () => {
     const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
     const opsWorkspace = `${workspaceRoot}/projects/ops`;
@@ -1207,6 +1165,7 @@ describe("resolveAgentIdByWorkspacePath", () => {
         list: [
           { id: "main", workspace: workspaceRoot },
           { id: "ops", workspace: opsWorkspace },
+          { id: "ops-shadow", workspace: opsWorkspace },
         ],
       },
     };
@@ -1262,28 +1221,39 @@ describe("resolveAgentIdByWorkspacePath", () => {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
-});
 
-describe("resolveAgentIdsByWorkspacePath", () => {
-  it("returns matching workspaces ordered by specificity", () => {
-    const workspaceRoot = `/tmp/openclaw-agent-scope-${Date.now()}-root`;
-    const opsWorkspace = `${workspaceRoot}/projects/ops`;
-    const opsDevWorkspace = `${opsWorkspace}/dev`;
-    const cfg: OpenClawConfig = {
-      agents: {
-        list: [
-          { id: "main", workspace: workspaceRoot },
-          { id: "ops", workspace: opsWorkspace },
-          { id: "ops-dev", workspace: opsDevWorkspace },
-        ],
-      },
-    };
+  it("matches a dangling workspace symlink to its vanished target", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-scope-dangling-"));
+    const workspaceDir = path.join(tempRoot, "vanished-workspace");
+    const workspaceAliasDir = path.join(tempRoot, "workspace-alias");
+    try {
+      fs.symlinkSync(
+        workspaceDir,
+        workspaceAliasDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const cfg: OpenClawConfig = {
+        agents: { list: [{ id: "ops", workspace: workspaceAliasDir }] },
+      };
 
-    expect(resolveAgentIdsByWorkspacePath(cfg, `${opsDevWorkspace}/pkg`)).toEqual([
-      "ops-dev",
-      "ops",
-      "main",
-    ]);
+      expect(resolveAgentIdByWorkspacePath(cfg, workspaceDir)).toBe("ops");
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a cyclic workspace alias bounded and separate from unrelated paths", () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "workspace-cycle-")));
+    const alias = path.join(root, "alias");
+    try {
+      fs.symlinkSync(alias, alias, process.platform === "win32" ? "junction" : "dir");
+      const cfg: OpenClawConfig = { agents: { entries: { ops: { workspace: alias } } } };
+
+      expect(resolveAgentIdByWorkspacePath(cfg, alias)).toBe("ops");
+      expect(resolveAgentIdByWorkspacePath(cfg, path.join(root, "other"))).toBeUndefined();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

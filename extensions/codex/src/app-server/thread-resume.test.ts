@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { resumeCodexAppServerThread } from "./thread-resume.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function resumeResponse(threadId: string, restoredTurns = 0) {
   return {
@@ -16,7 +17,8 @@ function resumeResponse(threadId: string, restoredTurns = 0) {
       status: { type: "idle" },
       path: null,
       cwd: "/repo",
-      cliVersion: "0.139.0",
+      projectId: null,
+      cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,
       agentRole: null,

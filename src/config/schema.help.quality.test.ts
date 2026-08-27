@@ -1,6 +1,5 @@
 // Checks config help text quality and coverage.
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { FIELD_HELP } from "./schema.help.js";
@@ -151,6 +150,12 @@ describe("config help copy quality", () => {
     }
   }
 
+  it("describes auto-mode collection mutation", () => {
+    const help = requireHelp("skills.workshop.autonomous.mode");
+    expect(help).toContain("daily");
+    expect(help).toContain("rewrite or drop");
+  });
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(requireLabel(key)).not.toHaveLength(0);
@@ -213,293 +218,135 @@ describe("config help copy quality", () => {
     }
   });
 
-  it("explains memory citations mode semantics", () => {
-    const help = expectDefined(
-      FIELD_HELP["memory.citations"],
-      'FIELD_HELP["memory.citations"] test invariant',
-    );
-    expect(help.includes('"auto"')).toBe(true);
-    expect(help.includes('"on"')).toBe(true);
-    expect(help.includes('"off"')).toBe(true);
-    expect(/always|always shows/i.test(help)).toBe(true);
-    expect(/hides|hide/i.test(help)).toBe(true);
-  });
-
-  it("includes a concrete example on memory path fields", () => {
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.paths.pattern"],
-        'FIELD_HELP["memory.qmd.paths.pattern"] test invariant',
-      ).includes("**/*.md"),
-    ).toBe(true);
-  });
-
-  it("documents cron retention formats", () => {
-    const retention = expectDefined(
-      FIELD_HELP["cron.sessionRetention"],
-      'FIELD_HELP["cron.sessionRetention"] test invariant',
-    );
-    expect(retention.includes("24h")).toBe(true);
-    expect(retention.includes("7d")).toBe(true);
-    expect(retention.includes("1h30m")).toBe(true);
-    expect(/false/i.test(retention)).toBe(true);
-
-    const token = expectDefined(
-      FIELD_HELP["cron.webhookToken"],
-      'FIELD_HELP["cron.webhookToken"] test invariant',
-    );
-    expect(/token|bearer/i.test(token)).toBe(true);
-    expect(/secret|env|rotate/i.test(token)).toBe(true);
-  });
-
-  it("documents session send-policy examples and prefix semantics", () => {
-    const rules = expectDefined(
-      FIELD_HELP["session.sendPolicy.rules"],
-      'FIELD_HELP["session.sendPolicy.rules"] test invariant',
-    );
-    expect(rules.includes("{ action:")).toBe(true);
-    expect(rules.includes('"deny"')).toBe(true);
-    expect(rules.includes('"discord"')).toBe(true);
-
-    const keyPrefix = expectDefined(
-      FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"],
-      'FIELD_HELP["session.sendPolicy.rules[].match.keyPrefix"] test invariant',
-    );
-    expect(/normalized/i.test(keyPrefix)).toBe(true);
-
-    const rawKeyPrefix = expectDefined(
-      FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"],
-      'FIELD_HELP["session.sendPolicy.rules[].match.rawKeyPrefix"] test invariant',
-    );
-    expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
-  });
-
-  it("documents session maintenance duration/size examples and deprecations", () => {
-    const pruneAfter = expectDefined(
-      FIELD_HELP["session.maintenance.pruneAfter"],
-      'FIELD_HELP["session.maintenance.pruneAfter"] test invariant',
-    );
-    expect(pruneAfter.includes("30d")).toBe(true);
-    expect(pruneAfter.includes("12h")).toBe(true);
-
-    const resetRetention = expectDefined(
-      FIELD_HELP["session.maintenance.resetArchiveRetention"],
-      'FIELD_HELP["session.maintenance.resetArchiveRetention"] test invariant',
-    );
-    expect(resetRetention.includes(".reset.")).toBe(true);
-    expect(/false/i.test(resetRetention)).toBe(true);
-
-    const maxDisk = expectDefined(
-      FIELD_HELP["session.maintenance.maxDiskBytes"],
-      'FIELD_HELP["session.maintenance.maxDiskBytes"] test invariant',
-    );
-    expect(maxDisk.includes("500mb")).toBe(true);
-
-    const highWater = expectDefined(
-      FIELD_HELP["session.maintenance.highWaterBytes"],
-      'FIELD_HELP["session.maintenance.highWaterBytes"] test invariant',
-    );
-    expect(highWater.includes("80%")).toBe(true);
-  });
-
-  it("documents approvals filters and target semantics", () => {
-    const sessionFilter = expectDefined(
-      FIELD_HELP["approvals.exec.sessionFilter"],
-      'FIELD_HELP["approvals.exec.sessionFilter"] test invariant',
-    );
-    expect(/substring|regex/i.test(sessionFilter)).toBe(true);
-    expect(sessionFilter.includes("discord:")).toBe(true);
-    expect(sessionFilter.includes("^agent:ops:")).toBe(true);
-
-    const agentFilter = expectDefined(
-      FIELD_HELP["approvals.exec.agentFilter"],
-      'FIELD_HELP["approvals.exec.agentFilter"] test invariant',
-    );
-    expect(agentFilter.includes("primary")).toBe(true);
-    expect(agentFilter.includes("ops-agent")).toBe(true);
-
-    const targetTo = expectDefined(
-      FIELD_HELP["approvals.exec.targets[].to"],
-      'FIELD_HELP["approvals.exec.targets[].to"] test invariant',
-    );
-    expect(/channel ID|user ID|thread root/i.test(targetTo)).toBe(true);
-    expect(/differs|per provider/i.test(targetTo)).toBe(true);
-  });
-
-  it("documents broadcast command examples", () => {
-    const broadcastMap = expectDefined(
-      FIELD_HELP["broadcast.*"],
-      'FIELD_HELP["broadcast.*"] test invariant',
-    );
-    expect(/source peer ID/i.test(broadcastMap)).toBe(true);
-    expect(/destination peer IDs/i.test(broadcastMap)).toBe(true);
-  });
-
-  it("documents hook transform safety and queue behavior options", () => {
-    const transformModule = expectDefined(
-      FIELD_HELP["hooks.mappings[].transform.module"],
-      'FIELD_HELP["hooks.mappings[].transform.module"] test invariant',
-    );
-    expect(/relative/i.test(transformModule)).toBe(true);
-    expect(/path traversal|reviewed|controlled/i.test(transformModule)).toBe(true);
-
-    const queueMode = expectDefined(
-      FIELD_HELP["messages.queue.mode"],
-      'FIELD_HELP["messages.queue.mode"] test invariant',
-    );
-    expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer"')).toBe(true);
-  });
-
-  it("documents gateway bind modes", () => {
-    const bind = expectDefined(
-      FIELD_HELP["gateway.bind"],
-      'FIELD_HELP["gateway.bind"] test invariant',
-    );
-    expect(bind.includes('"loopback"')).toBe(true);
-    expect(bind.includes('"tailnet"')).toBe(true);
-  });
-
-  it("documents admin semantics for logging and plugins", () => {
-    const consoleStyle = expectDefined(
-      FIELD_HELP["logging.consoleStyle"],
-      'FIELD_HELP["logging.consoleStyle"] test invariant',
-    );
-    expect(consoleStyle.includes('"pretty"')).toBe(true);
-    expect(consoleStyle.includes('"json"')).toBe(true);
-
-    const pluginApiKey = expectDefined(
-      FIELD_HELP["plugins.entries.*.apiKey"],
-      'FIELD_HELP["plugins.entries.*.apiKey"] test invariant',
-    );
-    expect(/secret|env|credential/i.test(pluginApiKey)).toBe(true);
-
-    const pluginEnv = expectDefined(
-      FIELD_HELP["plugins.entries.*.env"],
-      'FIELD_HELP["plugins.entries.*.env"] test invariant',
-    );
-    expect(/scope|plugin|environment/i.test(pluginEnv)).toBe(true);
-
-    const pluginPromptPolicy = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"],
-      'FIELD_HELP["plugins.entries.*.hooks.allowPromptInjection"] test invariant',
-    );
-    expect(pluginPromptPolicy.includes("before_prompt_build")).toBe(true);
-
-    const pluginConversationPolicy = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"],
-      'FIELD_HELP["plugins.entries.*.hooks.allowConversationAccess"] test invariant',
-    );
-    expect(pluginConversationPolicy.includes("llm_input")).toBe(true);
-    expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
-    expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
-
-    const pluginHookTimeout = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.timeoutMs"],
-      'FIELD_HELP["plugins.entries.*.hooks.timeoutMs"] test invariant',
-    );
-    expect(pluginHookTimeout.includes("typed hooks")).toBe(true);
-    expect(pluginHookTimeout.includes("hooks.timeouts")).toBe(true);
-
-    const pluginHookTimeouts = expectDefined(
-      FIELD_HELP["plugins.entries.*.hooks.timeouts"],
-      'FIELD_HELP["plugins.entries.*.hooks.timeouts"] test invariant',
-    );
-    expect(pluginHookTimeouts.includes("before_prompt_build")).toBe(true);
-    expect(pluginHookTimeouts.includes("agent_end")).toBe(true);
-    expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
-  });
-
-  it("documents auth/model root semantics and provider secret handling", () => {
-    const providerKey = expectDefined(
-      FIELD_HELP["models.providers.*.apiKey"],
-      'FIELD_HELP["models.providers.*.apiKey"] test invariant',
-    );
-    expect(/secret|env|credential/i.test(providerKey)).toBe(true);
-    const modelsMode = expectDefined(
-      FIELD_HELP["models.mode"],
-      'FIELD_HELP["models.mode"] test invariant',
-    );
-    expect(modelsMode.includes("SecretRef-managed")).toBe(true);
-    expect(modelsMode.includes("preserve")).toBe(true);
-  });
-
-  it("documents agent compaction safeguards and memory flush behavior", () => {
-    const mode = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.mode"],
-      'FIELD_HELP["agents.defaults.compaction.mode"] test invariant',
-    );
-    expect(mode.includes('"default"')).toBe(true);
-    expect(mode.includes('"safeguard"')).toBe(true);
-
-    const thinkingLevel = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.thinkingLevel"],
-      'FIELD_HELP["agents.defaults.compaction.thinkingLevel"] test invariant',
-    );
-    expect(/session level|inherit/i.test(thinkingLevel)).toBe(true);
-    expect(/Codex app-server|no per-operation thinking override/i.test(thinkingLevel)).toBe(true);
-
-    const identifierPolicy = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.identifierPolicy"],
-      'FIELD_HELP["agents.defaults.compaction.identifierPolicy"] test invariant',
-    );
-    expect(identifierPolicy.includes('"strict"')).toBe(true);
-    expect(identifierPolicy.includes('"off"')).toBe(true);
-
-    const recentTurnsPreserve = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"],
-      'FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"] test invariant',
-    );
-    expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
-    expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
-
-    const midTurnPrecheck = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"],
-      'FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"] test invariant',
-    );
-    expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
-
-    const compactionModel = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.model"],
-      'FIELD_HELP["agents.defaults.compaction.model"] test invariant',
-    );
-    expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);
-    expect(/alias/i.test(compactionModel)).toBe(true);
-
-    const transcriptBytes = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"],
-      'FIELD_HELP["agents.defaults.compaction.maxActiveTranscriptBytes"] test invariant',
-    );
-    expect(/transcript|bytes|compaction/i.test(transcriptBytes)).toBe(true);
-    expect(/never splits raw transcript bytes/i.test(transcriptBytes)).toBe(true);
-
-    const flush = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"],
-      'FIELD_HELP["agents.defaults.compaction.memoryFlush.enabled"] test invariant',
-    );
-    expect(/pre-compaction|memory flush|token/i.test(flush)).toBe(true);
-  });
-
-  it("documents agent startup-context preload controls", () => {
-    const startupContext = expectDefined(
-      FIELD_HELP["agents.defaults.startupContext"],
-      'FIELD_HELP["agents.defaults.startupContext"] test invariant',
-    );
-    expect(/first-turn|\/new|\/reset|daily memory/i.test(startupContext)).toBe(true);
-
-    const applyOn = expectDefined(
-      FIELD_HELP["agents.defaults.startupContext.applyOn"],
-      'FIELD_HELP["agents.defaults.startupContext.applyOn"] test invariant',
-    );
-    expect(applyOn.includes('"new"')).toBe(true);
-    expect(applyOn.includes('"reset"')).toBe(true);
-
-    const dailyMemoryDays = expectDefined(
-      FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"],
-      'FIELD_HELP["agents.defaults.startupContext.dailyMemoryDays"] test invariant',
-    );
-    expect(/today \+ yesterday|default:\s*2/i.test(dailyMemoryDays)).toBe(true);
-  });
+  it.each([
+    {
+      name: "explains memory citations mode semantics",
+      fields: [
+        ["memory.citations", ['"auto"', '"on"', '"off"', /always|always shows/i, /hides|hide/i]],
+      ],
+    },
+    {
+      name: "documents cron retention formats",
+      fields: [
+        ["cron.sessionRetention", ["24h", "7d", "1h30m", /false/i]],
+        ["cron.webhookToken", [/token|bearer/i, /secret|env|rotate/i]],
+      ],
+    },
+    {
+      name: "documents session send-policy examples and prefix semantics",
+      fields: [
+        ["session.sendPolicy.rules", ["{ action:", '"deny"', '"discord"']],
+        ["session.sendPolicy.rules[].match.keyPrefix", [/normalized/i]],
+        ["session.sendPolicy.rules[].match.rawKeyPrefix", [/raw|unnormalized/i]],
+      ],
+    },
+    {
+      name: "documents session maintenance duration/size examples and deprecations",
+      fields: [
+        ["session.maintenance.pruneAfter", ["30d", "12h"]],
+        ["session.maintenance.archiveDashboardAfter", ["7d", /false/i, "0"]],
+        ["session.maintenance.preserveRecent", ["7d", /false/i]],
+        ["session.maintenance.resetArchiveRetention", [".reset.", /false/i]],
+        ["session.maintenance.maxDiskBytes", ["500mb"]],
+        ["session.maintenance.highWaterBytes", ["80%"]],
+      ],
+    },
+    {
+      name: "documents approvals filters and target semantics",
+      fields: [
+        ["approvals.exec.sessionFilter", [/substring|regex/i, "discord:", "^agent:ops:"]],
+        ["approvals.exec.agentFilter", ["primary", "ops-agent"]],
+        [
+          "approvals.exec.targets[].to",
+          [/channel ID|user ID|thread root/i, /differs|per provider/i],
+        ],
+      ],
+    },
+    {
+      name: "documents broadcast command examples",
+      fields: [["broadcast.*", [/source peer ID/i, /destination peer IDs/i]]],
+    },
+    {
+      name: "documents hook transform safety and queue behavior options",
+      fields: [
+        ["hooks.mappings[].transform.module", [/relative/i, /path traversal|reviewed|controlled/i]],
+        ["messages.queue.mode", ['"interrupt"', '"steer"']],
+      ],
+    },
+    {
+      name: "documents gateway bind modes",
+      fields: [["gateway.bind", ['"loopback"', '"tailnet"']]],
+    },
+    {
+      name: "documents admin semantics for logging and plugins",
+      fields: [
+        ["logging.consoleStyle", ['"pretty"', '"json"']],
+        ["plugins.entries.*.apiKey", [/secret|env|credential/i]],
+        ["plugins.entries.*.env", [/scope|plugin|environment/i]],
+        ["plugins.entries.*.hooks.allowPromptInjection", ["before_prompt_build"]],
+        [
+          "plugins.entries.*.hooks.allowConversationAccess",
+          ["llm_input", "llm_output", "before_agent_finalize", "agent_end"],
+        ],
+        ["plugins.entries.*.hooks.timeoutMs", ["typed hooks", "hooks.timeouts"]],
+        ["plugins.entries.*.hooks.timeouts", ["before_prompt_build", "agent_end"]],
+      ],
+    },
+    {
+      name: "documents auth/model root semantics and provider secret handling",
+      fields: [
+        ["models.providers.*.apiKey", [/secret|env|credential/i]],
+        ["models.mode", ["SecretRef-managed", "preserve"]],
+      ],
+    },
+    {
+      name: "documents agent compaction safeguards and memory flush behavior",
+      fields: [
+        ["agents.defaults.compaction.mode", ['"default"', '"safeguard"']],
+        [
+          "agents.defaults.compaction.thinkingLevel",
+          [/session level|inherit/i, /Codex app-server|no per-operation thinking override/i],
+        ],
+        ["agents.defaults.compaction.identifierPolicy", ['"strict"', '"off"']],
+        [
+          "agents.defaults.compaction.recentTurnsPreserve",
+          [/recent.*turn|verbatim/i, /default:\s*3/i],
+        ],
+        [
+          "agents.defaults.compaction.midTurnPrecheck.enabled",
+          [/mid-turn|tool loop|default:\s*false/i],
+        ],
+        [
+          "agents.defaults.compaction.model",
+          [/provider\/model|different model|primary agent model/i, /alias/i],
+        ],
+        [
+          "agents.defaults.compaction.maxActiveTranscriptBytes",
+          [/transcript|bytes|compaction/i, /Codex app-server|native rollout|restart fresh/i],
+        ],
+        ["agents.defaults.compaction.memoryFlush.enabled", [/pre-compaction|memory flush|token/i]],
+      ],
+    },
+    {
+      name: "documents agent startup-context preload controls",
+      fields: [
+        ["agents.defaults.startupContext", [/first-turn|\/new|\/reset|daily memory/i]],
+        ["agents.defaults.startupContext.applyOn", ['"new"', '"reset"']],
+        ["agents.defaults.startupContext.dailyMemoryDays", [/today \+ yesterday|default:\s*2/i]],
+      ],
+    },
+  ] satisfies Array<{ name: string; fields: Array<[string, Array<string | RegExp>]> }>)(
+    "$name",
+    ({ fields }) => {
+      for (const [key, patterns] of fields) {
+        const help = requireHelp(key);
+        for (const pattern of patterns) {
+          const matches = typeof pattern === "string" ? help.includes(pattern) : pattern.test(help);
+          expect(matches, `missing ${String(pattern)} in ${key}`).toBe(true);
+        }
+      }
+    },
+  );
 });
 
 describe("config tier coverage", () => {

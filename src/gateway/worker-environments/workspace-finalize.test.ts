@@ -1,29 +1,33 @@
 import { describe, expect, it, vi } from "vitest";
-import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import {
+  registerWorkspaceReconcileReporter,
+  verifyReconciledWorkspaceFinal,
+} from "./workspace-finalize.js";
 
 describe("final worker workspace fences", () => {
   it("rechecks remote and local stability after the final quiescence renewal", async () => {
     const log: string[] = [];
-    await verifyReconciledWorkspaceFinal(
-      {
-        manifestRef: "sha256:" + "a".repeat(64),
-        changed: true,
-        verifyStable: async () => {
-          log.push("remote");
-        },
-        verifyLocalStable: async () => {
-          log.push("local");
-        },
+    const reconciliation = {
+      manifestRef: "sha256:" + "a".repeat(64),
+      changed: true,
+      verifyStable: async () => {
+        log.push("remote");
       },
-      {
-        assertActive: async () => {
-          log.push("quiescence");
-        },
-        resume: async () => {},
+      verifyLocalStable: async () => {
+        log.push("local");
       },
-    );
+    };
+    const outcomes: string[] = [];
+    registerWorkspaceReconcileReporter(reconciliation, (outcome) => outcomes.push(outcome));
+    await verifyReconciledWorkspaceFinal(reconciliation, {
+      assertActive: async () => {
+        log.push("quiescence");
+      },
+      resume: async () => {},
+    });
 
     expect(log).toEqual(["remote", "local", "quiescence", "remote", "local"]);
+    expect(outcomes).toEqual(["succeeded"]);
   });
 
   it("rejects a remote write observed after the final quiescence renewal", async () => {

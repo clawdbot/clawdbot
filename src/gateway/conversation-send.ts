@@ -5,9 +5,9 @@ import {
 } from "../config/sessions/conversation-delivery-store.js";
 import {
   resolveConversation,
-  type ConversationRegistryScope,
+  resolveConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ConversationDeliveryRejectedError,
@@ -19,6 +19,10 @@ import {
   ConversationInputError,
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
+import {
+  assertConversationDeliveryAttemptAuthorized,
+  assertConversationRouteEligibleForAgent,
+} from "./conversation-route-ownership.js";
 
 type ConversationSendDeps = ConversationDeliveryDeps & {
   resolveConversation: typeof resolveConversation;
@@ -28,19 +32,6 @@ const defaultDeps: ConversationSendDeps = {
   ...defaultConversationDeliveryDeps,
   resolveConversation,
 };
-
-function resolveConversationScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
-    agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
-      : {}),
-  };
-}
 
 function resultForCompletedOperation(
   operation: ConversationDeliveryRecord,
@@ -84,6 +75,7 @@ function resultForCompletedOperation(
 export async function runGatewayConversationSend(
   params: {
     config: OpenClawConfig;
+    readCurrentConfig?: () => OpenClawConfig;
     agentId: string;
     senderIsOwner: boolean;
     sourceSessionKey?: string;
@@ -94,7 +86,7 @@ export async function runGatewayConversationSend(
   },
   deps: ConversationSendDeps = defaultDeps,
 ): Promise<ConversationSendResult> {
-  const scope = resolveConversationScope(params);
+  const scope = resolveConversationRegistryScope(params);
   try {
     const prior = deps.getOperation(scope, params.operationId);
     let operation: ConversationDeliveryRecord | undefined;
@@ -106,10 +98,6 @@ export async function runGatewayConversationSend(
         ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
         message: params.message,
       }).record;
-      const completed = resultForCompletedOperation(operation);
-      if (completed) {
-        return completed;
-      }
     }
 
     const conversation = deps.resolveConversation(scope, params.conversationRef);
@@ -118,18 +106,42 @@ export async function runGatewayConversationSend(
         `Conversation not found: ${params.conversationRef} (use conversations_list)`,
       );
     }
+    const currentConfig = params.readCurrentConfig?.() ?? params.config;
+    assertConversationRouteEligibleForAgent({
+      config: currentConfig,
+      agentId: params.agentId,
+      conversation,
+    });
+    const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+    if (operation) {
+      const completed = resultForCompletedOperation(operation);
+      if (completed) {
+        return completed;
+      }
+    }
     const sent = await sendGatewayConversationMessage({
       deps,
       context: {
         agentId: params.agentId,
         ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        config: params.config,
+        config: currentConfig,
         senderIsOwner: params.senderIsOwner,
       },
       conversation,
       message: params.message,
       operationId: params.operationId,
       operationKind: "send",
+      routeFingerprint,
+      onDeliveryAttempt: async () => {
+        assertConversationDeliveryAttemptAuthorized({
+          config: params.readCurrentConfig?.() ?? currentConfig,
+          agentId: params.agentId,
+          conversationRef: conversation.conversationRef,
+          expectedRouteFingerprint: routeFingerprint,
+          scope,
+          resolveConversation: deps.resolveConversation,
+        });
+      },
       ...(operation ? { operation } : {}),
       ...(params.signal ? { signal: params.signal } : {}),
     });

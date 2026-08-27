@@ -39,10 +39,10 @@ describe("security audit gateway auth selection", () => {
         expectedAuth: { token: "local-token-abc123" },
       },
       {
-        name: "prefers env token over local config token",
+        name: "prefers local config token over env token",
         cfg: { gateway: { mode: "local", auth: { token: "local-token" } } },
         env: { token: "env-token" },
-        expectedAuth: { token: "env-token" },
+        expectedAuth: { token: "local-token" },
       },
       {
         name: "uses local auth when gateway.mode is undefined (default)",

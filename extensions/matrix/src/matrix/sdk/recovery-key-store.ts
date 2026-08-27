@@ -1,13 +1,14 @@
 import path from "node:path";
 // Matrix plugin module implements recovery key store behavior.
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   migrateLegacyMatrixRecoveryKeyFilePathToStore,
   readLegacyMatrixRecoveryKeyFile,
   readMatrixRecoveryKeyStateForPath,
   writeMatrixRecoveryKeyStateForPath,
 } from "../crypto-state-store.js";
-import { formatMatrixErrorMessage, formatMatrixErrorReason } from "../errors.js";
+import { formatMatrixErrorReason } from "../errors.js";
 import { LogService } from "./logger.js";
 import type {
   MatrixCryptoBootstrapApi,
@@ -174,7 +175,7 @@ export class MatrixRecoveryKeyStore {
     try {
       privateKey = decodeRecoveryKey(encodedPrivateKey);
     } catch (err) {
-      throw new Error(`Invalid Matrix recovery key: ${formatMatrixErrorMessage(err)}`, {
+      throw new Error(`Invalid Matrix recovery key: ${formatErrorMessage(err)}`, {
         cause: err,
       });
     }

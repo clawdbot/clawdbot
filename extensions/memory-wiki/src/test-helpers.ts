@@ -1,6 +1,4 @@
 // Memory Wiki helper module supports test helpers behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
@@ -8,7 +6,11 @@ import type {
   PluginStateEntry,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
 import { afterEach, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import {
@@ -144,7 +146,7 @@ function createMemoryBlobStore<T>() {
 }
 
 export function createMemoryWikiTestHarness() {
-  const tempDirs: string[] = [];
+  const tempWorkspaces: TempWorkspace[] = [];
   let compiledBlobStore = createMemoryBlobStore<unknown>();
 
   function configureCompiledCacheStore(): void {
@@ -158,16 +160,18 @@ export function createMemoryWikiTestHarness() {
   afterEach(async () => {
     configureMemoryWikiCompiledCacheStore(undefined);
     compiledBlobStore = createMemoryBlobStore<unknown>();
-    await Promise.all(
-      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-    );
+    await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
   });
 
+  // openclaw-temp-dir: allow this shared harness couples workspace cleanup to cache and vault lifecycle.
   async function createTempDir(prefix: string): Promise<string> {
     configureCompiledCacheStore();
-    const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), prefix));
-    tempDirs.push(tempDir);
-    return tempDir;
+    const workspace = await tempWorkspace({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix,
+    });
+    tempWorkspaces.push(workspace);
+    return workspace.dir;
   }
 
   async function createVault(options?: {

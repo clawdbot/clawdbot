@@ -9,8 +9,8 @@ import type {
   PluginHookBeforeAgentReplyEvent,
   PluginHookBeforeAgentReplyResult,
 } from "./hook-types.js";
+import { isPluginHookAgentTrigger } from "./hook-types.js";
 
-const BEFORE_AGENT_REPLY_TRIGGERS = new Set(["user", "heartbeat", "cron"]);
 const BEFORE_AGENT_REPLY_OBSERVER_KEY = Symbol.for("openclaw.beforeAgentReply.observer");
 
 type BeforeAgentReplyObserver = {
@@ -48,12 +48,14 @@ export function runBeforeAgentReplyForTurn(params: {
   onDispatch?: () => void;
   onDeclined?: () => void;
 }): Promise<PluginHookBeforeAgentReplyResult | undefined> {
-  if (!params.trigger || !BEFORE_AGENT_REPLY_TRIGGERS.has(params.trigger)) {
+  const trigger = params.trigger;
+  if (!isPluginHookAgentTrigger(trigger)) {
     return Promise.resolve(undefined);
   }
+  const context = { ...params.context, trigger };
   return runOncePerAgentRun(params.runId, "before_agent_reply", async () => {
     const hookRunner = getGlobalHookRunner();
-    if (!hookRunner?.hasHooks("before_agent_reply")) {
+    if (!hookRunner?.hasHooks("before_agent_reply", context)) {
       return undefined;
     }
     const observerScope = beforeAgentReplyObserver.getStore();
@@ -70,7 +72,7 @@ export function runBeforeAgentReplyForTurn(params: {
       return undefined;
     }
     params.onDispatch?.();
-    let result = await hookRunner.runBeforeAgentReply(params.event, params.context);
+    let result = await hookRunner.runBeforeAgentReply(params.event, context);
     if (!result?.handled) {
       params.onDeclined?.();
     }

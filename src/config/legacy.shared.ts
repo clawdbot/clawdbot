@@ -1,4 +1,7 @@
 // Defines shared legacy config rule contracts for detection and migration.
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { isRecord } from "../utils.js";
 export type LegacyConfigRule = {
   path: string[];
   message: string;
@@ -8,19 +11,26 @@ export type LegacyConfigRule = {
   requireSourceLiteral?: boolean;
 };
 
+export type LegacyConfigMigrationContext = {
+  /** Parsed configuration exactly as authored in the root config file. */
+  authoredRaw: unknown;
+  /** Configuration after include and environment resolution. */
+  resolvedRaw: unknown;
+};
+
 type LegacyConfigMigration = {
   id: string;
   describe: string;
-  apply: (raw: Record<string, unknown>, changes: string[]) => void;
+  apply: (
+    raw: Record<string, unknown>,
+    changes: string[],
+    context?: LegacyConfigMigrationContext,
+  ) => void;
 };
 
 export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
   legacyRules?: LegacyConfigRule[];
 };
-
-import { isSafeExecutableValue } from "../infra/exec-safety.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { isRecord } from "../utils.js";
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
   isRecord(value) ? value : null;
@@ -74,7 +84,7 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
     return null;
   }
 
-  const args = command.slice(1).map((part) => part.replace(/\{input\}/g, "{{MediaPath}}"));
+  const args = command.slice(1).map((part) => part.replace(/\{input\}/g, "{{AttachmentPath}}"));
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 

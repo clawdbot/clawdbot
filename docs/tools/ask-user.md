@@ -31,6 +31,10 @@ You can answer from any supported conversation surface:
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
 
+Never answer `ask_user` with a credential. When the agent needs an API key it
+uses the [`secrets` tool](/tools/secrets), whose masked prompt stores the value
+without it entering the chat, the transcript, or the model's context.
+
 ## Platform behavior
 
 Answers work on every supported conversation surface. The web Control UI uses a
@@ -52,6 +56,11 @@ The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
 An aborted agent run cancels its pending Gateway question.
+
+Gateway question records include the optional originating `runId`. Clients can
+use it to keep the prompt and its terminal answer summary with the correct agent
+turn, including after reconnecting and recovering the question with
+`question.list` or `question.get`.
 
 ## Tool schema
 

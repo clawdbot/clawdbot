@@ -1,33 +1,38 @@
 // Imessage tests cover state migrations plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspaceSync,
+  type TempWorkspaceSync,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { stateMigrations } from "../doctor-contract-api.js";
 import { resolveIMessageCatchupCursorKey } from "./monitor/catchup.js";
 import { detectIMessageLegacyStateMigrations } from "./state-migrations.js";
 
 describe("detectIMessageLegacyStateMigrations", () => {
-  const tempDirs: string[] = [];
+  let stateWorkspace: TempWorkspaceSync;
 
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+  beforeEach(() => {
+    stateWorkspace = tempWorkspaceSync({
+      rootDir: resolvePreferredOpenClawTmpDir(),
+      prefix: "openclaw-imsg-migration-",
+    });
   });
 
-  function makeStateDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-migration-"));
-    tempDirs.push(dir);
-    return dir;
-  }
+  afterEach(() => {
+    stateWorkspace.cleanup();
+  });
 
   function legacyCatchupFilename(accountId: string): string {
     return `${accountId}__${createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 12)}.json`;
   }
 
   it("imports reply, echo, and catchup sidecars into plugin state plans", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const imsgDir = path.join(stateDir, "imessage");
     fs.mkdirSync(path.join(imsgDir, "catchup"), { recursive: true });
     fs.writeFileSync(
@@ -56,6 +61,8 @@ describe("detectIMessageLegacyStateMigrations", () => {
         updatedAt: 1_700_000_000_123,
       }),
     );
+    const orphanPath = path.join(imsgDir, "catchup", "removed__123456789abc.json");
+    fs.writeFileSync(orphanPath, JSON.stringify({ lastSeenMs: 1, lastSeenRowid: 2 }));
 
     const plans = await detectIMessageLegacyStateMigrations({
       cfg: { channels: { imessage: { enabled: true } } } as never,
@@ -65,6 +72,7 @@ describe("detectIMessageLegacyStateMigrations", () => {
 
     expect(plans.map((plan) => plan.label)).toEqual([
       "iMessage catchup cursor",
+      "iMessage orphan catchup cursor",
       "iMessage reply short-id counter",
       "iMessage reply short-id cache",
       "iMessage sent-echo dedupe cache",
@@ -85,8 +93,63 @@ describe("detectIMessageLegacyStateMigrations", () => {
         expect(plan.cleanupWhenEmpty).toBe(true);
       }
       const entries = await plan.readEntries();
-      expect(entries).toHaveLength(1);
+      expect(entries).toHaveLength(plan.label === "iMessage orphan catchup cursor" ? 0 : 1);
     }
+
+    expect(
+      plans.map((plan) => ({
+        kind: plan.kind,
+        label: plan.label,
+        sourcePath: plan.sourcePath,
+        targetPath: plan.targetPath,
+        namespace: plan.kind === "plugin-state-import" ? plan.namespace : null,
+      })),
+    ).toEqual([
+      {
+        kind: "plugin-state-import",
+        label: "iMessage catchup cursor",
+        sourcePath: path.join(imsgDir, "catchup", "default__37a8eec1ce19.json"),
+        targetPath: "plugin state:imessage.catchup-cursors",
+        namespace: "imessage.catchup-cursors",
+      },
+      {
+        kind: "plugin-state-import",
+        label: "iMessage orphan catchup cursor",
+        sourcePath: orphanPath,
+        targetPath: "plugin state:imessage.catchup-cursors",
+        namespace: "imessage.catchup-cursors",
+      },
+      {
+        kind: "plugin-state-import",
+        label: "iMessage reply short-id counter",
+        sourcePath: path.join(imsgDir, "reply-cache.jsonl"),
+        targetPath: "plugin state:imessage.reply-cache-counter",
+        namespace: "imessage.reply-cache-counter",
+      },
+      {
+        kind: "plugin-state-import",
+        label: "iMessage reply short-id cache",
+        sourcePath: path.join(imsgDir, "reply-cache.jsonl"),
+        targetPath: "plugin state:imessage.reply-cache",
+        namespace: "imessage.reply-cache",
+      },
+      {
+        kind: "plugin-state-import",
+        label: "iMessage sent-echo dedupe cache",
+        sourcePath: path.join(imsgDir, "sent-echoes.jsonl"),
+        targetPath: "plugin state:imessage.sent-echoes",
+        namespace: "imessage.sent-echoes",
+      },
+    ]);
+    await expect(
+      stateMigrations[0]?.detectLegacyState({
+        config: { channels: { imessage: { enabled: true } } } as never,
+        env: {},
+        stateDir,
+        oauthDir: path.join(stateDir, "credentials"),
+        context: { openPluginStateKeyedStore: () => ({}) } as never,
+      }),
+    ).resolves.toEqual({ preview: plans.map(buildLegacyMigrationPreview) });
 
     const catchupPlan = plans.find((plan) => plan.label === "iMessage catchup cursor");
     expect(catchupPlan?.kind).toBe("plugin-state-import");
@@ -131,7 +194,7 @@ describe("detectIMessageLegacyStateMigrations", () => {
   });
 
   it("leaves unreadable reply-cache sidecars for a later migration attempt", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const imsgDir = path.join(stateDir, "imessage");
     fs.mkdirSync(imsgDir, { recursive: true });
     const sourcePath = path.join(imsgDir, "reply-cache.jsonl");
@@ -153,7 +216,7 @@ describe("detectIMessageLegacyStateMigrations", () => {
   });
 
   it("keeps the latest live reply-cache row for duplicate message ids", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const imsgDir = path.join(stateDir, "imessage");
     fs.mkdirSync(imsgDir, { recursive: true });
     const now = Date.now();
@@ -201,7 +264,7 @@ describe("detectIMessageLegacyStateMigrations", () => {
   });
 
   it("archives catchup cursor files that do not match configured accounts", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const catchupDir = path.join(stateDir, "imessage", "catchup");
     fs.mkdirSync(catchupDir, { recursive: true });
     const sourcePath = path.join(catchupDir, "removed-account__123456789abc.json");
@@ -227,7 +290,7 @@ describe("detectIMessageLegacyStateMigrations", () => {
   });
 
   it("normalizes configured account ids before importing catchup cursor files", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const catchupDir = path.join(stateDir, "imessage", "catchup");
     fs.mkdirSync(catchupDir, { recursive: true });
     const sourcePath = path.join(catchupDir, legacyCatchupFilename("work"));
@@ -260,7 +323,7 @@ describe("detectIMessageLegacyStateMigrations", () => {
   });
 
   it("caps imported catchup retry maps for plugin-state value limits", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = stateWorkspace.dir;
     const catchupDir = path.join(stateDir, "imessage", "catchup");
     fs.mkdirSync(catchupDir, { recursive: true });
     fs.writeFileSync(

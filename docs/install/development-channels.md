@@ -13,8 +13,9 @@ OpenClaw ships four update channels:
 - **stable**: npm dist-tag `latest`. Recommended for most users.
 - **extended-stable**: npm dist-tag `extended-stable`. A net-new, trailing
   supported-month package channel. It is package-only, and installation is
-  foreground-only. A stored selection receives read-only update hints when
-  `update.checkOnStart` is enabled, but never applies automatically.
+  foreground-only. It receives read-only update hints when `update.checkOnStart`
+  is enabled, including direct final extended-stable package installs, but never
+  applies automatically.
 - **beta**: npm dist-tag `beta`. Falls back to `latest` when `beta` is missing
   or older than the current stable release.
 - **dev**: moving head of `main` (git). npm dist-tag `dev` when published. `main`
@@ -47,6 +48,10 @@ install paths:
 For `dev` git installs, the default checkout is `~/openclaw` (or
 `$OPENCLAW_HOME/openclaw` when `OPENCLAW_HOME` is set); override with
 `OPENCLAW_GIT_DIR`.
+Automatic update campaigns pin the upstream commit they announce, so the
+displayed list previews up to five commits from the exact target installed even
+if `main` advances during the countdown. A manual
+`openclaw update --channel dev` still targets the current upstream `main`.
 
 <Tip>
 To keep stable and dev in parallel, use two separate checkouts and point each gateway at its own.
@@ -70,8 +75,6 @@ openclaw update --channel dev
 # Install a specific npm package spec
 openclaw update --tag openclaw@2026.4.1-beta.1
 
-# Install from GitHub main once without persisting the channel
-openclaw update --tag main
 ```
 
 Notes:
@@ -79,13 +82,11 @@ Notes:
 - `--tag` applies to **package (npm) installs only**; git installs ignore it.
 - The tag is not persisted; the next `openclaw update` uses the configured
   channel.
-- `--tag main` maps to the npm-compatible spec `github:openclaw/openclaw#main`
-  for that one run. For a persistent moving `main` install, use
+- The `--tag main` shorthand is rejected for package installs because the
+  workspace checkout is not a self-contained package artifact. Use
   `openclaw update --channel dev` (package installs switch to a git checkout)
   or reinstall with the installer's git method:
   `curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --version main`.
-  The npm install path rejects GitHub/git source targets outright and points
-  you at the git method instead.
 - Downgrade protection: if the target version is older than the current
   version, OpenClaw prompts for confirmation (skip with `--yes`).
 - Extended-stable always uses its verified exact package target. It is not a
@@ -119,7 +120,9 @@ Switching channels with `openclaw update` also syncs plugin sources:
   packages.
 - `extended-stable` resolves eligible official npm plugins with bare/default
   or `latest` intent to the exact installed core version. It does not query
-  plugin `@extended-stable` tags at runtime.
+  plugin `@extended-stable` tags at runtime. Version-bound runtime plugins use
+  the base release cohort for correction versions (for example, `YYYY.M.P-2`
+  uses plugin `YYYY.M.P`).
 - npm-installed plugins are updated after the core update completes.
 
 ## Checking current status

@@ -1,10 +1,6 @@
-import { parentPort, workerData } from "node:worker_threads";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import {
-  assertSqliteIntegrity,
-  isTerminalSqliteIntegrityError,
-} from "../infra/sqlite-integrity.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
+
+const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
 
 export type OpenClawDatabaseVerifyTarget = {
   path: string;
@@ -31,29 +27,92 @@ function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
   );
 }
 
-/** Verify database files serially so large agent scans never compete for I/O. */
-export function verifyOpenClawDatabases(
-  targets: readonly OpenClawDatabaseVerifyTarget[],
-): OpenClawDatabaseVerifyResult[] {
-  const sqlite = requireNodeSqlite();
-  return targets.map((target) => {
-    let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
-    try {
-      database = new sqlite.DatabaseSync(target.path, { readOnly: true });
-      database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-      assertSqliteIntegrity(database, target.label);
-      return { path: target.path, ok: true };
-    } catch (error) {
-      const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      const terminal = error instanceof Error && isTerminalSqliteIntegrityError(error);
-      return { path: target.path, ok: false, error: detail, terminal };
-    } finally {
-      database?.close();
-    }
-  });
+function formatVerifyError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
-if (parentPort) {
-  const targets = Array.isArray(workerData) ? workerData.filter(isVerifyTarget) : [];
-  parentPort.postMessage(verifyOpenClawDatabases(targets), []);
+async function verifyOpenClawDatabase(
+  target: OpenClawDatabaseVerifyTarget,
+): Promise<OpenClawDatabaseVerifyResult> {
+  const [sqlite, integrity, location] = await Promise.all([
+    import("../infra/node-sqlite.js"),
+    import("../infra/sqlite-integrity.js"),
+    import("../infra/sqlite-readonly-location.js"),
+  ]);
+  let cleanup: (() => boolean) | undefined;
+  let database: import("node:sqlite").DatabaseSync | undefined;
+  let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
+    try {
+      const prepared = await location.prepareSqliteReadOnlyLocationInProcess(target.path);
+      cleanup = prepared.cleanup;
+      database = sqlite.openNodeSqliteDatabase(prepared.location, {
+        readOnly: true,
+      });
+      database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+      integrity.assertSqliteIntegrity(database, target.label);
+      return { path: target.path, ok: true };
+    } catch (error) {
+      const terminal = error instanceof Error && integrity.isTerminalSqliteIntegrityError(error);
+      return {
+        path: target.path,
+        ok: false,
+        error: formatVerifyError(error),
+        terminal,
+      };
+    }
+  })();
+  try {
+    database?.close();
+  } catch (error) {
+    if (result.ok) {
+      result = {
+        path: target.path,
+        ok: false,
+        error: formatVerifyError(error),
+        terminal: false,
+      };
+    }
+  } finally {
+    cleanup?.();
+  }
+  return result;
+}
+
+/** Verify database files serially so large agent scans never compete for I/O. */
+export async function verifyOpenClawDatabases(
+  targets: readonly OpenClawDatabaseVerifyTarget[],
+): Promise<OpenClawDatabaseVerifyResult[]> {
+  const results: OpenClawDatabaseVerifyResult[] = [];
+  for (const target of targets) {
+    results.push(await verifyOpenClawDatabase(target));
+  }
+  return results;
+}
+
+// This module is also imported for its verifier function. Only the dedicated
+// child may consume and disconnect the process-wide IPC channel.
+const sendToParent =
+  process.argv[2] === DATABASE_VERIFY_CHILD_ARG ? process.send?.bind(process) : undefined;
+if (sendToParent) {
+  process.once("message", (message: unknown) => {
+    void (async () => {
+      try {
+        const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
+        const results = await verifyOpenClawDatabases(targets);
+        await new Promise<void>((resolve, reject) => {
+          sendToParent(results, (error) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          });
+        });
+      } catch {
+        process.exitCode = 1;
+      } finally {
+        process.disconnect?.();
+      }
+    })();
+  });
 }

@@ -18,8 +18,7 @@ final class PresenceReporter {
         self.task = Task.detached { [weak self] in
             guard let self else { return }
             await self.push(reason: "launch")
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+            while await SimpleTaskSupport.waitForNextOperation(interval: self.interval) {
                 await self.push(reason: "periodic")
             }
         }
@@ -95,18 +94,6 @@ final class PresenceReporter {
 extension PresenceReporter {
     static func _testComposePresenceSummary(mode: String, reason: String) -> String {
         self.composePresenceSummary(mode: mode, reason: reason)
-    }
-
-    static func _testAppVersionString() -> String {
-        self.appVersionString()
-    }
-
-    static func _testPlatformString() -> String {
-        self.platformString()
-    }
-
-    static func _testPrimaryIPv4Address() -> String? {
-        SystemPresenceInfo.primaryIPv4Address()
     }
 
     static func _testActivityPrivacyParameters() -> [String: AnyHashable] {

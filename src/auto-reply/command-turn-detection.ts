@@ -4,20 +4,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isControlCommandMessage } from "./command-detection.js";
 import {
   isExplicitCommandTurn,
+  resolveCommandBody,
   resolveCommandTurnContext,
   type CommandTurnContextInput,
 } from "./command-turn-context.js";
 
-function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
-  return (
-    normalizeOptionalString(input.CommandBody) ??
-    normalizeOptionalString(input.BodyForCommands) ??
-    normalizeOptionalString(input.RawBody) ??
-    normalizeOptionalString(input.Body)
-  );
-}
-
 function resolveVisibleMessageBody(input: CommandTurnContextInput): string | undefined {
+  if (typeof input.rawText === "string") {
+    return input.rawText;
+  }
   return normalizeOptionalString(input.RawBody) ?? normalizeOptionalString(input.Body);
 }
 

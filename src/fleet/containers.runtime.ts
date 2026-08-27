@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
+import { withContainerEnvFile } from "../infra/container-env-file.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildCellCreateArgs,
   buildCellRunArgs,
+  validateCellContainerProfile,
   validateFleetImage,
   type CellContainerProfile,
   type FleetContainerRuntimeName,
@@ -106,10 +106,6 @@ class InvalidInspectOutputError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function requireRecord(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new InvalidInspectOutputError();
@@ -138,7 +134,7 @@ function requireNonNegativeNumber(value: unknown): number {
   return value;
 }
 
-function readOptionalString(value: unknown): string | undefined {
+function readOptionalInspectString(value: unknown): string | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
@@ -167,13 +163,10 @@ function readStringRecord(value: unknown): Record<string, string> {
   if (value === undefined || value === null) {
     return {};
   }
-  const record = requireRecord(value);
-  for (const entry of Object.values(record)) {
-    if (typeof entry !== "string") {
-      throw new InvalidInspectOutputError();
-    }
+  if (!isStringRecord(value)) {
+    throw new InvalidInspectOutputError();
   }
-  return record as Record<string, string>;
+  return value;
 }
 
 function readStringArray(value: unknown): string[] {
@@ -197,7 +190,7 @@ function readRestartPolicy(value: unknown): string | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  return readOptionalString(requireRecord(value).Name);
+  return readOptionalInspectString(requireRecord(value).Name);
 }
 
 function readPortBindings(
@@ -234,7 +227,7 @@ function readNetworkAttachments(value: unknown): Array<{ id: string; name?: stri
         throw new InvalidInspectOutputError();
       }
       const attachment = requireRecord(rawAttachment);
-      const name = readOptionalString(attachment.Name ?? attachment.name);
+      const name = readOptionalInspectString(attachment.Name ?? attachment.name);
       const normalized: { id: string; name?: string } = { id };
       if (name) {
         normalized.name = name;
@@ -287,8 +280,8 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   const config = requireRecord(inspected.Config);
   const hostConfig = requireRecord(inspected.HostConfig);
   const nanoCpus = requireNonNegativeNumber(hostConfig.NanoCpus);
-  const user = readOptionalString(config.User);
-  const usernsMode = readOptionalString(hostConfig.UsernsMode);
+  const user = readOptionalInspectString(config.User);
+  const usernsMode = readOptionalInspectString(hostConfig.UsernsMode);
 
   return {
     kind: "ok",
@@ -527,7 +520,11 @@ const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
     };
     pipeWithBackpressure(child.stdout, process.stdout, stdout);
     pipeWithBackpressure(child.stderr, process.stderr, stderr);
-    child.once("error", reject);
+    child.on("error", (error) => {
+      if (child.pid === undefined) {
+        reject(error);
+      }
+    });
     child.once("close", (code, signal) => {
       stdout.flush();
       stderr.flush();
@@ -711,24 +708,15 @@ export function createFleetContainerRuntime(
     },
 
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
-      const tempRoot = await fs.realpath(os.tmpdir());
-      const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-fleet-env-"));
-      const environmentFile = path.join(tempDir, "cell.env");
-      try {
+      validateCellContainerProfile(profile);
+      await withContainerEnvFile(profile.environment, async (environmentFile) => {
         const args = start
           ? buildCellRunArgs(profile, { environmentFile })
           : buildCellCreateArgs(profile, { environmentFile });
-        const content = Object.entries(profile.environment)
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([key, value]) => `${key}=${value}\n`)
-          .join("");
-        await fs.writeFile(environmentFile, content, { encoding: "utf8", mode: 0o600 });
         await execute(profile.runtime, args, {
           redactValues: Object.values(profile.environment),
         });
-      } finally {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
+      });
     },
 
     async pull(runtime: FleetContainerRuntimeName, image: string): Promise<void> {

@@ -83,8 +83,9 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   const chatId = readString(message.chat_id);
   const chatType = normalizeFeishuChatType(message.chat_type);
   const messageType = readString(message.message_type);
-  const content = readString(message.content);
-  if (!messageId || !chatId || !chatType || !messageType || !content) {
+  // Feishu can deliver a legitimately empty message body; keep absent or
+  // non-string bodies malformed instead of inventing fallback content.
+  if (!messageId || !chatId || !chatType || !messageType || typeof message.content !== "string") {
     return null;
   }
   return value as FeishuMessageEvent;
@@ -291,12 +292,9 @@ export function createFeishuMessageReceiveHandler({
         const text = resolveDebounceText(event);
         return Boolean(text) && !channelRuntime.commands.isControlCommandMessage(text, cfg);
       },
-      onFlush: async (entries) => {
+      onFlush: (entries, createFlush) => {
         const activeEntries = entries.filter((entry) => !entry.abandoned);
         const last = activeEntries.at(-1);
-        if (!last) {
-          return;
-        }
         const { lifecycle, settle } = buildFeishuFlushIngressLifecycle(
           activeEntries.map((entry) => ({
             lifecycle: entry.turnAdoptionLifecycle,
@@ -307,74 +305,82 @@ export function createFeishuMessageReceiveHandler({
               error(`feishu[${accountId}]: failed to commit logical replay guard: ${String(err)}`),
           },
         );
-        if (lifecycle?.abortSignal.aborted) {
-          await lifecycle.onAbandoned();
-          return;
-        }
-        try {
-          if (activeEntries.length === 1) {
-            await dispatchFeishuMessage(
-              last.event,
-              resolveFeishuMessageDedupeKey(last.event),
-              last.processingClaim,
-              lifecycle,
-            );
-            await settle();
-            return;
-          }
-          const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
-          const freshEntries: FeishuMessageDebounceEntry[] = [];
-          for (const entry of dedupedEntries) {
-            if (
-              !(await hasProcessedMessage(
-                resolveFeishuMessageDedupeKey(entry.event),
-                accountId,
-                log,
-              ))
-            ) {
-              freshEntries.push(entry);
+        return createFlush({
+          lifecycle,
+          dispatch: async (admissionLifecycle) => {
+            if (!last) {
+              return;
             }
-          }
-          const dispatchEntry = freshEntries.at(-1);
-          if (!dispatchEntry) {
-            await settle();
-            return;
-          }
-          const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
-          if (!lifecycle) {
-            await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
-          }
-          const combinedText = freshEntries
-            .map((entry) => resolveDebounceText(entry.event))
-            .filter(Boolean)
-            .join("\n");
-          const mergedMentions = resolveFeishuDebounceMentions({
-            entries: freshEntries.map((entry) => entry.event),
-            botOpenId: getBotOpenId(accountId),
-          });
-          await dispatchFeishuMessage(
-            {
-              ...dispatchEntry.event,
-              message: {
-                ...dispatchEntry.event.message,
-                ...(combinedText.trim()
-                  ? {
-                      message_type: "text",
-                      content: JSON.stringify({ text: combinedText }),
-                    }
-                  : {}),
-                mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
-              },
-            },
-            dispatchDedupeKey,
-            dispatchEntry.processingClaim,
-            lifecycle,
-          );
-          await settle();
-        } catch (err) {
-          await lifecycle?.onAbandoned();
-          throw err;
-        }
+            if (admissionLifecycle.abortSignal.aborted) {
+              await admissionLifecycle.onAbandoned();
+              return;
+            }
+            try {
+              if (activeEntries.length === 1) {
+                await dispatchFeishuMessage(
+                  last.event,
+                  resolveFeishuMessageDedupeKey(last.event),
+                  last.processingClaim,
+                  admissionLifecycle,
+                );
+                await settle();
+                return;
+              }
+              const dedupedEntries = dedupeFeishuDebounceEntriesByDedupeKey(activeEntries);
+              const freshEntries: FeishuMessageDebounceEntry[] = [];
+              for (const entry of dedupedEntries) {
+                if (
+                  !(await hasProcessedMessage(
+                    resolveFeishuMessageDedupeKey(entry.event),
+                    accountId,
+                    log,
+                  ))
+                ) {
+                  freshEntries.push(entry);
+                }
+              }
+              const dispatchEntry = freshEntries.at(-1);
+              if (!dispatchEntry) {
+                await settle();
+                return;
+              }
+              const dispatchDedupeKey = resolveFeishuMessageDedupeKey(dispatchEntry.event);
+              if (!lifecycle) {
+                await recordSuppressedMessageIds(dedupedEntries, dispatchDedupeKey);
+              }
+              const combinedText = freshEntries
+                .map((entry) => resolveDebounceText(entry.event))
+                .filter(Boolean)
+                .join("\n");
+              const mergedMentions = resolveFeishuDebounceMentions({
+                entries: freshEntries.map((entry) => entry.event),
+                botOpenId: getBotOpenId(accountId),
+              });
+              await dispatchFeishuMessage(
+                {
+                  ...dispatchEntry.event,
+                  message: {
+                    ...dispatchEntry.event.message,
+                    ...(combinedText.trim()
+                      ? {
+                          message_type: "text",
+                          content: JSON.stringify({ text: combinedText }),
+                        }
+                      : {}),
+                    mentions: mergedMentions ?? dispatchEntry.event.message.mentions,
+                  },
+                },
+                dispatchDedupeKey,
+                dispatchEntry.processingClaim,
+                admissionLifecycle,
+              );
+              await settle();
+            } catch (err) {
+              await admissionLifecycle.onAbandoned();
+              throw err;
+            }
+          },
+        });
       },
       onError: (err, entries) => {
         for (const entry of entries) {

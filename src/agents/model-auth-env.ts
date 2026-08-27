@@ -1,13 +1,11 @@
 /**
  * Resolves model provider API keys from explicit environment variables.
  */
-import fs from "node:fs";
-import os from "node:os";
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalString as normalizeOptionalPathInput } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
+import { resolvePluginSetupProviderCore } from "../plugins/setup-registry.js";
+import { resolveLocalProviderAuthEvidence } from "../secrets/provider-auth-evidence.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
@@ -44,66 +42,12 @@ export type EnvApiKeyLookupOptions = {
   skipSetupProviderFallback?: boolean;
 };
 
-function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
-  const trimmed = rawPath.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const homeDir = normalizeOptionalPathInput(env.HOME) ?? os.homedir();
-  const appDataDir = normalizeOptionalPathInput(env.APPDATA);
-  if (trimmed.includes("${APPDATA}") && !appDataDir) {
-    return undefined;
-  }
-  return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
-}
-
-function hasRequiredAuthEvidenceEnv(
-  evidence: ProviderAuthEvidence,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const hasEnv = (key: string) => Boolean(normalizeOptionalSecretInput(env[key]));
-  if (evidence.requiresAnyEnv?.length && !evidence.requiresAnyEnv.some(hasEnv)) {
-    return false;
-  }
-  if (evidence.requiresAllEnv?.length && !evidence.requiresAllEnv.every(hasEnv)) {
-    return false;
-  }
-  return true;
-}
-
-function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.ProcessEnv): boolean {
-  if (evidence.fileEnvVar) {
-    const explicitPath = normalizeOptionalPathInput(env[evidence.fileEnvVar]);
-    if (explicitPath) {
-      return fs.existsSync(explicitPath);
-    }
-  }
-  for (const rawPath of evidence.fallbackPaths ?? []) {
-    const expandedPath = expandAuthEvidencePath(rawPath, env);
-    if (expandedPath && fs.existsSync(expandedPath)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function resolveAuthEvidence(
   evidence: readonly ProviderAuthEvidence[] | undefined,
   env: NodeJS.ProcessEnv,
 ): EnvApiKeyResult | null {
-  for (const entry of evidence ?? []) {
-    if (entry.type !== "local-file-with-env") {
-      continue;
-    }
-    if (!hasRequiredAuthEvidenceEnv(entry, env) || !hasLocalFileAuthEvidence(entry, env)) {
-      continue;
-    }
-    return {
-      apiKey: entry.credentialMarker,
-      source: entry.source ?? "local auth evidence",
-    };
-  }
-  return null;
+  const resolved = resolveLocalProviderAuthEvidence(evidence, env);
+  return resolved ? { apiKey: resolved.credentialMarker, source: resolved.source } : null;
 }
 
 /** Reports env/local auth presence without returning or resolving credential material. */
@@ -143,13 +87,11 @@ export function resolveProviderEnvAuthEvidence(
     };
   }
 
-  for (const evidence of authEvidenceMap[normalized] ?? []) {
-    if (!hasRequiredAuthEvidenceEnv(evidence, env) || !hasLocalFileAuthEvidence(evidence, env)) {
-      continue;
-    }
+  const localEvidence = resolveLocalProviderAuthEvidence(authEvidenceMap[normalized], env);
+  if (localEvidence) {
     return {
       mode: normalized === "amazon-bedrock" ? "aws-sdk" : "api-key",
-      source: evidence.source ?? "local auth evidence",
+      source: localEvidence.source,
     };
   }
   return null;
@@ -251,7 +193,7 @@ export function resolveEnvApiKey(
     return null;
   }
 
-  const setupProvider = resolvePluginSetupProvider({
+  const setupProvider = resolvePluginSetupProviderCore({
     provider: normalized,
     config: options.config,
     workspaceDir: options.workspaceDir,

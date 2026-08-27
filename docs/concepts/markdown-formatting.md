@@ -105,6 +105,15 @@ Spoiler markers (`||spoiler||`) are parsed for Signal (mapped to `SPOILER`
 style ranges) and Telegram (mapped to `<tg-spoiler>`). Other channels treat
 `||...||` as plain text.
 
+## Collapsible details
+
+The Control UI and Telegram accounts with `richMessages: true` render
+`<details><summary>Label</summary>` disclosures as native collapsible sections.
+OpenClaw tells the model about this option only when the current reply surface
+supports it. Other channels, including Telegram accounts without rich messages,
+flatten each disclosure to `**Summary**` followed by the visible body so no
+content is hidden or lost.
+
 ## Adding or updating a channel formatter
 
 1. **Parse once** with `markdownToIR(...)`, passing channel-appropriate

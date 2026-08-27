@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - apps/android/app/src/main/**
+      - apps/android/app/src/play/**
+      - apps/android/app/src/thirdParty/**
       - apps/android/wear/src/main/**
       - apps/ios/**
       - apps/macos/Sources/**
@@ -17,6 +19,7 @@ on:
       - scripts/android-app-i18n.ts
       - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
+      - scripts/native-i18n-locales.ts
       - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
       - .github/actions/publish-generated-pr/action.yml
@@ -66,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           persist-credentials: false
@@ -138,7 +141,7 @@ jobs:
     name: Refresh native ${{ matrix.locale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           persist-credentials: false
@@ -147,6 +150,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Ensure translation provider secrets exist
@@ -255,7 +259,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve-base.outputs.sha }}
           fetch-depth: 0
@@ -281,6 +285,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       # Source PRs own the stable-ID inventory. Locale workers only contribute
@@ -305,10 +310,10 @@ jobs:
           auto-merge: "true"
           generated-paths: |
             apps/.i18n/native
-            apps/.i18n/apple-translation-contradictions.json
             apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt
             apps/android/app/src/main/res/values*/assistant.xml
             apps/android/app/src/main/res/values*/strings.xml
+            apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml
             apps/android/wear/src/main/res/values*/strings.xml
             apps/ios/Resources/Localizable.xcstrings
             apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings
@@ -319,6 +324,8 @@ jobs:
           invalidation-paths: |
             apps/.i18n/native-source.json
             apps/android/app/src/main
+            apps/android/app/src/play
+            apps/android/app/src/thirdParty
             apps/android/wear/src/main
             apps/ios
             apps/macos/Sources
@@ -328,6 +335,7 @@ jobs:
             scripts/android-app-i18n.ts
             scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts
+            scripts/native-i18n-locales.ts
             ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml
             .github/actions/publish-generated-pr/action.yml

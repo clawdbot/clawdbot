@@ -16,6 +16,13 @@ export class CompactionError extends Error {
   }
 }
 
+/** Internal typed signal for a completed summary response with no usable text. */
+export class InvalidSummaryOutputError extends CompactionError {
+  constructor(message: string) {
+    super("summarization_failed", message);
+  }
+}
+
 type BranchSummaryErrorCode = "aborted" | "summarization_failed" | "invalid_session";
 
 export class BranchSummaryError extends Error {

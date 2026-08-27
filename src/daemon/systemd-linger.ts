@@ -25,10 +25,11 @@ type SystemdUserLingerStatus = {
 };
 
 /** Reads systemd user linger status through loginctl when available. */
-export async function readSystemdUserLingerStatus(
-  env: Record<string, string | undefined>,
-): Promise<SystemdUserLingerStatus | null> {
-  const user = resolveLoginctlUser(env);
+export async function readSystemdUserLingerStatus(params: {
+  env: Record<string, string | undefined>;
+  user?: string;
+}): Promise<SystemdUserLingerStatus | null> {
+  const user = params.user ?? resolveLoginctlUser(params.env);
   if (!user) {
     return null;
   }

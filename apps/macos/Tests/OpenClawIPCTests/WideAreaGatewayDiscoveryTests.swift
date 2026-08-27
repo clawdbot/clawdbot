@@ -56,7 +56,7 @@ struct WideAreaGatewayDiscoveryTests {
         let beacons = await TestIsolation.withEnvValues(
             ["OPENCLAW_WIDE_AREA_DOMAIN": "openclaw.internal"])
         {
-            WideAreaGatewayDiscovery.discover(
+            await WideAreaGatewayDiscovery.discover(
                 timeoutSeconds: 2.0,
                 context: context)
         }
@@ -107,7 +107,7 @@ struct WideAreaGatewayDiscoveryTests {
         let beacons = await TestIsolation.withEnvValues(
             ["OPENCLAW_WIDE_AREA_DOMAIN": "openclaw.internal"])
         {
-            WideAreaGatewayDiscovery.discover(
+            await WideAreaGatewayDiscovery.discover(
                 timeoutSeconds: 2.0,
                 context: context)
         }

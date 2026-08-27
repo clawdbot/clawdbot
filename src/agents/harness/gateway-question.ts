@@ -4,11 +4,13 @@ import type {
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/schema/questions.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import {
   buildAgentHarnessUserInputAnswers,
   type AgentHarnessUserInputAnswers,
   deliverAgentHarnessQuestionPrompt,
+  deliverAgentHarnessUserInputPrompt,
   type AgentHarnessUserInputPromptOptions,
   type AgentHarnessUserInputQuestion,
 } from "./user-input-bridge.js";
@@ -26,12 +28,14 @@ export type AgentHarnessQuestionGatewayCall = (
   extra?: { signal?: AbortSignal },
 ) => Promise<unknown>;
 
-type PendingAgentQuestion = {
+type PendingAgentGatewayQuestion = {
+  kind: "gateway";
   questionId: string;
   sessionKey: string;
   questions: readonly AgentHarnessUserInputQuestion[];
   gatewayCall: AgentHarnessQuestionGatewayCall;
   registration: Promise<unknown>;
+  rejectRegistration: (error: unknown) => void;
   attachRegistration: (promise: Promise<unknown>) => void;
   answer?: Promise<QuestionWaitAnswerResult>;
   bufferedAnswers?: AgentHarnessUserInputAnswers;
@@ -40,7 +44,29 @@ type PendingAgentQuestion = {
   resolving: boolean;
 };
 
-const pendingAgentQuestions = new Map<string, PendingAgentQuestion>();
+type PendingAgentSecretInput = {
+  kind: "secret";
+  sessionKey: string;
+  resolving: boolean;
+  settle: (text?: string) => boolean;
+};
+
+type PendingAgentQuestion = PendingAgentGatewayQuestion | PendingAgentSecretInput;
+
+const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
+  Symbol.for("openclaw.pendingAgentQuestions"),
+  (questions) => {
+    const error = new Error("gateway lifecycle ended before question registration completed");
+    for (const state of questions.values()) {
+      if (state.kind === "gateway") {
+        state.rejectRegistration(error);
+      } else {
+        state.settle();
+      }
+    }
+    questions.clear();
+  },
+);
 
 function readQuestionErrorReason(error: unknown): string | undefined {
   if (!error || typeof error !== "object") {
@@ -89,7 +115,7 @@ async function observeCommittedAnswer(
 }
 
 async function resolvePendingAgentQuestionAnswers(
-  state: PendingAgentQuestion,
+  state: PendingAgentGatewayQuestion,
   answers: AgentHarnessUserInputAnswers,
 ): Promise<boolean> {
   const gatewayAnswers: QuestionAnswers = {
@@ -135,7 +161,7 @@ export function registerPendingAgentQuestion(params: {
   const sessionKey = params.sessionKey.trim();
   const existing = pendingAgentQuestions.get(sessionKey);
   if (existing) {
-    throw new Error(`session already has a pending gateway question: ${existing.questionId}`);
+    throw new Error(`session already has a pending agent input request: ${sessionKey}`);
   }
   let resolveRegistration!: (value: unknown) => void;
   let rejectRegistration!: (error: unknown) => void;
@@ -146,9 +172,11 @@ export function registerPendingAgentQuestion(params: {
   void registration.catch(() => undefined);
   let registrationAttached = false;
   const state: PendingAgentQuestion = {
+    kind: "gateway",
     ...params,
     sessionKey,
     registration,
+    rejectRegistration,
     attachRegistration: (promise) => {
       if (registrationAttached) {
         throw new Error("gateway question registration already attached");
@@ -197,8 +225,12 @@ export async function claimPendingAgentQuestionAnswer(params: {
 }): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
   const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
-  if (!state || state.cancelRequested || state.resolving) {
+  if (!state || state.resolving || (state.kind === "gateway" && state.cancelRequested)) {
     return false;
+  }
+  if (state.kind === "secret") {
+    state.resolving = true;
+    return state.settle(params.text);
   }
   state.resolving = true;
   const answers = buildAgentHarnessUserInputAnswers(state.questions, params.text);
@@ -245,6 +277,10 @@ export async function cancelPendingAgentQuestionForSession(params: {
   if (!state || state.resolving) {
     return false;
   }
+  if (state.kind === "secret") {
+    state.resolving = true;
+    return state.settle();
+  }
   state.cancelRequested = true;
   state.resolving = true;
   try {
@@ -266,10 +302,68 @@ export async function cancelPendingAgentQuestionForSession(params: {
   }
 }
 
+type RunAgentHarnessSecretInputParams = {
+  questions: readonly AgentHarnessUserInputQuestion[];
+  sessionKey: string;
+  timeoutMs: number;
+  delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
+  promptOptions?: AgentHarnessUserInputPromptOptions;
+  signal?: AbortSignal;
+};
+
+/** Presents one warned secret prompt and keeps its answer out of durable question records. */
+function runAgentHarnessSecretInput(
+  params: RunAgentHarnessSecretInputParams,
+): Promise<string | undefined> {
+  params.signal?.throwIfAborted();
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    throw new Error("secret input requires a session key");
+  }
+  if (pendingAgentQuestions.has(sessionKey)) {
+    throw new Error(`session already has a pending agent input request: ${sessionKey}`);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (text?: string): boolean => {
+      if (settled || pendingAgentQuestions.get(sessionKey) !== state) {
+        return false;
+      }
+      settled = true;
+      pendingAgentQuestions.delete(sessionKey);
+      clearTimeout(timeout);
+      params.signal?.removeEventListener("abort", onAbort);
+      resolve(text);
+      return true;
+    };
+    const onAbort = () => finish();
+    const timeout = setTimeout(onAbort, params.timeoutMs);
+    timeout.unref?.();
+    const state: PendingAgentSecretInput = {
+      kind: "secret",
+      sessionKey,
+      resolving: false,
+      settle: finish,
+    };
+    pendingAgentQuestions.set(sessionKey, state);
+    params.signal?.addEventListener("abort", onAbort, { once: true });
+    if (params.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    void deliverAgentHarnessUserInputPrompt(
+      params.delivery,
+      params.questions,
+      params.promptOptions,
+    ).catch(() => finish());
+  });
+}
+
 type RunAgentHarnessGatewayQuestionParams = {
   questions: readonly AgentHarnessUserInputQuestion[];
   sessionKey: string;
   agentId?: string;
+  runId?: string;
   timeoutMs: number;
   gatewayCall: AgentHarnessQuestionGatewayCall;
   delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -282,6 +376,28 @@ type RunAgentHarnessGatewayQuestionParams = {
 export async function runAgentHarnessGatewayQuestion(
   params: RunAgentHarnessGatewayQuestionParams,
 ): Promise<QuestionWaitAnswerResult> {
+  if (params.questions.some((question) => question.isSecret)) {
+    const text = await runAgentHarnessSecretInput({
+      questions: params.questions,
+      sessionKey: params.sessionKey,
+      timeoutMs: params.timeoutMs,
+      delivery: params.delivery,
+      promptOptions: params.promptOptions,
+      signal: params.signal,
+    });
+    if (text === undefined) {
+      return { status: "cancelled" };
+    }
+    const parsed = buildAgentHarnessUserInputAnswers(params.questions, text);
+    return {
+      status: "answered",
+      answers: {
+        answers: Object.fromEntries(
+          Object.entries(parsed.answers).map(([id, answer]) => [id, answer.answers]),
+        ),
+      },
+    };
+  }
   const questionId = params.questionId ?? `ask_${randomBytes(16).toString("hex")}`;
   const questions: QuestionRequestQuestion[] = params.questions.map(({ id, ...question }) => ({
     ...question,
@@ -306,6 +422,7 @@ export async function runAgentHarnessGatewayQuestion(
           questions,
           sessionKey: params.sessionKey,
           ...(params.agentId ? { agentId: params.agentId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
           timeoutMs: params.timeoutMs,
         },
         params.signal ? { signal: params.signal } : undefined,

@@ -39,6 +39,27 @@ export function closeExpiredTalkRelaySessions<TSession extends TalkRelayLifecycl
   }
 }
 
+/** Closes every relay session owned by a disconnected gateway connection. */
+export function closeTalkRelaySessionsForConnection<
+  TSession extends TalkRelayLifecycleSession,
+>(params: {
+  sessions: Iterable<TSession>;
+  connId: string;
+  closeSession: CloseTalkRelaySession<TSession>;
+  onCloseError: (error: unknown, session: TSession) => void;
+}): void {
+  for (const session of params.sessions) {
+    if (session.connId !== params.connId) {
+      continue;
+    }
+    try {
+      params.closeSession(session);
+    } catch (error) {
+      params.onCloseError(error, session);
+    }
+  }
+}
+
 /** Returns the active session only when it belongs to the current connection. */
 export function requireActiveTalkRelaySession<TSession extends TalkRelayLifecycleSession>(params: {
   sessions: ReadonlyMap<string, TSession>;

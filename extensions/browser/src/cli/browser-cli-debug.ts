@@ -3,29 +3,20 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
+  printBrowserJsonResult as printJsonResult,
+  resolveBrowserProfileQuery as resolveProfileQuery,
+  runBrowserCliCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
-
-const BROWSER_DEBUG_TIMEOUT_MS = 20000;
-
-type BrowserRequestParams = Parameters<typeof callBrowserRequest>[1];
+import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
 type DebugContext = {
   parent: BrowserParentOpts;
   profile?: string;
 };
-
-function runBrowserDebug(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
-}
 
 async function withDebugContext(
   cmd: Command,
@@ -33,31 +24,12 @@ async function withDebugContext(
   action: (context: DebugContext) => Promise<void>,
 ) {
   const parent = parentOpts(cmd);
-  await runBrowserDebug(() =>
+  await runBrowserCliCommand(() =>
     action({
       parent,
       profile: parent.browserProfile,
     }),
   );
-}
-
-function printJsonResult(parent: BrowserParentOpts, result: unknown): boolean {
-  if (!parent.json) {
-    return false;
-  }
-  defaultRuntime.writeJson(result);
-  return true;
-}
-
-async function callDebugRequest<T>(
-  parent: BrowserParentOpts,
-  params: BrowserRequestParams,
-): Promise<T> {
-  return callBrowserRequest<T>(parent, params, { timeoutMs: BROWSER_DEBUG_TIMEOUT_MS });
-}
-
-function resolveProfileQuery(profile?: string) {
-  return profile ? { profile } : undefined;
 }
 
 function resolveDebugQuery(params: {
@@ -86,7 +58,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (ref: string, opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
+        const result = await callBrowserRequest(parent, {
           method: "POST",
           path: "/highlight",
           query: resolveProfileQuery(profile),
@@ -109,7 +81,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
+        const result = await callBrowserRequest<{
           errors: Array<{ timestamp: string; name?: string; message: string }>;
         }>(parent, {
           method: "GET",
@@ -143,7 +115,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{
+        const result = await callBrowserRequest<{
           requests: Array<{
             timestamp: string;
             method: string;
@@ -193,7 +165,7 @@ export function registerBrowserDebugCommands(
     .option("--sources", "Include sources (bigger traces)", false)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest(parent, {
+        const result = await callBrowserRequest(parent, {
           method: "POST",
           path: "/trace/start",
           query: resolveProfileQuery(profile),
@@ -221,7 +193,7 @@ export function registerBrowserDebugCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       await withDebugContext(cmd, parentOpts, async ({ parent, profile }) => {
-        const result = await callDebugRequest<{ path: string }>(parent, {
+        const result = await callBrowserRequest<{ path: string }>(parent, {
           method: "POST",
           path: "/trace/stop",
           query: resolveProfileQuery(profile),

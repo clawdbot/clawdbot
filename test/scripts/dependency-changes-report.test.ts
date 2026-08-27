@@ -7,13 +7,17 @@ import {
   dependencyDiffPathspecs,
   isDependencyFile,
   parseArgs,
-} from "../../scripts/dependency-changes-report.mjs";
+} from "../../scripts/dependency-changes-report.mts";
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/dependency-changes-report.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/dependency-changes-report.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {
@@ -60,18 +64,18 @@ describe("dependency-changes-report", () => {
     ]);
   });
 
-  it("treats shrinkwrap and package-lock as dependency files", () => {
-    expect(isDependencyFile("npm-shrinkwrap.json")).toBe(true);
-    expect(isDependencyFile("extensions/discord/npm-shrinkwrap.json")).toBe(true);
-    expect(isDependencyFile("package-lock.json")).toBe(true);
-    expect(isDependencyFile("extensions/discord/package-lock.json")).toBe(true);
+  it("treats committed dependency locks as dependency files", () => {
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
+    expect(isDependencyFile(".github/release/clawhub-cli/package-lock.json")).toBe(true);
+    expect(isDependencyFile(".github/release/vercel-cli/package-lock.json")).toBe(true);
+    expect(isDependencyFile("extensions/discord/package-lock.json")).toBe(false);
     expect(isDependencyFile("docs/gateway/security/index.md")).toBe(false);
   });
 
-  it("includes plugin shrinkwrap files in git diff pathspecs", () => {
-    expect(dependencyDiffPathspecs()).toContain("extensions/*/package-lock.json");
-    expect(dependencyDiffPathspecs()).toContain("extensions/*/npm-shrinkwrap.json");
+  it("includes committed dependency locks in git diff pathspecs", () => {
+    expect(dependencyDiffPathspecs()).toContain("pnpm-lock.yaml");
+    expect(dependencyDiffPathspecs()).toContain(".github/release/clawhub-cli/package-lock.json");
+    expect(dependencyDiffPathspecs()).toContain(".github/release/vercel-cli/package-lock.json");
   });
 
   it("rejects missing report artifact path option values", () => {

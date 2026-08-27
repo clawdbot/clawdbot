@@ -1,9 +1,11 @@
 // Normalizes payloads and applies post-send presentation/media effects.
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { resolveReceiptSourceId } from "../../channels/message/receipt.js";
 import { adaptMessagePresentationForChannel } from "../../channels/plugins/outbound/interactive.js";
 import type { ChannelOutboundTargetRef } from "../../channels/plugins/types.adapters.js";
 import {
   hasReplyPayloadContent,
+  type MessagePresentationBlock,
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
   type ReplyPayloadDeliveryPin,
@@ -11,11 +13,6 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
-import { diagnosticErrorCategory } from "../diagnostic-error-metadata.js";
-import {
-  emitInternalDiagnosticEvent as emitDiagnosticEvent,
-  type DiagnosticMessageDeliveryKind,
-} from "../diagnostic-events.js";
 import { formatErrorMessage } from "../errors.js";
 import type {
   ChannelHandler,
@@ -23,24 +20,15 @@ import type {
   NormalizedPayloadForChannelDelivery,
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
-import type { DeliveryMirror } from "./mirror.js";
+import { flattenMarkdownDetails } from "./markdown-details.js";
 import {
   summarizeOutboundPayloadForTransport,
   type NormalizedOutboundPayload,
   type OutboundPayloadPlan,
 } from "./payloads.js";
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
-import type { OutboundSessionContext } from "./session-context.js";
-import type { OutboundChannel } from "./targets.js";
 
 const log = createSubsystemLogger("outbound/deliver");
-
-export function sessionKeyForDeliveryDiagnostics(params: {
-  mirror?: DeliveryMirror;
-  session?: OutboundSessionContext;
-}): string | undefined {
-  return params.mirror?.sessionKey ?? params.session?.key ?? params.session?.policyKey;
-}
 
 export function deliveryKindForPayload(
   payload: ReplyPayload,
@@ -53,53 +41,6 @@ export function deliveryKindForPayload(
     return "other";
   }
   return "text";
-}
-
-export function emitMessageDeliveryStarted(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  deliveryKind: DiagnosticMessageDeliveryKind;
-  sessionKey?: string;
-}): void {
-  emitDiagnosticEvent({
-    type: "message.delivery.started",
-    channel: params.channel,
-    deliveryKind: params.deliveryKind,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-export function emitMessageDeliveryCompleted(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  deliveryKind: DiagnosticMessageDeliveryKind;
-  durationMs: number;
-  resultCount: number;
-  sessionKey?: string;
-}): void {
-  emitDiagnosticEvent({
-    type: "message.delivery.completed",
-    channel: params.channel,
-    deliveryKind: params.deliveryKind,
-    durationMs: params.durationMs,
-    resultCount: params.resultCount,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
-}
-
-export function emitMessageDeliveryError(params: {
-  channel: Exclude<OutboundChannel, "none">;
-  deliveryKind: DiagnosticMessageDeliveryKind;
-  durationMs: number;
-  error: unknown;
-  sessionKey?: string;
-}): void {
-  emitDiagnosticEvent({
-    type: "message.delivery.error",
-    channel: params.channel,
-    deliveryKind: params.deliveryKind,
-    durationMs: params.durationMs,
-    errorCategory: diagnosticErrorCategory(params.error),
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-  });
 }
 
 export function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
@@ -125,6 +66,12 @@ export function normalizePayloadsForChannelDelivery(
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
   for (const entry of plan) {
     let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
+    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
+      sanitizedPayload = {
+        ...sanitizedPayload,
+        text: flattenMarkdownDetails(sanitizedPayload.text),
+      };
+    }
     if (handler.sanitizeText && sanitizedPayload.text) {
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
         sanitizedPayload = {
@@ -229,15 +176,7 @@ export function buildPayloadSummary(payload: ReplyPayload): NormalizedOutboundPa
 }
 
 export function hasDeliveryResultIdentity(result: OutboundDeliveryResult): boolean {
-  return Boolean(
-    result.messageId ||
-    result.chatId ||
-    result.channelId ||
-    result.roomId ||
-    result.conversationId ||
-    result.toJid ||
-    result.pollId,
-  );
+  return resolveReceiptSourceId(result) !== undefined;
 }
 
 function normalizeDeliveryPin(payload: ReplyPayload): ReplyPayloadDeliveryPin | undefined {
@@ -349,6 +288,28 @@ export async function renderPresentationForDelivery(
     capabilities: handler.presentationCapabilities,
   });
   const textIsFallback = payload.presentationTextMode === "fallback";
+  const countDataBlocks = (blocks: readonly MessagePresentationBlock[]) =>
+    blocks.filter((block) => block.type === "table" || block.type === "chart").length;
+  const hasInteractiveBlocks = presentation.blocks.some(
+    (block) => block.type === "buttons" || block.type === "select",
+  );
+  // When every structured data block degraded to text and nothing interactive
+  // remains, the producer's authored fallback text beats generic block
+  // flattening; skip the channel renderer so that text survives verbatim.
+  if (
+    textIsFallback &&
+    payload.text?.trim() &&
+    !hasInteractiveBlocks &&
+    countDataBlocks(presentation.blocks) > 0 &&
+    countDataBlocks(adaptedPresentation.blocks) === 0
+  ) {
+    const {
+      presentation: _degradedPresentation,
+      presentationTextMode: _degradedPresentationTextMode,
+      ...authoredFallback
+    } = payload;
+    return authoredFallback;
+  }
   const adaptedPayload = {
     ...payload,
     ...(textIsFallback ? { text: undefined } : {}),
@@ -370,14 +331,14 @@ export async function renderPresentationForDelivery(
     presentationTextMode: _presentationTextMode,
     ...withoutPresentation
   } = payload;
+  // Native controls may be clipped or split; plain fallback must retain authored labels.
   return {
     ...withoutPresentation,
     text: textIsFallback
-      ? (payload.text ??
-        renderMessagePresentationFallbackText({ presentation: adaptedPresentation }))
+      ? (payload.text ?? renderMessagePresentationFallbackText({ presentation }))
       : renderMessagePresentationFallbackText({
           text: payload.text,
-          presentation: adaptedPresentation,
+          presentation,
         }),
   };
 }

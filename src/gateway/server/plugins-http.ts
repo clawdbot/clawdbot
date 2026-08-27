@@ -10,6 +10,7 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
+import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import {
@@ -33,7 +34,10 @@ export {
   findRegisteredPluginHttpRoute,
   isRegisteredPluginHttpRoutePath,
 } from "./plugins-http/route-match.js";
-export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth.js";
+export {
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./plugins-http/route-auth.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type PluginRouteRuntimeScope = Parameters<typeof withPluginRuntimeGatewayRequestScope>[0];
@@ -52,10 +56,17 @@ function resolvePluginRoutePathContextForRequest(
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
   clientIp: string | undefined,
+  requestAuth?: AuthorizedGatewayHttpRequest,
 ): GatewayRequestOptions["client"] {
+  const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
+  const sharedSecretOwner =
+    !authenticatedUserProfile &&
+    (requestAuth?.authMethod === "token" || requestAuth?.authMethod === "password");
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    ...(sharedSecretOwner ? { internal: { operatorRoleActor: { kind: "system" as const } } } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -106,6 +117,7 @@ function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistratio
 }
 
 function createPluginRouteRuntimeScope(params: {
+  registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
   gatewayRequestContext?: GatewayRequestContext;
@@ -128,8 +140,10 @@ function createPluginRouteRuntimeScope(params: {
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,
+    params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined,
   );
   return {
+    pluginRegistry: params.registry,
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     isWebchatConnect: () => false,
@@ -253,6 +267,7 @@ export function createGatewayPluginRequestHandler(params: {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
+              registry: params.registry,
               route,
               req,
               gatewayRequestContext,
@@ -272,13 +287,7 @@ export function createGatewayPluginRequestHandler(params: {
         }
       } catch (err) {
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Internal Server Error");
-        } else if (!res.writableEnded && !res.destroyed) {
-          res.end();
-        }
+        finishFailedGatewayHttpResponse(res);
         return true;
       }
     }
@@ -338,6 +347,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
+                registry: params.registry,
                 route,
                 req,
                 gatewayRequestContext,

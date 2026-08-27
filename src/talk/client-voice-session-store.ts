@@ -1,12 +1,13 @@
+import { z } from "zod";
 /** SQLite-backed persistence for durable per-agent Talk voice-call records. */
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
 export const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
 export const VOICE_SESSION_RECORD_VERSION = 1;
-export const VOICE_SESSION_MAX_TRANSCRIPT_CHARS = 8_000;
 export const VOICE_SESSION_STALE_AFTER_MS = 6 * 60 * 60_000;
 
 export type ClientVoiceToolEffect = {
@@ -32,6 +33,8 @@ export type ClientVoiceSessionRecord = {
   consultRunIds: string[];
   effects: ClientVoiceToolEffect[];
   digestDeliveredAt?: number;
+  /** Bounded hashes of transcript entries that must succeed before close can commit. */
+  transcriptFailureKeys: string[];
   /** Declared at create when the client speaks the transcript protocol (sent sessionKey). */
   transcriptCapable?: boolean;
   /** Set once a finalized user utterance persisted; gates spoken confirmation capability. */
@@ -44,53 +47,63 @@ export type ClientVoiceRunBinding = {
   sessionKey: string;
 };
 
+const TRANSCRIPT_FAILURE_KEY_PATTERN = /^[0-9a-f]{64}$/;
+
+const clientVoiceToolEffectSchema = z.looseObject({
+  runId: z.string(),
+  toolName: z.string(),
+  startedAt: z.number(),
+  status: z.enum(["started", "succeeded", "failed", "cancelled", "blocked"]),
+});
+
+const clientVoiceSessionRecordSchema = z.looseObject({
+  version: z.literal(VOICE_SESSION_RECORD_VERSION),
+  voiceSessionId: z.string(),
+  agentId: z.string(),
+  sessionKey: z.string(),
+  provider: z
+    .string()
+    .refine((value) => value.trim().length > 0)
+    .transform((value) => value.trim())
+    .optional(),
+  origin: z.enum(["client", "relay"]),
+  status: z.enum(["open", "closed"]),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  consultRunIds: z
+    .unknown()
+    .optional()
+    .transform((value) =>
+      Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === "string")
+        : [],
+    ),
+  effects: z
+    .unknown()
+    .optional()
+    .transform((value) =>
+      Array.isArray(value)
+        ? value.flatMap((entry) => {
+            const parsed = clientVoiceToolEffectSchema.safeParse(entry);
+            return parsed.success ? [parsed.data] : [];
+          })
+        : [],
+    ),
+  transcriptFailureKeys: z
+    .unknown()
+    .optional()
+    .transform((value) => value ?? [])
+    .pipe(
+      z
+        .array(z.string().regex(TRANSCRIPT_FAILURE_KEY_PATTERN))
+        .max(VOICE_TRANSCRIPT_MAX_UNRESOLVED)
+        .refine((keys) => new Set(keys).size === keys.length),
+    ),
+});
+
 function parseVoiceSessionRecord(value: unknown): ClientVoiceSessionRecord | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Partial<ClientVoiceSessionRecord>;
-  if (
-    record.version !== VOICE_SESSION_RECORD_VERSION ||
-    typeof record.voiceSessionId !== "string" ||
-    typeof record.agentId !== "string" ||
-    typeof record.sessionKey !== "string" ||
-    (record.provider !== undefined &&
-      (typeof record.provider !== "string" || !record.provider.trim())) ||
-    (record.origin !== "client" && record.origin !== "relay") ||
-    (record.status !== "open" && record.status !== "closed") ||
-    typeof record.createdAt !== "number" ||
-    typeof record.updatedAt !== "number"
-  ) {
-    return undefined;
-  }
-  const consultRunIds = Array.isArray(record.consultRunIds)
-    ? record.consultRunIds.filter((entry): entry is string => typeof entry === "string")
-    : [];
-  const effects = Array.isArray(record.effects)
-    ? record.effects.filter((entry): entry is ClientVoiceToolEffect => {
-        if (!entry || typeof entry !== "object") {
-          return false;
-        }
-        const effect = entry as Partial<ClientVoiceToolEffect>;
-        return (
-          typeof effect.runId === "string" &&
-          typeof effect.toolName === "string" &&
-          typeof effect.startedAt === "number" &&
-          (effect.status === "started" ||
-            effect.status === "succeeded" ||
-            effect.status === "failed" ||
-            effect.status === "cancelled" ||
-            effect.status === "blocked")
-        );
-      })
-    : [];
-  const provider = record.provider?.trim();
-  return {
-    ...record,
-    ...(provider ? { provider } : {}),
-    consultRunIds,
-    effects,
-  } as ClientVoiceSessionRecord;
+  const parsed = clientVoiceSessionRecordSchema.safeParse(value);
+  return parsed.success ? (parsed.data as ClientVoiceSessionRecord) : undefined;
 }
 
 export function parseStoredVoiceSessionRecord(

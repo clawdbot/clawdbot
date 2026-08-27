@@ -2,7 +2,10 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
-import { createAllowlistProviderRouteAllowlistWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createAllowlistProviderRouteAllowlistWarningCollector,
+  createConditionalWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
 import {
   buildWebhookChannelStatusSummary,
   createComputedAccountStatusAdapter,
@@ -34,7 +37,7 @@ import {
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
-import { nextcloudTalkSetupAdapter, nextcloudTalkSetupContract } from "./setup-core.js";
+import { nextcloudTalkSetupContract } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 
 const meta = {
@@ -70,6 +73,12 @@ const collectNextcloudTalkSecurityWarnings =
       groupAllowFromPath: "channels.nextcloud-talk.groupAllowFrom",
     },
   });
+const collectNextcloudTalkOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectNextcloudTalkSecurityWarnings,
+  checkId: "channels.nextcloud-talk.groups.open",
+  severity: "critical",
+  title: "Nextcloud Talk security warning",
+});
 
 export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
   createChatChannelPlugin({
@@ -112,6 +121,8 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       messaging: {
         targetPrefixes: ["nextcloud-talk", "nc-talk", "nc"],
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
+        inferTargetChatType: ({ to }) =>
+          normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
         resolveOutboundSessionRoute: (params) => resolveNextcloudTalkOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
@@ -122,7 +133,6 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         secretTargetRegistryEntries,
         collectRuntimeConfigAssignments,
       },
-      setup: nextcloudTalkSetupAdapter,
       setupContract: nextcloudTalkSetupContract,
       status: createComputedAccountStatusAdapter<ResolvedNextcloudTalkAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
@@ -183,7 +193,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
     },
     security: {
       ...nextcloudTalkSecurityAdapter,
-      collectWarnings: collectNextcloudTalkSecurityWarnings,
+      collectWarnings: collectNextcloudTalkOpenGroupFindings,
     },
     outbound: {
       base: {

@@ -1,4 +1,6 @@
 // Legacy config migration bridge for channel doctor compatibility contracts.
+
+import { isChannelConfigMetadataKey } from "../../../channels/config-metadata.js";
 import { getBootstrapChannelPlugin } from "../../../channels/plugins/bootstrap-registry.js";
 import { loadBundledChannelDoctorContractApi } from "../../../channels/plugins/doctor-contract-api.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -6,6 +8,7 @@ import {
   applyPluginDoctorCompatibilityMigrations,
   collectRelevantDoctorPluginIds,
 } from "../../../plugins/doctor-contract-registry.js";
+import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
 type ChannelDoctorCompatibilityMutation = {
@@ -16,16 +19,6 @@ type ChannelDoctorCompatibilityMutation = {
 type ChannelDoctorCompatibilityNormalizer = (params: {
   cfg: OpenClawConfig;
 }) => ChannelDoctorCompatibilityMutation;
-
-function collectRelevantDoctorChannelIds(raw: unknown): string[] {
-  const channels = isRecord(raw) && isRecord(raw.channels) ? raw.channels : null;
-  if (!channels) {
-    return [];
-  }
-  return Object.keys(channels)
-    .filter((channelId) => channelId !== "defaults")
-    .toSorted();
-}
 
 function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
@@ -59,7 +52,7 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
     migrateEntry(defaults, "channels.defaults");
   }
   for (const [channelId, value] of Object.entries(channels)) {
-    if (channelId === "defaults" || !isRecord(value)) {
+    if (!channelId.trim() || isChannelConfigMetadataKey(channelId) || !isRecord(value)) {
       continue;
     }
     const preserveEmptyPluginBlock = channelId === "feishu";
@@ -116,7 +109,10 @@ export function applyChannelDoctorCompatibilityMigrations(cfg: Record<string, un
   migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
 
-  for (const channelId of collectRelevantDoctorChannelIds(cfg)) {
+  for (const channelId of listDoctorConfiguredChannelIds(cfg, {
+    configEntryPolicy: "raw",
+    sort: "codepoint",
+  })) {
     const normalizeCompatibilityConfig = resolveBundledChannelCompatibilityNormalizer(channelId);
     if (!normalizeCompatibilityConfig) {
       unresolvedChannelIds.push(channelId);

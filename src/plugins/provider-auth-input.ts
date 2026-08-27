@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -136,6 +137,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -167,6 +169,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -182,6 +185,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -196,7 +200,14 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     explicitMode: params.secretInputMode,
   });
   const env = params.env ?? process.env;
-  const envKey = resolveEnvApiKey(params.provider, env);
+  // Setup must resolve the same trusted workspace/provider descriptors as
+  // runtime; dropping the staged config silently changes credential ownership.
+  const envKey = resolveEnvApiKey(params.provider, env, {
+    config: params.config,
+    workspaceDir:
+      params.workspaceDir ??
+      resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), env),
+  });
 
   if (selectedMode === "ref") {
     if (typeof params.prompter.select !== "function") {

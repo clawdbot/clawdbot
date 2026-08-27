@@ -4,10 +4,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mts";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -517,9 +517,6 @@ describe("stageBundledPluginRuntime", () => {
           openclaw: {
             extensions: ["./main.js"],
             setupEntry: "./setup.js",
-            startup: {
-              deferConfiguredChannelFullLoadUntilAfterListen: true,
-            },
           },
         },
         null,
@@ -548,7 +545,7 @@ describe("stageBundledPluginRuntime", () => {
     const discovery = discoverOpenClawPlugins({
       env,
     });
-    const manifestRegistry = loadPluginManifestRegistry({
+    const manifestRegistry = loadPluginManifestRegistryCore({
       env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
@@ -567,9 +564,6 @@ describe("stageBundledPluginRuntime", () => {
     );
     expect(fs.realpathSync(manifestRegistry.plugins[0]?.setupSource ?? "")).toBe(
       expectedRuntimeSetupPath,
-    );
-    expect(manifestRegistry.plugins[0]?.startupDeferConfiguredChannelFullLoadUntilAfterListen).toBe(
-      true,
     );
   });
 

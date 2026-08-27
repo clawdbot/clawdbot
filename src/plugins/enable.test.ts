@@ -78,6 +78,32 @@ describe("enablePluginInConfig", () => {
       },
     },
     {
+      name: "enables a canonical plugin allowed through a mixed-case compatibility id",
+      cfg: {
+        plugins: {
+          allow: [" GOOGLE-GEMINI-CLI "],
+        },
+      } as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: true,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.pluginId).toBe("google");
+        expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+        expectEnabledAllowlist(result, ["google"]);
+      },
+    },
+    {
+      name: "canonicalizes a mixed-case compatibility target before enabling it",
+      cfg: {} as OpenClawConfig,
+      pluginId: " GOOGLE-GEMINI-CLI ",
+      expectedEnabled: true,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.pluginId).toBe("google");
+        expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+        expect(result.config.plugins?.entries?.[" GOOGLE-GEMINI-CLI "]).toBeUndefined();
+      },
+    },
+    {
       name: "refuses enable when plugin is denylisted",
       cfg: {
         plugins: {
@@ -88,6 +114,21 @@ describe("enablePluginInConfig", () => {
       expectedEnabled: false,
       assert: (result: ReturnType<typeof enablePluginInConfig>) => {
         expect(result.reason).toBe("blocked by denylist");
+      },
+    },
+    {
+      name: "refuses a canonical plugin denied through a mixed-case compatibility id",
+      cfg: {
+        plugins: {
+          deny: [" GOOGLE-GEMINI-CLI "],
+        },
+      } as OpenClawConfig,
+      pluginId: "google",
+      expectedEnabled: false,
+      assert: (result: ReturnType<typeof enablePluginInConfig>) => {
+        expect(result.pluginId).toBe("google");
+        expect(result.reason).toBe("blocked by denylist");
+        expect(result.config.plugins?.entries?.google).toBeUndefined();
       },
     },
     {

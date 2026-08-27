@@ -9,9 +9,31 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerOcPathCli } from "../cli-registration.js";
 import { registerPathCli } from "./cli.js";
 
 const JSONC_INPUT_LIMIT_BYTES = 16 * 1024 * 1024;
+type RegisterCli = Parameters<typeof registerOcPathCli>[0]["registerCli"];
+type CliRegistrar = Parameters<RegisterCli>[0];
+type CliRegistrationOptions = Parameters<RegisterCli>[1];
+
+function resolvePathMachineOutput() {
+  let resolver:
+    | ((params: { argv: readonly string[]; stdoutIsTTY: boolean }) => boolean)
+    | undefined;
+  registerOcPathCli({
+    registerCli(_registrar: CliRegistrar, options?: CliRegistrationOptions) {
+      const descriptor = options?.descriptors?.[0];
+      resolver = descriptor && "machineOutput" in descriptor ? descriptor.machineOutput : undefined;
+    },
+  } as unknown as Parameters<typeof registerOcPathCli>[0]);
+  if (!resolver) {
+    throw new Error("oc-path CLI descriptor is missing its machine-output resolver");
+  }
+  return resolver;
+}
+
+const isPathMachineOutput = resolvePathMachineOutput();
 
 type PathCommandOptions = {
   readonly json?: boolean;
@@ -176,6 +198,14 @@ async function pathEmitCommand(
 }
 
 describe("openclaw path CLI", () => {
+  it("reports its TTY-aware machine-output mode to the CLI", () => {
+    const argv = ["node", "openclaw", "path", "validate", "oc://AGENTS.md"];
+    expect(isPathMachineOutput({ argv, stdoutIsTTY: false })).toBe(true);
+    expect(isPathMachineOutput({ argv, stdoutIsTTY: true })).toBe(false);
+    expect(isPathMachineOutput({ argv: [...argv, "--json"], stdoutIsTTY: true })).toBe(true);
+    expect(isPathMachineOutput({ argv: [...argv, "--human"], stdoutIsTTY: false })).toBe(false);
+  });
+
   let workspaceDir: string;
 
   beforeEach(() => {

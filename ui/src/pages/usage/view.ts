@@ -13,9 +13,9 @@ import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageInsightStats,
-  formatCost,
+  formatUsageCost,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
@@ -31,7 +31,8 @@ import {
   setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderSessionDetailPanel } from "./view-details.ts";
+import { renderSessionDetailPanel, usageDateKey } from "./view-details.ts";
+import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderCostBreakdownCompact,
   renderCostWindowComparison,
@@ -142,9 +143,20 @@ function renderUsageEmptyState(onRefresh: () => void) {
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
-function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
+function renderProviderUsage(
+  providers: ProviderUsageSnapshot[],
+  unavailable: boolean,
+  stalled: boolean,
+) {
+  const notice = stalled
+    ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
+    : unavailable
+      ? html`<div class="callout warning usage-callout">
+          ${t("usage.providerUsage.unavailable")}
+        </div>`
+      : nothing;
   if (providers.length === 0) {
-    return nothing;
+    return notice;
   }
   return renderSettingsSection(
     {
@@ -153,6 +165,7 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
       description: t("usage.providerUsage.subtitle"),
     },
     html`
+      ${notice}
       <div class="usage-panel provider-usage-section">
         <div class="provider-usage-grid">
           ${providers.map(
@@ -219,9 +232,7 @@ export function renderUsage(props: UsageProps) {
           if (!s.updatedAt) {
             return false;
           }
-          const d = new Date(s.updatedAt);
-          const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          return selectedDaySet.has(sessionDate);
+          return selectedDaySet.has(usageDateKey(s.updatedAt, filters.timeZone));
         })
       : agentScopedSessions;
 
@@ -370,7 +381,14 @@ export function renderUsage(props: UsageProps) {
       : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
-  const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
+  // The gateway always returns a totals object (all-zero when idle), so key
+  // the empty state off content — and never render it under an error callout,
+  // where "no usage data yet" would misexplain the failure.
+  const isEmpty =
+    !data.loading &&
+    !data.error &&
+    data.sessions.length === 0 &&
+    (data.totals?.totalTokens ?? 0) === 0;
   const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||
@@ -493,11 +511,11 @@ export function renderUsage(props: UsageProps) {
                 ${displayTotals
                   ? html`
                       <span class="usage-metric-badge">
-                        <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                        <strong>${formatUsageTokens(displayTotals.totalTokens)}</strong>
                         ${t("usage.metrics.tokens")}
                       </span>
                       <span class="usage-metric-badge">
-                        <strong>${formatCost(displayTotals.totalCost)}</strong>
+                        <strong>${formatUsageCost(displayTotals.totalCost)}</strong>
                         ${t("usage.metrics.cost")}
                       </span>
                       <span class="usage-metric-badge">
@@ -792,7 +810,11 @@ export function renderUsage(props: UsageProps) {
           </div>
         </section>
 
-        ${renderProviderUsage(data.providerUsage)}
+        ${renderProviderUsage(
+          data.providerUsage,
+          data.providerUsageUnavailable,
+          data.providerUsageStalled,
+        )}
         ${isEmpty
           ? renderUsageEmptyState(filterActions.onRefresh)
           : html`
@@ -808,6 +830,7 @@ export function renderUsage(props: UsageProps) {
                 displaySessionCount,
                 totalSessions,
               )}
+              ${renderUsageHeatmap(filteredDaily, filters.startDate, filters.endDate)}
               ${renderUsageMosaic(
                 aggregateSessions,
                 filters.timeZone,

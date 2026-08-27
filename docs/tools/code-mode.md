@@ -6,11 +6,13 @@ read_when:
   - You want to enable OpenClaw code mode for an agent run
   - You need to explain why Code Mode is different from Codex Code Mode
   - You are reviewing the compact tool contract, QuickJS-WASI sandbox, TypeScript transform, or hidden tool-catalog bridge
-  - You are adding or reviewing an internal code-mode namespace registry integration
+  - You are reviewing the MCP namespace bridge or virtual API declarations
 ---
 
-Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
-enabled, the model no longer sees every enabled tool schema; instead, it sees
+Code mode is an experimental OpenClaw agent-runtime feature. It defaults to the
+`"auto"` tier, which engages only models whose catalog marks them as preferred
+code-mode performers; every other model keeps normal tool exposure. When
+engaged, the model no longer sees every enabled tool schema; instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
 program that searches, describes, and calls the hidden tool catalog.
@@ -23,8 +25,8 @@ separate implementations:
   freeform-grammar tool: the model writes raw JavaScript source (optionally
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
-- OpenClaw code mode runs in the generic OpenClaw agent runtime and is
-  disabled unless `tools.codeMode.enabled: true` is configured. Its `exec`
+- OpenClaw code mode runs in the generic OpenClaw agent runtime, gated by
+  `tools.codeMode.enabled` (default `"auto"`, per-model activation). Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
@@ -32,23 +34,31 @@ Both are JavaScript execution surfaces, not shell-command surfaces. Treat them
 as independent, differently-implemented features that happen to expose
 identically-named `exec`/`wait` tools.
 
+In OpenClaw code mode, `command` is a JavaScript or TypeScript alias for
+`code`, not a shell command. For shell or file operations, call the appropriate
+async tool global from guest JavaScript. Recognizable shell
+commands are rejected before the QuickJS worker starts with actionable
+`invalid_input` guidance.
+
 ## What it does
 
 - The model-visible tool list becomes `exec`, `wait`, plus any direct-only tool
-  such as `computer` or the native-vision `image` loader whose image result
+  such as `computer` or the native-vision `view_image` loader whose image result
   cannot survive the guest bridge.
 - `exec` evaluates model-generated JavaScript or TypeScript in an isolated
   QuickJS-WASI worker thread.
-- Every catalog-eligible enabled tool (OpenClaw core, plugin, MCP, client) is hidden as a
-  standalone model tool and exposed inside the guest program through `ALL_TOOLS`
-  and `tools`.
-- The `exec` description carries a bounded quick index of exact OpenClaw/plugin
-  catalog ids, compact input hints, and compact declared output hints when a
+- Every catalog-eligible enabled non-MCP tool (OpenClaw core, plugin, client) is
+  hidden as a standalone model tool and exposed inside the guest program as an
+  async global function. MCP stays under the `MCP` namespace.
+- The `exec` description carries a bounded quick index of final callable names,
+  compact input hints, and compact declared output hints when a
   trusted tool provides an output schema. It omits descriptions, full schemas,
-  MCP entries, and overflow entries; guest-side catalog lookup remains the fallback.
-- Guest code searches the hidden catalog, describes a tool's schema, and calls
-  a tool through the same execution path used by normal agent turns (policy,
-  approvals, hooks, telemetry all still apply).
+  MCP entries, and overflow entries; callable `catalog.search(...)` results are
+  the fallback.
+- Guest code calls globals directly or searches the hidden catalog for callable
+  handles. A handle exposes bounded metadata and `describe()`, but never the
+  exact internal catalog id. Calls use the same execution path as normal agent
+  turns (policy, approvals, hooks, telemetry all still apply).
 - MCP tools are grouped under the `MCP` namespace; in code mode this is the
   only supported way to call them.
 - `wait` resumes a suspended code-mode run when nested tool calls are still
@@ -83,19 +93,25 @@ the QuickJS-WASI guest.
 
 ## Quickstart
 
-### Enable Code Mode
+### Defaults and overrides
+
+Code mode ships enabled in the `"auto"` tier: it engages only when the run's
+model is flagged as a preferred code-mode performer in its provider catalog,
+and every other model keeps normal tool exposure. No configuration is needed.
+See [Automatic per-model activation](#automatic-per-model-activation) for the
+exact semantics and the shipped model list.
+
+To opt out for every run:
 
 ```json5
 {
   tools: {
-    codeMode: {
-      enabled: true,
-    },
+    codeMode: false,
   },
 }
 ```
 
-Shorthand:
+To force code mode on for every tool-capable run, regardless of model:
 
 ```json5
 {
@@ -105,8 +121,9 @@ Shorthand:
 }
 ```
 
-Code mode stays off when `tools.codeMode` is omitted, `false`, or an object
-without `enabled: true`.
+Object form works too: `tools.codeMode.enabled` accepts the same `false`,
+`true`, and `"auto"` values. An object without `enabled` keeps the `"auto"`
+default.
 
 If you use sandboxed agents with configured MCP servers, also allow the
 bundled MCP plugin in the sandbox tool policy, for example
@@ -140,15 +157,45 @@ For a tool with a declared output such as
 select, call, and transform it:
 
 ```javascript
-const [shipmentTool] = await tools.search("list shipments");
-const shipments = await tools.callValue(shipmentTool.id, {});
+const [shipmentTool] = await catalog.search("list shipments");
+const shipments = await shipmentTool({});
 return shipments.filter((shipment) => !shipment.paid && shipment.tons > 10);
 ```
 
+Declared output fields may feed later calls in that same `exec`; do not spend a
+second `exec` merely inspecting them.
+
 When a quick-index line ends in `-> ?`, the output shape is unknown. The first
-`exec` must return `await tools.callValue(...)` unchanged. A later `exec` can
-transform the observed value. This costs an extra model turn, but prevents the
-model from guessing field names.
+`exec` must return the final async tool call unchanged. Do not feed the unknown
+value into guessed field-dependent logic in the same program. Observe the raw
+value, then use a later `exec` for dependent composition. This costs an extra
+model turn, but prevents the model from guessing field names.
+
+### Recover from tool errors
+
+Nested tool failures are ordinary JavaScript errors. Guest code can catch them
+and return the information needed to choose the next action:
+
+```javascript
+try {
+  return await terminal({ action: "list" });
+} catch (error) {
+  return { status: "unavailable", error: error.message };
+}
+```
+
+JavaScript syntax errors, TypeScript transform errors, and tool failures proven
+to occur before execution become failed `exec` results that the model can read
+and correct across successive turns. A failed tool call does not automatically
+end the agent run when OpenClaw can prove that no nested action started.
+
+OpenClaw does not automatically replay a failed program. If earlier calls
+already ran or a failed call may have partially applied, OpenClaw first limits
+recovery to an authorized read-only inspection of the current state. It does
+not expose writes, sends, shell commands, or other mutations during that
+reconciliation. Cancellation, explicitly terminal tool outcomes, sandbox
+restrictions, approval requirements, and tool-policy denials retain their
+existing behavior.
 
 ### Verify the active surface
 
@@ -169,10 +216,11 @@ With code mode active, the logged model-facing tool names should be `exec` and
 ## Use Swarm for agent fan-out
 
 [Swarm](/tools/swarm) adds `agents.run()`, `phase()`, and `log()` guest globals
-for orchestrating concurrent sub-agents from Code Mode scripts. Enable both
-`tools.codeMode` and `tools.swarm`, then use normal JavaScript control flow for
-fan-out, decision gates, and structured collection. Swarm is a separate opt-in
-gate; enabling Code Mode alone does not expose the `agents.*` API.
+for orchestrating concurrent sub-agents from Code Mode scripts. Enable
+`tools.swarm`, and ensure Code Mode engages through `"auto"` or `true`, then use
+normal JavaScript control flow for fan-out, decision gates, and structured
+collection. Swarm is a separate opt-in gate; engaging Code Mode alone does not
+expose the `agents.*` API.
 
 ## Technical tour
 
@@ -185,7 +233,7 @@ validating high-risk deployments.
 |                     |                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | Runtime             | [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi)                               |
-| Default state       | disabled                                                                                    |
+| Default state       | `"auto"` (engages only catalog-preferred models)                                            |
 | Stability           | experimental OpenClaw surface (Codex Code Mode is a separate, stable Codex harness surface) |
 | Target surface      | generic OpenClaw agent runs                                                                 |
 | Security posture    | model code is hostile                                                                       |
@@ -227,12 +275,13 @@ Provider-owned tools such as remote Python sandboxes are separate tools. See
 
 ## Configuration
 
-`tools.codeMode.enabled` is the activation gate; setting other fields does not
-enable the feature on its own.
+`tools.codeMode.enabled` is the activation gate. If it is omitted, including
+from object-form config that sets other fields, it inherits the `"auto"`
+default and may engage for catalog-preferred models.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | boolean; only `true` enables code mode          |
+| `enabled`             | `"auto"`                       | `false`, `true`, or `"auto"` (per-model)        |
 | `runtime`             | `"quickjs-wasi"`               | only supported value                            |
 | `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
 | `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
@@ -246,7 +295,101 @@ enable the feature on its own.
 | `maxSearchLimit`      | `50`                           | `1`-`50`                                        |
 
 If code mode is enabled but QuickJS-WASI cannot load, OpenClaw fails closed
-for that run; it does not silently expose normal tools as a fallback.
+for that run; it does not silently expose normal tools as a fallback. This
+holds for `true` and for `"auto"` runs where the model resolves as preferred:
+an engaged run never silently falls back to broad direct tool exposure.
+
+## Automatic per-model activation
+
+`tools.codeMode.enabled` accepts three values:
+
+- `"auto"` (default): code mode engages only when the run's model is flagged
+  as a preferred code-mode performer in its provider catalog.
+- `false`: code mode is off for every run.
+- `true`: code mode engages for every tool-capable run, regardless of model.
+
+`false` and `true` are absolute overrides and behave exactly as before the
+`"auto"` tier existed.
+
+### The `compat.codeMode` catalog flag
+
+Provider catalogs can tier a model with `compat.codeMode` on its model entry,
+next to flags like `compat.supportsTools`:
+
+- `"preferred"`: the model reliably writes short orchestration programs and
+  benefits from the compact code-mode surface; `"auto"` engages code mode.
+- `"capable"` (or absent): the model can run code mode when forced with
+  `enabled: true`, but `"auto"` keeps normal tool exposure.
+
+Models without tool support cannot use code mode at all; there is no separate
+"unsupported" tier. The flag is capability metadata owned by the provider
+plugin's catalog; core only reads the generic compat field.
+
+### Shipped preferred models
+
+Bundled provider catalogs currently flag these models as `"preferred"`:
+
+| Provider  | Models                                                                                                                                                           |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                                                   |
+| deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                                           |
+| google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash`, `gemini-3.7-flash` |
+| kimi      | `k3`, `k3-256k`                                                                                                                                                  |
+| minimax   | `MiniMax-M3`                                                                                                                                                     |
+| moonshot  | `kimi-k3`                                                                                                                                                        |
+| openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                                              |
+| xiaomi    | `mimo-v2.5`                                                                                                                                                      |
+| zai       | `glm-5.3`, `glm-5.2`, `glm-5.1`                                                                                                                                  |
+
+Everything else, including all Ollama-served local models, stays unflagged and
+keeps normal tool exposure under `"auto"`.
+
+### Models shipped by more than one provider
+
+Several vendors are reachable through more than one provider id: a subscription
+endpoint next to an API endpoint, or a gateway that resells another vendor's
+model. Because `"auto"` resolves the tier from whichever catalog served the run,
+two catalogs describing the same upstream model must not disagree by accident.
+
+Every catalog row for a shared model therefore states its tier explicitly once
+any sibling row states one. Rows are matched on the vendor's own name for the
+weights, so a catalog that republishes a model under a namespaced id or
+different casing is matched automatically: `novita/moonshotai/kimi-k3`,
+`nvidia/z-ai/glm-5.2`, and `together/deepseek-ai/DeepSeek-V4-Pro` all group with
+the first-party rows without anyone declaring anything. Only genuinely different
+names need the manifest's `upstreamModel` marker, as the `kimi` catalog uses for
+`moonshot/kimi-k3`.
+
+Reseller and aggregator catalogs such as `baseten`, `deepinfra`,
+`github-copilot`, `gmi`, `novita`, `nvidia`, `ollama-cloud`, `opencode`,
+`opencode-go`, `qianfan`, `together`, `venice`, and `volcengine-plan` currently
+declare `"capable"` for the models first-party catalogs flag `"preferred"`: the
+preferred tier came from evaluations on the first-party endpoints, and those
+runs have not been repeated per reseller. Promoting one of those rows is a
+deliberate, evidence-backed change rather than an oversight.
+
+For OpenAI models, the flag matters only when the run resolves to the OpenClaw
+embedded agent runtime. Default OpenAI routing uses the Codex-style harness
+surface, where OpenClaw code mode does not apply; the catalog flag never
+changes that routing decision.
+
+### Choosing when to enable
+
+In A/B evaluations on the preferred models above, code mode reduced total
+token usage by roughly 30-50% at equal-or-better task pass rates, mostly by
+replacing many full tool schemas and per-tool round trips with one compact
+program surface. Models below the preferred tier showed no consistent win and
+sometimes regressed, which is why `"auto"` leaves them on direct tools.
+
+The default `"auto"` fits agents that switch between models: strong models get
+the compact surface, weaker or local ones keep the exposure they handle best.
+Use `true`
+when you have verified a specific unflagged model performs well with code
+mode; global force-on is most predictable for single-model deployments. For
+open-weight or uncached serving where every prompt token is billed or
+recomputed, prefer enabling per model (via `"auto"` or a per-agent override)
+rather than globally, since the token savings depend on the model actually
+using the program surface well.
 
 ## Activation
 
@@ -258,7 +401,8 @@ final model request is assembled:
 2. Build the effective OpenClaw tool list, adding eligible plugin, MCP, and
    client tools.
 3. Apply allow/deny policy.
-4. If `tools.codeMode.enabled` is false, continue with normal tool exposure.
+4. If `tools.codeMode.enabled` is `false`, or is `"auto"` and the run's model
+   is not catalog-preferred, continue with normal tool exposure.
 5. If enabled and tools are active for the run, retain required direct-only
    tools and register every catalog-eligible effective tool in the code-mode
    catalog.
@@ -296,6 +440,7 @@ type CodeModeExecInput = {
   code?: string;
   command?: string;
   language?: "javascript" | "typescript";
+  restartSafe?: boolean;
 };
 ```
 
@@ -305,11 +450,25 @@ Rules:
 - `code` is the documented model-facing field.
 - `command` is accepted as an exec-compatible alias for hook policies and
   trusted rewrites (the normal OpenClaw shell exec tool also uses a `command`
-  field); when both are present, the values must match.
+  field). Blank caller aliases are treated as absent; a hook or trusted policy
+  that invalidates one populated alias (blank or non-string) invalidates both so
+  execution fails closed. When both aliases are non-empty, their values must match.
 - `language` defaults to `"javascript"`; the schema exposes it as a flat
   string enum (`"javascript" | "typescript"`), not a `oneOf`/`anyOf` union,
   since some providers reject those shapes.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
+- Do not set `restartSafe` on a new `exec`. Set it to `true` only when OpenClaw
+  explicitly requests replay after a gateway restart, and never for `write`,
+  `edit`, `exec`, or any mutation. Every catalog call must be explicitly
+  replay-safe. OpenClaw rejects unmarked catalog tools and namespace
+  surfaces that are not proven replay-safe, and restart-safe runs do not
+  auto-drain pending calls. A generic exec surface is not replay-safe merely
+  because one command appears read-only; use audited read, grep, or find tools.
+  Suspended results are marked replay-safe so
+  [restart recovery](/gateway/restart-recovery) can reconstruct an interrupted
+  turn from its transcript instead of restoring the process-local snapshot.
+  Recovery remains limited to audited read-only core tools and explicitly
+  replay-safe plugin tools. Leave the field omitted for ordinary calls.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader
   patterns.
 - `exec` never exposes the normal shell `exec` implementation recursively.
@@ -351,12 +510,16 @@ type CodeModeFailedResult = {
 `exec` returns `waiting` when the guest suspends with resumable state that still
 needs a model-visible continuation — an explicit `yield_control(...)`, or a
 bridge tool call that has not resolved within the exec deadline. The result
-includes a `runId` for `wait`. Bridge tool calls — `tools.search`/`describe`/
-`call` and namespace calls, including MCP namespace calls — are auto-drained
-inside the same `exec`/`wait` call while they resolve within the deadline, so a
-compact code block that awaits several tools runs to completion in one model
-turn instead of forcing one model tool call per await. Restart-safe runs never
-auto-drain; their pending work still goes through the replay-safe checks.
+includes a `runId` for `wait`. Native-channel exec approvals are different:
+while the operator decision is pending, OpenClaw suspends both the Code Mode
+execution budget and the owning agent-run budget. The original `exec` remains
+in flight, then resumes with exactly its unused budget after approval resolves;
+it does not return `pending_tools` or require model polling through `wait`.
+Bridge requests — `catalog.search`, handle `describe()`, callable tool handles,
+and namespace calls including MCP — are auto-drained inside the same
+`exec`/`wait` call while they resolve within the deadline, so a compact code
+block that awaits several tools runs to completion in one model turn instead of
+forcing one model tool call per await.
 
 `exec` returns `completed` only when the guest VM has no pending work and the
 final value is JSON-compatible after OpenClaw's output adapter runs.
@@ -375,9 +538,11 @@ type CodeModeWaitInput = {
 
 Output is the same `CodeModeResult` union returned by `exec`.
 
-`wait` exists because nested OpenClaw tools can be slow, interactive, approval
-gated, or stream partial updates; the model should not need to keep one long
-`exec` call open while the host waits for external work.
+`wait` exists because nested OpenClaw tools can be slow, interactive, or stream
+partial updates; the model should not need to keep one long `exec` call open
+while the host waits for ordinary external work. Native-channel exec approvals
+are the exception: they stay inside the original `exec` so approval authority
+remains bound to the admitted run.
 
 QuickJS-WASI snapshot/restore is the resume mechanism:
 
@@ -405,60 +570,78 @@ scoped to the run and session that created them.
 ## Guest runtime API
 
 ```typescript
-declare const ALL_TOOLS: ToolCatalogEntry[];
-declare const tools: ToolCatalog;
+declare const catalog: ToolCatalog;
 declare const MCP: Record<string, unknown>;
 declare const namespaces: Record<string, unknown>;
 
+declare function setTimeout(
+  callback: (...args: unknown[]) => void,
+  delay?: number,
+  ...args: unknown[]
+): number;
+declare function clearTimeout(id: number): void;
 declare function text(value: unknown): void;
 declare function json(value: unknown): void;
 declare function yield_control(reason?: string): Promise<void>;
 ```
 
-`ALL_TOOLS` is compact metadata for the run-scoped catalog; it does not contain
-full schemas by default. The model-visible `exec` description also includes a
-bounded, deterministic subset of exact OpenClaw/plugin ids, compact input
-hints, and trusted declared output hints. Descriptions remain deferred so
-adversarial catalog prose cannot steer the model. When that index omits a tool,
-read `ALL_TOOLS` or call `tools.search(...)` inside the guest program.
+Guest timers are bridged through the host, so they survive QuickJS snapshot/resume and remain bounded by the Code Mode execution and snapshot limits.
 
-The arrow in each quick-index line describes the `tools.callValue(...)` value.
+Every effective non-MCP tool is also installed as an async global function.
+The model-visible `exec` description includes a bounded, deterministic subset
+of final callable names, compact input hints, and trusted declared output hints.
+Descriptions remain deferred so adversarial catalog prose cannot steer the
+model. When that index omits a tool, call `catalog.search(...)`; its results are
+callable functions.
+
+The arrow in each quick-index line describes the callable function's value.
 `-> Array<{ id: string }>` is a declared output hint; `-> ?` is output unknown.
 Unknown outputs stay raw-first: return the value unchanged, observe it, then
-filter or map it in a later `exec` instead of guessing field names. This also
+filter or map it in a later `exec` instead of feeding guessed fields into
+dependent logic in the same program. This also
 applies when a declared-output read feeds a final `-> ?` call: return that
 call's raw value without wrapping it in the requested answer shape.
 
 ```typescript
-type ToolCatalogEntry = {
-  id: string;
-  name: string;
+type ToolCatalogMetadata = {
+  callableName: string;
+  toolName: string;
   label?: string;
   description: string;
-  source: "openclaw" | "mcp" | "client";
-  sourceName?: string;
-  input: string;
+  source: "openclaw" | "client";
+  input?: string;
   output?: string;
 };
+
+type ToolCatalogHandle = ((input?: unknown) => Promise<unknown>) &
+  ToolCatalogMetadata & {
+    describe(): Promise<ToolCatalogDescription>;
+    toJSON(): ToolCatalogMetadata;
+  };
 ```
 
+Returning `await catalog.search(...)` or `catalog.all()` serializes each
+callable handle to this bounded metadata. Serialization does not call
+`describe()` or start another bridge request; inside the same program, the
+handle remains callable.
+
 `input` is a bounded TypeScript-style signature for the common case. Use
-`tools.describe(...)` when the exact full schema is still needed. Remote MCP
-and client entries use `input: "unknown"` so their untrusted schemas stay
-deferred until `describe`. `output` is
+the handle's `describe()` when the exact full schema is still needed. Client
+entries use `input: "unknown"` so their untrusted schemas stay deferred until
+`describe()`. `output` is
 present only for a complete compact hint derived from a trusted OpenClaw core
 or plugin `outputSchema`. MCP and client output-schema claims are not promoted
 into this trusted catalog hint.
 
-Plugin tools use `source: "openclaw"` with `sourceName` set to the owning
-plugin id; there is no separate `"plugin"` source value. `source: "mcp"` is
-used only for MCP entries in `sourceName`/`mcp` metadata (and is filtered out
-of `ALL_TOOLS`/`tools.*`, see below).
+Plugin tools use `source: "openclaw"`; there is no separate `"plugin"` source
+value. MCP entries are excluded from generic catalog discovery and remain
+available only through `MCP`.
 
 Full schema is loaded only on demand:
 
 ```typescript
-type ToolCatalogEntryWithSchema = ToolCatalogEntry & {
+type ToolCatalogDescription = Omit<ToolCatalogMetadata, "toolName"> & {
+  name: string;
   parameters: unknown;
   outputSchema?: unknown;
 };
@@ -468,28 +651,45 @@ Catalog helpers:
 
 ```typescript
 type ToolCatalog = {
-  search(query: string, options?: { limit?: number }): Promise<ToolCatalogEntry[]>;
-  describe(id: string): Promise<ToolCatalogEntryWithSchema>;
-  callValue(id: string, input?: unknown): Promise<unknown>;
-  call(id: string, input?: unknown): Promise<unknown>;
-  [safeToolName: string]: unknown;
+  search(query: string, options?: { limit?: number }): Promise<ToolCatalogHandle[]>;
+  all(): readonly ToolCatalogHandle[];
 };
 ```
 
-Convenience tool functions are installed only for unambiguous safe names:
+Paired Gateway nodes are available through the `nodes` global:
 
 ```typescript
-const files = await tools.search("read local file");
-const fileRead = await tools.describe(files[0].id);
-const content = await tools.callValue(fileRead.id, { path: "README.md" });
-
-// If the hidden catalog has an unambiguous `web_search` entry:
-const hits = await tools.web_search({ query: "OpenClaw code mode" });
+const available = await nodes.list();
+const node = await nodes.get(available[0].id);
+const status = await node.invoke("device.status");
 ```
 
-`tools.callValue(...)` returns a normal tool's JSON `details` value directly.
-`tools.call(...)` preserves the raw `{ tool, result }` envelope for callers
-that need content blocks or other result metadata.
+`nodes.list()` returns paired node ids, names, platforms, connection state, and
+advertised commands. `nodes.get(idOrName)` resolves an exact id before a display
+name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
+Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
+approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
+`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`exec`: the generic nodes surface reserves `system.run` for the normal shell
+`exec` tool with a node host.
+
+Call quick-index globals directly, or use callable catalog handles when lookup
+is needed:
+
+```typescript
+const content = await read({ path: "README.md" });
+
+const [tool] = await catalog.search("...");
+const result = await tool({ query: "OpenClaw" });
+
+const [search] = await catalog.search("search the web", { limit: 1 });
+const schema = await search.describe();
+const hits = await search({ query: "OpenClaw code mode" });
+```
+
+Calling a global or catalog handle returns the normal tool's JSON `details`
+value directly. Exact catalog ids and raw `{ tool, result }` envelopes are not
+guest-visible.
 
 ## Declared output contracts
 
@@ -537,7 +737,7 @@ Current built-in contracts include `agents_list`, `apply_patch`,
 `conversations_list`, `conversations_send`, `conversations_turn`, `edit`,
 `openclaw`, `read`, `screen`,
 `sessions_history`, `sessions_list`, `sessions_search`, `sessions_send`,
-`session_status`, `spawn_task`, `terminal`, `web_fetch`, and `web_search`.
+`session_status`, `suggest_task`, `terminal`, `web_fetch`, and `web_search`.
 Exact passthroughs can reuse their owning protocol schema instead of
 duplicating a model-only contract. For example, the conversation tools expose
 the same Gateway result schemas used by `conversations.list`,
@@ -546,15 +746,18 @@ schema whose hint exposes stable metadata, text, cache state, and nested spill
 metadata; `web_search` declares its exact normalized results/answer/error/raw
 union as a complete quick-index hint. Filesystem contracts return structured
 read text, image, truncation, and optional-not-found outcomes; explicit edit
-change state plus diff/patch data; and apply-patch path summaries. When the
-quick index declares the fields, one cell can compose discovery and delivery
-without a separate inspection turn:
+change state plus diff/patch data; and apply-patch path summaries. Missing
+canonical daily notes (`memory/YYYY-MM-DD.md`) return an optional `not_found`
+result even when `optional` is omitted; other missing paths throw unless
+`optional: true` is explicitly supplied. When the quick index declares the
+fields, one cell can compose discovery and delivery without a separate
+inspection turn:
 
 ```javascript
-const listed = await tools.conversations_list({ query: "build bot" });
+const listed = await conversations_list({ query: "build bot" });
 const target = listed.conversations.find((item) => item.label === "Build bot");
 if (!target) throw new Error("conversation not found");
-return await tools.conversations_send({
+return await conversations_send({
   conversationRef: target.conversationRef,
   message: "Build finished.",
 });
@@ -562,7 +765,8 @@ return await tools.conversations_send({
 
 The nested calls still use normal tool policy, hooks, and approvals. If a full
 contract is exact but too large for the bounded quick index, it remains
-available through `tools.describe(...)` and the arrow stays `-> ?`.
+available through the callable handle's `describe()` and the arrow stays
+`-> ?`.
 
 The contract rules are strict:
 
@@ -572,12 +776,12 @@ The contract rules are strict:
   the tool has no stable structured result.
 - Close object layers with `{ additionalProperties: false }` for a complete
   quick-index hint. Open, oversized, or otherwise partial schemas stay
-  available through `tools.describe(...)` but do not enable one-turn field use.
+  available through handle `describe()` but do not enable one-turn field use.
 - OpenClaw compiles the schema before running the tool, then validates final
   `details` after normal tool hooks and before a catalog call returns. An
   invalid schema cannot run the tool; a mismatch fails without printing the
   value.
-- Compact hints are deterministic and bounded. `tools.describe(...)` exposes
+- Compact hints are deterministic and bounded. Handle `describe()` exposes
   the full trusted schema when the compact hint is insufficient.
 - Installed plugin code is already trusted local code. Remote MCP and client
   metadata remains untrusted and cannot opt into these quick-index hints.
@@ -585,9 +789,9 @@ The contract rules are strict:
 See [Tool plugins](/plugins/tool-plugins#output-contracts) for plugin authoring
 details.
 
-MCP catalog entries are not callable through `tools.callValue(...)`,
-`tools.call(...)`, or convenience functions in code mode; they are exposed
-only through the generated `MCP` namespace. TypeScript-style declaration files
+MCP catalog entries are not exposed as bare globals or through generic
+`catalog` discovery; they are available only through the generated `MCP`
+namespace. TypeScript-style declaration files
 are available through the read-only `API` virtual file surface, so agents can
 inspect MCP signatures without adding MCP schemas to the prompt:
 
@@ -614,11 +818,15 @@ tool metadata:
 
 ```typescript
 type McpToolResult = {
-  content?: unknown[];
+  content: unknown[];
   structuredContent?: unknown;
   isError?: boolean;
-  [key: string]: unknown;
 };
+
+type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };
+type McpResourcesReadResult = { contents: unknown[] };
+type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };
+type McpPromptsGetResult = { messages: unknown[]; description?: string };
 
 declare namespace MCP.github {
   /** Return this TypeScript-style API header. */
@@ -639,6 +847,15 @@ declare namespace MCP.github {
 }
 ```
 
+MCP tool calls return their original JSON-safe content blocks, including block
+annotations and block-level `_meta`, plus top-level `structuredContent` and
+`isError` when provided. Top-level MCP `_meta` and private app metadata never
+enter the guest. An MCP application failure with `isError: true` still resolves
+as a result, so guest code can inspect and recover from it. Resource and prompt
+operations instead return their native MCP shapes: `resources.list()` returns
+`resources`, `resources.read()` returns `contents`, `prompts.list()` returns
+`prompts`, and `prompts.get()` returns `messages` with an optional `description`.
+
 Declaration files are virtual, not written under the workspace or state
 directory. For each code-mode `exec` call, OpenClaw builds the run-scoped tool
 catalog, keeps the visible MCP entries, renders `mcp/index.d.ts` plus one
@@ -657,193 +874,6 @@ single-tool schema response inside the program.
 The guest runtime never sees host objects directly. Inputs and outputs cross
 the bridge as JSON-compatible values with explicit size caps.
 
-## Internal namespaces
-
-Internal namespaces give code mode a concise domain API without adding more
-model-visible tools. A loader-owned integration registers a namespace such as
-`Issues` or `Calendar`; guest code then calls that namespace inside the
-QuickJS program while the model still sees the compact control/direct surface.
-
-Namespaces are internal for now. There is no public plugin SDK namespace API:
-external plugin namespaces need a loader-owned contract so plugin identity,
-installed manifests, auth state, and cached catalog descriptors cannot drift
-from the plugin tools that back the namespace. Core code mode owns only the
-sandbox, serialization, catalog gating, and bridge dispatch.
-
-Guest code can use either the direct global or the `namespaces` map:
-
-```javascript
-const open = await Issues.list({ state: "open" });
-const alsoOpen = await namespaces.Issues.list({ state: "open" });
-return { count: open.length, alsoCount: alsoOpen.length };
-```
-
-### Registry lifecycle
-
-The namespace registry is process-local and keyed by namespace id:
-
-1. A trusted loader calls `registerCodeModeNamespaceForPlugin(pluginId, registration)`.
-2. Code mode creates the hidden `ToolSearchRuntime` for the run and reads its
-   run-scoped catalog.
-3. `createCodeModeNamespaceRuntime(ctx, catalog)` keeps only registrations
-   whose `requiredToolNames` are all visible and owned by the same `pluginId`.
-4. Each visible namespace calls `createScope(ctx)` for the current run,
-   receiving run context such as `agentId`, `sessionKey`, `sessionId`,
-   `runId`, config, and abort state.
-5. Scope data is serialized into a plain descriptor and injected into QuickJS
-   as direct globals and `namespaces.<globalName>`.
-6. Guest calls suspend through the worker bridge, resolve the namespace path
-   on the host, map the call to a declared plugin-owned catalog tool, and
-   execute that tool through `ToolSearchRuntime.callExactId`.
-7. Ready namespace bridge calls are auto-drained inside the active
-   `exec`/`wait` call; if namespace work is still pending at the timeout or
-   the guest yields explicitly, `wait` resumes the same namespace runtime
-   later.
-8. Plugin rollback or uninstall calls
-   `clearCodeModeNamespacesForPlugin(pluginId)` so stale globals do not
-   survive a failed plugin load.
-
-Namespace calls are catalog tool calls: they use the same policy hooks,
-approvals, abort handling, telemetry, transcript projection, and
-suspend/resume behavior as `tools.call(...)`.
-
-### Registration shape
-
-Register namespaces from the integration that owns the backing tools. Keep
-the scope small and only expose domain verbs that map to declared catalog
-tools.
-
-```typescript
-import {
-  createCodeModeNamespaceTool,
-  registerCodeModeNamespaceForPlugin,
-} from "../agents/code-mode-namespaces.js";
-
-const pluginId = "github";
-
-registerCodeModeNamespaceForPlugin(pluginId, {
-  id: "github-issues",
-  globalName: "Issues",
-  description: "GitHub issue helpers for the current repository.",
-  requiredToolNames: ["github_list_issues", "github_update_issue"],
-  prompt: "Use Issues.list(params) and Issues.update(number, patch).",
-  createScope: (ctx) => ({
-    repository: ctx.config,
-    list: createCodeModeNamespaceTool("github_list_issues", ([params]) => params ?? {}),
-    update: createCodeModeNamespaceTool("github_update_issue", ([number, patch]) => ({
-      number,
-      patch,
-    })),
-  }),
-});
-```
-
-`createCodeModeNamespaceTool(toolName, inputMapper)` marks a scope member as a
-callable namespace function. The optional `inputMapper` receives the guest
-arguments and returns the input object for the backing catalog tool; without
-one, the first guest argument is used, or `{}` when omitted.
-
-Raw host functions are rejected before guest code runs:
-
-```typescript
-createScope: () => ({
-  // Wrong: this bypasses the catalog tool lifecycle and will be rejected.
-  list: async () => githubClient.listIssues(),
-});
-```
-
-### Ownership and visibility
-
-Namespace ownership is bound to the registration caller's `pluginId`.
-`requiredToolNames` is both a visibility gate and an ownership check:
-
-- every required tool must exist in the run catalog
-- every required tool must have `sourceName === pluginId`
-- the namespace is hidden when any required tool is absent or owned by
-  another plugin
-- each callable path may target only a tool named in `requiredToolNames`
-
-This prevents another plugin from exposing a namespace by registering a
-same-named tool, and keeps namespaces aligned with ordinary agent policy: if
-the run cannot see the backing tools, it cannot see the namespace.
-
-For example, a GitHub namespace should live behind a GitHub-owned plugin that
-owns GitHub auth, REST/GraphQL clients, rate limits, write approvals, and
-tests. Core code mode should not embed GitHub-specific APIs, token handling,
-or provider policy.
-
-### Scope serialization rules
-
-`createScope(ctx)` may return a plain object containing JSON-compatible
-values, arrays, nested objects, and `createCodeModeNamespaceTool(...)` call
-markers. Host objects never enter QuickJS directly.
-
-The serializer rejects:
-
-- raw functions
-- circular object graphs
-- unsafe path segments: `__proto__`, `constructor`, `prototype`, empty keys,
-  or keys containing the internal path separator
-- `globalName` values that are not JavaScript identifiers
-- `globalName` collisions with built-in code-mode globals such as `tools`,
-  `namespaces`, `text`, `json`, `yield_control`, `MCP`, `API`, `ALL_TOOLS`, or
-  `__openclaw*`
-
-Values that cannot be JSON-serialized are converted to JSON-safe fallback
-values before crossing the bridge. Binary data, handles, sockets, clients, and
-class instances should stay behind ordinary catalog tools.
-
-### Prompts
-
-The namespace `description` and optional `prompt` are appended to the model
-visible `exec` schema only when the namespace is visible for that run. Use
-them to teach the smallest useful surface:
-
-```typescript
-{
-  description: "Fiction production service helpers.",
-  prompt:
-    "Use Fictions.riskAudit(), Fictions.promoteIfReady(id, status), and Fictions.unpaidOver(amount).",
-}
-```
-
-Keep prompts about the namespace contract, not auth setup, implementation
-history, or unrelated plugin behavior.
-
-### Cleanup
-
-Namespaces are process-local registrations. Remove them when the owning
-plugin is disabled, uninstalled, or rolled back:
-
-```typescript
-clearCodeModeNamespacesForPlugin(pluginId);
-```
-
-Code-mode cleanup is plugin-owned; clear the plugin's namespace registrations
-when its lifecycle ends instead of keeping per-namespace teardown handles.
-Tests can call `clearCodeModeNamespacesForTest()` to avoid leaking
-registrations across cases.
-
-### Test checklist
-
-Namespace changes should cover the security boundary and the guest behavior:
-
-- namespace prompt text appears only when backing tools are visible
-- same-named tools from another `sourceName` do not expose the namespace
-- raw scope functions are rejected
-- forged namespace ids and forged paths are rejected
-- callable paths cannot target undeclared tools
-- nested objects and shared references serialize correctly
-- namespace calls execute through catalog tools and return JSON-safe details
-- failures can be caught by guest code
-- suspended namespace calls resume through `wait`
-- plugin rollback clears the owning namespace registrations
-
-Namespaces complement the generic `tools.search`/`tools.call` catalog: use the
-catalog for arbitrary enabled OpenClaw, plugin, and client tools; use `MCP`
-for MCP tools; use other namespaces for plugin-owned, documented domain APIs
-where concise code is more reliable than repeated schema lookups.
-
 ## Output API
 
 - `text(value)` appends human-readable output to the `output` array.
@@ -856,10 +886,15 @@ where concise code is more reliable than repeated schema lookups.
 type CodeModeOutput = { type: "text"; text: string } | { type: "json"; value: unknown };
 ```
 
-Rules: output order matches guest calls; output is capped by
-`maxOutputBytes`; non-serializable values are converted to plain strings or
-errors; binary values are not supported. Images and files travel through
-ordinary OpenClaw tools, not through the code-mode bridge.
+Rules: output order matches guest calls. Nested tool results, cumulative guest
+output, and the final value share the `maxOutputBytes` serialized UTF-8 budget.
+When a successful result exceeds the budget, OpenClaw returns a bounded value
+with `truncated: true`, a UTF-8-safe `prefix`, `omittedBytes`, and guidance to
+rerun with narrower arguments. Treat that marker as a successful partial result:
+reduce the search scope, paginate, select fewer files, or return a smaller
+projection. Non-serializable values are converted to plain strings or errors;
+binary values are not supported. Images and files travel through ordinary
+OpenClaw tools, not through the code-mode bridge.
 
 ## Tool catalog
 
@@ -867,23 +902,18 @@ The hidden catalog includes tools after effective policy filtering, in this
 order: OpenClaw core tools, bundled plugin tools, external plugin tools, MCP
 tools, then client-provided tools for the current run.
 
-Catalog ids are stable within one run and deterministic across equivalent
-tool sets when possible. Actual shape:
+Catalog ids remain opaque host-only routing identities. They are stable within
+one run and deterministic across equivalent tool sets when possible, but they
+are never included in the prompt, guest metadata, handle descriptions, or
+errors. Policy, approvals, telemetry, replay safety, and namespace dispatch
+continue to use them internally.
 
-```text
-<source>:<owner>:<tool-name>
-```
-
-where `<source>` is `openclaw`, `mcp`, or `client` (plugin tools use
-`openclaw` with the plugin id as `<owner>`; core tools use `openclaw:core:*`).
-Examples:
-
-```text
-openclaw:core:message
-openclaw:browser:browser_request
-mcp:github:create_issue
-client:app:select_file
-```
+Before the worker starts, OpenClaw projects one effective winner per exact tool
+name and computes its final guest callable name. This matches direct-mode
+precedence: later client tools win an exact-name shadow, while plugin conflict
+enforcement remains unchanged. The finalized projection is carried through
+bridge calls and snapshot resume; consumers do not reconstruct it from the
+catalog.
 
 The catalog omits code-mode control tools (`exec`, `wait`, `tool_search_code`,
 `tool_search`, `tool_describe`, `tool_call`) and direct-only tools. Controls
@@ -892,25 +922,24 @@ because their structured results cannot cross the QuickJS bridge.
 
 MCP entries stay in the run-scoped catalog so policy, approvals, hooks,
 telemetry, transcript projection, and exact tool ids remain shared with
-normal tool execution. The guest-facing `ALL_TOOLS`, `tools.search(...)`,
-`tools.describe(...)`, `tools.callValue(...)`, and `tools.call(...)` views omit MCP entries. The
-generated `MCP.<server>.<tool>({ ...input })` namespace resolves back to the
-exact catalog id and dispatches through the same executor path.
+normal tool execution. Generic guest `catalog.search(...)` and `catalog.all()`
+omit MCP entries. The generated `MCP.<server>.<tool>({ ...input })` namespace
+resolves to its host-only entry and dispatches through the same executor path.
 
 ## Tool Search interaction
 
 Code mode supersedes the OpenClaw Tool Search model surface for runs where it
 is active.
 
-When `tools.codeMode.enabled` is true and code mode activates:
+When Code Mode engages through forced `true` or `"auto"` activation:
 
 - OpenClaw does not expose `tool_search_code`, `tool_search`, `tool_describe`,
   or `tool_call` as model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
-- The guest runtime receives compact `ALL_TOOLS` metadata and search/describe/
-  call helpers for non-MCP tools.
+- The guest runtime receives bare async globals plus callable search/describe
+  handles for non-MCP tools.
 - MCP calls use the generated `MCP` namespace and its `$api()` headers instead
-  of `tools.call(...)`.
+  of generic catalog discovery.
 - Nested calls dispatch through the same OpenClaw executor path that Tool
   Search uses.
 
@@ -925,14 +954,19 @@ any other tool.
 
 Inside the guest runtime:
 
-- `tools.call("openclaw:core:exec", input)` can call the shell exec tool if
-  policy allows it.
-- `tools.exec(...)` is installed only if the shell exec catalog entry has an
-  unambiguous safe name.
-- the code-mode `exec` tool is never recursively available through `tools`.
-
-If two tools normalize to the same safe convenience name, OpenClaw omits the
-convenience function and requires `tools.call(id, input)`.
+- An exact JavaScript-safe tool name stays exact: `web_search(...)` and
+  `sessions_spawn(...)`.
+- Invalid identifier characters become `_`; a still-invalid first character
+  gets the `tool_` prefix. For example, `llm-task` becomes `llm_task` when that
+  name is free.
+- JavaScript reserved words, specialized globals, and normalized collisions
+  receive a deterministic short suffix derived from the host-only identity.
+- Exact safe names win their unsuffixed spelling. A raw tool never overwrites
+  `catalog`, `MCP`, `API`, `nodes`, `skills`, `namespaces`, output/timer helpers,
+  or optional Swarm globals.
+- The normal shell `exec` tool is callable as the `exec(...)` guest global when
+  policy allows it. The code-mode control `exec` is not recursively available
+  inside the guest.
 
 ## Nested tool execution
 
@@ -944,6 +978,15 @@ signal, streaming updates where available, and trajectory/audit events.
 Nested calls project into the transcript as real tool calls so support
 bundles show what happened, with the projection identifying the parent
 code-mode tool call and the nested tool id.
+
+Nested tool failures cross into the guest as catchable JavaScript errors. If
+guest code does not catch an error, `exec` or `wait` returns a failed tool
+result. Proven no-start failures and guest-only errors allow ordinary model
+recovery; possible nested side effects require authorized read-only
+reconciliation before any further action. Network-controlled tool output and
+errors retain their existing untrusted-content wrapping and sanitization;
+recovering from a failure does not grant new permissions or replay completed
+side effects.
 
 Parallel nested calls are allowed up to `maxPendingToolCalls`.
 
@@ -964,13 +1007,6 @@ session.`.
 - A run's snapshot is removed from the map as soon as it settles to
   `completed` or `failed`, or is dropped on Gateway shutdown (nothing
   survives a restart: this is transient runtime state).
-- For read-only work, `exec` can set `restartSafe: true`. OpenClaw then rejects
-  side-effecting catalog calls and plugin namespaces before execution and
-  marks suspended results as replay-safe. If a restart interrupts `wait`,
-  [restart recovery](/gateway/restart-recovery) reconstructs the turn from the
-  transcript instead of restoring the process-local snapshot. The recovery
-  turn itself remains limited to audited read-only core tools and explicitly
-  replay-safe plugin tools.
 - OpenClaw caps the number of concurrently suspended runs per process (64) and
   rejects new suspensions past that cap with `too many suspended code mode
 runs.`.
@@ -1020,7 +1056,8 @@ Model code is hostile. The runtime uses defense in depth:
 - converts host errors into plain guest errors, never host realm objects
 - drops snapshots on timeout, abort, session end, or expiry
 - rejects recursive access to `exec`, `wait`, and Tool Search control tools
-- prevents convenience-name collisions from shadowing catalog helpers
+- reserves specialized globals and resolves callable-name collisions before the
+  worker starts
 
 The sandbox is one security layer; operators may still need OS-level
 hardening for high-risk deployments.
@@ -1031,6 +1068,7 @@ hardening for high-risk deployments.
 type CodeModeErrorCode =
   | "invalid_input"
   | "runtime_unavailable"
+  | "aborted"
   | "timeout"
   | "output_limit_exceeded"
   | "snapshot_limit_exceeded"
@@ -1041,6 +1079,13 @@ type CodeModeErrorCode =
 rejected module access, TypeScript transform failures, unknown/expired/
 wrong-scope `runId` values, and too many suspended runs. `runtime_unavailable`
 covers a QuickJS worker that fails to start or exits non-zero.
+`aborted` means the caller cancelled an active `exec` or `wait`; OpenClaw
+terminates the worker or drops the suspended run, so that `runId` cannot be
+resumed. It is distinct from `timeout`, which means an execution deadline was
+exceeded.
+`output_limit_exceeded` is reserved for a result that cannot be serialized into
+the bounded projection; ordinary oversized successful results are truncated and
+remain successful.
 
 Errors returned to the guest are plain data; host `Error` instances, stack
 objects, prototypes, and host functions do not cross into QuickJS.
@@ -1051,6 +1096,30 @@ Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
 counts for the run's catalog, and the model-visible tool names (`exec`,
 `wait`, and retained direct-only tools).
+The `counterScope` identifies one counter lifetime, changing when a catalog is
+replaced or restored but remaining stable when tools are appended or prompt
+policy narrows that catalog.
+
+The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
+`agent exec --json` envelope) adds per-run stats:
+
+- `codeModeEngaged`: `true` only when code mode actually owned the model tool
+  surface. This is the reliable engagement signal — do not infer engagement
+  from config or tool names: the shell tool is also named `exec`, and the
+  `"auto"` tier engages per model capability. Harnesses that bridge OpenClaw's
+  tool surface (Copilot) report their resolved gate, so
+  `codeModeEngaged: false` with `tools.codeMode.enabled=true` makes a silent
+  no-op observable. Harnesses that run their own native tool surface (Codex)
+  never engage OpenClaw code mode, so they always read `false`; an attempt that
+  reports nothing is normalized to `false` for the same reason. Codex's own
+  `codeModeOnly` is a separate native feature that this field does not track.
+- `assistantTurns`: completed assistant/provider round trips across the run.
+- `bridgeCalls`: the run's cumulative inner bridge counts
+  (`{ search, describe, call }`). These calls never reach the provider;
+  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+- `costUsd`: estimated USD cost from the run's accumulated usage and the
+  model's cost config (cache read/write tiers included); omitted when the
+  model has no cost data.
 
 Telemetry must not include secrets, raw environment values, or unredacted
 tool inputs beyond existing OpenClaw trajectory policy.
@@ -1098,24 +1167,29 @@ does not use a `node:vm` child as the sandbox.
 Code mode coverage should prove:
 
 - disabled config leaves existing tool exposure unchanged
-- object config without `enabled: true` leaves code mode disabled
+- omitted `enabled`, including object config that sets other fields, inherits
+  `"auto"` and engages only for catalog-preferred models
 - enabled config exposes `exec`, `wait`, and only required direct-only tools to
   the model when tools are active for the run
 - raw no-tool runs, `disableTools`, and empty allowlists do not trigger
   code-mode payload enforcement
-- all catalog-eligible effective non-MCP tools appear in `ALL_TOOLS`
-- direct-only tools stay model-visible and do not appear in `ALL_TOOLS`
-- denied tools do not appear in `ALL_TOOLS`
-- `tools.search`, `tools.describe`, `tools.callValue`, and `tools.call` work for OpenClaw tools
+- every catalog-eligible effective non-MCP name has one callable winner
+- direct-only tools stay model-visible and do not appear in `catalog`
+- denied tools have no global or catalog handle
+- bare globals, callable `catalog.search` results, `catalog.all`, and handle
+  `describe()` work for OpenClaw and client tools without exposing exact ids
 - `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` expose TypeScript-style
   MCP declarations without a bridge/tool call
 - MCP namespace `$api()` remains available as an inline fallback for schemas
 - MCP namespace calls work for visible MCP tools with one object input, while
-  direct MCP catalog entries are absent from `tools.*`
+  direct MCP entries are absent from generic `catalog` discovery
 - Tool Search control tools are hidden from both the model surface and the
   hidden catalog
 - nested calls preserve approval and hook behavior
-- shell `exec` is hidden from the model but callable by catalog id when
+- caught and uncaught nested failures remain recoverable without replaying
+  previously executed side effects
+- network-controlled failures retain untrusted-content wrapping and sanitization
+- shell `exec` is hidden from the model but callable as a guest global when
   allowed
 - recursive code-mode `exec` and `wait` are not callable from guest code
 - TypeScript input is transformed and evaluated without loading TypeScript on
@@ -1140,15 +1214,15 @@ Run these as integration or end-to-end tests when changing the runtime:
 5. Send an agent turn with OpenClaw, plugin, MCP, and client test tools.
 6. Assert the model-visible tool list is `exec`, `wait`, plus only configured
    direct-only tools.
-7. In `exec`, read `ALL_TOOLS` and assert the catalog-eligible effective test
-   tools are present while direct-only tools are absent.
-8. In `exec`, call OpenClaw/plugin/client tools through `tools.search`,
-   `tools.describe`, and `tools.callValue` (or raw `tools.call`).
+7. In `exec`, call safe bare globals and assert normalized, reserved, and
+   colliding names match the quick index.
+8. Search `catalog`, inspect handle metadata/`describe()`, and call
+   OpenClaw/plugin/client handles without observing exact ids.
 9. In `exec`, call `API.list("mcp")` and `API.read("mcp/<server>.d.ts")` and
    assert the declaration files describe visible MCP tools.
 10. In `exec`, call MCP tools through `MCP.<server>.<tool>({ ...input })` and
-    assert direct MCP catalog entries are absent from `ALL_TOOLS` and
-    `tools.*`.
+    assert direct MCP entries are absent from `catalog.search()` and
+    `catalog.all()`.
 11. Assert denied tools are absent and cannot be called by guessed id.
 12. Start a nested tool call that resolves after `exec` returns `waiting`.
 13. Call `wait` and assert the restored VM receives the tool result.

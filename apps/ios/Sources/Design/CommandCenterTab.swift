@@ -123,13 +123,13 @@ struct CommandCenterTab: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
             self.threadTile(
                 title: String(localized: "Sessions"),
-                value: self.overviewSessions.count.formatted())
+                value: self.overviewCountText(self.overviewSessions.count))
             self.threadTile(
                 title: String(localized: "Live"),
-                value: self.overviewLiveCount.formatted())
+                value: self.overviewCountText(self.overviewLiveCount))
             self.threadTile(
                 title: String(localized: "Unread"),
-                value: self.overviewUnreadCount.formatted())
+                value: self.overviewCountText(self.overviewUnreadCount))
             self.threadTile(
                 title: String(localized: "Tokens"),
                 value: self.overviewTokenText)
@@ -282,8 +282,14 @@ struct CommandCenterTab: View {
         self.overviewSessions.count { $0.unread == true }
     }
 
+    private func overviewCountText(_ count: Int) -> String {
+        "\(count.formatted())\(self.dashboardModel?.isSessionRosterComplete == false ? "+" : "")"
+    }
+
     private var overviewTokenText: String {
-        let summary = RootSidebarModel.tokenUsageSummary(for: self.overviewSessions)
+        let summary = RootSidebarModel.tokenUsageSummary(
+            for: self.overviewSessions,
+            rosterIsComplete: self.dashboardModel?.isSessionRosterComplete ?? true)
         guard let total = summary.total else { return "n/a" }
         return "\(summary.isPartial ? "~" : "")\(total.formatted(.number.notation(.compactName)))"
     }
@@ -444,6 +450,9 @@ struct CommandCenterTab: View {
                                 session: session,
                                 categories: self.sessionCategories,
                                 isEnabled: self.sessionControlsAvailable,
+                                canArchive: ChatSessionSidebarModel.canArchiveSession(
+                                    session,
+                                    mainSessionKey: self.appModel.defaultChatSessionKey),
                                 actions: CommandSessionActions(
                                     rename: { self.patchSession(session, label: .some($0)) },
                                     moveToGroup: { self.patchSession(session, category: .some($0)) },
@@ -605,10 +614,10 @@ struct CommandCenterTab: View {
         self.appModel.chatViewModelIdentityID
     }
 
-    private func open(_ route: WorkRoute, unread: Bool = false) {
+    private func open(_ route: WorkRoute) {
         switch route {
         case let .chat(sessionKey):
-            self.appModel.openChat(sessionKey: sessionKey, unread: unread)
+            self.appModel.openChat(sessionKey: sessionKey)
             self.openChat()
         case .settings:
             self.openSettings()
@@ -616,11 +625,11 @@ struct CommandCenterTab: View {
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {
-        self.open(.chat(session.key), unread: session.unread == true)
+        self.open(.chat(session.key))
     }
 
     private func openDefaultChatSession() {
-        self.open(.chat(nil), unread: self.effectiveDefaultChatSessionEntry?.unread == true)
+        self.open(.chat(nil))
     }
 
     private func patchSession(
@@ -634,6 +643,7 @@ struct CommandCenterTab: View {
         self.performSessionMutation { transport in
             try await transport.patchSession(
                 key: session.key,
+                expectedSessionID: archived == nil ? nil : session.sessionId,
                 label: label,
                 category: category,
                 pinned: pinned,
@@ -652,6 +662,7 @@ struct CommandCenterTab: View {
         self.performSessionMutation(resetActiveSessionKey: session.key) { transport in
             try await transport.patchSession(
                 key: session.key,
+                expectedSessionID: session.sessionId,
                 label: nil,
                 category: nil,
                 pinned: nil,
@@ -663,7 +674,9 @@ struct CommandCenterTab: View {
     private func forkSession(_ session: OpenClawChatSessionEntry) {
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(parentKey: session.key)
+                let key = try await self.appModel.makeChatTransport().forkSession(
+                    parentKey: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
                 if let dashboardModel {
                     await dashboardModel.refreshSessions(appModel: self.appModel)
                 } else {
@@ -1244,6 +1257,7 @@ struct CommandSessionsScreen: View {
                 do {
                     try await transport.patchSession(
                         key: member.key,
+                        expectedSessionID: nil,
                         label: nil,
                         category: .some(category),
                         pinned: nil,
@@ -1274,6 +1288,9 @@ struct CommandSessionsScreen: View {
             categories: self.sessionCategories,
             isArchived: session.archived == true,
             isEnabled: self.sessionControlsAvailable,
+            canArchive: ChatSessionSidebarModel.canArchiveSession(
+                session,
+                mainSessionKey: self.appModel.defaultChatSessionKey),
             actions: CommandSessionActions(
                 rename: { self.patchSession(session, label: .some($0)) },
                 moveToGroup: { self.patchSession(session, category: .some($0)) },
@@ -1285,11 +1302,11 @@ struct CommandSessionsScreen: View {
     }
 
     private func open(_ session: OpenClawChatSessionEntry) {
-        self.openSessionKey(session.key, unread: session.unread == true)
+        self.openSessionKey(session.key)
     }
 
-    private func openSessionKey(_ key: String, unread: Bool = false) {
-        self.appModel.openChat(sessionKey: key, unread: unread)
+    private func openSessionKey(_ key: String) {
+        self.appModel.openChat(sessionKey: key)
         self.dismiss()
         self.openChat()
     }
@@ -1305,6 +1322,7 @@ struct CommandSessionsScreen: View {
         self.performMutation { transport in
             try await transport.patchSession(
                 key: session.key,
+                expectedSessionID: archived == nil ? nil : session.sessionId,
                 label: label,
                 category: category,
                 pinned: pinned,
@@ -1324,6 +1342,7 @@ struct CommandSessionsScreen: View {
         self.performMutation(resetActiveSessionKey: archivesSession ? session.key : nil) { transport in
             try await transport.patchSession(
                 key: session.key,
+                expectedSessionID: session.sessionId,
                 label: nil,
                 category: nil,
                 pinned: nil,
@@ -1335,7 +1354,9 @@ struct CommandSessionsScreen: View {
     private func forkSession(_ session: OpenClawChatSessionEntry) {
         Task {
             do {
-                let key = try await self.appModel.makeChatTransport().forkSession(parentKey: session.key)
+                let key = try await self.appModel.makeChatTransport().forkSession(
+                    parentKey: session.key,
+                    fromLastCompleted: session.hasActiveRun == true)
                 await self.refreshSessions()
                 self.openSessionKey(key)
             } catch {

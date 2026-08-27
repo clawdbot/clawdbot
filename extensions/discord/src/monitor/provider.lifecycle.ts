@@ -1,15 +1,14 @@
 // Discord provider module implements model/runtime integration.
-import {
-  createConnectedChannelStatusPatch,
-  createTransportActivityStatusPatch,
-} from "openclaw/plugin-sdk/gateway-runtime";
+import { createTransportActivityStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { asDateTimestampMs, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
+import { isFatalGatewayCloseCode } from "../internal/gateway-close-codes.js";
+import { GatewayCloseCodes } from "../internal/gateway.js";
 import { getDiscordGatewayEmitter, waitForDiscordGatewayStop } from "../monitor.gateway.js";
-import type { DiscordVoiceManager } from "../voice/manager.js";
+import type { DiscordVoiceManager } from "../voice/voice-runtime.js";
 import {
   DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT,
   type MutableDiscordGateway,
@@ -20,7 +19,7 @@ import {
   type DiscordGatewayEvent,
   type DiscordGatewaySupervisor,
 } from "./gateway-supervisor.js";
-import type { DiscordMonitorStatusSink } from "./status.js";
+import { createDiscordReadyStatusPatch, type DiscordMonitorStatusSink } from "./status.js";
 
 const DEFAULT_DISCORD_GATEWAY_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_DISCORD_GATEWAY_RUNTIME_READY_TIMEOUT_MS = 30_000;
@@ -214,11 +213,7 @@ function createGatewayStatusObserver(params: {
     queuedForceStopError = err;
   };
   const pushConnectedStatus = (at: number) => {
-    params.pushStatus({
-      ...createConnectedChannelStatusPatch(at),
-      lastDisconnect: null,
-      lastError: null,
-    });
+    params.pushStatus(createDiscordReadyStatusPatch(at));
   };
   const startReadyWatch = () => {
     clearReadyWatch();
@@ -249,6 +244,7 @@ function createGatewayStatusObserver(params: {
         );
         params.pushStatus({
           connected: false,
+          lifecycle: "recovering",
           lastEventAt: at,
           lastDisconnect: {
             at,
@@ -277,8 +273,14 @@ function createGatewayStatusObserver(params: {
     if (message.includes("Gateway websocket closed")) {
       clearReadyWatch();
       const code = parseGatewayCloseCode(message);
+      // Fatal gateway closes require operator repair. Keep the outer channel supervisor from
+      // turning an invalid credential or configuration into an automatic restart loop.
+      const terminalDisconnect =
+        code !== undefined && isFatalGatewayCloseCode(code as GatewayCloseCodes);
       params.pushStatus({
         connected: false,
+        lifecycle: terminalDisconnect ? "blocked" : "recovering",
+        ...(terminalDisconnect ? { terminalDisconnect: true, lastError: message } : {}),
         lastEventAt: at,
         lastDisconnect: {
           at,
@@ -291,6 +293,7 @@ function createGatewayStatusObserver(params: {
       clearReadyWatch();
       params.pushStatus({
         connected: false,
+        lifecycle: "recovering",
         lastEventAt: at,
         lastError: message,
       });
@@ -333,11 +336,7 @@ async function waitForGatewayReady(params: {
       }
       if (params.gateway?.isConnected === true) {
         const at = Date.now();
-        params.pushStatus?.({
-          ...createConnectedChannelStatusPatch(at),
-          lastDisconnect: null,
-          lastError: null,
-        });
+        params.pushStatus?.(createDiscordReadyStatusPatch(at));
         return "ready";
       }
       if (Date.now() >= deadlineAt) {
@@ -375,6 +374,7 @@ async function waitForGatewayReady(params: {
     );
     params.pushStatus?.({
       connected: false,
+      lifecycle: "recovering",
       lastEventAt: restartAt,
       lastDisconnect: {
         at: restartAt,
@@ -573,7 +573,3 @@ export async function runDiscordGatewayLifecycle(params: {
     params.threadBindings.stop();
   }
 }
-
-// Test-only surface. Re-exported from the plugin root `test-api.ts` entry so Knip's
-// production scan sees the consumer; tests import `testing` from `test-api.js`.
-export const testing = { waitForGatewayReady };

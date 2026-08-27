@@ -1,6 +1,8 @@
 // Pure platform and payload helpers for remote skill binary probes.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SkillEntry } from "../types.js";
 
@@ -41,6 +43,23 @@ export function isMacPlatform(platform?: string, deviceFamily?: string): boolean
 
 export function supportsSystemRun(commands?: string[]): boolean {
   return Array.isArray(commands) && commands.includes("system.run");
+}
+
+export function isRemoteSkillEligibilityNode(
+  node:
+    | {
+        connected?: boolean;
+        platform?: string;
+        deviceFamily?: string;
+        commands?: string[];
+      }
+    | undefined,
+): boolean {
+  return Boolean(
+    node?.connected &&
+    isMacPlatform(node.platform, node.deviceFamily) &&
+    supportsSystemRun(node.commands),
+  );
 }
 
 export function supportsSystemWhich(commands?: string[]): boolean {

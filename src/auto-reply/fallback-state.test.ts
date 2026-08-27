@@ -15,9 +15,12 @@ const baseAttempt = {
 };
 
 const activeFallbackState: FallbackNoticeState = {
-  fallbackNoticeSelectedModel: "demo-primary/model-a",
-  fallbackNoticeActiveModel: "demo-fallback/model-b",
-  fallbackNoticeReason: "rate limit",
+  fallbackNotice: {
+    kind: "active",
+    selectedModel: "demo-primary/model-a",
+    activeModel: "demo-fallback/model-b",
+    reason: "rate limit",
+  },
 };
 
 function registerAnthropicCliBackendForTest(): void {
@@ -62,9 +65,12 @@ describe("fallback-state", () => {
     {
       name: "does not treat runtime drift as fallback when persisted state does not match",
       state: {
-        fallbackNoticeSelectedModel: "other-provider/other-model",
-        fallbackNoticeActiveModel: "demo-fallback/model-b",
-        fallbackNoticeReason: "rate limit",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "other-provider/other-model",
+          activeModel: "demo-fallback/model-b",
+          reason: "rate limit",
+        },
       } satisfies FallbackNoticeState,
       expected: { active: false, reason: undefined },
     },
@@ -90,14 +96,6 @@ describe("fallback-state", () => {
     expect(resolved.nextState.activeModel).toBe("demo-fallback/model-b");
   });
 
-  it("normalizes fallback reason whitespace for summaries", () => {
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, reason: "rate_limit\n\tburst" }],
-    });
-
-    expect(resolved.reasonSummary).toBe("rate limit burst");
-  });
-
   it("prefers formatted transient error details over generic rate-limit labels", () => {
     const resolved = resolveDemoFallbackTransition({
       attempts: [
@@ -110,6 +108,37 @@ describe("fallback-state", () => {
 
     expect(resolved.reasonSummary).toContain("HTTP 429: Too Many Requests");
     expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
+  });
+
+  it.each([
+    // 真实 AWS Bedrock fixture，provenance 可追溯:
+    //   src/agents/failover-error.test.ts:54（引用 AWS troubleshooting 文档）
+    //   src/agents/failover-error.test.ts:688 / provider-error-patterns.test.ts:153
+    "ThrottlingException: Your request was denied due to exceeding the account quotas for Amazon Bedrock.",
+    "ThrottlingException: Too many concurrent requests",
+  ])(
+    "preserves throttle-flavored transient details over the generic rate-limit label (%j)",
+    (error) => {
+      const resolved = resolveDemoFallbackTransition({
+        attempts: [{ ...baseAttempt, error }],
+      });
+
+      // 回归: TRANSIENT_ERROR_DETAIL_HINT_RE 必须命中 throttle 词族
+      // (throttle/throttling/throttled/ThrottlingException)。原先裸 `throttl\b`
+      // 仅匹配不存在的词干 "throttl"，真实 Bedrock 消息全部失配，详细预览被
+      // 塌缩成通用 "rate limit" 标签。修复后预览得以保留。
+      expect(resolved.reasonSummary).toContain("ThrottlingException");
+      expect(resolved.reasonSummary).not.toBe("rate limit");
+    },
+  );
+
+  it("still collapses to the reason label when a transient reason lacks any transient-detail hint", () => {
+    // 防止过度匹配: 修复不得让门控对无 transient 提示的文本也放行。
+    const resolved = resolveDemoFallbackTransition({
+      attempts: [{ ...baseAttempt, error: "Unauthorized: invalid API key" }],
+    });
+
+    expect(resolved.reasonSummary).toBe("rate limit");
   });
 
   it("keeps truncated transient error details UTF-16 safe", () => {
@@ -160,9 +189,12 @@ describe("fallback-state", () => {
       activeModel: "claude-opus-4-7",
       attempts: [],
       state: {
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
       },
       cfg: {},
     });
@@ -204,9 +236,12 @@ describe("fallback-state", () => {
       activeModel: "claude-opus-4-7",
       attempts: [],
       state: {
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
       },
       cfg: {},
     });

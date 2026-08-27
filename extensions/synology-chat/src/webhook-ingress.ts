@@ -1,23 +1,14 @@
 // Synology Chat plugin owns raw webhook durable admission and draining.
+import { createStandardRawEventIngressMonitor } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
-  createChannelIngressMonitor,
+  createChannelIngressError,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getSynologyRuntime } from "./runtime.js";
-
-const SYNOLOGY_INGRESS_PAYLOAD_VERSION = 1;
-const SYNOLOGY_INGRESS_POLL_INTERVAL_MS = 500;
-const SYNOLOGY_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES = 8;
-const SYNOLOGY_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// Synology does not publish a webhook retry horizon. Keep the fleet's conservative
-// webhook cap so any duplicate POST retains its post_id tombstone.
-const SYNOLOGY_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const SYNOLOGY_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const SYNOLOGY_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 
 export type SynologyWebhookRawEvent = {
   bodyFields: Record<string, unknown>;
@@ -38,16 +29,10 @@ type SynologyIngressDispatch = (
   lifecycle: SynologyIngressLifecycle,
 ) => Promise<SynologyIngressDispatchResult | void> | SynologyIngressDispatchResult | void;
 
-export class SynologyIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "synology-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SynologyIngressPermanentError";
-  }
-}
+export const SynologyIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "synology-auth"
+>("SynologyIngressPermanentError", { withReason: true });
+export type SynologyIngressPermanentError = InstanceType<typeof SynologyIngressPermanentError>;
 
 function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {
@@ -98,10 +83,6 @@ function inspectSynologyIngressEvent(event: SynologyWebhookRawEvent): {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function deserializeSynologyIngressEvent(
   rawEvent: string,
   claimedId: string,
@@ -137,15 +118,6 @@ function resolveSynologyIngressNonRetryableFailure(error: unknown) {
   return null;
 }
 
-export type SynologyIngressMonitor = {
-  receive: (
-    rawEvent: SynologyWebhookRawEvent,
-  ) => Promise<{ kind: "durable" } | { kind: "invalid"; message: string }>;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 export function createSynologyIngressMonitor(options: {
   accountId: string;
   queue?: ChannelIngressQueue<SynologyIngressPayload>;
@@ -156,7 +128,7 @@ export function createSynologyIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
-}): SynologyIngressMonitor {
+}) {
   const serializeForIngress = (rawEvent: SynologyWebhookRawEvent): string => {
     const bodyFields = { ...rawEvent.bodyFields };
     const queryFields = { ...rawEvent.queryFields };
@@ -166,11 +138,7 @@ export function createSynologyIngressMonitor(options: {
     return JSON.stringify({ bodyFields, queryFields });
   };
 
-  const monitor = createChannelIngressMonitor<
-    SynologyWebhookRawEvent,
-    string,
-    SynologyIngressPayload
-  >({
+  return createStandardRawEventIngressMonitor({
     queue:
       options.queue ??
       (() =>
@@ -179,8 +147,6 @@ export function createSynologyIngressMonitor(options: {
         })),
     inspect: (rawEvent) => inspectSynologyIngressEvent(rawEvent),
     payload: {
-      storage: "raw-event",
-      version: SYNOLOGY_INGRESS_PAYLOAD_VERSION,
       serialize: serializeForIngress,
       deserialize: (rawEvent, { claim }) => deserializeSynologyIngressEvent(rawEvent, claim.id),
       createClaimError: (kind, claim) =>
@@ -192,48 +158,22 @@ export function createSynologyIngressMonitor(options: {
         ),
     },
     deliver: (rawEvent, lifecycle) => options.dispatch(rawEvent, lifecycle),
-    pollIntervalMs: options.pollIntervalMs ?? SYNOLOGY_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: SYNOLOGY_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: SYNOLOGY_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SYNOLOGY_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SYNOLOGY_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SYNOLOGY_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    pollIntervalMs: options.pollIntervalMs,
+    // Synology has no published retry horizon; keep the conservative 30-day / 20k cap.
     drain: {
       resolveNonRetryableFailure: resolveSynologyIngressNonRetryableFailure,
-      startLimit: SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES,
       ...(options.adoptionStallTimeoutMs === undefined
         ? {}
         : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.error?.(`synology-chat: ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-    admissionMode: "while-running",
     createStoppedError: () => new Error("Synology Chat ingress is stopped."),
     onError: (error) =>
       options.runtime.error?.(`synology-chat ingress drain failed: ${formatErrorMessage(error)}`),
+    classifyAdmissionError: (error) =>
+      error instanceof SynologyIngressPermanentError ? error.message : undefined,
   });
-
-  return {
-    receive: async (rawEvent) => {
-      if (!monitor.isRunning()) {
-        throw new Error("Synology Chat ingress is stopped.");
-      }
-      let facts: ReturnType<typeof inspectSynologyIngressEvent>;
-      try {
-        facts = inspectSynologyIngressEvent(rawEvent);
-      } catch (error) {
-        if (error instanceof SynologyIngressPermanentError) {
-          return { kind: "invalid", message: error.message };
-        }
-        throw error;
-      }
-      await monitor.admit(rawEvent, { facts });
-      return { kind: "durable" };
-    },
-    start: monitor.start,
-    stop: monitor.stop,
-    waitForIdle: monitor.waitForIdle,
-  };
 }
+
+export type SynologyIngressMonitor = ReturnType<typeof createSynologyIngressMonitor>;

@@ -20,8 +20,8 @@ import {
   SESSION_STORE_TEMP_STALE_MS,
   isTrajectorySessionArtifactName,
 } from "./artifacts.js";
-import { resolveSessionFilePath } from "./paths.js";
-import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { resolveSessionFilePathCore } from "./paths.js";
+import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 import { projectSessionStoreForPersistence } from "./skill-prompt-blobs.js";
 import { shouldPreserveMaintenanceEntry } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
@@ -29,6 +29,7 @@ import type { SessionEntry } from "./types.js";
 type SessionDiskBudgetConfig = {
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
+  preserveRecentMs?: number | null;
 };
 
 export type SessionDiskBudgetSweepResult = {
@@ -151,7 +152,7 @@ function resolveSessionTranscriptPathForEntry(params: {
     return null;
   }
   try {
-    const resolved = resolveSessionFilePath(params.entry.sessionId, params.entry, {
+    const resolved = resolveSessionFilePathCore(params.entry.sessionId, params.entry, {
       sessionsDir: params.sessionsDir,
     });
     const resolvedSessionsDir = canonicalizePathForComparison(params.sessionsDir);
@@ -258,23 +259,21 @@ async function readSessionsDirFiles(sessionsDir: string): Promise<SessionsDirFil
 }
 
 async function readSqliteDatabaseFiles(storePath: string): Promise<SessionsDirFileStat[]> {
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-  if (!databasePath) {
-    return [];
-  }
   const files: SessionsDirFileStat[] = [];
-  for (const filePath of [databasePath, `${databasePath}-wal`]) {
-    const stat = await fs.promises.stat(filePath).catch(() => null);
-    if (!stat?.isFile()) {
-      continue;
+  for (const databasePath of listDurableSqliteTargetPathsForSessionStorePath(storePath)) {
+    for (const filePath of [databasePath, `${databasePath}-wal`]) {
+      const stat = await fs.promises.stat(filePath).catch(() => null);
+      if (!stat?.isFile()) {
+        continue;
+      }
+      files.push({
+        path: filePath,
+        canonicalPath: canonicalizePathForComparison(filePath),
+        name: path.basename(filePath),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+      });
     }
-    files.push({
-      path: filePath,
-      canonicalPath: canonicalizePathForComparison(filePath),
-      name: path.basename(filePath),
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-    });
   }
   return files;
 }
@@ -286,17 +285,24 @@ export async function measureSessionPhysicalDiskUsage(
   const sessionsDirFiles = await readSessionsDirFiles(path.dirname(storePath));
   const promptBlobFiles = await readSessionPromptBlobFiles(path.dirname(storePath));
   const databaseFiles = await readSqliteDatabaseFiles(storePath);
-  const databasePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
-  const databaseMainPath = databasePath ? canonicalizePathForComparison(databasePath) : undefined;
-  const databaseWalPath = databasePath
-    ? canonicalizePathForComparison(`${databasePath}-wal`)
-    : undefined;
+  const databaseMainPaths = new Set(
+    databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
+  );
+  const databaseWalPaths = new Set(
+    databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
+  );
   const uniqueFiles = new Map<string, SessionsDirFileStat>();
   for (const file of [...sessionsDirFiles, ...promptBlobFiles, ...databaseFiles]) {
     uniqueFiles.set(file.canonicalPath, file);
   }
-  const databaseMainBytes = databaseMainPath ? (uniqueFiles.get(databaseMainPath)?.size ?? 0) : 0;
-  const databaseWalBytes = databaseWalPath ? (uniqueFiles.get(databaseWalPath)?.size ?? 0) : 0;
+  const databaseMainBytes = [...databaseMainPaths].reduce(
+    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
+    0,
+  );
+  const databaseWalBytes = [...databaseWalPaths].reduce(
+    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
+    0,
+  );
   const totalBytes = [...uniqueFiles.values()].reduce((sum, file) => sum + file.size, 0);
   return {
     databaseMainBytes,
@@ -311,8 +317,9 @@ export async function hasRetainedSessionTranscriptArchives(storePath: string): P
   return files.some((file) => isRetainedSessionTranscriptArchiveName(file.name));
 }
 
-/** Removes oldest retained reset/delete archives, remeasuring physical usage after each file. */
+/** Removes oldest retained archives and legacy compact backups, remeasuring after each file. */
 export async function pruneSessionTranscriptArchivesToHighWater(params: {
+  excludeNames?: ReadonlySet<string>;
   highWaterBytes: number;
   storePath: string;
 }): Promise<{ removedFiles: number; usage: SessionPhysicalDiskUsage }> {
@@ -320,7 +327,10 @@ export async function pruneSessionTranscriptArchivesToHighWater(params: {
   // may prune an archive the current pass just extracted, which is preferred
   // over evicting additional sessions' searchable rows to spare a copy.
   const files = (await readSessionsDirFiles(path.dirname(params.storePath)))
-    .filter((file) => isRetainedSessionTranscriptArchiveName(file.name))
+    .filter(
+      (file) =>
+        isRetainedSessionTranscriptArchiveName(file.name) && !params.excludeNames?.has(file.name),
+    )
     .toSorted((left, right) => left.mtimeMs - right.mtimeMs);
   let usage = await measureSessionPhysicalDiskUsage(params.storePath);
   let removedFiles = 0;
@@ -837,7 +847,14 @@ export async function enforceSessionDiskBudget(params: {
       if (!entry) {
         continue;
       }
-      if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
+      if (
+        shouldPreserveMaintenanceEntry({
+          key,
+          entry,
+          preserveKeys: params.preserveKeys,
+          preserveRecentMs: params.maintenance.preserveRecentMs,
+        })
+      ) {
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;

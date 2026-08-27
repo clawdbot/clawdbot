@@ -1,10 +1,12 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
+import org.gradle.api.tasks.Exec
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
+val openClawAndroidApplicationId = "ai.openclaw.app"
 val openClawAndroidVersionFile = rootProject.file("Config/Version.properties")
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
 val openClawAndroidVersionProperties =
@@ -149,7 +151,8 @@ android {
   }
 
   defaultConfig {
-    applicationId = "ai.openclaw.app"
+    applicationId = openClawAndroidApplicationId
+    resValue("string", "application_id", openClawAndroidApplicationId)
     minSdk = 31
     targetSdk = 36
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -189,6 +192,9 @@ android {
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
     }
     debug {
+      applicationIdSuffix = ".debug"
+      versionNameSuffix = "-debug"
+      resValue("string", "application_id", "$openClawAndroidApplicationId.debug")
       isMinifyEnabled = false
     }
   }
@@ -204,6 +210,7 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+    resValues = true
   }
 
   androidResources {
@@ -268,6 +275,7 @@ android {
 }
 
 androidComponents {
+  val adbExecutable = sdkComponents.adb
   onVariants { variant ->
     variant.outputs
       .filterIsInstance<VariantOutputImpl>()
@@ -283,6 +291,24 @@ androidComponents {
           }
         output.outputFileName = outputFileName
       }
+
+    if (variant.buildType == "debug") {
+      val variantNameCapitalized = variant.name.replaceFirstChar(Char::titlecase)
+      tasks.register<Exec>("run$variantNameCapitalized") {
+        group = "install"
+        description = "Installs and launches the ${variant.name} app."
+        dependsOn("install$variantNameCapitalized")
+        commandLine(
+          adbExecutable.get().asFile.absolutePath,
+          "shell",
+          "am",
+          "start",
+          "-W",
+          "-n",
+          "${variant.applicationId.get()}/$openClawAndroidApplicationId.MainActivity",
+        )
+      }
+    }
   }
 }
 kotlin {
@@ -318,6 +344,7 @@ dependencies {
   implementation(libs.androidx.compose.ui)
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.compose.material3)
+  implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
   // material-icons-extended pulled in full icon set (~20 MB DEX). Only ~18 icons used.
   // R8 will tree-shake unused icons when minify is enabled on release builds.
   implementation(libs.androidx.compose.material.icons.extended)
@@ -336,6 +363,10 @@ dependencies {
   ksp(libs.androidx.room.compiler)
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
+  implementation(libs.media3.datasource.okhttp)
+  implementation(libs.media3.exoplayer)
+  implementation(libs.media3.session)
+  implementation(libs.media3.ui)
   implementation(libs.bcprov)
   implementation(libs.coil.compose)
   implementation(libs.coil.svg)
@@ -362,6 +393,7 @@ dependencies {
   testImplementation(libs.kotest.assertions.core)
   testImplementation(libs.mockwebserver)
   testImplementation(libs.robolectric)
+  testImplementation(libs.androidx.compose.ui.test.junit4)
   testRuntimeOnly(libs.junit.vintage.engine)
 
   androidTestImplementation(libs.androidx.test.ext.junit)

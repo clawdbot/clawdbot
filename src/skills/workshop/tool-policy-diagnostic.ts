@@ -1,5 +1,5 @@
 // Skill Workshop diagnostics explain which effective policy layer hides its agent tool.
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityProfile,
   type ResolvedConversationCapabilityProfile,
@@ -30,13 +30,22 @@ type AgentToolsLocation = {
 };
 
 function findAgentTools(config: OpenClawConfig, agentId: string): AgentToolsLocation | undefined {
-  const index = config.agents?.list?.findIndex(
-    (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
+  const listed = listAgentEntriesWithSource(config).find(
+    ({ entry }) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
-  const tools = index !== undefined && index >= 0 ? config.agents?.list?.[index]?.tools : undefined;
-  return index !== undefined && index >= 0 && tools
-    ? { path: `agents.list[${index}].tools`, tools }
-    : undefined;
+  if (!listed?.entry.tools) {
+    return undefined;
+  }
+  // Report the canonical entries path; an id-less legacy list row (which
+  // normalizeAgentId maps to the default id) keeps its indexed path so the
+  // remediation never points at agents.entries.undefined.
+  const path =
+    listed.source.kind === "entries"
+      ? `agents.entries.${listed.source.key}.tools`
+      : typeof listed.entry.id === "string" && listed.entry.id.length > 0
+        ? `agents.entries.${listed.entry.id}.tools`
+        : `agents.list[${listed.source.index}].tools`;
+  return { path, tools: listed.entry.tools };
 }
 
 function providerPolicyPath(params: {
@@ -107,7 +116,7 @@ function describeExclusion(params: {
   });
   const agentProvider = providerPolicyPath({
     tools: agent?.tools,
-    basePath: agent?.path ?? "agents.list[].tools",
+    basePath: agent?.path ?? "agents.entries.*.tools",
     capabilityProfile: params.capabilityProfile,
   });
 
@@ -148,13 +157,13 @@ function describeExclusion(params: {
   const normalizedLabel = label.startsWith(`agents.${params.agentId}.tools.byProvider`)
     ? label.replace(
         `agents.${params.agentId}.tools.byProvider`,
-        agentProvider?.path ?? `${agent?.path ?? "agents.list[].tools"}.byProvider`,
+        agentProvider?.path ?? `${agent?.path ?? "agents.entries.*.tools"}.byProvider`,
       )
     : label.startsWith("tools.byProvider")
       ? label.replace("tools.byProvider", globalProvider?.path ?? "tools.byProvider")
       : label
-          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.list[].tools")
-          .replace("agent tools", agent?.path ?? "agents.list[].tools");
+          .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
+          .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
   if (policyDeniesWorkshop(params.event)) {
     const source = normalizedLabel.replace(/\.allow$/, ".deny");
     return {
@@ -196,7 +205,6 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
     config: params.config,
     conversationCapabilityProfile: params.conversationCapabilityProfile,
     warn: () => {},
-    toolPolicyAuditLogLevel: "debug",
     onFilter: (event) => {
       if (
         !exclusion &&

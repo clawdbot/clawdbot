@@ -52,6 +52,33 @@ function sentRealtimeEvents(): Array<Record<string, unknown>> {
   );
 }
 
+function dispatchDescribeViewToolCall(
+  peer: FakePeerConnection | undefined,
+  ids: { itemId: string; callId: string },
+): void {
+  peer?.channel.dispatchEvent(
+    new MessageEvent("message", {
+      data: JSON.stringify({
+        type: "response.done",
+        response: {
+          id: `response-${ids.callId}`,
+          status: "completed",
+          output: [
+            {
+              type: "function_call",
+              status: "completed",
+              id: ids.itemId,
+              call_id: ids.callId,
+              name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
+              arguments: "{}",
+            },
+          ],
+        },
+      }),
+    }),
+  );
+}
+
 describe("OpenAI Realtime Video Talk", () => {
   beforeEach(() => {
     FakePeerConnection.instance = undefined;
@@ -131,17 +158,7 @@ describe("OpenAI Realtime Video Talk", () => {
 
     await transport.setVideoEnabled(true);
     expect(onVideoStream).toHaveBeenCalledWith(camera);
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-camera",
-          call_id: "call-camera",
-          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-          arguments: "{}",
-        }),
-      }),
-    );
+    dispatchDescribeViewToolCall(peer, { itemId: "item-camera", callId: "call-camera" });
     await Promise.resolve();
     expect(sentRealtimeEvents()).not.toContainEqual(
       expect.objectContaining({
@@ -190,17 +207,10 @@ describe("OpenAI Realtime Video Talk", () => {
     expect(videoStop).toHaveBeenCalledOnce();
     expect(audioStop).not.toHaveBeenCalled();
 
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.function_call_arguments.done",
-          item_id: "item-camera-off",
-          call_id: "call-camera-off",
-          name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME,
-          arguments: "{}",
-        }),
-      }),
-    );
+    dispatchDescribeViewToolCall(peer, {
+      itemId: "item-camera-off",
+      callId: "call-camera-off",
+    });
     await vi.waitFor(() =>
       expect(sentRealtimeEvents()).toContainEqual({
         type: "conversation.item.create",

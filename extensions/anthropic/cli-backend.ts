@@ -1,16 +1,15 @@
 /**
  * Claude CLI backend descriptor. It configures Claude Code process arguments,
- * MCP bundling, session handling, credential transport, and watchdog defaults.
+ * MCP bundling, session handling, and credential transport.
  */
 import { createHmac, randomBytes } from "node:crypto";
 import type {
+  CliBackendExecuteContext,
   CliBackendPlugin,
   CliBackendPreparedExecution,
 } from "openclaw/plugin-sdk/cli-backend";
-import {
-  CLI_FRESH_WATCHDOG_DEFAULTS,
-  CLI_RESUME_WATCHDOG_DEFAULTS,
-} from "openclaw/plugin-sdk/cli-backend";
+import { resolveClaudeCliContextWindowModelId } from "./cli-catalog.js";
+import { parseClaudeCliJsonlEvent } from "./cli-output.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -20,16 +19,18 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
-  resolveClaudeCliRuntimeToolAvailability,
+  resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
+import anthropicPluginPackage from "./package.json" with { type: "json" };
 
 type ClaudeCliAuthCredential =
-  | { type: "oauth"; access: string }
+  | { type: "oauth"; access: string; expires: number }
   | { type: "token"; token: string }
   | { type: "api_key"; key: string }
   | { type: string };
 
 type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
   secretInput: {
     fd: 3;
     fingerprint: string;
@@ -38,6 +39,23 @@ type ClaudeCliPreparedExecution = CliBackendPreparedExecution & {
 };
 
 const CLAUDE_CLI_CREDENTIAL_FINGERPRINT_KEY = randomBytes(32);
+// Agent SDK query() writes this value into process.env. Seed it before core
+// fingerprints the child env so the first resumed turn keeps its warm query.
+const CLAUDE_AGENT_SDK_VERSION =
+  anthropicPluginPackage.dependencies["@anthropic-ai/claude-agent-sdk"];
+const CLAUDE_CLI_DEFAULT_ARGS = [
+  "-p",
+  "--output-format",
+  "stream-json",
+  "--include-partial-messages",
+  "--verbose",
+  "--setting-sources",
+  "user",
+  "--allowedTools",
+  "mcp__openclaw__*",
+  "--disallowedTools",
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
+] as const;
 
 function createClaudeCliAuthInput(params: {
   envName: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" | "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR";
@@ -74,11 +92,20 @@ function createClaudeCliAuthInput(params: {
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
 ): ClaudeCliPreparedExecution | undefined {
-  if (
-    credential?.type === "oauth" &&
-    "access" in credential &&
-    typeof credential.access === "string"
-  ) {
+  // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
+  // OpenClaw-owned). Native `claude` logins are never forwarded; the current
+  // Claude process reads its own config directory. An expired token here is
+  // therefore OpenClaw-managed state that must fail loudly.
+  if (credential?.type === "oauth" && "access" in credential) {
+    const expires = "expires" in credential ? credential.expires : undefined;
+    if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= Date.now()) {
+      throw new Error(
+        "Selected Claude CLI OAuth credential is expired or invalid. Re-authenticate the selected profile and retry. OpenClaw did not start the run.",
+      );
+    }
+    if (typeof credential.access !== "string") {
+      return undefined;
+    }
     return createClaudeCliAuthInput({
       envName: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
       value: credential.access,
@@ -104,7 +131,12 @@ function resolveClaudeCliAuthInput(
 }
 
 /** Build the Claude CLI backend plugin descriptor. */
-export function buildAnthropicCliBackend(): CliBackendPlugin {
+export function buildAnthropicCliBackend(
+  options: {
+    ensureDynamicSystemPromptSectionsSupport?: () => Promise<void>;
+    supportsDynamicSystemPromptSections?: () => boolean;
+  } = {},
+): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
     modelProvider: "anthropic",
@@ -128,8 +160,41 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    manualCompaction: {
+      buildPrompt: (customInstructions) => {
+        const instructions = customInstructions?.trim();
+        return instructions ? `/compact ${instructions}` : "/compact";
+      },
+      input: "arg",
+      validateOutput: (rawOutput) => {
+        for (const line of rawOutput.split("\n")) {
+          try {
+            const event = JSON.parse(line) as {
+              compact_result?: unknown;
+              type?: unknown;
+              subtype?: unknown;
+            };
+            // Claude Code 2.0.76, 2.1.225, and 2.1.226 emit these terminal
+            // records; system/status with status=compacting is progress only.
+            if (
+              event.compact_result === "success" ||
+              (event.type === "system" && event.subtype === "compact_boundary")
+            ) {
+              return { ok: true };
+            }
+          } catch {
+            // Ignore non-JSON process noise; the positive acknowledgement is authoritative.
+          }
+        }
+        return {
+          ok: false,
+          reason: "Claude CLI did not confirm that native compaction ran.",
+        };
+      },
+    },
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
     // tokens to metered extra-usage billing (or rejects them without balance);
     // opted-in embedded runs on subscription credentials execute through this
@@ -137,35 +202,12 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     subscriptionAuthDispatch: true,
     config: {
       command: "claude",
-      args: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-      ],
-      resumeArgs: [
-        "-p",
-        "--output-format",
-        "stream-json",
-        "--include-partial-messages",
-        "--verbose",
-        "--setting-sources",
-        "user",
-        "--allowedTools",
-        "mcp__openclaw__*",
-        "--disallowedTools",
-        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
-        "--resume",
-        "{sessionId}",
-      ],
+      args: [...CLAUDE_CLI_DEFAULT_ARGS],
+      resumeArgs: [...CLAUDE_CLI_DEFAULT_ARGS, "--resume", "{sessionId}"],
       forkArg: "--fork-session",
+      // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
+      // emits the matching transcript UUID on assistant records.
+      resumeAtArg: "--resume-session-at",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -176,40 +218,63 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       sessionArgs: ["--session-id", "{sessionId}"],
       sessionMode: "always",
       reseedFromRawTranscriptWhenUncompacted: true,
+      freshSessionRecovery: "invalidated-only",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
       systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
-      reliability: {
-        watchdog: {
-          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
-        },
-      },
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveModelId: ({ modelId, contextWindow }) =>
+      resolveClaudeCliContextWindowModelId(modelId, contextWindow),
     authEpochMode: "profile-only",
     prepareExecution: (context) => {
-      const credentialContext = context as typeof context & {
-        authCredential?: ClaudeCliAuthCredential;
+      const prepare = () => {
+        const credentialContext = context as typeof context & {
+          authCredential?: ClaudeCliAuthCredential;
+          isolatedCompletionPrompt?: string;
+          isolatedCompletionSystemPrompt?: string;
+        };
+        const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
+        const isolatedCompletion = credentialContext.isolatedCompletionPrompt !== undefined;
+        const agentSdkExecution =
+          !isolatedCompletion && context.executionMode === "agent"
+            ? {
+                async *execute(executionContext: CliBackendExecuteContext) {
+                  const { executeClaudeAgentSdk } = await import("./agent-sdk.runtime.js");
+                  yield* executeClaudeAgentSdk(executionContext, authInput?.secretInput);
+                },
+              }
+            : undefined;
+        const env = {
+          ...(agentSdkExecution ? { CLAUDE_AGENT_SDK_VERSION } : {}),
+          ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+          ...(context.contextWindow === "200k" ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" } : {}),
+          ...resolveClaudeCliThinkingEnv(context.thinkingLevel, context.modelId),
+          ...authInput?.env,
+        };
+        return Object.keys(env).length > 0 || isolatedCompletion || agentSdkExecution
+          ? {
+              env,
+              // The paired side-question argv projection disables settings, memory,
+              // hooks, session persistence, and tools before process launch.
+              ...(isolatedCompletion ? { isolatedCompletionEnforced: true as const } : {}),
+              ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
+              ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
+              ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
+              ...agentSdkExecution,
+            }
+          : undefined;
       };
-      const authInput = resolveClaudeCliAuthInput(credentialContext.authCredential);
-      const env = {
-        ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
-        ...authInput?.env,
-      };
-      return Object.keys(env).length > 0
-        ? {
-            env,
-            ...(authInput?.clearEnv ? { clearEnv: authInput.clearEnv } : {}),
-            ...(authInput?.secretInput ? { secretInput: authInput.secretInput } : {}),
-            ...(authInput?.cleanup ? { cleanup: authInput.cleanup } : {}),
-          }
-        : undefined;
+      const supportProbe = options.ensureDynamicSystemPromptSectionsSupport?.();
+      return supportProbe ? supportProbe.then(prepare) : prepare();
     },
-    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
-    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
+    parseJsonlEvent: parseClaudeCliJsonlEvent,
+    resolveExecutionArgs: (context) =>
+      resolveClaudeCliExecutionArgs(context, {
+        excludeDynamicSystemPromptSections: options.supportsDynamicSystemPromptSections?.(),
+      }),
   };
 }

@@ -28,6 +28,7 @@ export const discordQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "discord",
     adapterFactory: createLiveTransportQaAdapterFactory({
       id: "discord",
+      supportsModuleFlows: true,
       async create(context) {
         return (await loadDiscordQaAdapterRuntime()).createDiscordQaTransportAdapter(context);
       },

@@ -1,22 +1,25 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 
-let cached: { client: GatewayBrowserClient; result: SystemAgentSetupDetectResult } | undefined;
+export type ModelSetupDetectionConnection = Pick<ApplicationGatewaySnapshot, "client" | "hello"> & {
+  agentId: string | null;
+};
 
-export function cacheModelSetupDetection(
-  client: GatewayBrowserClient,
-  result: SystemAgentSetupDetectResult,
-): void {
-  cached = { client, result };
-}
+let cached:
+  | { connection: ModelSetupDetectionConnection; result: SystemAgentSetupDetectResult }
+  | undefined;
 
 export function consumeCachedModelSetupDetection(
-  client: GatewayBrowserClient,
+  connection: ModelSetupDetectionConnection,
 ): SystemAgentSetupDetectResult | null {
   if (!cached) {
     return null;
   }
-  if (cached.client !== client) {
+  if (
+    cached.connection.client !== connection.client ||
+    cached.connection.hello !== connection.hello ||
+    cached.connection.agentId !== connection.agentId
+  ) {
     cached = undefined;
     return null;
   }

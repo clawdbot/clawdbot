@@ -1,15 +1,6 @@
 #!/usr/bin/env -S node --import tsx
+import { parseStrictBooleanArg } from "./lib/arg-utils.mts";
 import { buildOpenClawReleaseClawHubRuntimeState } from "./lib/openclaw-release-clawhub-plan.ts";
-
-function parseBoolean(value: string, label: string): boolean {
-  if (value === "true") {
-    return true;
-  }
-  if (value === "false") {
-    return false;
-  }
-  throw new Error(`${label} must be true or false.`);
-}
 
 function parseArgs(argv: string[]) {
   const values = [...argv];
@@ -40,10 +31,10 @@ function parseArgs(argv: string[]) {
         repository = next();
         break;
       case "--wait-for-clawhub":
-        waitForClawHub = parseBoolean(next(), "--wait-for-clawhub");
+        waitForClawHub = parseStrictBooleanArg(next(), "--wait-for-clawhub");
         break;
       case "--force-skip-clawhub":
-        forceSkipClawHub = parseBoolean(next(), "--force-skip-clawhub");
+        forceSkipClawHub = parseStrictBooleanArg(next(), "--force-skip-clawhub");
         break;
       case "--normal-run-id":
         normalRunId = next();
@@ -52,7 +43,7 @@ function parseArgs(argv: string[]) {
         bootstrapRunId = next();
         break;
       case "--bootstrap-completed":
-        bootstrapCompleted = parseBoolean(next(), "--bootstrap-completed");
+        bootstrapCompleted = parseStrictBooleanArg(next(), "--bootstrap-completed");
         break;
       default:
         throw new Error(`Unknown argument: ${arg}`);

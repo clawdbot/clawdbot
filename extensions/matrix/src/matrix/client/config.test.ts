@@ -1,7 +1,7 @@
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 // Matrix tests cover config plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
-import type { LookupFn } from "../../runtime-api.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
@@ -556,7 +556,7 @@ describe("Matrix auth/config live surfaces", () => {
     ).toThrow(/Matrix account id "!!!" is invalid/i);
   });
 
-  it("rejects explicitly selected disabled accounts instead of borrowing another account", () => {
+  it("rejects explicitly selected disabled accounts before resolving their secrets", () => {
     const cfg = {
       channels: {
         matrix: {
@@ -566,7 +566,11 @@ describe("Matrix auth/config live surfaces", () => {
             disabled: {
               enabled: false,
               homeserver: "https://disabled.example.org",
-              accessToken: "disabled-token",
+              accessToken: {
+                source: "env",
+                provider: "default",
+                id: "MATRIX_DISABLED_ACCESS_TOKEN",
+              },
             },
           },
         },

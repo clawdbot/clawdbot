@@ -55,6 +55,24 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toEqual({ ok: false, error: "message or attachment required" });
   });
 
+  it("accepts start-or-steer requests with or without a transcript leaf", () => {
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({ queueMode: "steer" }),
+        client: null,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      normalizeChatSendRequest({
+        params: validParams({
+          queueMode: "steer",
+          expectedLeafEntryId: "leaf-1",
+        }),
+        client: null,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+
   it("accepts an attachment-only request after attachment normalization", () => {
     const result = normalizeChatSendRequest({
       params: validParams({

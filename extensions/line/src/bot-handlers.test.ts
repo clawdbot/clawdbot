@@ -7,18 +7,45 @@ import type { LineAccountConfig } from "./types.js";
 
 type MessageEvent = webhook.MessageEvent;
 
+const pairingDeliveryMocks = vi.hoisted(() => ({
+  invokePairingReply: false,
+  pushMessageLine: vi.fn(async () => {
+    throw new Error("pushMessageLine should not be called from bot-handlers tests");
+  }),
+  replyMessageLine: vi.fn(async () => {
+    throw new Error("replyMessageLine should not be called from bot-handlers tests");
+  }),
+}));
+
 // Avoid pulling in globals/pairing/media dependencies; this suite only asserts
 // allowlist/groupPolicy gating and message-context wiring.
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
   buildMentionRegexes: () => [],
+  isChannelPartialDeliveryError: (error: unknown) =>
+    Boolean(
+      error &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "CHANNEL_PARTIAL_DELIVERY",
+    ),
   matchesMentionPatterns: () => false,
 }));
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
   createChannelPairingChallengeIssuer:
     ({ upsertPairingRequest }: { upsertPairingRequest: (args: unknown) => Promise<unknown> }) =>
-    async ({ senderId, onCreated }: { senderId: string; onCreated?: () => void }) => {
+    async ({
+      senderId,
+      onCreated,
+      sendPairingReply,
+    }: {
+      senderId: string;
+      onCreated?: () => void;
+      sendPairingReply?: (text: string) => Promise<void>;
+    }) => {
       await upsertPairingRequest({ id: senderId, meta: {} });
       onCreated?.();
+      if (pairingDeliveryMocks.invokePairingReply) {
+        await sendPairingReply?.("Pairing challenge");
+      }
     },
 }));
 vi.mock("openclaw/plugin-sdk/command-auth-native", () => ({
@@ -141,12 +168,8 @@ vi.mock("./download.js", async (importActual) => ({
 }));
 
 vi.mock("./send.js", () => ({
-  pushMessageLine: async () => {
-    throw new Error("pushMessageLine should not be called from bot-handlers tests");
-  },
-  replyMessageLine: async () => {
-    throw new Error("replyMessageLine should not be called from bot-handlers tests");
-  },
+  pushMessageLine: pairingDeliveryMocks.pushMessageLine,
+  replyMessageLine: pairingDeliveryMocks.replyMessageLine,
 }));
 
 const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted(() => ({
@@ -307,6 +330,9 @@ describe("handleLineWebhookEvents", () => {
   });
 
   beforeEach(() => {
+    pairingDeliveryMocks.invokePairingReply = false;
+    pairingDeliveryMocks.pushMessageLine.mockClear();
+    pairingDeliveryMocks.replyMessageLine.mockClear();
     buildLineMessageContextMock.mockReset();
     buildLineMessageContextMock.mockImplementation(async () => ({
       ctxPayload: { From: "line:group:group-1" },
@@ -727,6 +753,41 @@ describe("handleLineWebhookEvents", () => {
     expect(pairingRequest?.id).toBe("user-5");
     expect(pairingRequest?.accountId).toBe("default");
   });
+
+  it.each([
+    { name: "already accepted", delivered: true, fallbackPushCount: 0 },
+    { name: "not delivered", delivered: false, fallbackPushCount: 1 },
+  ])(
+    "avoids duplicate delivery when the pairing reply was $name",
+    async ({ delivered, fallbackPushCount }) => {
+      pairingDeliveryMocks.invokePairingReply = true;
+      const replyError = delivered
+        ? Object.assign(new Error("activity store unavailable"), {
+            code: "CHANNEL_PARTIAL_DELIVERY",
+            deliveryResult: { messageIds: ["line-final"], visibleReplySent: true },
+          })
+        : new Error("provider delivery rejected");
+      pairingDeliveryMocks.replyMessageLine.mockRejectedValueOnce(replyError);
+      const event = createTestMessageEvent({
+        message: {
+          id: "pairing-final",
+          type: "text",
+          text: "hello",
+          quoteToken: "pairing-final-quote",
+        },
+        source: { type: "user", userId: "pairing-user" },
+        webhookEventId: "pairing-final-event",
+      });
+
+      await handleLineWebhookEvents(
+        [event],
+        createLineWebhookTestContext({ processMessage: vi.fn(), dmPolicy: "pairing" }),
+      );
+
+      expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
+      expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(fallbackPushCount);
+    },
+  );
 
   it("does not authorize DM senders from another account's pairing-store entries", async () => {
     const processMessage = vi.fn();
@@ -1297,6 +1358,49 @@ describe("handleLineWebhookEvents", () => {
         createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
       ),
     ).rejects.toBeInstanceOf(MediaFetchError);
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("does not materialize or dispatch media after ingress cancellation", async () => {
+    const cancellation = new Error("LINE webhook spool stopped");
+    const abort = new AbortController();
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockImplementationOnce(
+      async (
+        _messageId: string,
+        _token: string,
+        _maxBytes: number,
+        options?: { signal?: AbortSignal },
+      ) => {
+        options?.signal?.throwIfAborted();
+        throw new Error("download did not receive ingress cancellation");
+      },
+    );
+    const event = createTestMessageEvent({
+      message: {
+        id: "image-cancelled-1",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-image-cancelled",
+      },
+      source: { type: "user", userId: "user-image-cancelled" },
+      webhookEventId: "evt-image-cancelled",
+    });
+    const context = {
+      ...createLineWebhookTestContext({ processMessage, dmPolicy: "open" }),
+      turnAdoptionLifecycle: {
+        admission: "exclusive" as const,
+        abortSignal: abort.signal,
+        onAdopted: vi.fn(),
+        onDeferred: vi.fn(),
+        onAbandoned: vi.fn(),
+      },
+    };
+    abort.abort(cancellation);
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toBe(cancellation);
 
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
     expect(processMessage).not.toHaveBeenCalled();

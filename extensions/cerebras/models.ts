@@ -1,10 +1,9 @@
 /**
  * Cerebras model catalog helpers derived from the plugin manifest.
  */
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
+import { buildCerebrasProvider } from "./provider-catalog.js";
 
 const CEREBRAS_MANIFEST_CATALOG = manifest.modelCatalog.providers.cerebras;
 
@@ -15,19 +14,5 @@ export const CEREBRAS_MODEL_CATALOG = CEREBRAS_MANIFEST_CATALOG.models;
 
 /** Builds normalized Cerebras catalog model definitions. */
 export function buildCerebrasCatalogModels(): ModelDefinitionConfig[] {
-  return buildManifestModelProviderConfig({
-    providerId: "cerebras",
-    catalog: CEREBRAS_MANIFEST_CATALOG,
-  }).models;
-}
-
-/** Builds one normalized Cerebras model definition from a manifest entry. */
-export function buildCerebrasModelDefinition(
-  model: (typeof CEREBRAS_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  const providerConfig = buildManifestModelProviderConfig({
-    providerId: "cerebras",
-    catalog: { ...CEREBRAS_MANIFEST_CATALOG, models: [model] },
-  });
-  return expectDefined(providerConfig.models.at(0), "normalized Cerebras manifest model");
+  return buildCerebrasProvider().models;
 }

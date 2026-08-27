@@ -1,7 +1,7 @@
 // Proves when a new state root cannot contain legacy state migration work.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveConfigPath,
   resolveLegacyStateDirs,
@@ -10,7 +10,12 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveEffectiveHomeDir } from "../../../infra/home-dir.js";
 import { tryReadJsonSync } from "../../../infra/json-files.js";
-import { inspectBundledPluginStartupMetadata } from "../../../plugins/bundled-plugin-startup-metadata.js";
+import {
+  inspectBundledPluginStartupMetadata,
+  inspectPluginStartupMetadata,
+} from "../../../plugins/bundled-plugin-startup-metadata.js";
+import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { configMayRequireStartupPluginConvergence } from "./startup-plugin-convergence-plan.js";
 
 const STATEFUL_CONFIG_KEYS = new Set([
@@ -26,7 +31,6 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "cron",
   "discovery",
   "env",
-  "hooks",
   "marketplaces",
   "mcp",
   "media",
@@ -42,6 +46,49 @@ const STATEFUL_CONFIG_KEYS = new Set([
   "transcripts",
   "web",
 ]);
+
+// Canonical internal entries have no legacy machine state to import. Keep every
+// older or external hook shape on Doctor's full migration path.
+function hasOnlyMigrationSafeInternalHooks(config: Record<string, unknown>): boolean {
+  const hooks = config.hooks;
+  if (hooks === undefined) {
+    return true;
+  }
+  if (!isRecord(hooks) || Object.keys(hooks).some((key) => key !== "internal")) {
+    return false;
+  }
+
+  const internal = hooks.internal;
+  if (internal === undefined) {
+    return true;
+  }
+  if (
+    !isRecord(internal) ||
+    Object.keys(internal).some((key) => !["enabled", "entries"].includes(key)) ||
+    (internal.enabled !== undefined && typeof internal.enabled !== "boolean")
+  ) {
+    return false;
+  }
+
+  if (internal.entries === undefined) {
+    return true;
+  }
+  if (!isRecord(internal.entries)) {
+    return false;
+  }
+  return Object.values(internal.entries).every((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+    if (entry.enabled !== undefined && typeof entry.enabled !== "boolean") {
+      return false;
+    }
+    if (entry.env === undefined) {
+      return true;
+    }
+    return isStringRecord(entry.env);
+  });
+}
 
 function containsObjectKey(value: unknown, targetKey: string): boolean {
   if (Array.isArray(value)) {
@@ -64,9 +111,57 @@ function hasOnlyMigrationSafePluginEntries(
   if (!isRecord(plugins)) {
     return plugins === undefined;
   }
-  if (Object.keys(plugins).some((key) => !["enabled", "entries", "allow", "deny"].includes(key))) {
+  if (
+    Object.keys(plugins).some(
+      (key) => !["enabled", "entries", "allow", "deny", "load"].includes(key),
+    )
+  ) {
     return false;
   }
+
+  if (plugins.load !== undefined) {
+    if (
+      !isRecord(plugins.load) ||
+      Object.keys(plugins.load).some((key) => key !== "paths") ||
+      !Array.isArray(plugins.load.paths) ||
+      !plugins.load.paths.every((entry) => typeof entry === "string" && entry.trim().length > 0)
+    ) {
+      return false;
+    }
+    if (plugins.load.paths.length > 0) {
+      const discovery = discoverConfiguredPluginLoadPaths({
+        loadPaths: plugins.load.paths,
+        env,
+      });
+      if (discovery.candidates.length === 0) {
+        return false;
+      }
+      // Discovery alone cannot prove host compatibility or rule out a fallback
+      // doctor owner; use the same candidate acceptance as normal plugin startup.
+      const registry = loadPluginManifestRegistryCore({
+        config: config as OpenClawConfig,
+        discovery,
+        env,
+        installRecords: {},
+      });
+      if (
+        registry.diagnostics.length > 0 ||
+        registry.plugins.length !== discovery.candidates.length
+      ) {
+        return false;
+      }
+      for (const plugin of registry.plugins) {
+        const metadata = inspectPluginStartupMetadata({
+          pluginId: plugin.id,
+          rootDir: plugin.rootDir,
+        });
+        if (!metadata || metadata.hasDoctorContract) {
+          return false;
+        }
+      }
+    }
+  }
+
   if (!isRecord(plugins.entries)) {
     return plugins.entries === undefined;
   }
@@ -87,6 +182,9 @@ function hasOnlyMigrationSafePluginEntries(
 
 function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean {
   if ([...STATEFUL_CONFIG_KEYS].some((key) => Object.hasOwn(config, key))) {
+    return false;
+  }
+  if (!hasOnlyMigrationSafeInternalHooks(config)) {
     return false;
   }
   if (containsObjectKey(config.agents, "memorySearch")) {
@@ -165,16 +263,20 @@ export function planPristineStartupStateMigrations(
   if (!homeDir) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const legacyStateAbsent = resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
-    if (path.resolve(legacyDir) === path.resolve(stateDir)) {
-      return false;
-    }
-    return !fs.existsSync(legacyDir);
-  });
+  const explicitStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const legacyStateAbsent =
+    Boolean(explicitStateDir) ||
+    resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
+      if (path.resolve(legacyDir) === path.resolve(stateDir)) {
+        return false;
+      }
+      return !fs.existsSync(legacyDir);
+    });
   if (!legacyStateAbsent) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const configPlan = planPristineStartupConfigMigrations(tryReadJsonSync(configPath), env);
+  const config = fs.existsSync(configPath) ? tryReadJsonSync(configPath) : {};
+  const configPlan = planPristineStartupConfigMigrations(config, env);
   return {
     skipAllStateMigrations: configPlan.skipAllStateMigrations,
     skipCoreStateMigrations: configPlan.skipCoreStateMigrations,

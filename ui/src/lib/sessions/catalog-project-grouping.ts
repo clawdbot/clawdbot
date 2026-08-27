@@ -1,13 +1,17 @@
 import type { SessionCatalogSession } from "../../../../packages/gateway-protocol/src/index.ts";
 
-export type CatalogProjectGrouping = "project" | "none";
+export type CatalogProjectGrouping = "project" | "person" | "none";
 
 export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGrouping {
-  return raw === "none" ? "none" : "project";
+  return raw === "none" || raw === "person" ? raw : "project";
 }
 
 type CatalogProjectGroup = {
+  kind: "custom" | "project" | "person";
   key: string;
+  // Collapse ids predate the group-kind namespace. Read the old suffix until
+  // the next toggle migrates that section to its canonical id.
+  legacySectionKey?: string;
   label: string;
   title: string;
   sessions: SessionCatalogSession[];
@@ -22,22 +26,25 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
   // order depend on the roster's sort.
   const customGroups: CatalogProjectGroup[] = [];
   const projectGroups: CatalogProjectGroup[] = [];
-  const groupsByPath = new Map<string, CatalogProjectGroup>();
+  const customGroupsByName = new Map<string, CatalogProjectGroup>();
+  const projectGroupsByPath = new Map<string, CatalogProjectGroup>();
   const ungrouped: SessionCatalogSession[] = [];
 
   for (const session of sessions) {
     const customGroup = session.customGroup?.trim();
     if (customGroup) {
       const key = `custom:${customGroup}`;
-      let group = groupsByPath.get(key);
+      let group = customGroupsByName.get(customGroup);
       if (!group) {
         group = {
+          kind: "custom",
           key,
+          legacySectionKey: key,
           label: customGroup,
           title: `Custom group: ${customGroup}`,
           sessions: [],
         };
-        groupsByPath.set(key, group);
+        customGroupsByName.set(customGroup, group);
         customGroups.push(group);
       }
       group.sessions.push(session);
@@ -58,19 +65,59 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
       ungrouped.push(session);
       continue;
     }
-    let group = groupsByPath.get(projectPath);
+    let group = projectGroupsByPath.get(projectPath);
     if (!group) {
       group = {
-        key: projectPath,
+        kind: "project",
+        key: `project:${projectPath}`,
+        legacySectionKey: projectPath,
         label: projectPath.split(/[\\/]/).at(-1) || projectPath,
         title: projectPath,
         sessions: [],
       };
-      groupsByPath.set(projectPath, group);
+      projectGroupsByPath.set(projectPath, group);
       projectGroups.push(group);
     }
     group.sessions.push(session);
   }
 
   return { groups: [...customGroups, ...projectGroups], ungrouped };
+}
+
+/** Groups adopted sessions by their creator identity. Native threads only carry
+    `createdActor` once adopted (the gateway strips provider-supplied actors), so
+    unattributed sessions intentionally fall to the flat ungrouped tail. */
+export function groupCatalogSessionsByPerson(sessions: readonly SessionCatalogSession[]): {
+  groups: CatalogProjectGroup[];
+  ungrouped: SessionCatalogSession[];
+} {
+  const groupsById = new Map<string, CatalogProjectGroup>();
+  const ungrouped: SessionCatalogSession[] = [];
+
+  for (const session of sessions) {
+    const actor = session.createdActor;
+    if (!actor?.id) {
+      ungrouped.push(session);
+      continue;
+    }
+    const key = `person:${actor.id}`;
+    let group = groupsById.get(key);
+    if (!group) {
+      const label = actor.label?.trim() || actor.id;
+      group = {
+        kind: "person",
+        key,
+        legacySectionKey: key,
+        label,
+        title: `Created by ${label}`,
+        sessions: [],
+      };
+      groupsById.set(key, group);
+    }
+    group.sessions.push(session);
+  }
+
+  // Label order keeps the section stable regardless of roster sort.
+  const groups = [...groupsById.values()].toSorted((a, b) => a.label.localeCompare(b.label));
+  return { groups, ungrouped };
 }

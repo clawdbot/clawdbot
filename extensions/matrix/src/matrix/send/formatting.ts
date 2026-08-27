@@ -1,7 +1,9 @@
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 // Matrix helper module supports formatting behavior.
 import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
+  markdownToMatrixBody,
   markdownToMatrixHtml,
   resolveMatrixMentionsInMarkdown,
   renderMarkdownToMatrixHtmlWithMentions,
@@ -25,18 +27,22 @@ const getCore = () => getMatrixRuntime();
 async function renderMatrixFormattedContent(params: {
   client: MatrixClient;
   markdown?: string | null;
+  preparedBody?: string;
   includeMentions?: boolean;
-}): Promise<{ html?: string; mentions?: MatrixMentions }> {
+  tableMode?: MarkdownTableMode;
+}): Promise<{ body: string; html?: string; mentions?: MatrixMentions }> {
   const markdown = params.markdown ?? "";
+  const body = params.preparedBody ?? markdownToMatrixBody(markdown);
   if (params.includeMentions === false) {
-    const html = markdownToMatrixHtml(markdown).trimEnd();
-    return { html: html || undefined };
+    const html = markdownToMatrixHtml(markdown, { tableMode: params.tableMode }).trimEnd();
+    return { body, html: html || undefined };
   }
   const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
     markdown,
     client: params.client,
+    tableMode: params.tableMode,
   });
-  return { html, mentions };
+  return { body, html, mentions };
 }
 
 export function buildTextContent(
@@ -63,13 +69,18 @@ export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
   content: MatrixFormattedContent;
   markdown?: string | null;
+  preparedBody?: string;
   includeMentions?: boolean;
+  tableMode?: MarkdownTableMode;
 }): Promise<void> {
-  const { html, mentions } = await renderMatrixFormattedContent({
+  const { body, html, mentions } = await renderMatrixFormattedContent({
     client: params.client,
     markdown: params.markdown,
+    preparedBody: params.preparedBody,
     includeMentions: params.includeMentions,
+    tableMode: params.tableMode,
   });
+  params.content.body = body || params.content.body;
   if (mentions) {
     params.content["m.mentions"] = mentions;
   } else {

@@ -1,10 +1,17 @@
 // Discord plugin module implements payload behavior.
-import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
+import {
+  ComponentType,
+  MessageFlags,
+  type APIEmbed,
+  type APIMessageTopLevelComponent,
+} from "discord-api-types/v10";
 import { Embed } from "./embeds.js";
+import { stripUndefinedFields as clean } from "./undefined-fields.js";
 
 export type MessagePayloadFile = {
   name: string;
   data: Blob | Uint8Array | ArrayBuffer;
+  contentType?: string;
   description?: string;
   duration_secs?: number;
   waveform?: string;
@@ -12,7 +19,7 @@ export type MessagePayloadFile = {
 export type MessagePayloadObject = {
   content?: string;
   embeds?: Array<APIEmbed | Embed>;
-  components?: TopLevelComponents[];
+  components?: Array<TopLevelComponents | APIMessageTopLevelComponent>;
   allowedMentions?: unknown;
   allowed_mentions?: unknown;
   flags?: number;
@@ -28,21 +35,19 @@ export type TopLevelComponents = {
   serialize: () => unknown;
 };
 
-function clean<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
-}
-
-function serializeAnyComponent(component: { serialize: () => unknown }): unknown {
-  return component.serialize();
-}
-
-function payloadHasV2Components(payload: MessagePayloadObject): boolean {
-  return Boolean(payload.components?.some((component) => component.isV2));
+export function hasDiscordV2Components(components?: MessagePayloadObject["components"]): boolean {
+  return Boolean(
+    components?.some(
+      (component) =>
+        ("isV2" in component && component.isV2) ||
+        ("type" in component && component.type !== ComponentType.ActionRow),
+    ),
+  );
 }
 
 function normalizePayloadFlags(payload: MessagePayloadObject): number | undefined {
   const flags = payload.ephemeral ? (payload.flags ?? 0) | MessageFlags.Ephemeral : payload.flags;
-  if (!payloadHasV2Components(payload)) {
+  if (!hasDiscordV2Components(payload.components)) {
     return flags;
   }
   if (payload.content || payload.embeds?.length) {
@@ -59,7 +64,9 @@ export function serializePayload(payload: MessagePayload) {
   return clean({
     content: payload.content,
     embeds: payload.embeds?.map((entry) => ("serialize" in entry ? entry.serialize() : entry)),
-    components: payload.components?.map((entry) => serializeAnyComponent(entry)),
+    components: payload.components?.map((entry) =>
+      "serialize" in entry ? entry.serialize() : entry,
+    ),
     allowed_mentions: payload.allowed_mentions ?? payload.allowedMentions,
     flags,
     tts: payload.tts,

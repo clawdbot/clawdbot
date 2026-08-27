@@ -2,8 +2,15 @@
 import { describe, expect, it } from "vitest";
 import {
   describeApprovalDeliveryDestination,
+  resolveAmbiguousApprovalRouteNoticeText,
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
+
+it("routes ambiguous ownership to an account-independent approval surface", () => {
+  expect(resolveAmbiguousApprovalRouteNoticeText()).toBe(
+    "Approval required, but multiple channel accounts can handle this request. Open the Control UI or terminal UI to approve it.",
+  );
+});
 
 describe("describeApprovalDeliveryDestination", () => {
   it("labels approver-DM-only delivery as channel DMs", () => {

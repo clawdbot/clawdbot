@@ -1,4 +1,5 @@
 // Filterable select list tests cover keyboard filtering and cursor behavior.
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { FilterableSelectList, type FilterableSelectItem } from "./filterable-select-list.js";
 
@@ -34,6 +35,82 @@ describe("FilterableSelectList", () => {
       list.handleInput(ch);
     }
   }
+
+  it("emits the hardware cursor marker only while the filter input is focused", () => {
+    const list = new FilterableSelectList(testItems, 5, mockTheme);
+
+    expect(list.focused).toBe(false);
+    expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
+
+    list.focused = true;
+    expect(list.focused).toBe(true);
+    expect(list.render(80)[0]).toContain(CURSOR_MARKER);
+
+    list.focused = false;
+    expect(list.focused).toBe(false);
+    expect(list.render(80)[0]).not.toContain(CURSOR_MARKER);
+  });
+
+  it.each([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])(
+    "keeps ANSI, CJK, scroll, and no-match rows within %i terminal columns",
+    (width) => {
+      const items: FilterableSelectItem[] = [
+        {
+          value: "cjk",
+          label: "\u001b[32m日本語の検索結果\u001b[0m",
+          description: "長い説明と表示幅の検証",
+        },
+        { value: "other", label: "another long search result" },
+      ];
+      const list = new FilterableSelectList(items, 1, mockTheme);
+      list.focused = true;
+
+      for (const line of list.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+
+      typeInput(list, "missing");
+      for (const line of list.render(width)) {
+        expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+      }
+    },
+  );
+
+  it.each([
+    { query: "j", expectedValue: "juliet" },
+    { query: "k", expectedValue: "kilo" },
+  ])("filters names beginning with $query", ({ query, expectedValue }) => {
+    const list = new FilterableSelectList(
+      [
+        { value: "alpha", label: "alpha" },
+        { value: "kilo", label: "kilo" },
+        { value: "juliet", label: "juliet" },
+      ],
+      5,
+      mockTheme,
+    );
+
+    list.handleInput(query);
+
+    expect(list.getFilterText()).toBe(query);
+    expect(list.getSelectedItem()?.value).toBe(expectedValue);
+  });
+
+  it("preserves arrow and Ctrl-key navigation", () => {
+    const list = new FilterableSelectList(testItems, 5, mockTheme);
+
+    list.handleInput("\x1b[B");
+    expect(list.getSelectedItem()?.value).toBe("session-2");
+
+    list.handleInput("\u0010");
+    expect(list.getSelectedItem()?.value).toBe("session-1");
+
+    list.handleInput("\u000e");
+    expect(list.getSelectedItem()?.value).toBe("session-2");
+
+    list.handleInput("\x1b[A");
+    expect(list.getSelectedItem()?.value).toBe("session-1");
+  });
 
   it("clears the active filter before cancelling", () => {
     const list = new FilterableSelectList(testItems, 5, mockTheme);
@@ -88,5 +165,51 @@ describe("FilterableSelectList", () => {
     typeInput(list, "codex52");
 
     expect(list.getSelectedItem()?.value).toBe("codex");
+  });
+
+  it("sanitizes rendered fields without changing filtering or the selected value", () => {
+    const attacks = [
+      "\u001b[38;5;201m",
+      "\u001b[3J",
+      "\u001b]0;filter-title\u0007",
+      "\u001b]52;c;filter-clipboard\u0007",
+      "\u009b2K",
+      "\u009d0;filter-c1-title\u009c",
+    ];
+    const rawValue = `fv-start${attacks[1]}fv-end\r\nمرحبا\tשלום`;
+    const description = `fd-start${attacks[3]}fd-end\n東京`;
+    const list = new FilterableSelectList(
+      [
+        { value: "decoy", label: "decoy" },
+        {
+          value: rawValue,
+          label: attacks.join(""),
+          description,
+          searchText: "raw-filter-target",
+        },
+      ],
+      5,
+      mockTheme,
+    );
+    let selectedValue: string | undefined;
+    list.onSelect = (item) => {
+      selectedValue = item.value;
+    };
+
+    typeInput(list, "raw-filter-target");
+    const rendered = list.render(160).join("\n");
+
+    expect(rendered).toContain("fv-startfv-end");
+    expect(rendered).toContain("مرحبا שלום");
+    expect(rendered).toContain("fd-startfd-end 東京");
+    expect(rendered).toContain("\u2067");
+    expect(rendered).toContain("\u2069");
+    for (const attack of attacks) {
+      expect(rendered).not.toContain(attack);
+    }
+    expect(rendered).not.toContain("fv-end\r\nمرحبا\tשלום");
+
+    list.handleInput("\r");
+    expect(selectedValue).toBe(rawValue);
   });
 });

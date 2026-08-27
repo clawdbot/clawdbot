@@ -38,7 +38,6 @@ export type MeetingSessionRuntimeMessages<TSpeechBlockedReason extends string> =
   speech: {
     audioBridgeUnavailable: string;
     browserUnverified: string;
-    manualActionFallback: string;
     microphoneMuted: string;
     microphoneMutedReason: TSpeechBlockedReason;
     notInCall: string;
@@ -322,7 +321,7 @@ export class MeetingSessionRuntime<
         return true;
       }
       const health = this.options.getBrowser(result.session as TSession)?.health;
-      if (health?.manualActionRequired || result.session?.state !== "active") {
+      if (health?.manualAction || result.session?.state !== "active") {
         return false;
       }
       const blocked = health?.speechBlockedReason;
@@ -578,9 +577,7 @@ export class MeetingSessionRuntime<
           ...browser.health,
           inCall: false,
           micMuted: undefined,
-          manualActionRequired: false,
-          manualActionReason: undefined,
-          manualActionMessage: undefined,
+          manualAction: undefined,
           speechReady: false,
           speechBlockedReason: undefined,
           speechBlockedMessage: undefined,

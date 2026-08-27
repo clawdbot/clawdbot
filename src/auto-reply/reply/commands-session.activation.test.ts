@@ -9,7 +9,7 @@ const persistenceConflictReply = vi.hoisted(() => ({
 }));
 
 vi.mock("./commands-session-store.js", () => ({
-  persistSessionEntry: persistSessionEntryMock,
+  persistCommandSession: persistSessionEntryMock,
   sessionEntryPersistenceConflictReply: () => persistenceConflictReply,
 }));
 

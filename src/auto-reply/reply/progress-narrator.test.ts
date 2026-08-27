@@ -449,6 +449,11 @@ describe("progress narration through reply options", () => {
       phase: "start",
       args: { command: "cat /etc/hosts" },
     });
+    narrator.noteToolStart({
+      name: "server.exec",
+      phase: "start",
+      args: { command: "cat /etc/hosts" },
+    });
     await flushNarrations();
     narrator.noteCommandOutput({
       name: "exec",

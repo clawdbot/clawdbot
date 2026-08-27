@@ -1,9 +1,15 @@
 import { Type } from "typebox";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { onSubagentRegistryPersisted } from "../subagent-registry-state.js";
-import { getSubagentRunsByRunIds } from "../subagent-registry.js";
-import type { SubagentRunRecord } from "../subagent-registry.types.js";
-import { resolveSwarmConfig } from "../swarm-config.js";
+import { createAbortError } from "../../infra/abort-signal.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveSubagentCompletionResultText } from "../subagents/completion/subagent-completion-result.js";
+import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
+import { getSubagentRunsByRunIds } from "../subagents/registry/subagent-registry.js";
+import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
+import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
+import { describeAgentsWaitTool } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
@@ -17,7 +23,12 @@ const AgentsWaitToolSchema = Type.Object({
 type WaitError = { runId: string; error: "not_found" | "not_owner" };
 type WaitTarget = { runId: string; entry: SubagentRunRecord };
 
-function ownsRun(entry: SubagentRunRecord, currentSessionKeys: ReadonlySet<string>): boolean {
+function ownsRun(
+  entry: SubagentRunRecord,
+  currentSessionKeys: ReadonlySet<string>,
+  currentAgentId?: string,
+  config?: OpenClawConfig,
+): boolean {
   const owner = entry.swarmRequesterSessionKey?.trim();
   if (!owner) {
     return false;
@@ -26,7 +37,28 @@ function ownsRun(entry: SubagentRunRecord, currentSessionKeys: ReadonlySet<strin
     entry.swarmWaitOwnerSessionKeys && entry.swarmWaitOwnerSessionKeys.length > 0
       ? entry.swarmWaitOwnerSessionKeys
       : [owner];
-  return authorizedSessionKeys.some((sessionKey) => currentSessionKeys.has(sessionKey));
+  return authorizedSessionKeys.some((sessionKey) => {
+    if (!currentSessionKeys.has(sessionKey)) {
+      return false;
+    }
+    const ownerAgentId =
+      parseAgentSessionKey(sessionKey)?.agentId ??
+      entry.requesterAgentId ??
+      paramsOwner(config, sessionKey);
+    return Boolean(ownerAgentId && (!currentAgentId || ownerAgentId === currentAgentId));
+  });
+}
+
+function paramsOwner(config: OpenClawConfig | undefined, sessionKey: string): string | undefined {
+  if (!config) {
+    return undefined;
+  }
+  const persisted = resolvePersistedSessionStoreOwnerForKey(config, sessionKey);
+  return persisted.kind === "configured"
+    ? persisted.agentId
+    : persisted.kind === "none"
+      ? tryResolveLegacyCompatibilityAgentId(config)
+      : undefined;
 }
 
 function completionResult(entry: SubagentRunRecord) {
@@ -37,8 +69,11 @@ function completionResult(entry: SubagentRunRecord) {
   return {
     runId: entry.swarmRunId ?? entry.runId,
     status: completion.status,
-    result: entry.completion?.resultText ?? entry.completion?.fallbackResultText ?? "",
+    result: resolveSubagentCompletionResultText(entry) ?? "",
     ...(completion.structured !== undefined ? { structured: completion.structured } : {}),
+    ...(entry.execution.outcome?.status === "error"
+      ? { error: entry.execution.outcome.error }
+      : {}),
     ...(completion.schemaError ? { schemaError: completion.schemaError } : {}),
     sessionKey: entry.childSessionKey,
     ...(entry.label ? { label: entry.label } : {}),
@@ -52,10 +87,17 @@ export type CollectorCompletionResult = NonNullable<ReturnType<typeof completion
 export async function waitForCollectorCompletion(params: {
   runId: string;
   currentSessionKeys: ReadonlySet<string>;
+  currentAgentId?: string;
+  config?: OpenClawConfig;
   signal?: AbortSignal;
 }): Promise<CollectorCompletionResult> {
   const readCompletion = (): CollectorCompletionResult | undefined => {
-    const state = readWaitState([params.runId], params.currentSessionKeys);
+    const state = readWaitState(
+      [params.runId],
+      params.currentSessionKeys,
+      params.currentAgentId,
+      params.config,
+    );
     const error = state.errors?.[0];
     if (error) {
       throw new ToolInputError(`agents.run ${error.error}: ${error.runId}`);
@@ -106,7 +148,12 @@ export async function waitForCollectorCompletion(params: {
   });
 }
 
-function resolveWaitTargets(ids: readonly string[], currentSessionKeys: ReadonlySet<string>) {
+function resolveWaitTargets(
+  ids: readonly string[],
+  currentSessionKeys: ReadonlySet<string>,
+  currentAgentId?: string,
+  config?: OpenClawConfig,
+) {
   const targets: WaitTarget[] = [];
   const errors: WaitError[] = [];
   const snapshot = getSubagentRunsByRunIds(ids);
@@ -114,7 +161,7 @@ function resolveWaitTargets(ids: readonly string[], currentSessionKeys: Readonly
     const entry = snapshot.entries.get(runId);
     if (!entry?.collect) {
       errors.push({ runId, error: "not_found" });
-    } else if (!ownsRun(entry, currentSessionKeys)) {
+    } else if (!ownsRun(entry, currentSessionKeys, currentAgentId, config)) {
       errors.push({ runId, error: "not_owner" });
     } else {
       targets.push({ runId, entry });
@@ -135,7 +182,8 @@ function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly 
     if (result) {
       completed.push({
         result,
-        completedAt: entry.completion?.capturedAt ?? entry.endedAt ?? Number.MAX_SAFE_INTEGER,
+        completedAt:
+          entry.completion?.capturedAt ?? entry.execution.endedAt ?? Number.MAX_SAFE_INTEGER,
         inputIndex,
       });
     } else {
@@ -152,37 +200,58 @@ function readResolvedWaitState(targets: readonly WaitTarget[], errors: readonly 
   };
 }
 
-function readWaitState(ids: readonly string[], currentSessionKeys: ReadonlySet<string>) {
-  const resolved = resolveWaitTargets(ids, currentSessionKeys);
+function readWaitState(
+  ids: readonly string[],
+  currentSessionKeys: ReadonlySet<string>,
+  currentAgentId?: string,
+  config?: OpenClawConfig,
+) {
+  const resolved = resolveWaitTargets(ids, currentSessionKeys, currentAgentId, config);
   return readResolvedWaitState(resolved.targets, resolved.errors);
 }
 
 async function waitForCollector(params: {
   ids: readonly string[];
   currentSessionKeys: ReadonlySet<string>;
+  currentAgentId?: string;
+  config?: OpenClawConfig;
   timeoutMs: number;
   signal?: AbortSignal;
 }) {
   const deadline = Date.now() + params.timeoutMs;
   for (;;) {
+    if (params.signal?.aborted) {
+      throw createAbortError("agents_wait aborted.");
+    }
     // Recovery can replace a registry row while preserving its stable swarm id.
     // Re-resolve ownership and completion on every poll instead of retaining old objects.
-    const state = readWaitState(params.ids, params.currentSessionKeys);
+    const state = readWaitState(
+      params.ids,
+      params.currentSessionKeys,
+      params.currentAgentId,
+      params.config,
+    );
     if (state.completed.length > 0 || state.pending.length === 0 || Date.now() >= deadline) {
       return state;
     }
-    await new Promise<void>((resolve) => {
-      const finish = () => {
+    await new Promise<void>((resolve, reject) => {
+      const finish = (error?: Error) => {
         clearTimeout(timer);
-        params.signal?.removeEventListener("abort", finish);
+        params.signal?.removeEventListener("abort", onAbort);
+        if (error) {
+          reject(error);
+          return;
+        }
         resolve();
       };
+      const onAbort = () => finish(createAbortError("agents_wait aborted."));
       const timer = setTimeout(finish, Math.min(25, Math.max(0, deadline - Date.now())));
-      params.signal?.addEventListener("abort", finish, { once: true });
+      params.signal?.addEventListener("abort", onAbort, { once: true });
+      // Abort can race listener registration; never turn that cancellation into a successful poll.
+      if (params.signal?.aborted) {
+        onAbort();
+      }
     });
-    if (params.signal?.aborted) {
-      return readWaitState(params.ids, params.currentSessionKeys);
-    }
   }
 }
 
@@ -197,7 +266,7 @@ export function createAgentsWaitTool(opts: {
     label: "Wait for Agents",
     name: "agents_wait",
     displaySummary: "Wait for collector children.",
-    description: "Wait until one collector child completes, or until timeout.",
+    description: describeAgentsWaitTool(false),
     parameters: AgentsWaitToolSchema,
     execute: async (_toolCallId, args, signal) => {
       const params = args as { ids: string[]; timeoutSeconds?: number };
@@ -205,6 +274,9 @@ export function createAgentsWaitTool(opts: {
         throw new ToolInputError(`agents_wait supports at most ${MAX_WAIT_IDS} ids.`);
       }
       const ids = [...new Set(params.ids.map((id) => id.trim()).filter(Boolean))];
+      if (ids.length === 0) {
+        throw new ToolInputError("agents_wait requires at least one non-empty run id.");
+      }
       const currentSessionKeys = new Set(
         [opts.runSessionKey, opts.agentSessionKey].filter((key): key is string =>
           Boolean(key?.trim()),
@@ -218,24 +290,16 @@ export function createAgentsWaitTool(opts: {
       const result = await waitForCollector({
         ids,
         currentSessionKeys,
+        currentAgentId: opts.agentId,
+        config: opts.config,
         timeoutMs: timeoutSeconds * 1_000,
         signal,
       });
-      return jsonResult(result);
+      const noAuthorizedTargets =
+        result.completed.length === 0 &&
+        result.pending.length === 0 &&
+        Boolean(result.errors?.length);
+      return jsonResult(noAuthorizedTargets ? { ...result, success: false } : result);
     },
-  };
-}
-
-const testing = {
-  ownsRun,
-  readResolvedWaitState,
-  readWaitState,
-  resolveWaitTargets,
-  waitForCollector,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.agentsWaitToolTestApi")] = {
-    testing,
   };
 }

@@ -156,6 +156,7 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     const { clientFactory, request } = createClientFactory(false);
 
     await expect(resolveSupport(clientFactory, " OpenAI ")).resolves.toBe("supported");
+    expect(clientFactory).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -165,6 +166,16 @@ describe("resolveCodexProviderWebSearchSupport", () => {
     await expect(resolveSupport(clientFactory, "amazon-bedrock")).resolves.toBe("unsupported");
     await expect(resolveSupport(clientFactory, "custom-provider")).resolves.toBe("unsupported");
     await expect(resolveSupport(clientFactory, "lmstudio")).resolves.toBe("unsupported");
+    expect(clientFactory).not.toHaveBeenCalled();
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not wait for app-server startup when the override proves hosted support", async () => {
+    const clientFactory = vi.fn(
+      async () => await new Promise<CodexAppServerClient>(() => {}),
+    ) as unknown as CodexAppServerClientFactory;
+
+    await expect(resolveSupport(clientFactory, "openai")).resolves.toBe("supported");
+    expect(clientFactory).not.toHaveBeenCalled();
   });
 });

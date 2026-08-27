@@ -1,11 +1,41 @@
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import type { TaskRegistryDeliveryRuntime } from "./task-registry-state.js";
+import { createTaskRecord as createTaskRecordOrNull } from "./task-registry.js";
 import type { TaskEventRecord, TaskRecord } from "./task-registry.types.js";
-import "./task-registry.js";
 
-type TaskRegistryDeliveryRuntime = Pick<
-  typeof import("./task-registry-delivery-runtime.js"),
-  "sendMessage"
->;
+type CreateTaskRecordParams = Parameters<typeof createTaskRecordOrNull>[0];
+type TaskFixtureDefaults = "runtime" | "ownerKey" | "scopeKind" | "status" | "deliveryStatus";
+type TaskFixtureParams = Omit<CreateTaskRecordParams, TaskFixtureDefaults> &
+  Partial<Pick<CreateTaskRecordParams, Exclude<TaskFixtureDefaults, "runtime">>>;
+
+export function createTaskFixture(
+  runtime: CreateTaskRecordParams["runtime"],
+  params: TaskFixtureParams,
+): TaskRecord {
+  const task = createTaskRecordOrNull({
+    runtime,
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    status: "running",
+    deliveryStatus: "not_applicable",
+    ...params,
+  });
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
+}
+
+export function createAcpTaskRecord(
+  params: Omit<TaskFixtureParams, "task"> & { runId: string; task?: string },
+): TaskRecord {
+  return createTaskFixture("acp", {
+    childSessionKey: "agent:main:acp:child",
+    task: "Investigate issue",
+    deliveryStatus: "pending",
+    ...params,
+  });
+}
 
 type TaskRegistryTestApi = {
   maybeDeliverTaskStateChangeUpdate(

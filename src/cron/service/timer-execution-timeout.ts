@@ -4,18 +4,23 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronCompletionStatus,
   CronDeliveryTrace,
   CronJob,
   CronNextCheckProposal,
+  CronResolvedDeliveryState,
   CronRunOutcome,
+  CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import type { CronRunReceiptSettlementDisposition } from "./run-receipts.js";
 import type { CronServiceState } from "./state.js";
 
-export const MAX_TIMER_DELAY_MS = 60_000;
+export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
 export const HEARTBEAT_SKIP_DISABLED = "disabled";
 
@@ -39,6 +44,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     job: CronJob;
     taskRunId?: string;
+    completionStatus: CronCompletionStatus;
+    deliveryState: CronResolvedDeliveryState;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
@@ -46,6 +53,8 @@ export type TimedCronRunOutcome = CronRunOutcome &
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
     reservationIdentity?: object;
+    runReceipt?: CronRunReceiptHandle;
+    receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
     startedAt: number;
     endedAt: number;
     triggerEval?: CronTriggerEvalOutcome;
@@ -56,8 +65,12 @@ export type TimedCronRunOutcome = CronRunOutcome &
 
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
+    completionStatus?: CronCompletionStatus;
+    deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
+    delivery?: CronDeliveryTrace;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
     nextCheck?: CronNextCheckProposal;
@@ -92,6 +105,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
+  configRevision: string;
+  nextRunAtMs: number | undefined;
+  lastRunAtMs: number | undefined;
+  lastRunStatus: CronRunStatus | undefined;
 };
 
 export type StartupCatchupPlan = {
@@ -109,6 +126,9 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
+  /** Revalidates the durable run fence after awaited planning and before effects. */
+  assertRunCurrent?: () => void;
   streamBatch?: string;
   // Source definition and logical identity are an inseparable admission claim.
   // The key catches edits; the identity catches disable→re-enable and A→B→A.
@@ -116,9 +136,13 @@ export type ExecuteJobCoreOptions = {
   streamSourceIdentity?: string;
 };
 
-/** Script payloads run headlessly even when their notifications target main. */
+/** Payloads that execute outside the main session own cancellable task-run state. */
 export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return job.sessionTarget !== "main" || job.payload.kind === "script";
+  return (
+    job.sessionTarget !== "main" ||
+    job.payload.kind === "script" ||
+    job.payload.kind === "skillCollectionReview"
+  );
 }
 
 export function resolveMainSessionCronDeliveryContext(
@@ -131,7 +155,11 @@ export function resolveMainSessionCronDeliveryContext(
   }
   const explicitAgentId = job.agentId?.trim();
   const agentId = normalizeAgentId(
-    explicitAgentId || resolveAgentIdFromSessionKey(targetSessionKey),
+    explicitAgentId ||
+      resolveAgentIdFromSessionKey(
+        targetSessionKey,
+        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+      ),
   );
   const storePath = state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
   if (!storePath) {

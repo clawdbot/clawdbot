@@ -1,7 +1,16 @@
-import { listQaScenariosForExecutionProfile } from "../../scenario-catalog.js";
+import type { QaProviderModeInput } from "../../model-selection.js";
+import { resolveLiveTransportQaScenarioIds } from "../shared/scenario-selection.js";
 
-export function resolveDiscordQaScenarioIds({ scenarioIds }: { scenarioIds?: readonly string[] }) {
-  return scenarioIds?.length
-    ? [...scenarioIds]
-    : listQaScenariosForExecutionProfile("discord:adapter").map((scenario) => scenario.id);
+export function resolveDiscordQaScenarioIds(params: {
+  profile?: string;
+  primaryModel?: string;
+  providerMode?: QaProviderModeInput;
+  scenarioIds?: readonly string[];
+}) {
+  return resolveLiveTransportQaScenarioIds({
+    channelId: "discord",
+    supportsModuleFlows: true,
+    ...params,
+    providerMode: params.providerMode ?? "live-frontier",
+  });
 }

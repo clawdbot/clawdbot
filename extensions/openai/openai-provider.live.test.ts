@@ -5,7 +5,13 @@ import { describe, expect, it } from "vitest";
 import { buildOpenAIProvider } from "./openai-provider.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
-const DEFAULT_LIVE_MODEL_IDS = ["chat-latest", "gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"] as const;
+const DEFAULT_LIVE_MODEL_IDS = [
+  "gpt-5.6",
+  "chat-latest",
+  "gpt-5.5",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+] as const;
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 
@@ -22,6 +28,25 @@ type LiveModelCase = {
 
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
+    case "gpt-5.6":
+    case "gpt-5.6-sol":
+    case "gpt-5.6-terra":
+    case "gpt-5.6-luna":
+      return {
+        modelId,
+        templateId: "gpt-5.5",
+        templateName: "GPT-5.5",
+        cost:
+          modelId === "gpt-5.6-terra"
+            ? { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 }
+            : modelId === "gpt-5.6-luna"
+              ? { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 }
+              : { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+        contextWindow: 1_050_000,
+        maxTokens: 128_000,
+        reasoning: true,
+        textVerbosity: "low",
+      };
     case "chat-latest":
       return {
         modelId,
@@ -39,7 +64,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         templateId: "gpt-5.5",
         templateName: "GPT-5.5",
         cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 1_000_000,
+        contextWindow: 1_050_000,
         maxTokens: 128_000,
         reasoning: true,
         textVerbosity: "low",
@@ -50,7 +75,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         templateId: "gpt-5.4-pro",
         templateName: "GPT-5.4 Pro",
         cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1_000_000,
+        contextWindow: 1_050_000,
         maxTokens: 128_000,
         reasoning: true,
         textVerbosity: "low",
@@ -60,8 +85,8 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5.2",
         templateName: "GPT-5.2",
-        cost: { input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
-        contextWindow: 400_000,
+        cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
+        contextWindow: 1_050_000,
         maxTokens: 128_000,
         reasoning: true,
         textVerbosity: "low",
@@ -71,8 +96,8 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5.2-pro",
         templateName: "GPT-5.2 Pro",
-        cost: { input: 21, output: 168, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 400_000,
+        cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
         maxTokens: 128_000,
         reasoning: true,
         textVerbosity: "low",
@@ -82,7 +107,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5-mini",
         templateName: "GPT-5 mini",
-        cost: { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 },
+        cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: true,
@@ -93,7 +118,7 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
         modelId,
         templateId: "gpt-5-nano",
         templateName: "GPT-5 nano",
-        cost: { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite: 0 },
+        cost: { input: 0.2, output: 1.25, cacheRead: 0.02, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
         reasoning: true,

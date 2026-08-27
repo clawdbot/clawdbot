@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolveCodexAppServerUserHomeDir } from "./config-reviewer.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
@@ -6,6 +7,21 @@ const CODEX_EPHEMERAL_AUTH_STORE_OVERRIDE = 'cli_auth_credentials_store="ephemer
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
   return path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME);
+}
+
+/** Resolves the local CODEX_HOME used when starting one app-server connection. */
+export function resolveCodexAppServerLocalHomeDir(
+  startOptions: CodexAppServerStartOptions,
+  agentDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = startOptions.env?.CODEX_HOME;
+  if (configured?.trim()) {
+    return configured;
+  }
+  return startOptions.homeScope === "user"
+    ? resolveCodexAppServerUserHomeDir(env)
+    : resolveCodexAppServerHomeDir(agentDir);
 }
 
 /** Forces OpenClaw-owned Codex auth to remain process-local. */

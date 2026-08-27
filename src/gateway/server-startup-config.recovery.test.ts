@@ -484,6 +484,32 @@ describe("gateway startup config validation", () => {
     );
   });
 
+  it("renders actionable diagnostics for invalid config written by a newer version", async () => {
+    const rawConfig = {
+      meta: { lastTouchedVersion: "9999.1.1" },
+      gateway: { mode: "nope" },
+    };
+    const invalidSnapshot = buildInvalidConfigSnapshot({
+      rawConfig,
+      config: rawConfig as OpenClawConfig,
+      issues: [
+        {
+          path: "gateway.mode",
+          pathSegments: ["gateway", "mode"],
+          message: 'Invalid input (allowed: "local", "remote")',
+        },
+      ],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+
+    await expectStartupRejects(
+      new RegExp(
+        'openclaw-startup-recovery\\.json:1 — gateway\\.mode: Invalid input \\(allowed: "local", "remote"\\), got: "nope".*Config was last written by OpenClaw 9999\\.1\\.1, but you are running',
+        "s",
+      ),
+    );
+  });
+
   it("does not suggest doctor repair for plugin packaging compiled-output failures", async () => {
     const rawConfig = pluginSlotRawConfig("local");
     const invalidSnapshot = buildInvalidConfigSnapshot({

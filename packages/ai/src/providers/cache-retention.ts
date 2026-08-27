@@ -5,7 +5,7 @@ import type { CacheRetention } from "../types.js";
  * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
  */
 export function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
-  if (cacheRetention) {
+  if (cacheRetention === "short" || cacheRetention === "long" || cacheRetention === "none") {
     return cacheRetention;
   }
   if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {

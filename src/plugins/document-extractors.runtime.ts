@@ -7,19 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
 import type { PluginDocumentExtractorEntry } from "./document-extractor-types.js";
+import { sortPluginEntriesForAutoDetect } from "./plugin-entry-order.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
-
-function compareExtractors(
-  left: PluginDocumentExtractorEntry,
-  right: PluginDocumentExtractorEntry,
-): number {
-  const leftOrder = left.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-  const rightOrder = right.autoDetectOrder ?? Number.MAX_SAFE_INTEGER;
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder;
-  }
-  return left.id.localeCompare(right.id) || left.pluginId.localeCompare(right.pluginId);
-}
 
 function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
   config?: OpenClawConfig;
@@ -61,10 +50,6 @@ export function resolvePluginDocumentExtractors(params?: {
       env: params?.env,
       onlyPluginIds: params?.onlyPluginIds,
       contract: "documentExtractors",
-      compatMode: {
-        enablement: "always",
-        vitest: true,
-      },
     }).map((plugin) => plugin.id);
   for (const pluginId of pluginIds) {
     let loaded: PluginDocumentExtractorEntry[] | null;
@@ -86,5 +71,5 @@ export function resolvePluginDocumentExtractors(params?: {
       cause: loadErrors.length === 1 ? loadErrors[0] : new AggregateError(loadErrors),
     });
   }
-  return extractors.toSorted(compareExtractors);
+  return sortPluginEntriesForAutoDetect(extractors);
 }

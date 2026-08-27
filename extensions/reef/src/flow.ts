@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendAudit,
   appendInboxRead,
@@ -42,12 +45,6 @@ interface LegacyDeliveryCandidate {
   expiresAt: number;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function buildLegacyDeliveryIndex(
   entries: readonly AuditEntry[],
 ): Map<string, LegacyDeliveryCandidate> {
@@ -57,12 +54,12 @@ function buildLegacyDeliveryIndex(
   const candidates = new Map<string, LegacyDeliveryCandidate>();
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index]!;
-    const payload = asRecord(entry.event.payload);
+    const payload = asOptionalRecord(entry.event.payload);
     if (entry.event.type === "confirm_delivery") {
       if (entry.event.ts < oldest) {
         continue;
       }
-      const receipt = asRecord(payload?.receipt);
+      const receipt = asOptionalRecord(payload?.receipt);
       if (typeof receipt?.id === "string") {
         confirmed.add(receipt.id);
         sealed.delete(receipt.id);
@@ -143,6 +140,7 @@ export class ReefMessageFlow {
       replay: ReplayStore;
       reviews: ReviewApprovalStore;
       delivered: ReefDeliveredStore;
+      authoritySignal?: AbortSignal;
       onIngress: (message: ReefIngressMessage) => Promise<void>;
       onOwnerNotice: (text: string) => Promise<void>;
     },
@@ -160,6 +158,8 @@ export class ReefMessageFlow {
       onPlatformSendDispatch?: () => Promise<void>;
     } = {},
   ): Promise<string> {
+    const signal = this.options.authoritySignal;
+    signal?.throwIfAborted();
     const friend = this.options.trust.get(peer);
     if (
       !friend ||
@@ -188,6 +188,7 @@ export class ReefMessageFlow {
       policyVersion: this.requireGuardConfig().policyVersion,
       reviewGate: (request) => this.options.reviews.request(request),
     });
+    signal?.throwIfAborted();
     // Persist the exact peer/id/body binding before the relay can return a
     // receipt. Only a matching durable record may later authorize a resend turn.
     if (!matchesReefPeerIdentity(this.options.trust.get(peer), recipient)) {
@@ -208,7 +209,9 @@ export class ReefMessageFlow {
     // Guard/review/encryption are local and may reject safely. Mark ambiguity
     // only at the relay boundary so recovery never treats those failures as sent.
     await context.onPlatformSendDispatch?.();
-    await this.options.transport.sendEnvelope(peer, result.envelope);
+    signal?.throwIfAborted();
+    await this.options.transport.sendEnvelope(peer, result.envelope, signal);
+    signal?.throwIfAborted();
     return id;
   }
 

@@ -1,9 +1,9 @@
 // Matrix plugin module implements context summary behavior.
 import {
-  formatMatrixMessageText,
-  resolveMatrixMessageAttachment,
-  resolveMatrixMessageBody,
-} from "../media-text.js";
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatMatrixMessageText, resolveBundledMatrixReplacementContent } from "../media-text.js";
 import {
   formatPollAsText,
   isPollStartType,
@@ -11,14 +11,6 @@ import {
   type PollStartContent,
 } from "../poll-types.js";
 import type { MatrixRawEvent } from "./types.js";
-
-export function trimMatrixMaybeString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
 
 export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): string | undefined {
   if (isPollStartType(event.type)) {
@@ -28,17 +20,16 @@ export function summarizeMatrixMessageContextEvent(event: MatrixRawEvent): strin
     }
   }
 
-  const content = event.content as { body?: unknown; filename?: unknown; msgtype?: unknown };
+  // Thread roots do not reject redacted originals before projection; never
+  // restore their content from a replacement bundled by the homeserver.
+  const content = (
+    event.unsigned?.redacted_because
+      ? event.content
+      : (resolveBundledMatrixReplacementContent(event) ?? event.content)
+  ) as { body?: unknown; filename?: unknown; msgtype?: unknown };
   return formatMatrixMessageText({
-    body: resolveMatrixMessageBody({
-      body: trimMatrixMaybeString(content.body),
-      filename: trimMatrixMaybeString(content.filename),
-      msgtype: trimMatrixMaybeString(content.msgtype),
-    }),
-    attachment: resolveMatrixMessageAttachment({
-      body: trimMatrixMaybeString(content.body),
-      filename: trimMatrixMaybeString(content.filename),
-      msgtype: trimMatrixMaybeString(content.msgtype),
-    }),
+    body: readStringValue(content.body),
+    filename: readStringValue(content.filename),
+    msgtype: normalizeOptionalString(content.msgtype),
   });
 }

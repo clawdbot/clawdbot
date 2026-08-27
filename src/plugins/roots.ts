@@ -1,8 +1,9 @@
 // Resolves plugin root directories for bundled and installed plugins.
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveConfigDir, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 
 export type PluginSourceRoots = {
   stock?: string;
@@ -22,7 +23,7 @@ export function resolvePluginSourceRoots(params: {
   const env = params.env ?? process.env;
   const workspaceRoot = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
   const stock = resolveBundledPluginsDir(env);
-  const global = path.join(resolveConfigDir(env), "extensions");
+  const global = resolveDefaultPluginExtensionsDir(env);
   const workspace = workspaceRoot ? path.join(workspaceRoot, ".openclaw", "extensions") : undefined;
   return { stock, global, workspace };
 }

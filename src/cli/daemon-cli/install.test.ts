@@ -13,6 +13,7 @@ const resolveNodeStartupTlsEnvironmentMock = vi.hoisted(() => vi.fn());
 const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
+const isDefaultInstallIdentityMock = vi.hoisted(() => vi.fn(() => true));
 const replaceConfigFileMock = vi.hoisted(() => vi.fn());
 const resolveIsNixModeMock = vi.hoisted(() => vi.fn(() => false));
 const resolveSecretInputRefMock = vi.hoisted(() =>
@@ -102,23 +103,22 @@ vi.mock("../../config/mutate.js", () => ({
 }));
 
 vi.mock("../../config/paths.js", () => ({
+  isDefaultInstallIdentity: isDefaultInstallIdentityMock,
+  resolveNativeServiceProfileConflict: () => null,
   resolveGatewayPort: resolveGatewayPortMock,
   resolveIsNixMode: resolveIsNixModeMock,
 }));
 
-vi.mock("../../commands/gateway-install-token.persist.runtime.js", () => ({
-  readConfigFileSnapshot: readConfigFileSnapshotMock,
-  readConfigFileSnapshotForWrite: vi.fn(async () => ({
-    snapshot: await readConfigFileSnapshotMock(),
-    writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-  })),
-  replaceConfigFile: replaceConfigFileMock,
-}));
-
-vi.mock("../../config/types.secrets.js", () => ({
-  hasConfiguredSecretInput: hasConfiguredSecretInputMock,
-  resolveSecretInputRef: resolveSecretInputRefMock,
-}));
+vi.mock("../../config/types.secrets.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/types.secrets.js")>();
+  return {
+    ...actual,
+    coerceSecretRef: (value: unknown, defaults?: unknown) =>
+      resolveSecretInputRefMock({ value, defaults })?.ref ?? null,
+    hasConfiguredSecretInput: hasConfiguredSecretInputMock,
+    resolveSecretInputRef: resolveSecretInputRefMock,
+  };
+});
 
 vi.mock("../../gateway/auth.js", () => ({
   resolveGatewayAuth: resolveGatewayAuthMock,
@@ -268,6 +268,61 @@ describe("mergeInstallInvocationEnv", () => {
     expect(env.openai_api_key).toBeUndefined();
     expect(env.NODE_OPTIONS).toBeUndefined();
   });
+
+  it.each([
+    { platform: "darwin" as const, caKey: "NODE_EXTRA_CA_CERTS" },
+    { platform: "linux" as const, caKey: "NODE_EXTRA_CA_CERTS" },
+    { platform: "win32" as const, caKey: "node_extra_ca_certs" },
+  ])(
+    "preserves installed additive Node CA trust without unsafe overrides on $platform",
+    ({ platform, caKey }) => {
+      const env = mergeInstallInvocationEnv({
+        env: { PATH: "/usr/bin" },
+        existingServiceEnv: {
+          [caKey]: " /opt/openclaw/corporate-ca.pem ",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+          HTTPS_PROXY: "https://attacker.invalid",
+          NODE_OPTIONS: "--require /tmp/untrusted.js",
+          BASH_ENV: "/tmp/untrusted.sh",
+          LD_PRELOAD: "/tmp/untrusted.so",
+          OPENAI_API_KEY: "existing-service-key",
+        },
+        platform,
+      });
+
+      expectFields(env, {
+        NODE_EXTRA_CA_CERTS: "/opt/openclaw/corporate-ca.pem",
+        OPENAI_API_KEY: "existing-service-key",
+        PATH: "/usr/bin",
+      });
+      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.BASH_ENV).toBeUndefined();
+      expect(env.LD_PRELOAD).toBeUndefined();
+      if (platform === "win32") {
+        expect(env.node_extra_ca_certs).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    { platform: "darwin" as const, shellKey: "NODE_EXTRA_CA_CERTS" },
+    { platform: "win32" as const, shellKey: "node_extra_ca_certs" },
+  ])(
+    "lets the current shell override installed Node CA trust on $platform",
+    ({ platform, shellKey }) => {
+      const env = mergeInstallInvocationEnv({
+        env: { [shellKey]: "/opt/openclaw/current-shell-ca.pem" },
+        existingServiceEnv: {
+          NODE_EXTRA_CA_CERTS: "/opt/openclaw/previous-service-ca.pem",
+        },
+        platform,
+      });
+
+      expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/openclaw/current-shell-ca.pem");
+    },
+  );
 });
 
 describe("runDaemonInstall", () => {
@@ -276,6 +331,7 @@ describe("runDaemonInstall", () => {
     resolveNodeStartupTlsEnvironmentMock.mockReset();
     readConfigFileSnapshotMock.mockReset();
     resolveGatewayPortMock.mockClear();
+    isDefaultInstallIdentityMock.mockReturnValue(true);
     replaceConfigFileMock.mockReset();
     resolveIsNixModeMock.mockReset();
     resolveSecretInputRefMock.mockReset();
@@ -359,6 +415,20 @@ describe("runDaemonInstall", () => {
     expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks non-default install identities before inspecting host services", async () => {
+    isDefaultInstallIdentityMock.mockReturnValue(false);
+
+    await runDaemonInstall({ json: true });
+
+    expect(actionState.failed[0]?.message).toContain(
+      "service management skipped: non-default state dir or config path",
+    );
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(service.readCommand).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
@@ -664,6 +734,13 @@ describe("runDaemonInstall", () => {
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
   });
 
+  it("forwards Bun as the explicit managed-service runtime", async () => {
+    await runDaemonInstall({ json: true, runtime: "bun" });
+
+    expect(readFirstInstallPlanArg().runtime).toBe("bun");
+    expect(actionState.failed).toStrictEqual([]);
+  });
+
   it("continues Linux install when service probe hits a non-fatal systemd bus failure", async () => {
     service.isLoaded.mockRejectedValueOnce(
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
@@ -764,12 +841,30 @@ describe("runDaemonInstall", () => {
     expectLastEmittedResult("already-installed");
   });
 
-  it("preserves wrapper env from an installed but unloaded service during forced reinstall", async () => {
+  it("preserves managed base wrapper, environment, and provenance during forced reinstall", async () => {
+    for (const key of ["OPENAI_API_KEY", "OPENCLAW_WRAPPER"]) {
+      delete process.env[key];
+    }
+    const environment = {
+      OPENAI_API_KEY: "managed-service-key",
+      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+    };
+    const environmentValueSources = {
+      OPENAI_API_KEY: "file",
+      OPENCLAW_WRAPPER: "inline",
+    };
     service.isLoaded.mockResolvedValue(false);
     service.readCommand.mockResolvedValue({
-      programArguments: ["/usr/local/bin/openclaw-doppler", "gateway", "run"],
+      programArguments: ["/operator/drop-in-wrapper", "gateway", "run"],
       environment: {
-        OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+        OPENAI_API_KEY: "operator-drop-in-key",
+        OPENCLAW_WRAPPER: "/operator/drop-in-wrapper",
+      },
+      environmentValueSources: { OPENAI_API_KEY: "inline" },
+      managedDefinition: {
+        programArguments: [environment.OPENCLAW_WRAPPER, "gateway", "run"],
+        environment,
+        environmentValueSources,
       },
     } as never);
 
@@ -777,14 +872,73 @@ describe("runDaemonInstall", () => {
 
     expect(service.readCommand).toHaveBeenCalledTimes(1);
     const installPlanArg = readFirstInstallPlanArg();
-    expectFields(installPlanArg, { wrapperPath: "/usr/local/bin/openclaw-doppler" });
-    expectFields(installPlanArg.existingEnvironment, {
-      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+    expectFields(installPlanArg, {
+      wrapperPath: environment.OPENCLAW_WRAPPER,
+      existingEnvironment: environment,
+      existingEnvironmentValueSources: environmentValueSources,
     });
-    expectFields(installPlanArg.env, {
-      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-    });
+    expectFields(installPlanArg.env, environment);
     expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves generated-service CA trust without unsafe overrides during forced reinstall", async () => {
+    const extraCaCerts = "/opt/openclaw/corporate-ca.pem";
+    for (const key of [
+      "NODE_EXTRA_CA_CERTS",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+      "HTTPS_PROXY",
+      "NODE_OPTIONS",
+      "BASH_ENV",
+      "LD_PRELOAD",
+    ]) {
+      delete process.env[key];
+    }
+    service.isLoaded.mockResolvedValue(true);
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        NODE_EXTRA_CA_CERTS: extraCaCerts,
+        NODE_TLS_REJECT_UNAUTHORIZED: "0",
+        HTTPS_PROXY: "https://attacker.invalid",
+        NODE_OPTIONS: "--require /tmp/untrusted.js",
+        BASH_ENV: "/tmp/untrusted.sh",
+        LD_PRELOAD: "/tmp/untrusted.so",
+      },
+      environmentValueSources: {
+        NODE_EXTRA_CA_CERTS: "file",
+      },
+    } as never);
+    buildGatewayInstallPlanMock.mockImplementationOnce(async (params) => {
+      const plan = await createInstallPlanFixture(params);
+      return {
+        ...plan,
+        environment: {
+          ...plan.environment,
+          NODE_EXTRA_CA_CERTS: params?.env?.NODE_EXTRA_CA_CERTS ?? "/etc/ssl/cert.pem",
+        },
+      };
+    });
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params?: unknown) => {
+      await (params as { install: () => Promise<void> }).install();
+    });
+
+    await runDaemonInstall({ json: true, force: true });
+
+    const installPlanArg = readFirstInstallPlanArg();
+    const installEnv = installPlanArg.env as Record<string, string | undefined>;
+    expect(installEnv.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
+    expect(installEnv.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+    expect(installEnv.HTTPS_PROXY).toBeUndefined();
+    expect(installEnv.NODE_OPTIONS).toBeUndefined();
+    expect(installEnv.BASH_ENV).toBeUndefined();
+    expect(installEnv.LD_PRELOAD).toBeUndefined();
+    expectFields(installPlanArg.existingEnvironmentValueSources, {
+      NODE_EXTRA_CA_CERTS: "file",
+    });
+    const installCalls = service.install.mock.calls as unknown as Array<
+      [{ environment?: Record<string, string | undefined> }]
+    >;
+    expect(installCalls[0]?.[0].environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
   });
 
   it("reinstalls when wrapper command matches but wrapper env is missing", async () => {
@@ -829,20 +983,24 @@ describe("runDaemonInstall", () => {
     );
   });
 
-  it("does not reinstall when OPENCLAW_GATEWAY_TOKEN comes from an env file", async () => {
+  it.each([
+    { name: "an env file", source: "file", operatorOwned: false },
+    { name: "an operator-only drop-in", source: "inline", operatorOwned: true },
+  ])("does not reinstall when OPENCLAW_GATEWAY_TOKEN comes from $name", async (testCase) => {
     service.isLoaded.mockResolvedValue(true);
+    const programArguments = ["openclaw", "gateway", "run"];
     service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: {
-        OPENCLAW_GATEWAY_TOKEN: "env-file-token",
-      },
-      environmentValueSources: {
-        OPENCLAW_GATEWAY_TOKEN: "file",
-      },
+      programArguments,
+      environment: { OPENCLAW_GATEWAY_TOKEN: "operator-token" },
+      environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: testCase.source },
+      ...(testCase.operatorOwned && {
+        managedDefinition: { programArguments, environment: {} },
+      }),
     } as never);
 
     await runDaemonInstall({ json: true });
 
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
     expectLastEmittedResult("already-installed");
   });

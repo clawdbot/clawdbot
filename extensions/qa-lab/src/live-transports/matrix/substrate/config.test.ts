@@ -4,6 +4,10 @@ import { describe, expect, it } from "vitest";
 import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
+function castRecord(value: unknown): Record<string, unknown> {
+  return value as Record<string, unknown>;
+}
+
 describe("matrix qa config", () => {
   const topology: MatrixQaProvisionedTopology = {
     defaultRoomId: "!main:matrix-qa.test",
@@ -73,8 +77,69 @@ describe("matrix qa config", () => {
       requireMention: true,
     });
     expect(sut?.replyToMode).toBe("off");
+    expect(sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "off",
+      preview: { toolProgress: true },
+    });
+    expect(sut?.textChunkLimit).toBe(4000);
     expect(sut?.threadReplies).toBe("inbound");
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+  });
+
+  it("preserves the scenario provider plugin without enabling unrelated plugins", () => {
+    const next = buildMatrixQaConfig(
+      {
+        plugins: {
+          allow: ["acpx", "memory-core", "qa-lab", "openai"],
+          entries: {
+            matrix: {
+              config: { preserve: "matrix-config" },
+              enabled: false,
+              hooks: { allowConversationAccess: true, timeoutMs: 1_500 },
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openai/gpt-5.4"],
+              },
+              subagent: {
+                allowModelOverride: true,
+                allowedModels: ["anthropic/claude-sonnet-4-6"],
+              },
+            },
+            openai: { enabled: true },
+            unrelated: { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        observerUserId: "@observer:matrix-qa.test",
+        sutAccessToken: "sut-token",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology,
+      },
+    );
+
+    expect(next.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "openai", "matrix"]);
+    expect(next.plugins?.allow).not.toContain("unrelated");
+    expect(next.plugins?.allow).not.toContain("anthropic");
+    expect(next.plugins?.entries?.matrix).toEqual({
+      config: { preserve: "matrix-config" },
+      enabled: true,
+      hooks: { allowConversationAccess: true, timeoutMs: 1_500 },
+      llm: {
+        allowModelOverride: true,
+        allowedModels: ["openai/gpt-5.4"],
+      },
+      subagent: {
+        allowModelOverride: true,
+        allowedModels: ["anthropic/claude-sonnet-4-6"],
+      },
+    });
+    expect(next.plugins?.entries?.openai).toEqual({ enabled: true });
   });
 
   it("honors an explicit DM disable with a provisioned DM room", () => {
@@ -221,7 +286,8 @@ describe("matrix qa config", () => {
       topology,
     });
 
-    const reset = buildMatrixQaConfig(overridden, {
+    const reset = buildMatrixQaConfig({} as OpenClawConfig, {
+      currentConfig: overridden,
       driverUserId: "@driver:matrix-qa.test",
       homeserver: "http://127.0.0.1:28008/",
       observerUserId: "@observer:matrix-qa.test",
@@ -233,7 +299,287 @@ describe("matrix qa config", () => {
 
     expect(reset.channels?.matrix?.accounts?.sut?.autoJoin).toBeUndefined();
     expect(reset.channels?.matrix?.accounts?.sut?.autoJoinAllowlist).toBeUndefined();
-    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toBeUndefined();
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "off",
+      preview: { toolProgress: true },
+    });
+  });
+
+  it("restores owned baseline leaves while preserving current Matrix lifecycle and siblings", () => {
+    const baseline = {
+      approvals: { exec: { enabled: false, mode: "session" } },
+      agents: {
+        defaults: {
+          blockStreamingChunk: { maxChars: 120 },
+          adjacentDefault: "baseline",
+        },
+      },
+      tools: {
+        profile: "messaging",
+        media: {
+          models: [{ provider: "openai", model: "baseline", capabilities: ["audio"] }],
+          audio: {
+            enabled: false,
+            prompt: "baseline prompt",
+            scope: {
+              default: "allow",
+              rules: [{ action: "allow", match: { chatType: "direct" } }],
+            },
+          },
+        },
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["baseline"],
+        },
+      },
+      channels: {
+        matrix: {
+          unknownRoot: "baseline",
+          accounts: {
+            sut: {
+              allowBots: false,
+              autoJoin: "allowlist",
+              autoJoinAllowlist: ["!baseline:matrix-qa.test"],
+              deviceId: "BASELINE-DEVICE",
+              dm: {
+                allowFrom: ["@baseline:matrix-qa.test"],
+                enabled: true,
+                policy: "open",
+                sessionScope: "per-room",
+                threadReplies: "always",
+              },
+              execApprovals: {
+                agentFilter: ["baseline-agent"],
+                approvers: ["@baseline:matrix-qa.test"],
+                enabled: false,
+                sessionFilter: ["baseline-session"],
+                target: "dm",
+              },
+              groups: {
+                "!main:matrix-qa.test": {
+                  allowBots: false,
+                  enabled: false,
+                  requireMention: false,
+                  tools: {
+                    allow: ["baseline-allow"],
+                    deny: ["baseline-deny"],
+                  },
+                },
+              },
+              streaming: {
+                block: { enabled: true },
+                chunkMode: "newline",
+                mode: "quiet",
+                preview: { toolProgress: false },
+              },
+              threadBindings: {
+                enabled: false,
+                idleHours: 12,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const current = structuredClone(baseline) as OpenClawConfig & Record<string, unknown>;
+    const currentRoot = castRecord(current);
+    currentRoot.unrelated = { currentOnly: true };
+    castRecord(currentRoot.approvals).exec = {
+      enabled: true,
+      mode: "session",
+      reviewer: "current",
+    };
+    castRecord(currentRoot.agents).defaults = {
+      blockStreamingChunk: { maxChars: 8 },
+      adjacentDefault: "current",
+    };
+    const currentTools = castRecord(currentRoot.tools);
+    const currentMedia = castRecord(currentTools.media);
+    currentTools.profile = "coding";
+    currentMedia.models = [{ provider: "openai", model: "previous" }];
+    currentMedia.audio = {
+      enabled: true,
+      prompt: "previous prompt",
+      adjacentAudio: "current",
+      scope: {
+        default: "deny",
+        rules: [{ action: "deny", match: { chatType: "group" } }],
+      },
+    };
+    castRecord(currentRoot.messages).groupChat = {
+      mentionPatterns: ["previous"],
+      adjacentMessage: "current",
+    };
+    const currentMatrix = castRecord(castRecord(currentRoot.channels).matrix);
+    currentMatrix.unknownRoot = "current";
+    const currentAccounts = castRecord(currentMatrix.accounts);
+    currentAccounts.sibling = { enabled: false, homeserver: "https://sibling.invalid" };
+    currentAccounts["qa-driver-bot-source"] = { enabled: false, userId: "@stale:test" };
+    const currentSut = castRecord(currentAccounts.sut);
+    currentAccounts.sut = {
+      ...currentSut,
+      allowBots: "mentions",
+      autoJoinAllowlist: ["!previous:matrix-qa.test"],
+      deviceId: "CURRENT-DEVICE",
+      lifecycleState: "current",
+      dm: {
+        ...castRecord(currentSut.dm),
+        allowFrom: ["@previous:test"],
+        adjacentDm: "current",
+        sessionScope: "per-user",
+      },
+      execApprovals: {
+        agentFilter: ["previous-agent"],
+        adjacentApproval: "current",
+        approvers: ["@previous:test"],
+        enabled: true,
+        sessionFilter: ["previous-session"],
+        target: "both",
+      },
+      groups: {
+        ...castRecord(currentSut.groups),
+        "!main:matrix-qa.test": {
+          allowBots: "mentions",
+          adjacentGroup: "current",
+          enabled: true,
+          requireMention: true,
+          tools: {
+            adjacentTool: "current",
+            allow: ["previous-allow"],
+            deny: ["previous-deny"],
+          },
+        },
+        "!current-only:matrix-qa.test": {
+          adjacentGroup: "preserved",
+          enabled: false,
+        },
+      },
+      streaming: {
+        adjacentStreaming: "current",
+        block: { adjacentBlock: "current", enabled: true },
+        chunkMode: "newline",
+        mode: "quiet",
+        preview: { adjacentPreview: "current", toolProgress: false },
+      },
+      threadBindings: {
+        adjacentBinding: "current",
+        enabled: true,
+        idleHours: 1,
+      },
+    };
+
+    const next = buildMatrixQaConfig(baseline, {
+      currentConfig: current,
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(castRecord(next).unrelated).toEqual({ currentOnly: true });
+    expect(next.approvals?.exec).toEqual({
+      enabled: false,
+      mode: "session",
+      reviewer: "current",
+    });
+    expect(next.agents?.defaults).toMatchObject({
+      adjacentDefault: "current",
+      blockStreamingChunk: { maxChars: 120 },
+    });
+    expect(next.tools?.profile).toBe("messaging");
+    expect(next.tools?.media).toMatchObject({
+      models: [{ provider: "openai", model: "baseline", capabilities: ["audio"] }],
+      audio: {
+        adjacentAudio: "current",
+        enabled: false,
+        prompt: "baseline prompt",
+        scope: {
+          default: "allow",
+          rules: [{ action: "allow", match: { chatType: "direct" } }],
+        },
+      },
+    });
+    expect(next.messages?.groupChat).toMatchObject({
+      adjacentMessage: "current",
+      mentionPatterns: ["baseline"],
+      visibleReplies: "automatic",
+    });
+    expect(next.channels?.matrix).toMatchObject({ unknownRoot: "current" });
+    expect(next.channels?.matrix?.accounts?.sibling).toEqual(currentAccounts.sibling);
+    expect(next.channels?.matrix?.accounts?.["qa-driver-bot-source"]).toBeUndefined();
+    const sut = castRecord(next.channels?.matrix?.accounts?.sut);
+    expect(sut).toMatchObject({
+      allowBots: false,
+      autoJoin: "allowlist",
+      autoJoinAllowlist: ["!baseline:matrix-qa.test"],
+      deviceId: "CURRENT-DEVICE",
+      lifecycleState: "current",
+      textChunkLimit: 4000,
+      dm: {
+        adjacentDm: "current",
+        allowFrom: ["@driver:matrix-qa.test"],
+        sessionScope: "per-room",
+        threadReplies: "always",
+      },
+      execApprovals: {
+        adjacentApproval: "current",
+        agentFilter: ["baseline-agent"],
+        approvers: ["@baseline:matrix-qa.test"],
+        enabled: false,
+        sessionFilter: ["baseline-session"],
+        target: "dm",
+      },
+      streaming: {
+        adjacentStreaming: "current",
+        block: { adjacentBlock: "current", enabled: false },
+        chunkMode: "length",
+        mode: "off",
+        preview: { adjacentPreview: "current", toolProgress: true },
+      },
+      threadBindings: {
+        adjacentBinding: "current",
+        enabled: false,
+        idleHours: 12,
+      },
+    });
+    const sutGroups = castRecord(sut.groups);
+    expect(sutGroups["!main:matrix-qa.test"]).toEqual({
+      adjacentGroup: "current",
+      allowBots: false,
+      enabled: true,
+      requireMention: true,
+      tools: {
+        adjacentTool: "current",
+        allow: ["baseline-allow"],
+        deny: ["baseline-deny"],
+      },
+    });
+    expect(sutGroups["!current-only:matrix-qa.test"]).toEqual({
+      adjacentGroup: "preserved",
+      enabled: false,
+    });
+
+    const provisioned = buildMatrixQaConfig(baseline, {
+      currentConfig: current,
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutDeviceId: "PROVISIONED-DEVICE",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+    expect(provisioned.channels?.matrix?.accounts?.sut).toMatchObject({
+      deviceId: "PROVISIONED-DEVICE",
+      lifecycleState: "current",
+    });
   });
 
   it("normalizes Matrix QA overrides into the written account config", () => {
@@ -264,9 +610,55 @@ describe("matrix qa config", () => {
     expect(account?.groupPolicy).toBe("open");
     expect(account?.streaming).toEqual({
       block: { enabled: true },
+      chunkMode: "length",
       mode: "partial",
+      preview: { toolProgress: true },
     });
     expect(config.messages?.groupChat?.mentionPatterns).toEqual(["\\S"]);
+  });
+
+  it("resets progress and preview overrides when a scalar follows an object", () => {
+    const optedOut = buildMatrixQaConfig({} as OpenClawConfig, {
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: {
+        streaming: {
+          mode: "quiet",
+          progress: { commandText: "raw" },
+          preview: { toolProgress: false },
+        },
+      },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+    const reset = buildMatrixQaConfig({} as OpenClawConfig, {
+      currentConfig: optedOut,
+      driverUserId: "@driver:matrix-qa.test",
+      homeserver: "http://127.0.0.1:28008/",
+      observerUserId: "@observer:matrix-qa.test",
+      overrides: { streaming: "quiet" },
+      sutAccessToken: "sut-token",
+      sutAccountId: "sut",
+      sutUserId: "@sut:matrix-qa.test",
+      topology,
+    });
+
+    expect(optedOut.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "quiet",
+      progress: { commandText: "raw" },
+      preview: { toolProgress: false },
+    });
+    expect(reset.channels?.matrix?.accounts?.sut?.streaming).toEqual({
+      block: { enabled: false },
+      chunkMode: "length",
+      mode: "quiet",
+      preview: { toolProgress: true },
+    });
   });
 
   it("applies Matrix approval delivery overrides with gateway forwarding enabled", () => {
@@ -357,7 +749,8 @@ describe("matrix qa config", () => {
       sutUserId: "@sut:matrix-qa.test",
       topology,
     });
-    const reset = buildMatrixQaConfig(withObserver, {
+    const reset = buildMatrixQaConfig({} as OpenClawConfig, {
+      currentConfig: withObserver,
       driverUserId: "@driver:matrix-qa.test",
       homeserver: "http://127.0.0.1:28008/",
       observerUserId: "@observer:matrix-qa.test",

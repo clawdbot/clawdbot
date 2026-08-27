@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
-import { resolvePluginProviders } from "./providers.runtime.js";
+import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -18,7 +18,7 @@ afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
 
-function makeTempDir() {
+function makePluginLoaderTempDir() {
   return makeTrackedTempDir("openclaw-provider-setup-trust", tempDirs);
 }
 
@@ -89,7 +89,7 @@ module.exports = {
 
 describe("setup provider workspace trust", () => {
   it("does not import untrusted workspace provider plugins during default setup discovery", () => {
-    const runRoot = makeTempDir();
+    const runRoot = makePluginLoaderTempDir();
     const workspaceDir = path.join(runRoot, "workspace");
     const stateDir = path.join(runRoot, "state");
     const markerDir = path.join(runRoot, "markers");
@@ -110,7 +110,7 @@ describe("setup provider workspace trust", () => {
     };
 
     withEnv(env, () => {
-      const providers = resolvePluginProviders({
+      const providers = resolvePluginProvidersCore({
         config: {
           plugins: {
             enabled: true,
@@ -130,7 +130,7 @@ describe("setup provider workspace trust", () => {
   });
 
   it("loads explicitly trusted workspace provider plugins during setup discovery", () => {
-    const runRoot = makeTempDir();
+    const runRoot = makePluginLoaderTempDir();
     const workspaceDir = path.join(runRoot, "workspace");
     const stateDir = path.join(runRoot, "state");
     const markerDir = path.join(runRoot, "markers");
@@ -151,7 +151,7 @@ describe("setup provider workspace trust", () => {
     };
 
     withEnv(env, () => {
-      const providers = resolvePluginProviders({
+      const providers = resolvePluginProvidersCore({
         config: {
           plugins: {
             allow: ["setup-trusted-provider"],

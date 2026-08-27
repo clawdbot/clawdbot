@@ -4,19 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
-import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
-  NODE_SERVICE_KIND,
-  NODE_SERVICE_MARKER,
-  NODE_WINDOWS_TASK_SCRIPT_NAME,
-  resolveNodeLaunchAgentLabel,
-  resolveNodeSystemdServiceName,
-  resolveNodeWindowsTaskName,
+  resolveNodeServiceIdentityEnvironment,
 } from "./constants.js";
 import { resolveGatewayHeapNodeOptions } from "./gateway-heap.js";
 import { resolveGatewayStateDir } from "./paths.js";
@@ -30,10 +24,6 @@ type MinimalServicePathOptions = {
   env?: Record<string, string | undefined>;
   existsSync?: (candidate: string) => boolean;
   includeMissingUserBinDefaults?: boolean;
-};
-
-type BuildServicePathOptions = MinimalServicePathOptions & {
-  env?: Record<string, string | undefined>;
 };
 
 type SharedServiceEnvironmentFields = {
@@ -239,16 +229,10 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   return [];
 }
 
-/**
- * Resolve common user bin directories for macOS.
- * These are paths where npm global installs and node version managers typically place binaries.
- *
- * Key differences from Linux:
- * - fnm: macOS uses ~/Library/Application Support/fnm (not ~/.local/share/fnm)
- * - pnpm: macOS uses ~/Library/pnpm (not ~/.local/share/pnpm)
- */
-function resolveDarwinUserBinDirs(
+/** Resolve common user bin directories while preserving platform-specific manager roots. */
+function resolveUserBinDirs(
   home: string | undefined,
+  platform: "darwin" | "linux",
   env?: Record<string, string | undefined>,
   existsSync: (candidate: string) => boolean = fs.existsSync,
   options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults"> = {},
@@ -261,76 +245,42 @@ function resolveDarwinUserBinDirs(
   const pathOptions = { ...options, home };
   const includeMissingUserBinDefaults = options.includeMissingUserBinDefaults ?? true;
 
-  // Env-configured bin roots (override defaults when present).
-  // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
-  // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
   addCommonEnvConfiguredBinDirs(dirs, env, pathOptions);
-  // nvm: no stable default path, relies on env or user's shell config
-  // User must set NVM_DIR and source nvm.sh for it to work
-  addEnvConfiguredBinDir(dirs, env?.NVM_DIR, pathOptions);
-  // fnm: use aliases/default (not current)
+  addEnvConfiguredBinDir(
+    dirs,
+    platform === "darwin" ? env?.NVM_DIR : appendSubdir(env?.NVM_DIR, "current/bin"),
+    pathOptions,
+  );
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  // pnpm 10 placed binaries directly in PNPM_HOME; pnpm 11 uses PNPM_HOME/bin.
-
-  // Common user bin directories
-  addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
-
-  // Nix Home Manager (cross-platform)
-  addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
-
-  // Node version managers - macOS specific paths
-  // nvm: no stable default path, depends on user's shell configuration
-  // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
-  addExistingDir(dirs, `${home}/Library/Application Support/fnm/aliases/default/bin`, existsSync); // fnm default
-  addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
-  // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
-  addExistingDir(dirs, `${home}/Library/pnpm/bin`, existsSync); // pnpm 11 default
-  addExistingDir(dirs, `${home}/Library/pnpm`, existsSync); // pnpm default
-  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 XDG fallback
-  addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm XDG fallback
-
-  return dirs;
-}
-
-/**
- * Resolve common user bin directories for Linux.
- * These are paths where npm global installs and node version managers typically place binaries.
- */
-function resolveLinuxUserBinDirs(
-  home: string | undefined,
-  env?: Record<string, string | undefined>,
-  existsSync: (candidate: string) => boolean = fs.existsSync,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults"> = {},
-): string[] {
-  if (!home) {
-    return [];
+  if (platform === "linux") {
+    addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
   }
-
-  const dirs: string[] = [];
-  const pathOptions = { ...options, home };
-  const includeMissingUserBinDefaults = options.includeMissingUserBinDefaults ?? true;
-
-  // Env-configured bin roots (override defaults when present).
-  addCommonEnvConfiguredBinDirs(dirs, env, pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
-
-  // Common user bin directories
   addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
-
-  // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
-
-  // Node version managers
-  addExistingDir(dirs, `${home}/.nvm/current/bin`, existsSync); // nvm with current symlink
-  addExistingDir(dirs, `${home}/.local/share/fnm/aliases/default/bin`, existsSync); // fnm default
-  addExistingDir(dirs, `${home}/.local/share/fnm/current/bin`, existsSync); // fnm legacy current symlink
-  addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
-  addExistingDir(dirs, `${home}/.fnm/current/bin`, existsSync); // fnm legacy current symlink
-  addExistingDir(dirs, `${home}/.local/share/pnpm/bin`, existsSync); // pnpm 11 global bin
-  addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm global bin
-
+  // macOS uses Library roots; Linux uses XDG/current symlinks. Preserve both
+  // the pnpm root (v10) and its bin subdirectory (v11) in their original order.
+  const managerDirs =
+    platform === "darwin"
+      ? [
+          "Library/Application Support/fnm/aliases/default/bin",
+          ".fnm/aliases/default/bin",
+          "Library/pnpm/bin",
+          "Library/pnpm",
+          ".local/share/pnpm/bin",
+          ".local/share/pnpm",
+        ]
+      : [
+          ".nvm/current/bin",
+          ".local/share/fnm/aliases/default/bin",
+          ".local/share/fnm/current/bin",
+          ".fnm/aliases/default/bin",
+          ".fnm/current/bin",
+          ".local/share/pnpm/bin",
+          ".local/share/pnpm",
+        ];
+  for (const directory of managerDirs) {
+    addExistingDir(dirs, `${home}/${directory}`, existsSync);
+  }
   return dirs;
 }
 
@@ -342,43 +292,22 @@ function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): st
     return [];
   }
 
-  const parts: string[] = [];
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
   const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
 
   const existsSync = options.existsSync ?? fs.existsSync;
-  const userDirs = includeUserDirs
-    ? platform === "linux"
-      ? resolveLinuxUserBinDirs(options.home, options.env, existsSync, options)
-      : platform === "darwin"
-        ? resolveDarwinUserBinDirs(options.home, options.env, existsSync, options)
-        : []
-    : [];
+  const userDirs =
+    includeUserDirs && (platform === "linux" || platform === "darwin")
+      ? resolveUserBinDirs(options.home, platform, options.env, existsSync, options)
+      : [];
 
-  const add = (dir: string) => {
-    if (!dir) {
-      return;
-    }
-    if (!parts.includes(dir)) {
-      parts.push(dir);
-    }
-  };
-
-  for (const dir of extraDirs) {
-    add(dir);
-  }
-  for (const dir of systemDirs) {
-    add(dir);
-  }
-  for (const dir of userDirs) {
-    add(dir);
-  }
-
-  return parts;
+  return [...new Set([...extraDirs, ...systemDirs, ...userDirs].filter(Boolean))];
 }
 
-export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptions = {}): string[] {
+export function getMinimalServicePathPartsFromEnv(
+  options: MinimalServicePathOptions = {},
+): string[] {
   const env = options.env ?? process.env;
   return getMinimalServicePathParts({
     ...options,
@@ -387,13 +316,8 @@ export function getMinimalServicePathPartsFromEnv(options: BuildServicePathOptio
   });
 }
 
-function buildMinimalServicePath(options: BuildServicePathOptions = {}): string {
+function buildMinimalServicePath(options: MinimalServicePathOptions = {}): string {
   const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  if (platform === "win32") {
-    return env.PATH ?? "";
-  }
-
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
@@ -439,7 +363,6 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
   };
 }
 
@@ -459,21 +382,17 @@ export function buildNodeServiceEnvironment(params: {
   );
   const gatewayToken = normalizeOptionalString(env.OPENCLAW_GATEWAY_TOKEN);
   const gatewayPassword = normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD);
+  const cloudflareAccessClientId = normalizeOptionalString(env.CF_ACCESS_CLIENT_ID);
+  const cloudflareAccessClientSecret = normalizeOptionalString(env.CF_ACCESS_CLIENT_SECRET);
   const allowInsecurePrivateWs = normalizeOptionalString(env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_GATEWAY_TOKEN: gatewayToken,
     OPENCLAW_GATEWAY_PASSWORD: gatewayPassword,
+    CF_ACCESS_CLIENT_ID: cloudflareAccessClientId,
+    CF_ACCESS_CLIENT_SECRET: cloudflareAccessClientSecret,
     OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: allowInsecurePrivateWs,
-    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
-    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
-    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
-    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
-    OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
-    OPENCLAW_LOG_PREFIX: "node",
-    OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
-    OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
-    OPENCLAW_SERVICE_VERSION: VERSION,
+    ...resolveNodeServiceIdentityEnvironment(),
   };
 }
 

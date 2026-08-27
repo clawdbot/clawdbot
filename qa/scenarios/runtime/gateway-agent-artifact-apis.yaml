@@ -1,0 +1,29 @@
+title: Gateway agent and artifact APIs
+
+scenario:
+  id: gateway-agent-artifact-apis
+  surface: runtime
+  category: gateway.gateway-rpc-apis-and-events
+  coverage:
+    primary:
+      - gateway.agent-and-artifact-apis
+  objective: Verify agent configuration, editable agent files, worker environments, and transcript artifacts through the real Gateway RPC and HTTP boundaries.
+  successCriteria:
+    - A real operator client creates, lists, updates, and deletes an agent through Gateway RPCs.
+    - Agent file set, list, and get preserve exact content, byte size, and content hash.
+    - Worker environment create, replay, list, status, and destroy calls preserve idempotency through the Gateway context service seam.
+    - A SQLite-backed task transcript exposes a managed artifact through list, get, and download RPCs.
+    - The ticketed HTTP download returns the exact artifact bytes while unknown and cross-agent lookups fail.
+  docsRefs:
+    - docs/gateway/protocol.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/server-methods/agents.ts
+    - src/gateway/server-methods/environments.ts
+    - src/gateway/server-methods/artifacts.ts
+    - src/gateway/managed-image-attachments.ts
+    - test/e2e/qa-lab/runtime/gateway-agent-artifact-apis.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-agent-artifact-apis.e2e.test.ts
+    summary: Run a real Gateway and operator client across config-backed agents, editable files, injected environment lifecycle, SQLite task transcripts, artifact RPCs, and ticketed HTTP bytes.

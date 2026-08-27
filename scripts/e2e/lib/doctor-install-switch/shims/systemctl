@@ -2,7 +2,9 @@
 set -euo pipefail
 
 args=("$@")
+scope="system"
 if [[ "${args[0]:-}" == "--user" ]]; then
+  scope="user"
   args=("${args[@]:1}")
 fi
 cmd="${args[0]:-}"
@@ -24,6 +26,20 @@ case "$cmd" in
     exit 1
     ;;
   show)
+    property=""
+    for arg in "${args[@]:1}"; do
+      case "$arg" in
+        --property=*) property="${arg#--property=}" ;;
+      esac
+    done
+    if [[ "$scope" == "system" && "$property" == "LoadState" ]]; then
+      echo "not-found"
+      exit 0
+    fi
+    if [[ "$scope" == "system" && "$property" == "UnitPath" ]]; then
+      echo "/etc/systemd/system /usr/lib/systemd/system"
+      exit 0
+    fi
     printf "%s\n" \
       "ActiveState=inactive" \
       "SubState=dead" \

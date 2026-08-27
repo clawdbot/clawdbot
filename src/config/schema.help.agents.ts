@@ -1,14 +1,10 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 export const AGENT_FIELD_HELP: Record<string, string> = {
-  ui: "UI presentation settings for accenting and assistant identity shown in control surfaces. Use this for branding and readability customization without changing runtime behavior.",
+  ui: "UI presentation settings for accenting and operator display preferences. Use this for readability customization without changing runtime behavior.",
   "ui.seamColor":
     "Primary accent color used by UI surfaces for emphasis, badges, and visual identity cues. Use high-contrast values that remain readable across light/dark themes.",
-  "ui.assistant":
-    "Assistant display identity settings for name and avatar shown in UI surfaces. Keep these values aligned with your operator-facing persona and support expectations.",
-  "ui.assistant.name":
-    "Display name shown for the assistant in UI views, chat chrome, and status contexts. Keep this stable so operators can reliably identify which assistant persona is active.",
-  "ui.assistant.avatar":
-    "Assistant avatar image source used in UI surfaces (URL, path, or data URI depending on runtime support). Use trusted assets and consistent branding dimensions for clean rendering.",
+  "ui.prefs.accent":
+    "User-selected Control UI accent color in #RRGGBB format. Overrides ui.seamColor; clear it to restore the configured seam color or theme default.",
   tui: "Terminal UI display settings. Use this section for terminal-only presentation preferences without changing Gateway or other UI behavior.",
   "tui.footer":
     "Terminal UI footer display settings. Keep optional context compact so session, model, goal, and token information stay readable.",
@@ -55,7 +51,11 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.llm.allowModelOverride":
     "Explicitly allows this plugin to request model overrides in api.runtime.llm.complete. Keep false unless the plugin is trusted to steer model selection.",
   "plugins.entries.*.llm.allowedModels":
-    'Allowed override targets for trusted plugin LLM completions as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+    'Allowed override targets for trusted plugin LLM calls as canonical "provider/model" refs. Use "*" only when you intentionally allow any model override.',
+  "plugins.entries.*.llm.allowedCompletionModels":
+    'Allowed targets for every plugin LLM completion as canonical "provider/model" refs, including host-resolved defaults and overrides. Use "*" only when you intentionally allow any model.',
+  "plugins.entries.*.llm.allowAuthProfileOverride":
+    "Allows this plugin to select a non-default auth profile for isolated agent-runtime completions. Keep false unless the plugin is trusted for explicit isolated credential routing.",
   "plugins.entries.*.llm.allowAgentIdOverride":
     "Explicitly allows this plugin to request api.runtime.llm.complete against a non-default agent id. Keep false unless the plugin is trusted for cross-agent model access.",
   "plugins.entries.*.apiKey":
@@ -118,12 +118,14 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     'Image-tool media compression preference: "auto" adapts to provider/model limits and image count, "efficient" saves tokens and bytes, "balanced" keeps the current middle ground, and "high" preserves more detail for screenshots and document images.',
   "agents.defaults.compaction":
     "Compaction behavior for when context nears token limits, including strategy and pre-compaction memory flush behavior. Use this when long-running sessions need stable continuity under tight context windows.",
+  "agents.defaults.compaction.enabled":
+    "Enable embedded proactive auto-compaction (default: true). Set false to stop threshold-driven embedded compaction while preserving OpenClaw overflow recovery, preflight compaction, and manual /compact.",
   "agents.defaults.compaction.mode":
-    'Compaction strategy mode: "default" uses baseline behavior, while "safeguard" applies stricter guardrails to preserve recent context. Keep "default" unless you observe aggressive history loss near limit boundaries.',
+    'Compaction strategy mode: "safeguard" (the effective default when unset) applies guardrails to preserve recent context, while "default" uses baseline summarization without them. Set "default" only if safeguard summarization causes problems for your provider.',
   "agents.defaults.compaction.provider":
     "Id of a registered compaction provider plugin used for summarization. When set and the provider is registered, its summarize() method is called instead of the built-in summarizeInStages pipeline. Falls back to built-in on provider failure. Leave unset to use the default built-in summarization.",
   "agents.defaults.compaction.thinkingLevel":
-    'Optional thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", or "ultra". It overrides the session level and is clamped to the actual compaction model/runtime; leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
+    'Thinking level used only for embedded OpenClaw compaction summaries: "off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max", "ultra", or "inherit". The default is "low"; set "inherit" to reuse the session level. The selected level is clamped to the actual compaction model/runtime. Native Codex app-server compaction ignores this setting because its compact request has no per-operation thinking override, and OpenClaw logs a warning.',
   "agents.defaults.compaction.keepRecentTokens":
     "Minimum token budget preserved from the most recent conversation window during compaction. Use higher values to protect immediate context continuity and lower values to keep more long-tail history.",
   "agents.defaults.compaction.identifierPolicy":
@@ -148,10 +150,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
-  "agents.defaults.compaction.truncateAfterCompaction":
-    "When enabled, rotates the active session transcript after compaction so future turns load only the summary and unsummarized tail while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: false.",
   "agents.defaults.compaction.maxActiveTranscriptBytes":
-    'Triggers normal local compaction when the active session transcript reaches this size (bytes or strings like "20mb"). Requires truncateAfterCompaction so successful compaction can rotate to a smaller successor transcript; set to 0 or leave unset to disable. This never splits raw transcript bytes.',
+    'Byte threshold that triggers normal preflight local compaction when the transcript window the model sees (since the latest compaction or reset) reaches this size (bytes or strings like "20mb"). Set to 0 or leave unset to disable. Also caps Codex app-server native rollout transcripts; oversized native threads restart fresh.',
   "agents.defaults.compaction.notifyUser":
     "When enabled, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, '🧹 Compacting context...' and '🧹 Compaction complete'), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, '⚠️ Memory maintenance temporarily failed; continuing your reply.'). Disabled by default to keep context maintenance silent and non-intrusive.",
   "agents.defaults.compaction.memoryFlush":
@@ -163,7 +163,7 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.compaction.memoryFlush.softThresholdTokens":
     "Threshold distance to compaction (in tokens) that triggers pre-compaction memory flush execution. Use earlier thresholds for safer persistence, or tighter thresholds for lower flush frequency.",
   "agents.defaults.compaction.memoryFlush.forceFlushTranscriptBytes":
-    'Forces pre-compaction memory flush when active transcript size reaches this threshold (bytes or strings like "2mb"). Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
+    'Forces pre-compaction memory flush when the model-visible transcript window reaches this threshold (bytes or strings like "2mb"). After compaction, this includes the retained tail and subsequent turns rather than discarded history. Use this to prevent long-session hangs even when token counters are stale; set to 0 to disable.',
   "agents.defaults.embeddedAgent":
     "Embedded OpenClaw runner hardening controls for how workspace-local agent settings are trusted and applied in OpenClaw sessions.",
   "agents.defaults.embeddedAgent.projectSettingsPolicy":
@@ -180,11 +180,9 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.typingMode":
     'Controls when typing starts for agents: "never", "instant", "thinking", or "message". Per-agent typingMode overrides this default.',
   "agents.defaults.typingIntervalSeconds":
-    "Controls typing-indicator keepalive cadence in seconds. Per-agent typingIntervalSeconds overrides this default.",
+    "Controls typing-indicator keepalive cadence in seconds for every agent. Increase it to reduce update frequency across all typing-capable channels.",
   "agents.entries.*.typingMode":
     "Overrides the default typing start policy for one agent without changing other agents.",
-  "agents.entries.*.typingIntervalSeconds":
-    "Overrides the default typing-indicator keepalive cadence for one agent. Use this when one agent needs a different refresh interval from the shared default.",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
   "commands.native":
@@ -219,6 +217,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Exact MCP tool names or simple '*' globs to expose from this server. When omitted, all server tools remain eligible unless excluded.",
   "mcp.servers.*.toolFilter.exclude":
     "Exact MCP tool names or simple '*' globs to hide from this server.",
+  "mcp.servers.*.oauth.identity":
+    'OAuth credential ownership for this server. Omit this field or use "shared" for operator-managed credentials; use "per-requester" to let each authenticated sender connect their own account.',
   "mcp.servers.*.oauth.authProfileId":
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":

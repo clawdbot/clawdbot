@@ -1,11 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
+import { createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
+import {
+  ARCHIVE_LIMIT_ERROR_CODE,
+  ArchiveFormatError,
+  ArchiveLimitError,
+  ArchiveSecurityError,
+  extractArchive,
+} from "../infra/archive.js";
+import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  publishFileNoClobber,
+} from "../infra/directory-durability.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/path-guards.js";
 import {
   cellAuthSecretDir,
   cellNetworkName,
@@ -39,18 +53,7 @@ const MANIFEST_MAX_BYTES = 4 * 1024 * 1024;
 const BACKUP_LEASE_PROBE_INTERVAL_MS = 30_000;
 const RESTORE_VERIFY_TIMEOUT_MS = 60_000;
 const RESTORE_VERIFY_POLL_MS = 1_000;
-
-type BackupLinkCacheKey = `${number}:${number}`;
-
-class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
-  override get(_key: BackupLinkCacheKey): undefined {
-    return undefined;
-  }
-
-  override set(_key: BackupLinkCacheKey, _value: string): this {
-    return this;
-  }
-}
+const RESTORE_EXTRACT_TIMEOUT_MS = 30 * 60_000;
 
 type FleetBackupManifest = {
   schemaVersion: 1;
@@ -79,10 +82,6 @@ type FleetRestoreResult = {
   started: boolean;
   url: string;
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function timestampBasename(tenant: string, nowMs: number): string {
   const stamp = new Date(nowMs)
@@ -126,14 +125,6 @@ async function canonicalizeForContainment(targetPath: string): Promise<string> {
   }
 }
 
-function isWithin(candidate: string, root: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
-
 function remapArchivePath(
   entryPath: string,
   manifestPath: string,
@@ -144,11 +135,11 @@ function remapArchivePath(
   if (resolved === manifestPath) {
     return "manifest.json";
   }
-  if (isWithin(resolved, dataTarget)) {
+  if (isPathInside(dataTarget, resolved)) {
     const relative = path.relative(dataTarget, resolved).split(path.sep).join(path.posix.sep);
     return relative ? path.posix.join("data", relative) : "data";
   }
-  if (isWithin(resolved, authTarget)) {
+  if (isPathInside(authTarget, resolved)) {
     const relative = path.relative(authTarget, resolved).split(path.sep).join(path.posix.sep);
     return relative ? path.posix.join("auth", relative) : "auth";
   }
@@ -212,7 +203,7 @@ export async function backupFleetCell(params: {
   );
   const canonicalOutput = await canonicalizeForContainment(archivePath);
   const roots = [dataTarget, authTarget];
-  if (roots.some((root) => isWithin(canonicalOutput, root))) {
+  if (roots.some((root) => isPathInside(root, canonicalOutput))) {
     throw new Error(
       "Fleet backup output must not be written inside the cell data or auth directory.",
     );
@@ -311,7 +302,7 @@ export async function backupFleetCell(params: {
           gzip: true,
           portable: true,
           preservePaths: true,
-          linkCache: new BackupLinkCache(),
+          linkCache: createBackupLinkCache(),
           filter,
           onWriteEntry: (entry) => {
             entry.path = remapArchivePath(entry.path, manifestPath, dataTarget, authTarget);
@@ -319,8 +310,8 @@ export async function backupFleetCell(params: {
         },
         [manifestPath, dataTarget, authTarget],
       ),
-      // Stream to a same-directory temp path first: a killed process must not
-      // leave a truncated file under the final archive name.
+      // Finish streaming into a same-directory temp path before publication;
+      // filesystems without hard-link support still need a non-atomic copy.
       createWriteStream(tempArchivePath, { flags: "wx", mode: 0o600 }),
     );
     // A single large file can stream past the lease TTL without a filter
@@ -351,7 +342,25 @@ export async function backupFleetCell(params: {
         `Fleet backup refuses a file name its restore path rules would reject: ${unrestorablePath}. Rename the file inside the cell and retry.`,
       );
     }
-    await publishArchive(tempArchivePath, archivePath);
+    try {
+      await publishFileNoClobber(tempArchivePath, archivePath, {
+        strategy: "link-or-copy",
+        durability: "degrade",
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
+          cause: error,
+        });
+      }
+      if (getPublishFileExclusiveFailureDetails(error)?.cleanup === "unknown") {
+        throw new Error(
+          `Fleet backup publication failed: ${errorMessage(error)}. A partial archive may remain at ${archivePath}; inspect or remove it before retrying.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     return {
       tenant: params.record.tenantId,
       archivePath,
@@ -363,37 +372,6 @@ export async function backupFleetCell(params: {
   } finally {
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
-  }
-}
-
-// Publish with no-overwrite semantics after every check passed: hard-link the
-// temp file to the final name when supported, else exclusive copy. EEXIST from
-// either path means another process owns the destination.
-async function publishArchive(tempArchivePath: string, archivePath: string): Promise<void> {
-  try {
-    await fs.link(tempArchivePath, archivePath);
-    return;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
-        cause: error,
-      });
-    }
-    if (code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EPERM") {
-      throw error;
-    }
-  }
-  try {
-    await fs.copyFile(tempArchivePath, archivePath, fsConstants.COPYFILE_EXCL);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
-        cause: error,
-      });
-    }
-    await fs.rm(archivePath, { force: true }).catch(() => undefined);
-    throw error;
   }
 }
 
@@ -415,13 +393,6 @@ function isAllowedRestorePath(rawPath: string): boolean {
     normalized === "auth" ||
     normalized.startsWith("auth/")
   );
-}
-
-function restoreEntryKind(entry: Stats | tar.ReadEntry): "file" | "directory" | "other" {
-  if ("isFile" in entry) {
-    return entry.isFile() ? "file" : entry.isDirectory() ? "directory" : "other";
-  }
-  return entry.type === "File" ? "file" : entry.type === "Directory" ? "directory" : "other";
 }
 
 // Extraction runs as the invoking user, so a root-invoked restore must repair
@@ -488,7 +459,7 @@ export async function restoreFleetCell(params: {
     canonicalizeForContainment(params.record.dataDir),
     canonicalizeForContainment(cellAuthSecretDir(params.stateDir, params.record.tenantId)),
   ]);
-  if (restoreRoots.some((root) => isWithin(canonicalArchive, root))) {
+  if (restoreRoots.some((root) => isPathInside(root, canonicalArchive))) {
     throw new Error(
       "Fleet restore archive must not be stored inside the cell data or auth directory.",
     );
@@ -526,58 +497,78 @@ export async function restoreFleetCell(params: {
   let replacementAttemptId = "";
   try {
     let invalidArchive = false;
-    let totalBytes = 0;
-    let totalEntries = 0;
-    let exceeded = false;
-    let tooManyEntries = false;
+    let totalPathComponents = 0;
+    let tooManyPathComponents = false;
     const maxBytes = params.maxBytes ?? DEFAULT_FLEET_BACKUP_MAX_BYTES;
     const maxEntries = params.maxEntries ?? FLEET_BACKUP_MAX_ENTRIES;
-    await tar.x({
-      file: archivePath,
-      cwd: tempDir,
-      preservePaths: false,
-      preserveOwner: false,
-      strict: true,
-      filter: (entryPath, entry) => {
-        if (exceeded || tooManyEntries) {
-          return false;
-        }
-        // Entry cap complements the byte cap: metadata-only archive bombs stay
-        // under --max-bytes but can exhaust host inodes during extraction.
-        // Count path segments, not entries, so deep paths whose intermediate
-        // directories are created implicitly cannot bypass the budget.
-        totalEntries += entryPath.split("/").filter(Boolean).length;
-        if (totalEntries > maxEntries) {
-          tooManyEntries = true;
-          return false;
-        }
-        const kind = restoreEntryKind(entry);
-        if (kind === "other" || !isAllowedRestorePath(entryPath)) {
-          invalidArchive = true;
-          return false;
-        }
-        if (kind === "file") {
-          totalBytes += entry.size;
-          if (totalBytes > maxBytes) {
-            exceeded = true;
-            return false;
+    try {
+      await extractArchive({
+        archivePath,
+        destDir: tempDir,
+        kind: "tar",
+        tarGzip: true,
+        timeoutMs: RESTORE_EXTRACT_TIMEOUT_MS,
+        entryModes: "clamp",
+        entryFilter: (entry) => {
+          // Preserve Fleet's aggregate component budget in addition to the
+          // per-entry preflight enforced by maxEntryPathComponents.
+          totalPathComponents += entry.path.split("/").filter(Boolean).length;
+          if (totalPathComponents > maxEntries) {
+            tooManyPathComponents = true;
+            return "skip";
           }
-        }
-        return true;
-      },
-    });
-    if (exceeded) {
-      throw new Error(
-        `Fleet restore exceeds the ${maxBytes}-byte limit; raise --max-bytes or use a smaller archive.`,
-      );
-    }
-    if (tooManyEntries) {
-      throw new Error(
-        `Fleet restore exceeds the ${maxEntries}-entry limit; the archive is not a usable fleet cell backup.`,
-      );
-    }
-    if (invalidArchive) {
-      throw new Error("Archive is not a fleet cell backup or was tampered with.");
+          if (
+            (entry.kind !== "file" && entry.kind !== "directory") ||
+            !isAllowedRestorePath(entry.path)
+          ) {
+            invalidArchive = true;
+            return "skip";
+          }
+          return "extract";
+        },
+        onFiltered: "reject-archive",
+        limits: {
+          // The caller already pinned this exact archive path and size; setting
+          // the observed size avoids fs-safe's smaller generic upload default.
+          maxArchiveBytes: Math.max(1, archiveStat.size),
+          maxEntries,
+          maxExtractedBytes: maxBytes,
+          maxEntryBytes: maxBytes,
+          maxEntryPathComponents: maxEntries,
+        },
+      });
+    } catch (error) {
+      if (
+        tooManyPathComponents ||
+        (error instanceof ArchiveLimitError &&
+          (error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT ||
+            error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_PATH_COMPONENTS_EXCEEDS_LIMIT))
+      ) {
+        throw new Error(
+          `Fleet restore exceeds the ${maxEntries}-entry limit; the archive is not a usable fleet cell backup.`,
+          { cause: error },
+        );
+      }
+      if (
+        error instanceof ArchiveLimitError &&
+        (error.code === ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT ||
+          error.code === ARCHIVE_LIMIT_ERROR_CODE.ENTRY_EXTRACTED_SIZE_EXCEEDS_LIMIT)
+      ) {
+        throw new Error(
+          `Fleet restore exceeds the ${maxBytes}-byte limit; raise --max-bytes or use a smaller archive.`,
+          { cause: error },
+        );
+      }
+      if (
+        invalidArchive ||
+        error instanceof ArchiveSecurityError ||
+        error instanceof ArchiveFormatError
+      ) {
+        throw new Error("Archive is not a fleet cell backup or was tampered with.", {
+          cause: error,
+        });
+      }
+      throw error;
     }
     const safeRoot = await fsSafeRoot(tempDir, {
       symlinks: "reject",

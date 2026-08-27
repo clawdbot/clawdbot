@@ -26,7 +26,7 @@ import type {
   ExtensionRuntime,
   LoadExtensionsResult,
 } from "./extensions/types.js";
-import { DefaultPackageManager, type PathMetadata } from "./package-manager.js";
+import { DefaultPackageManager, type PathMetadata, type ResolvedPaths } from "./package-manager.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -49,6 +49,13 @@ export interface ResourceLoader {
   extendResources(paths: ResourceExtensionPaths): void;
   reload(): Promise<void>;
 }
+
+const EMPTY_RESOLVED_PATHS: ResolvedPaths = {
+  extensions: [],
+  skills: [],
+  prompts: [],
+  themes: [],
+};
 
 function resolvePromptInput(input: string | undefined, description: string): string | undefined {
   if (!input) {
@@ -349,7 +356,10 @@ export class DefaultResourceLoader implements ResourceLoader {
       clearExtensionCache();
     }
     await this.settingsManager.reload();
-    const resolvedPaths = await this.packageManager.resolve();
+    const resolvedPaths =
+      this.noExtensions && this.noSkills && this.noPromptTemplates && this.noThemes
+        ? EMPTY_RESOLVED_PATHS
+        : await this.packageManager.resolve();
     const cliExtensionPaths = await this.packageManager.resolveExtensionSources(
       this.additionalExtensionPaths,
       {

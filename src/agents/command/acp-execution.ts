@@ -1,15 +1,18 @@
+import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  assertAgentRunLifecycleGenerationCurrent,
-  registerAgentRunContext,
-} from "../../infra/agent-events.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
@@ -33,6 +36,7 @@ type AcpReadyResolution = Extract<
 >;
 
 export async function runAcpAgentCommand(params: {
+  preparedRunAdmission: PreparedAgentRunAdmission;
   cfg: OpenClawConfig;
   deps: CliDeps;
   runtime: RuntimeEnv;
@@ -101,7 +105,49 @@ export async function runAcpAgentCommand(params: {
 
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+    const admittedRunContext = await params.preparedRunAdmission.admit("acp");
+    const isElicitationActive = () => {
+      if (
+        params.opts.abortSignal?.aborted === true ||
+        getAdmittedRunDelegatedAuthority(admittedRunContext) === undefined
+      ) {
+        return false;
+      }
+      try {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const onElicitation = createLazyAcpElicitationHandler({
+      sourceSessionKey: params.opts.inputProvenance?.sourceSessionKey ?? params.sessionKey,
+      targetSessionKey: params.sessionKey,
+      outerRequestId: params.runId,
+      agentId: params.sessionAgentId,
+      runId: params.runId,
+      delivery: {
+        deliver: async (_kind, payload) => {
+          if (!isElicitationActive()) {
+            throw new Error("ACP input request is no longer active.");
+          }
+          if (payload.text) {
+            attemptExecutionRuntime.emitAcpRuntimeEvent({
+              runId: params.runId,
+              toolTracker: acpToolTracker,
+              sessionKey: params.sessionKey,
+              agentId: params.sessionAgentId,
+              abortSignal: params.opts.abortSignal,
+              event: { type: "status", text: payload.text, tag: "elicitation" },
+            });
+          }
+          return true;
+        },
+      },
+      isActive: isElicitationActive,
+    });
     await params.acpManager.runTurn({
+      admittedRunContext,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
       provenance: params.provenance,
@@ -110,6 +156,8 @@ export async function runAcpAgentCommand(params: {
       mode: "prompt",
       requestId: params.runId,
       signal: params.opts.abortSignal,
+      onElicitation,
+      onBeforePrompt: params.opts.onExecutionStarted,
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
           attemptExecutionRuntime.emitAcpPromptSubmitted({
@@ -177,6 +225,7 @@ export async function runAcpAgentCommand(params: {
 
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
   const finalText = visibleTextAccumulator.finalize();
+  const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
   let sessionEntry = params.sessionEntry;
   try {
     const { resolveAcpSessionCwd } = await loadAcpSessionIdentifiersRuntime();
@@ -249,11 +298,13 @@ export async function runAcpAgentCommand(params: {
     abortSignal: params.opts.abortSignal,
     stopReason,
     resultStatus,
+    terminalReply,
   });
 
   const result = applyAgentRunAbortMetadata(
     attemptExecutionRuntime.buildAcpResult({
       payloadText: finalText,
+      terminalReply,
       startedAt,
       stopReason,
       resultStatus,

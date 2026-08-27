@@ -1,5 +1,7 @@
 // Internal hook tests cover dispatch for command, session, agent, and gateway hooks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   clearInternalHooks,
@@ -7,8 +9,6 @@ import {
   getRegisteredEventKeys,
   isAgentBootstrapEvent,
   isGatewayStartupEvent,
-  isMessageReceivedEvent,
-  isMessageSentEvent,
   registerInternalHook,
   setInternalHooksEnabled,
   triggerInternalHook,
@@ -30,6 +30,7 @@ describe("hooks", () => {
   afterEach(() => {
     clearInternalHooks();
     setInternalHooksEnabled(true);
+    resetPluginRuntimeStateForTest();
   });
 
   describe("registerInternalHook", () => {
@@ -248,151 +249,6 @@ describe("hooks", () => {
     });
   });
 
-  describe("isMessageReceivedEvent", () => {
-    it.each([
-      {
-        name: "returns true for message:received events with expected context",
-        event: createInternalHookEvent("message", "received", "test-session", {
-          from: "+1234567890",
-          content: "Hello world",
-          channelId: "whatsapp",
-          conversationId: "chat-123",
-          timestamp: Date.now(),
-        } satisfies MessageReceivedHookContext),
-        expected: true,
-      },
-      {
-        name: "returns false for message:sent events",
-        event: createInternalHookEvent("message", "sent", "test-session", {
-          to: "+1234567890",
-          content: "Hello world",
-          success: true,
-          channelId: "whatsapp",
-        } satisfies MessageSentHookContext),
-        expected: false,
-      },
-      {
-        name: "returns false when content is missing",
-        event: createInternalHookEvent("message", "received", "test-session", {
-          from: "+1234567890",
-          channelId: "whatsapp",
-        }),
-        expected: false,
-      },
-      {
-        name: "returns false when content is not a string",
-        event: createInternalHookEvent("message", "received", "test-session", {
-          from: "+1234567890",
-          content: 123,
-          channelId: "whatsapp",
-        }),
-        expected: false,
-      },
-    ] satisfies Array<{
-      name: string;
-      event: ReturnType<typeof createInternalHookEvent>;
-      expected: boolean;
-    }>)("$name", ({ event, expected }) => {
-      expect(isMessageReceivedEvent(event)).toBe(expected);
-    });
-  });
-
-  describe("isMessageSentEvent", () => {
-    it.each([
-      {
-        name: "returns true for message:sent events with expected context",
-        event: createInternalHookEvent("message", "sent", "test-session", {
-          to: "+1234567890",
-          content: "Hello world",
-          success: true,
-          channelId: "telegram",
-          conversationId: "chat-456",
-          messageId: "msg-789",
-        } satisfies MessageSentHookContext),
-        expected: true,
-      },
-      {
-        name: "returns true when success is false (error case)",
-        event: createInternalHookEvent("message", "sent", "test-session", {
-          to: "+1234567890",
-          content: "Hello world",
-          success: false,
-          error: "Network error",
-          channelId: "whatsapp",
-        } satisfies MessageSentHookContext),
-        expected: true,
-      },
-      {
-        name: "returns false for message:received events",
-        event: createInternalHookEvent("message", "received", "test-session", {
-          from: "+1234567890",
-          content: "Hello world",
-          channelId: "whatsapp",
-        } satisfies MessageReceivedHookContext),
-        expected: false,
-      },
-      {
-        name: "returns false when content is missing",
-        event: createInternalHookEvent("message", "sent", "test-session", {
-          to: "+1234567890",
-          success: true,
-          channelId: "telegram",
-        }),
-        expected: false,
-      },
-      {
-        name: "returns false when content is not a string",
-        event: createInternalHookEvent("message", "sent", "test-session", {
-          to: "+1234567890",
-          content: false,
-          success: true,
-          channelId: "telegram",
-        }),
-        expected: false,
-      },
-    ] satisfies Array<{
-      name: string;
-      event: ReturnType<typeof createInternalHookEvent>;
-      expected: boolean;
-    }>)("$name", ({ event, expected }) => {
-      expect(isMessageSentEvent(event)).toBe(expected);
-    });
-  });
-
-  describe("message type-guard shared negatives", () => {
-    it("returns false for non-message and missing-context shapes", () => {
-      const cases = [
-        {
-          match: isMessageReceivedEvent,
-        },
-        {
-          match: isMessageSentEvent,
-        },
-      ] as const;
-      const nonMessageEvent = createInternalHookEvent("command", "new", "test-session");
-      const missingReceivedContext = createInternalHookEvent(
-        "message",
-        "received",
-        "test-session",
-        {
-          from: "+1234567890",
-          // missing channelId
-        },
-      );
-      const missingSentContext = createInternalHookEvent("message", "sent", "test-session", {
-        to: "+1234567890",
-        channelId: "whatsapp",
-        // missing success
-      });
-
-      for (const { match } of cases) {
-        expect(match(nonMessageEvent)).toBe(false);
-      }
-      expect(isMessageReceivedEvent(missingReceivedContext)).toBe(false);
-      expect(isMessageSentEvent(missingSentContext)).toBe(false);
-    });
-  });
-
   describe("message hooks", () => {
     it("should trigger message:received handlers", async () => {
       const handler = vi.fn();
@@ -508,6 +364,22 @@ describe("hooks", () => {
 
       const keys = getRegisteredEventKeys();
       expect(keys).toStrictEqual([]);
+    });
+
+    it("removes legacy hooks from the active plugin registry", () => {
+      const active = createEmptyPluginRegistry();
+      active.legacyInternalHooks.push({
+        pluginId: "active-plugin",
+        name: "active-plugin",
+        event: "command:stop",
+        handler: vi.fn(),
+      });
+      setActivePluginRegistry(active);
+
+      clearInternalHooks();
+
+      expect(active.legacyInternalHooks).toStrictEqual([]);
+      expect(getRegisteredEventKeys()).toStrictEqual([]);
     });
   });
 });

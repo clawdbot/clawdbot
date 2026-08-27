@@ -233,11 +233,13 @@ async function resolveAllowedChannelTarget(
     allowNameMatching: isDangerousNameMatchingEnabled(teams),
   });
   const stableTarget = await resolveStableChannelTarget(cfg, target);
+  if (!directRoute.allowlistConfigured && groupPolicy !== "open" && stableTarget) {
+    throw new ToolAuthorizationError(
+      'Microsoft Teams read target is not allowed. Configure channels.msteams.teams.<team>.channels for this channel, or deliberately set channels.msteams.groupPolicy to "open".',
+    );
+  }
   if (directRoute.allowed) {
     return stableTarget;
-  }
-  if (!directRoute.allowlistConfigured) {
-    return groupPolicy === "open" ? stableTarget : undefined;
   }
   if (!stableTarget || !teams?.teams) {
     return undefined;

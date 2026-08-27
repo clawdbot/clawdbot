@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-contract.js";
+import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
@@ -95,10 +95,11 @@ function externalPluginConfig(
     },
     serverVersion: null,
     devGitBranch: null,
+    environment: null,
     localMediaPreviewRoots: [],
     embedSandboxMode: "scripts",
     allowExternalEmbedUrls: false,
-    chatMessageMaxWidth: null,
+    automaticallyFetchFavicons: false,
     terminalEnabled: false,
     pluginFrameGrants,
   };
@@ -127,6 +128,7 @@ function createExternalPluginPage(
     client: null,
     phase: "connected",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello,
     assistantAgentId: null,
     sessionKey: "main",
@@ -425,6 +427,7 @@ describe("PluginPage", () => {
       client: null,
       phase: "connected",
       offlineStable: false,
+      canvasPluginSurfaceUrl: null,
       hello,
       assistantAgentId: null,
       sessionKey: "main",
@@ -495,6 +498,7 @@ describe("PluginPage", () => {
         client: { request } as unknown as GatewayBrowserClient,
         phase: "connected",
         offlineStable: false,
+        canvasPluginSurfaceUrl: null,
         hello,
         assistantAgentId: null,
         sessionKey: "main",
@@ -576,6 +580,7 @@ describe("PluginPage", () => {
       client,
       phase: "connected",
       offlineStable: false,
+      canvasPluginSurfaceUrl: null,
       hello,
       assistantAgentId: null,
       sessionKey: "main",
@@ -646,6 +651,7 @@ describe("PluginPage", () => {
       client: null,
       phase: "connected",
       offlineStable: false,
+      canvasPluginSurfaceUrl: null,
       hello,
       assistantAgentId: null,
       sessionKey: "main",

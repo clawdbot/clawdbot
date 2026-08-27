@@ -104,8 +104,8 @@ export function withFirstStreamEventTimeout<T>(
           timer = setTimeout(() => {
             const timeoutError = createFirstStreamEventTimeoutError(timeoutContext);
             timeoutContext.onTimeout?.(timeoutError);
-            timeoutContext.abort?.(timeoutError);
             reject(timeoutError);
+            timeoutContext.abort?.(timeoutError);
           }, timeoutMs);
           timer.unref?.();
           iterator.next().then(resolve, reject);

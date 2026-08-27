@@ -1,9 +1,12 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
+import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
-import { classifyPortListener, inspectPortUsage, type PortUsage } from "../../infra/ports.js";
+import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import { classifyPortListener } from "../../infra/ports-format.js";
+import { inspectPortUsage } from "../../infra/ports-inspect.js";
+import type { PortUsage } from "../../infra/ports-types.js";
 import {
   hasActiveStartupMigrationLease,
   STARTUP_MIGRATION_LEASE_TTL_MS,
@@ -35,7 +38,7 @@ export type {
   GatewayRestartSnapshot,
   GatewayRestartWaitOutcome,
 } from "./restart-health.types.js";
-export { terminateStaleGatewayPids } from "./restart-stale-pids.js";
+export { terminateStaleGatewayPids } from "../../infra/restart-stale-pids.js";
 
 const STARTUP_MIGRATION_ACTIVITY_POLL_MS = 5_000;
 const STOPPED_FREE_EARLY_EXIT_GRACE_MS = 10_000;
@@ -86,10 +89,18 @@ export async function inspectGatewayRestart(params: {
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
   probeAuth?: GatewayRestartProbeAuth;
+  probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
+  const probeHosts =
+    params.probeHosts ??
+    (await resolveGatewayServiceProbeHosts({
+      env,
+      command: (await params.service.readCommand?.(env).catch(() => null)) ?? null,
+    }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   let reachability: GatewayReachability | null = null;
+  let probeError: string | undefined;
   let activatedPluginErrors: PluginHealthErrorSummary[] = [];
   let channelProbeErrors: Array<{ id: string; error: string }> = [];
   const loadReachability = async () => {
@@ -100,6 +111,7 @@ export async function inspectGatewayRestart(params: {
         auth: params.probeAuth,
         env,
       });
+      probeError = reachability.probeError;
       activatedPluginErrors = reachability.activatedPluginErrors;
       channelProbeErrors = reachability.channelProbeErrors;
     }
@@ -114,7 +126,9 @@ export async function inspectGatewayRestart(params: {
 
   let portUsage: PortUsage;
   try {
-    portUsage = await inspectPortUsage(params.port);
+    portUsage = await inspectPortUsage(params.port, {
+      probeHosts,
+    });
   } catch (err) {
     portUsage = {
       port: params.port,
@@ -126,32 +140,28 @@ export async function inspectGatewayRestart(params: {
   }
 
   if (portUsage.status === "busy" && runtime.status !== "running") {
-    try {
-      const reachable = await loadReachability();
-      if (reachable.reachable) {
-        return applyChannelProbeErrors(
-          applyActivatedPluginErrors(
-            applyExpectedVersion(
-              {
-                runtime,
-                portUsage,
-                healthy: true,
-                staleGatewayPids: [],
-                gatewayVersion: reachable.gatewayVersion,
-                ...(reachable.activatedPluginErrors.length > 0
-                  ? { activatedPluginErrors: reachable.activatedPluginErrors }
-                  : {}),
-                ...(reachable.channelProbeErrors.length > 0
-                  ? { channelProbeErrors: reachable.channelProbeErrors }
-                  : {}),
-              },
-              expectedVersion,
-            ),
+    const reachable = await loadReachability();
+    if (reachable.reachable) {
+      return applyChannelProbeErrors(
+        applyActivatedPluginErrors(
+          applyExpectedVersion(
+            {
+              runtime,
+              portUsage,
+              healthy: true,
+              staleGatewayPids: [],
+              gatewayVersion: reachable.gatewayVersion,
+              ...(reachable.activatedPluginErrors.length > 0
+                ? { activatedPluginErrors: reachable.activatedPluginErrors }
+                : {}),
+              ...(reachable.channelProbeErrors.length > 0
+                ? { channelProbeErrors: reachable.channelProbeErrors }
+                : {}),
+            },
+            expectedVersion,
           ),
-        );
-      }
-    } catch {
-      // Probe is best-effort; keep the ownership-based diagnostics.
+        ),
+      );
     }
   }
 
@@ -183,28 +193,20 @@ export async function inspectGatewayRestart(params: {
   let healthy = running && ownsPort;
   let gatewayVersion: string | null | undefined;
   if (expectedVersion && healthy && portUsage.status === "busy") {
-    try {
-      const reachable = await loadReachability();
-      healthy = reachable.reachable;
-      gatewayVersion = reachable.gatewayVersion;
-      if (reachable.activatedPluginErrors.length > 0) {
-        healthy = false;
-      }
-      if (reachable.channelProbeErrors.length > 0) {
-        healthy = false;
-      }
-    } catch {
+    const reachable = await loadReachability();
+    healthy = reachable.reachable;
+    gatewayVersion = reachable.gatewayVersion;
+    if (reachable.activatedPluginErrors.length > 0) {
+      healthy = false;
+    }
+    if (reachable.channelProbeErrors.length > 0) {
       healthy = false;
     }
   }
   if (!healthy && running && portUsage.status === "busy" && !expectedVersion) {
-    try {
-      const reachable = await loadReachability();
-      healthy = reachable.reachable;
-      gatewayVersion = reachable.gatewayVersion;
-    } catch {
-      // best-effort probe
-    }
+    const reachable = await loadReachability();
+    healthy = reachable.reachable;
+    gatewayVersion = reachable.gatewayVersion;
   }
   const staleGatewayPids = Array.from(
     new Set([
@@ -235,6 +237,7 @@ export async function inspectGatewayRestart(params: {
           healthy,
           staleGatewayPids,
           ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
+          ...(probeError ? { probeError } : {}),
           ...(activatedPluginErrors.length ? { activatedPluginErrors } : {}),
           ...(channelProbeErrors.length ? { channelProbeErrors } : {}),
         },
@@ -281,6 +284,7 @@ export async function waitForGatewayHealthyRestart(params: {
   requireRunningService?: boolean;
   supervisorKeepsAlive?: boolean;
   isStartupMigrationActive?: typeof hasActiveStartupMigrationLease;
+  probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const startedAtMs = performance.now();
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
@@ -288,6 +292,12 @@ export async function waitForGatewayHealthyRestart(params: {
   const standardDeadlineMs = attempts * delayMs;
 
   const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
+  const probeHosts =
+    params.probeHosts ??
+    (await resolveGatewayServiceProbeHosts({
+      env: params.env,
+      command: await params.service.readCommand(params.env ?? process.env).catch(() => null),
+    }));
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
@@ -295,6 +305,7 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
     probeAuth,
+    probeHosts,
   });
 
   let consecutiveStoppedFreeCount = 0;
@@ -382,6 +393,7 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
       probeAuth,
+      probeHosts,
     });
   }
 }

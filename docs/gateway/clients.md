@@ -31,7 +31,7 @@ install them only after the registry pages below resolve.
   provides schemas, runtime validators, TypeScript types, client identity and
   capability registries, structured error readers, and protocol version constants.
   Its npm tarball also includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
   machine-readable contract.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   is the reference connection implementation. Import the package root for the Node
@@ -65,9 +65,12 @@ gateway` or the `openclaw onboard --gateway-auth ...` options, then let device
 pairing mint the client token:
 
 1. Persist an Ed25519 device identity in the client.
-2. Wait for `connect.challenge`, sign the challenge-bound device payload, and send
-   `connect` with the requested operator role, scopes, and the shared Gateway token
-   or password for bootstrap authentication.
+2. Wait for `connect.challenge`, use its `ts` as the device proof's `signedAt`,
+   sign the challenge-bound device payload, and send `connect` with the requested
+   operator role, scopes, and the shared Gateway token or password for bootstrap
+   authentication. A received WebSocket challenge without a non-negative integer
+   `ts` is invalid. Clients that explicitly support Gateways from before
+   `connect.challenge` existed may use local time only on their no-challenge path.
 3. If the Gateway returns structured `PAIRING_REQUIRED` details, show the request
    ID and pause or retry according to `error.details.recommendedNextStep`.
 4. On the Gateway host, review the request with `openclaw devices list`, then
@@ -94,8 +97,14 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 
 The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
 `run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
+`task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
+`usage-refreshing`.
 Advertise only capabilities the client actually implements.
+
+`usage-refreshing` allows a cold `usage.status` request to return immediately
+with `refreshing: true` and an empty provider list. A client advertising it must
+keep that payload cache-cold and refetch on a short bounded schedule. Other
+clients retain the blocking cold read.
 
 <Warning>
 `tool-events` gates live tool-execution streaming. The Gateway registers only
@@ -108,30 +117,105 @@ Capability-gated agent tools are a separate use of the same declaration. If an
 agent tool requires a client capability, the Gateway omits that tool unless the
 originating client advertised every required capability.
 
+## Validate attachments before sending
+
+Attachment limits are operator-tunable, so do not hardcode them. Read
+`hello-ok.policy.attachments` and validate locally before uploading:
+
+```ts
+const attachments = hello.policy.attachments;
+if (attachments) {
+  const ceiling = isImage ? attachments.maxImageBytes : attachments.maxBytes;
+  if (file.byteLength > ceiling) rejectLocally();
+}
+```
+
+Both values are decoded per-attachment ceilings. Still check the serialized
+request against `policy.maxPayload`: attachments travel as base64, so a file near
+`maxBytes` can exceed the frame limit on its own. Older gateways omit
+`policy.attachments`; when it is absent, send and handle the server outcome.
+Accepted MIME types and per-message handling are not advertised because they
+depend on the entrypoint and the resolved model. The gateway can return a typed
+rejection, while text-only model runs can omit additional images after their
+offload cap and still complete the request. The values are a connection-time
+snapshot, so re-read them on every reconnect.
+
 ## Recover state after reconnect
 
 Treat every successful reconnect as a new projection over durable history and
 current in-memory run state:
 
-1. Re-establish `sessions.subscribe` and the selected session's
-   `sessions.messages.subscribe` subscription.
+1. Re-establish `sessions.subscribe` with your list parameters to receive the
+   current roster in the same response, as described
+   [below](/gateway/clients#subscribe-instead-of-polling-usage). Also re-establish
+   the selected session's `sessions.messages.subscribe` subscription.
 2. Call `chat.history` for the selected `sessionKey` and replace local persisted
    rows with the returned `messages` projection.
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
    `plan`. Adopt the run even when `text` is empty.
-4. Read `sessionInfo.hasActiveRun` and `sessionInfo.activeRunIds`. Prefer exact
-   membership in `activeRunIds` when deciding whether a retained run still owns
-   the streaming UI. A true `hasActiveRun` with no listed ID can represent another
-   active runtime projection.
-5. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
+4. Treat `sessionInfo.hasActiveRun` as aggregate direct-session activity.
+   `activeRunIds`, when present, is the complete exact active set; an empty array
+   therefore proves the session is idle. When `hasActiveRun` is true and
+   `activeRunIds` is omitted, another runtime owner is active but its exact run
+   identities are unavailable. In incremental merge events, omission means no
+   change, `null` is the event-only tombstone that clears cached exact IDs to
+   unavailable, and an array replaces the cache (including `[]` for proven
+   idle). Correlate only a run ID the client owns locally or received from a
+   request, history response, or event, and never select the first list entry as
+   an owner.
+5. Show an observer headline or run-inspector link only when the observer digest's
+   exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
+   make a retained digest current.
+6. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
    Maintain the highest accepted sequence independently for each run, ignore an
    already-seen or lower sequence, and treat a forward gap as a reason to reload
    authoritative history.
+
+### Active-run cache matrix
+
+Classify the source before applying `activeRunIds`; the same omission has
+different meaning in a full snapshot and an incremental delta.
+
+| Client cache             | Read path                                                  | Class    | Required behavior                                                                                  |
+| ------------------------ | ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| Web session roster       | `sessions.list`, reconnect hydration                       | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                  |
+| Web selected session     | `chat.history.sessionInfo`                                 | Snapshot | Replace the row projection; omission clears cached exact IDs.                                      |
+| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Omission is inert; `null` clears; an array replaces.                                               |
+| Android session roster   | `sessions.list`, reconnect hydration                       | Snapshot | Replace the list rows; omission clears cached exact IDs.                                           |
+| Android selected session | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                              |
+| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Field presence controls replacement; `null` clears and omission is inert.                          |
+| Apple session roster     | `sessions.list`, reconnect hydration                       | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                            |
+| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                      |
+| Apple session events     | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces. |
 
 The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside
 an `agent` event payload is assigned per run and orders that run's lifecycle,
 assistant, plan, tool, and other stream events.
+
+## Render generated image artifacts
+
+Assistant-generated images arrive as canonical `type: "image"` content blocks.
+Managed blocks include a stable `artifactId`, a Gateway-relative `url`, MIME
+type, dimensions, size, and accessible alt text. Keep that reference in the
+transcript cache; do not persist downloaded bytes or temporary download URLs.
+
+Resolve the image through the authenticated WebSocket connection:
+
+1. Call `artifacts.download` with the current `sessionKey`, optional `agentId`,
+   and the block's `artifactId`.
+2. Use the returned short-lived `url` before `expiresAt`. The URL is scoped to
+   that exact transcript-backed artifact and does not contain a reusable Gateway
+   or device credential.
+3. Fetch it from the Gateway origin using the same TLS pin and reverse-proxy
+   headers as the active connection. Validate the response as an image and
+   enforce a 12 MiB source limit plus a bounded decoded thumbnail.
+4. If the URL expires, repeat `artifacts.download` once. Reconnect or route
+   changes cancel the old load rather than retargeting it to another Gateway.
+
+Older image blocks without `artifactId` remain displayable by existing Control
+UI clients, but native clients should show a readable attachment fallback rather
+than forward a shared owner credential.
 
 ## Use history metadata and stable anchors
 
@@ -146,6 +230,9 @@ Rows returned by `chat.history` can carry an `__openclaw` metadata envelope:
   `kind: "compaction"` and may include `tokensBefore` and `tokensAfter` when a
   matching checkpoint recorded those metrics.
 
+  A session reset boundary uses `kind: "reset"`. It has no checkpoint token
+  metrics.
+
 Page backward with the response's `hasMore` and `nextOffset` values. Numeric
 offsets describe the current transcript projection, so do not persist them as
 long-lived bookmarks across reset or compaction. Persist `__openclaw.id` instead.
@@ -155,8 +242,27 @@ archive history; anchored responses intentionally omit numeric paging metadata.
 
 ## Subscribe instead of polling usage
 
-Load the initial catalog with `sessions.list`, then call `sessions.subscribe` once
-per connection. Merge `sessions.changed` events by `sessionKey`. Session change
+Install the `sessions.changed` listener, then call `sessions.subscribe` once per
+connection with your `sessions.list` parameters, such as
+`{ limit: 60, ownerFirst: true }`. The response is `{ subscribed: true, list }`,
+where `list` is the normal `SessionsListResult` snapshot. Passing `{}` activates
+the subscription but returns only `{ subscribed: true }`, without a list.
+
+The Gateway activates the subscription before reading the snapshot. Events can
+therefore arrive before the response. Track changes received during bootstrap
+and follow the response with a `sessions.list` refresh when needed; do not let
+the snapshot silently overwrite a newer event. Re-establish this flow after
+every reconnect.
+
+`ownerFirst: true` prepends up to 60 matching sessions owned by the authenticated
+viewer to the normal first page, removing duplicates within that response. It
+applies only when `offset` is zero or omitted. The Gateway derives the viewer
+identity from the authenticated connection, not a client-supplied identity.
+The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
+number of returned rows, when loading another page, and merge rows by session
+key. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
+
+Merge subsequent `sessions.changed` events by `sessionKey`. Session change
 payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
 `totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
 and active-run state.

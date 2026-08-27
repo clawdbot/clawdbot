@@ -4,7 +4,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { readJsonBodyOrError, sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  readJsonBodyOrError,
+  sendJson,
+  sendMethodNotAllowed,
+  watchClientDisconnect,
+} from "./http-common.js";
 import {
   authorizeScopedGatewayHttpRequestOrReply,
   getHeader,
@@ -60,37 +65,56 @@ export async function handleToolsInvokeHttpRequest(
   if (!authResult) {
     return true;
   }
-  const { cfg, requestAuth } = authResult;
-
-  const bodyUnknown = await readJsonBodyOrError(req, res, opts.maxBodyBytes ?? DEFAULT_BODY_BYTES);
-  if (bodyUnknown === undefined) {
+  const { cfg, requestAuth, operatorScopes } = authResult;
+  if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
     return true;
   }
-  const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
+  const abortController = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
-  // Resolve message channel/account hints (optional headers) for policy inheritance.
-  const messageChannel = normalizeMessageChannel(
-    getHeader(req, "x-openclaw-message-channel") ?? "",
-  );
-  const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
-  const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
-  const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
-  const outcome = await invokeGatewayTool({
-    cfg,
-    input: body,
-    messageChannel: messageChannel ?? undefined,
-    accountId,
-    agentTo,
-    agentThreadId,
-    senderIsOwner,
-    conversationReadOrigin: "direct-operator",
-    toolCallIdPrefix: "http",
-  });
-  if (outcome.ok) {
-    sendJson(res, outcome.status, { ok: true, result: outcome.result });
-  } else {
-    sendJson(res, outcome.status, { ok: false, error: outcome.error });
+  try {
+    const bodyUnknown = await readJsonBodyOrError(
+      req,
+      res,
+      opts.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+    );
+    if (bodyUnknown === undefined || abortController.signal.aborted) {
+      return true;
+    }
+    const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
+
+    // Resolve message channel/account hints (optional headers) for policy inheritance.
+    const messageChannel = normalizeMessageChannel(
+      getHeader(req, "x-openclaw-message-channel") ?? "",
+    );
+    const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
+    const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
+    const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
+    const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
+    const outcome = await invokeGatewayTool({
+      cfg,
+      input: body,
+      messageChannel: messageChannel ?? undefined,
+      accountId,
+      agentTo,
+      agentThreadId,
+      authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+      operatorScopes,
+      senderIsOwner,
+      conversationReadOrigin: "direct-operator",
+      toolCallIdPrefix: "http",
+      signal: abortController.signal,
+    });
+    if (abortController.signal.aborted) {
+      return true;
+    }
+    if (outcome.ok) {
+      sendJson(res, outcome.status, { ok: true, result: outcome.result });
+    } else {
+      sendJson(res, outcome.status, { ok: false, error: outcome.error });
+    }
+  } finally {
+    stopWatchingDisconnect();
   }
 
   return true;

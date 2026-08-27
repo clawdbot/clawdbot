@@ -20,10 +20,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
-import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { countActiveRunsForSession } from "./subagent-registry.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
+import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
+import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
+import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
+import { resolveSubagentTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
 
 type SpawnMode = "run" | "session";
 type SpawnBackendKind = "subagent" | "acp";
@@ -154,7 +154,7 @@ function buildThreadBindingUnavailableError(kind: SpawnBackendKind, mode: SpawnM
     return (
       'sessions_spawn(mode="session") is only available on channels that expose thread bindings (e.g. Discord threads, Slack threads, Telegram forum topics). ' +
       "This request is not running on a channel that can bind a subagent thread. " +
-      'Use mode="run" for one-shot subagent work, or sessions_send(sessionKey=...) to keep talking to a persistent session without thread binding.'
+      'Use mode="run" for one-shot subagent work.'
     );
   }
   return (
@@ -309,6 +309,7 @@ export function resolveSpawnAdmission(params: {
   }
   const callerDepth = getSubagentDepthFromSessionStore(params.requesterSessionKey, {
     cfg: params.cfg,
+    agentId: params.requesterAgentId,
   });
   const maxSpawnDepth =
     params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
@@ -330,8 +331,10 @@ export function resolveSpawnAdmission(params: {
         maxSpawnDepth,
         collect: false,
         activeChildren:
-          countActiveRunsForSession(params.requesterSessionKey, { collect: false }) +
-          (params.additionalActiveChildren ?? 0),
+          countActiveRunsForSession(params.requesterSessionKey, {
+            collect: false,
+            requesterAgentId: params.requesterAgentId,
+          }) + (params.additionalActiveChildren ?? 0),
         maxActiveChildren:
           params.cfg.agents?.defaults?.subagents?.maxChildrenPerAgent ??
           DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
@@ -351,7 +354,7 @@ export function resolveSpawnAdmission(params: {
     return {
       ok: false,
       error:
-        "sessions_spawn requires explicit agentId when requireAgentId is configured. Use agents_list to see allowed agent ids.",
+        "sessions_spawn requires explicit agentId when requireAgentId is configured. Provide an allowed configured agentId.",
     };
   }
   const targetPolicy = resolveSubagentTargetPolicy({

@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
+import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveProfileParticipantIdFromSessionCreation } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -14,7 +16,7 @@ import {
   resolveSourceReplyPolicy,
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
-import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
+import { executeAgentTurn } from "./agent-runner-execution.js";
 import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
@@ -27,6 +29,9 @@ import {
 } from "./pending-final-delivery.js";
 import type { FollowupRun } from "./queue.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
+import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
@@ -40,7 +45,6 @@ type SessionResetOptions = {
 
 type ExecutePreparedReplyAgentRunInput = Pick<
   RunReplyAgentParams,
-  | "agentCfgContextTokens"
   | "blockReplyChunking"
   | "blockStreamingEnabled"
   | "commandBody"
@@ -65,7 +69,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   activeSessionStore: Record<string, SessionEntry> | undefined;
   admitUserTurn: ReturnType<typeof createReplyRestartRecoveryClaimController>["admitUserTurn"];
   applyReplyToMode: (payload: ReplyPayload) => ReplyPayload;
-  beforeAgentReplyDispatchedForSteer: boolean;
   beginBeforeAgentReply: ReturnType<
     typeof createReplyRestartRecoveryClaimController
   >["beginBeforeAgentReply"];
@@ -104,9 +107,7 @@ export async function executePreparedReplyAgentRun(
   const {
     activeSessionStore,
     admitUserTurn: admitUserTurnWithRecovery,
-    agentCfgContextTokens,
     applyReplyToMode,
-    beforeAgentReplyDispatchedForSteer,
     beginBeforeAgentReply: beginBeforeAgentReplyWithRecovery,
     blockReplyChunking,
     blockReplyPipeline,
@@ -196,7 +197,6 @@ export async function executePreparedReplyAgentRun(
       sessionCtx,
       opts,
       defaultModel,
-      agentCfgContextTokens,
       resolvedVerboseLevel,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,
@@ -227,7 +227,6 @@ export async function executePreparedReplyAgentRun(
         followupRun,
         promptForEstimate: followupRun.prompt,
         defaultModel,
-        agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey,
@@ -279,7 +278,6 @@ export async function executePreparedReplyAgentRun(
     sessionKey,
     storePath,
     defaultModel,
-    agentCfgContextTokens,
     toolProgressDetail,
   });
   setRunFollowupTurn(runFollowupTurn);
@@ -297,25 +295,18 @@ export async function executePreparedReplyAgentRun(
   const runOutcome = await withBeforeAgentReplyObserver(
     {
       beforeDispatch: async () => {
-        const shouldDispatch = await beginBeforeAgentReply();
-        if (!shouldDispatch || !beforeAgentReplyDispatchedForSteer) {
-          return shouldDispatch;
-        }
-        // The same source fell through from steering. Advance recovery while
-        // preserving the hook decision made before the attempted injection.
-        await checkpointBeforeAgentReply({ state: "continue" });
-        return false;
+        return await beginBeforeAgentReply();
       },
       afterDispatch: async (hookResult) => {
         if (!hookResult?.handled) {
-          await checkpointBeforeAgentReply({ state: "continue" });
+          await checkpointBeforeAgentReply({ state: undefined });
           return hookResult;
         }
         const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
         const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
         const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
         let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
-          state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
+          state: normalizedHookReplies.length === 0 ? "handled-silent" : "pending",
         };
         if (sessionKey && storePath && normalizedHookReplies.length > 0) {
           const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -328,15 +319,25 @@ export async function executePreparedReplyAgentRun(
           });
           if (!sourceReplyPolicy.suppressDelivery) {
             const pendingFinalDeliveryIntentId = crypto.randomUUID();
+            const pendingFinalDeliveryDeliveryId = crypto.randomUUID();
             setReplyPayloadMetadata(hookReply, {
-              pendingFinalDeliveryIntentId,
-              pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              pendingFinalDeliveryCompletion: {
+                deliveryId: pendingFinalDeliveryDeliveryId,
+                intentId: pendingFinalDeliveryIntentId,
+                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
+                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
+                  : {}),
+                sessionId: replyOperation.sessionId,
+                sessionKey,
+                storePath,
+              },
             });
             hookCheckpoint = {
-              state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
+              state: "handled-reply",
               pendingFinalDelivery: {
                 text: hookFinalDeliveryText ?? "",
                 intentId: pendingFinalDeliveryIntentId,
+                deliveries: [{ id: pendingFinalDeliveryDeliveryId, state: "prepared" }],
                 context: resolveReplyRunDeliveryContext({
                   cfg,
                   sessionCtx,
@@ -357,16 +358,26 @@ export async function executePreparedReplyAgentRun(
         return { ...hookResult, reply: hookReply };
       },
     },
-    () =>
-      traceAgentPhase("reply.run_agent_turn", () =>
-        runAgentTurnWithFallback({
+    () => {
+      const gitCoauthorAttribution = prepareGitCoauthorAttribution({
+        agentId: followupRun.run.agentId,
+        config: cfg,
+        currentProfileId: resolveProfileParticipantIdFromSessionCreation(
+          sessionCtx.SessionCreation,
+        ),
+        sessionKey,
+        storePath,
+      });
+      const agentTurnOpts = gitCoauthorAttribution ? { ...opts, gitCoauthorAttribution } : opts;
+      return traceAgentPhase("reply.run_agent_turn", () =>
+        executeAgentTurn({
           commandBody,
           transcriptCommandBody,
           followupRun,
           sessionCtx,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
           replyOperation,
-          opts,
+          opts: agentTurnOpts,
           typingSignals,
           blockReplyPipeline,
           blockStreamingEnabled,
@@ -388,23 +399,42 @@ export async function executePreparedReplyAgentRun(
           replyMediaContext,
           isRestartRecoveryArmed,
         }),
-      ),
+      );
+    },
+  );
+  const operationSuperseded = isReplyOperationSuperseded(replyOperation);
+  recordReplyOperationAgentTurn(
+    resolveReplyOperationRunState(opts),
+    operationSuperseded
+      ? "superseded"
+      : runOutcome.outcome.kind === "rejected"
+        ? "failed"
+        : runOutcome.outcome.kind === "aborted" || runOutcome.outcome.abortReason
+          ? "cancelled"
+          : runOutcome.outcome.status,
+    replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();
   activeIsNewSession = getActiveIsNewSession();
 
-  if (runOutcome.kind === "final") {
-    if (!replyOperation.result) {
+  if (operationSuperseded) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
+  if (runOutcome.outcome.kind !== "settled") {
+    if (runOutcome.outcome.kind === "rejected" && !replyOperation.result) {
       replyOperation.fail("run_failed", new Error("reply operation exited with final payload"));
     }
-    return returnWithQueuedFollowupDrain(runOutcome.payload);
+    return returnWithQueuedFollowupDrain(
+      runOutcome.outcome.kind === "rejected"
+        ? runOutcome.outcome.payload
+        : { text: SILENT_REPLY_TOKEN },
+    );
   }
 
   return await finalizeReplyAgentRun({
     activeIsNewSession,
     activeSessionEntry,
     activeSessionStore,
-    agentCfgContextTokens,
     blockReplyPipeline,
     blockStreamingEnabled,
     cfg,
@@ -427,7 +457,8 @@ export async function executePreparedReplyAgentRun(
     resolvedVerboseLevel,
     returnWithQueuedFollowupDrain,
     runFollowupTurn,
-    runOutcome,
+    execution: runOutcome.outcome,
+    runId: runOutcome.runId,
     runStartedAt,
     runtimePolicySessionKey,
     sessionCtx,
@@ -488,7 +519,6 @@ export function createReplyAgentRestartRecoveryController(
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())
         : getActiveSessionEntry(),
     getSessionId: () => replyOperation.sessionId,
-    beforeAgentReplyState: "admitted",
     isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",

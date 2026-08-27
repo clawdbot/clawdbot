@@ -1,36 +1,20 @@
-// Transcript rewrite tests cover in-memory and persisted JSONL rewrites for
-// tool-result externalization, labels, compaction markers, and write locks.
+// Transcript rewrite tests cover in-memory and persisted branch rewrites for
+// tool-result externalization, labels, and compaction markers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  appendTranscriptMessage,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { buildSessionWriteLockModuleMock } from "../../test-utils/session-write-lock-module-mock.js";
-
-const acquireSessionWriteLockReleaseMock = vi.hoisted(() => vi.fn(async () => {}));
-const acquireSessionWriteLockMock = vi.hoisted(() =>
-  vi.fn(async (_params?: unknown) => ({ release: acquireSessionWriteLockReleaseMock })),
-);
-
-vi.mock("../session-write-lock.js", () =>
-  buildSessionWriteLockModuleMock(
-    () => vi.importActual<typeof import("../session-write-lock.js")>("../session-write-lock.js"),
-    (params) => acquireSessionWriteLockMock(params),
-  ),
-);
 
 let rewriteTranscriptEntriesInSessionManager: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInSessionManager;
-let rewriteTranscriptEntriesInRuntimeTranscript: typeof import("./transcript-rewrite.js").rewriteTranscriptEntriesInRuntimeTranscript;
-let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
 let installSessionToolResultGuard: typeof import("../session-tool-result-guard.js").installSessionToolResultGuard;
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -154,15 +138,8 @@ function requireValue<T>(value: T | undefined, label: string): T {
 }
 
 beforeAll(async () => {
-  ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({ rewriteTranscriptEntriesInRuntimeTranscript, rewriteTranscriptEntriesInSessionManager } =
-    await import("./transcript-rewrite.js"));
-});
-
-beforeEach(() => {
-  acquireSessionWriteLockMock.mockClear();
-  acquireSessionWriteLockReleaseMock.mockClear();
+  ({ rewriteTranscriptEntriesInSessionManager } = await import("./transcript-rewrite.js"));
 });
 
 describe("rewriteTranscriptEntriesInSessionManager", () => {
@@ -316,128 +293,68 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     }
     expect(replayedAssistant.content).toEqual([{ type: "text", text: "summarized" }]);
   });
-});
 
-describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
-  it("does not create session metadata for missing runtime transcripts", async () => {
+  it("preserves original SQLite rows on the abandoned branch", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
     const storePath = path.join(dir, "sessions.json");
-    await fs.writeFile(storePath, "{}\n", "utf8");
-
-    const result = await rewriteTranscriptEntriesInRuntimeTranscript({
-      scope: {
-        agentId: "main",
-        sessionId: "missing-session",
-        sessionKey: "agent:main:missing",
-        storePath,
-      },
-      request: { replacements: [] },
-    });
-
-    expect(result.changed).toBe(false);
-    expect(await fs.readFile(storePath, "utf8")).toBe("{}\n");
-  });
-
-  it("rewrites runtime transcripts through scoped session identity", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
-    const storePath = path.join(dir, "sessions.json");
-    const sessionId = "runtime-sqlite-rewrite";
+    const sessionId = "runtime-sqlite-branch-rewrite";
+    const sessionKey = "agent:main:test";
     const sessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId,
       storePath,
     });
-    const scope = {
+    const target = {
       agentId: "main",
       sessionId,
-      sessionKey: "agent:main:test",
+      sessionKey,
       storePath,
     };
-    await replaceSessionEntry({ sessionKey: "agent:main:test", storePath }, {
+    await replaceSessionEntry({ sessionKey, storePath }, {
       sessionFile,
       sessionId,
       updatedAt: 10,
     } as SessionEntry);
-    await appendTranscriptMessage(scope, {
-      message: {
-        role: "user",
-        content: "run tool",
-        timestamp: 1,
-      },
-    });
-    const toolResult = await appendTranscriptMessage(scope, {
-      message: {
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "exec",
-        content: createTextContent("before rewrite"),
-        isError: false,
-        timestamp: 2,
-      },
-    });
-    await appendTranscriptMessage(scope, {
-      message: {
+    const sessionManager = SessionManager.open(target, dir);
+    const [, toolResultEntryId] = appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
+      asAppendMessage(createToolResultReplacement("exec", "before rewrite", 2)),
+      asAppendMessage({
         role: "assistant",
         content: createTextContent("summarized"),
         timestamp: 3,
-      },
+      }),
+    ]);
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: expectDefined(toolResultEntryId, "persisted tool result entry id"),
+          message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+        },
+      ],
     });
-    const toolResultEntryId = toolResult.messageId;
-    const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
 
-    try {
-      const result = await rewriteTranscriptEntriesInRuntimeTranscript({
-        scope: {
-          agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:test",
-          storePath,
-        },
-        request: {
-          replacements: [
-            {
-              entryId: toolResultEntryId,
-              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
-            },
-          ],
-        },
-      });
+    expect(result.changed).toBe(true);
+    const storedEvents = await loadTranscriptEvents(target);
+    const original = storedEvents.find(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "id" in entry &&
+        entry.id === toolResultEntryId,
+    ) as { message?: AgentMessage } | undefined;
+    expect(original?.message).toEqual(createToolResultReplacement("exec", "before rewrite", 2));
 
-      expect(result.changed).toBe(true);
-      expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
-      expect(acquireSessionWriteLockReleaseMock).not.toHaveBeenCalled();
-      expect(listener).toHaveBeenCalledWith({
-        agentId: "main",
-        sessionId,
-        sessionKey: "agent:main:test",
-        target: {
-          agentId: "main",
-          sessionId,
-          sessionKey: "agent:main:test",
-        },
-      });
-
-      const branchMessages = (await loadTranscriptEvents(scope))
-        .filter(
-          (entry): entry is { message: AgentMessage; type: "message" } =>
-            typeof entry === "object" &&
-            entry !== null &&
-            "message" in entry &&
-            "type" in entry &&
-            entry.type === "message",
-        )
-        .map((entry) => entry.message);
-      expect(branchMessages.map((message) => message.role)).toEqual([
-        "user",
-        "toolResult",
-        "assistant",
-      ]);
-      expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
-        { type: "text", text: "[runtime rewrite]" },
-      ]);
-    } finally {
-      cleanup();
-    }
+    const activeMessages = getBranchMessages(SessionManager.open(target, dir));
+    expect(activeMessages.map((message) => message.role)).toEqual([
+      "user",
+      "toolResult",
+      "assistant",
+    ]);
+    expect((activeMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+      { type: "text", text: "[runtime rewrite]" },
+    ]);
   });
 });

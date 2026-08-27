@@ -1,53 +1,67 @@
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { SessionCreatedActor as ProtocolSessionCreatedActor } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsListResult } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import "./viewer-facepile.ts";
 
 export type SessionCreatedActor = ProtocolSessionCreatedActor;
-export type SessionCreatorOption = SessionCreatedActor & { id: string };
+export type SessionOwnerOption = NonNullable<SessionsListResult["owners"]>[number];
 
-export function listSessionCreators(
-  sessions: readonly { createdActor?: SessionCreatedActor }[],
-): SessionCreatorOption[] {
-  const creators = new Map<string, SessionCreatorOption>();
-  for (const session of sessions) {
-    const id = session.createdActor?.id?.trim();
-    if (!id) {
-      continue;
-    }
-    const label = session.createdActor?.label?.trim();
-    const existing = creators.get(id);
-    if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
-      creators.set(id, {
-        type: session.createdActor?.type ?? "human",
-        id,
-        ...(label ? { label } : {}),
-      });
-    }
+export function listAssignableSessionOwners(params: {
+  facet?: SessionsListResult["owners"];
+  agents?: readonly { id: string; name?: string }[];
+  self?: { id: string; name?: string; avatarUrl?: string } | null;
+}): SessionOwnerOption[] {
+  const owners = new Map((params.facet ?? []).map((owner) => [owner.id, owner]));
+  if (params.self?.id && owners.get(params.self.id)?.type !== "agent") {
+    owners.set(params.self.id, {
+      type: "human",
+      id: params.self.id,
+      ...(params.self.name ? { label: params.self.name } : {}),
+      ...(params.self.avatarUrl ? { avatarUrl: params.self.avatarUrl } : {}),
+    });
   }
-  return [...creators.values()].toSorted((a, b) => {
-    const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
-    return byLabel || a.id.localeCompare(b.id);
-  });
+  for (const agent of params.agents ?? []) {
+    owners.set(agent.id, {
+      type: "agent",
+      id: agent.id,
+      ...(agent.name ? { label: agent.name } : {}),
+    });
+  }
+  return [...owners.values()].toSorted(
+    (left, right) =>
+      left.type.localeCompare(right.type) ||
+      (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 export function renderSessionOwnerChip(
-  createdActor: SessionCreatedActor | null | undefined,
+  owner: SessionCreatedActor | null | undefined,
   size: "row" | "header",
-  attribution: "created" | "archived" = "created",
+  attribution: "created" | "owned" | "archived" = "created",
+  viewingNow?: boolean,
+  participants?: readonly SessionCreatedActor[],
+  participantCount?: number,
 ) {
-  return createdActor?.id
+  return owner?.id
     ? html`<openclaw-session-owner-chip
-        .createdActor=${createdActor}
+        .owner=${owner}
         size=${size}
         attribution=${attribution}
+        .viewingNow=${viewingNow}
+        .participants=${participants ?? []}
+        .participantCount=${participantCount ?? participants?.length ?? 0}
       ></openclaw-session-owner-chip>`
     : nothing;
 }
 
-function ownerInitials(createdActor: SessionCreatedActor): string {
-  const source = createdActor.label?.trim() || createdActor.id?.trim() || "";
+export function sessionOwnerInitials(owner: SessionCreatedActor): string {
+  const source = owner.label?.trim() || owner.id?.trim() || "";
   if (!source) {
     return "";
   }
@@ -55,8 +69,11 @@ function ownerInitials(createdActor: SessionCreatedActor): string {
     .replace(/@.*$/u, "")
     .split(/[\s._-]+/u)
     .filter(Boolean);
-  const initials = ((parts[0]?.[0] ?? "") + (parts[1]?.[0] ?? "")).toUpperCase();
-  return initials || source[0]!.toUpperCase();
+  // Grapheme clusters, not UTF-16 units or bare code points: emoji display names
+  // must render their complete visible initial (no lone surrogates or split ZWJ sequences).
+  const firstChar = (value: string | undefined): string => (value ? takeGraphemes(value, 1) : "");
+  const initials = (firstChar(parts[0]) + firstChar(parts[1])).toUpperCase();
+  return initials || firstChar(source).toUpperCase();
 }
 
 // Deterministic hue per identity so a person keeps one color everywhere.
@@ -68,39 +85,131 @@ function ownerHue(id: string): number {
   return Math.abs(hash) % 360;
 }
 
+export function renderSessionOwnerMenuAvatar(owner: SessionOwnerOption) {
+  return html`<openclaw-viewer-avatar
+    .user=${{
+      id: owner.id,
+      name: owner.label,
+      avatarUrl: owner.avatarUrl,
+      watchedSessions: [],
+    }}
+    .markAsViewer=${false}
+    variant="session"
+    aria-hidden="true"
+  ></openclaw-viewer-avatar>`;
+}
+
 /**
- * Permanent session-owner avatar. Ownership is provenance, not presence:
- * this chip is solid and never pulses/expires, in deliberate contrast to the
- * translucent, ring-styled live-presence chips. Render only when the gateway
- * has 2+ distinct creator identities (solo mode shows no attribution chrome).
+ * Session-owner avatar. The owner may be reassigned; live viewing only changes
+ * avatar saturation. Render only when the Gateway's complete owner facet has 2+
+ * identities (solo mode shows no attribution chrome). Human actors use the durable
+ * profile projection carried by the session record; actors without it keep stable initials.
  */
 class SessionOwnerChip extends OpenClawLightDomElement {
-  @property({ attribute: false }) createdActor: SessionCreatedActor | null = null;
+  @property({ attribute: false }) owner: SessionCreatedActor | null = null;
   @property({ type: String }) size: "row" | "header" = "row";
-  @property({ type: String }) attribution: "created" | "archived" = "created";
+  @property({ type: String }) attribution: "created" | "owned" | "archived" = "created";
+  @property({ attribute: false }) viewingNow?: boolean;
+  @property({ attribute: false }) participants: readonly SessionCreatedActor[] = [];
+  @property({ type: Number }) participantCount = 0;
 
   override render() {
-    const createdActor = this.createdActor;
-    if (!createdActor?.id) {
+    const owner = this.owner;
+    if (!owner?.id) {
       return nothing;
     }
-    const initials = ownerInitials(createdActor);
+    const initials = sessionOwnerInitials(owner);
     if (!initials) {
       return nothing;
     }
-    const title = createdActor.label || createdActor.id;
-    const accessibleLabel = t(
-      this.attribution === "archived" ? "sessionsView.archivedBy" : "sessionsView.createdBy",
-      { name: title },
-    );
+    const title = owner.label || owner.id;
+    const attributionKey =
+      this.attribution === "archived"
+        ? "sessionsView.archivedBy"
+        : this.attribution === "owned"
+          ? "sessionsView.ownedBy"
+          : "sessionsView.createdBy";
+    const attributionLabel = t(attributionKey, { name: title });
+    const accessibleLabel = this.viewingNow
+      ? `${attributionLabel} · ${t("sessionsView.viewingNow")}`
+      : attributionLabel;
+    const avatar = owner.avatarUrl
+      ? resolveAvatar({
+          id: owner.id,
+          name: owner.label,
+          profileAvatarUrl: owner.avatarUrl,
+        })
+      : null;
+    if (this.size === "row" && this.participantCount > 0) {
+      const participant = this.participants[0];
+      const participantTitle = participant?.label || participant?.id;
+      const combinedLabel =
+        this.participantCount === 1 && participantTitle
+          ? `${accessibleLabel} · ${t("sessionsView.withParticipant", { name: participantTitle })}`
+          : `${accessibleLabel} · ${t("sessionsView.withMoreParticipants", { count: String(this.participantCount) })}`;
+      return html`
+        <span class="session-owner-stack" role="group" aria-label=${combinedLabel}>
+          <span class="session-owner-stack__back" aria-hidden="true">
+            ${this.participantCount === 1 && participant?.id
+              ? html`<openclaw-viewer-avatar
+                  .user=${{
+                    id: participant.id,
+                    name: participant.label,
+                    avatarUrl: participant.avatarUrl,
+                    watchedSessions: [],
+                  }}
+                  .markAsViewer=${false}
+                  variant="session"
+                ></openclaw-viewer-avatar>`
+              : html`<span class="session-owner-stack__overflow">+${this.participantCount}</span>`}
+          </span>
+          <span
+            class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
+              ? "session-owner-chip--away"
+              : ""} session-owner-stack__front"
+            style="--owner-hue: ${ownerHue(owner.id)}"
+            role="img"
+            aria-label=${accessibleLabel}
+            title=${accessibleLabel}
+            >${avatar?.kind === "profile"
+              ? html`<openclaw-viewer-avatar
+                  .user=${{
+                    id: owner.id,
+                    name: owner.label,
+                    avatarUrl: owner.avatarUrl,
+                    watchedSessions: [],
+                  }}
+                  .markAsViewer=${false}
+                  variant="session"
+                  aria-hidden="true"
+                ></openclaw-viewer-avatar>`
+              : initials}</span
+          >
+        </span>
+      `;
+    }
     return html`
       <span
-        class="session-owner-chip session-owner-chip--${this.size}"
-        style="--owner-hue: ${ownerHue(createdActor.id)}"
+        class="session-owner-chip session-owner-chip--${this.size} ${this.viewingNow === false
+          ? "session-owner-chip--away"
+          : ""}"
+        style="--owner-hue: ${ownerHue(owner.id)}"
         role="img"
         aria-label=${accessibleLabel}
         title=${accessibleLabel}
-        >${initials}</span
+        >${avatar?.kind === "profile"
+          ? html`<openclaw-viewer-avatar
+              .user=${{
+                id: owner.id,
+                name: owner.label,
+                avatarUrl: owner.avatarUrl,
+                watchedSessions: [],
+              }}
+              .markAsViewer=${false}
+              variant="session"
+              aria-hidden="true"
+            ></openclaw-viewer-avatar>`
+          : initials}</span
       >
     `;
   }

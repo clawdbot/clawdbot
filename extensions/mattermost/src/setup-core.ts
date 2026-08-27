@@ -13,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import {
-  resolveMattermostAccount,
+  inspectMattermostAccount,
   type ResolvedMattermostAccount,
 } from "./setup.accounts.runtime.js";
 import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
@@ -33,11 +33,7 @@ export function isMattermostConfigured(account: ResolvedMattermostAccount): bool
 }
 
 export function resolveMattermostAccountWithSecrets(cfg: OpenClawConfig, accountId: string) {
-  return resolveMattermostAccount({
-    cfg,
-    accountId,
-    allowUnresolvedSecretRef: true,
-  });
+  return inspectMattermostAccount({ cfg, accountId });
 }
 
 export function applyMattermostSetupConfigPatch(params: {
@@ -138,6 +134,7 @@ export const mattermostSetupContract = defineChannelSetupContract({
     useEnv: {
       kind: "boolean",
       cli: { flags: "--use-env", description: "Use Mattermost environment credentials" },
+      envVars: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"],
     },
   },
   legacyAdapter: mattermostSetupAdapter,

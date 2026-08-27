@@ -1,14 +1,16 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
   mergeUsageLatency,
+  usageDailyModelIdentity,
+  usageModelIdentity,
 } from "../../../../src/shared/usage-aggregates.js";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -25,8 +27,14 @@ function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-function formatTokens(n: number): string {
+function formatUsageTokens(n: number): string {
   return formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
+}
+
+// Usage charts choose fixed precision from the surrounding scale; the shared
+// adaptive cost formatter would change labels as values cross its thresholds.
+function formatUsageCost(n: number, decimals = 2): string {
+  return `$${n.toFixed(decimals)}`;
 }
 
 function formatHourLabel(hour: number): string {
@@ -352,7 +360,7 @@ function renderUsageMosaic(
         description: t("usage.mosaic.subtitleEmpty"),
         actions: html`
           <div class="usage-mosaic-total">
-            ${formatTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+            ${formatUsageTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
           </div>
         `,
       },
@@ -378,7 +386,7 @@ function renderUsageMosaic(
       }),
       actions: html`
         <div class="usage-mosaic-total">
-          ${formatTokens(stats.totalTokens)}
+          ${formatUsageTokens(stats.totalTokens)}
           ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       `,
@@ -398,7 +406,7 @@ function renderUsageMosaic(
                 return html`
                   <div class="usage-daypart-cell" style="background: ${bg};">
                     <div class="usage-daypart-label">${part.label}</div>
-                    <div class="usage-daypart-value">${formatTokens(part.tokens)}</div>
+                    <div class="usage-daypart-value">${formatUsageTokens(part.tokens)}</div>
                   </div>
                 `;
               })}
@@ -416,7 +424,7 @@ function renderUsageMosaic(
                   value > 0
                     ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
                     : "transparent";
-                const title = `${hour}:00 · ${formatTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(
                   t("usage.metrics.tokens"),
                 )}`;
                 const border =
@@ -425,12 +433,15 @@ function renderUsageMosaic(
                     : "color-mix(in srgb, var(--accent) 24%, transparent)";
                 const selected = selectedHours.includes(hour);
                 return html`
-                  <div
+                  <button
+                    type="button"
                     class="usage-hour-cell ${selected ? "selected" : ""}"
                     style="background: ${bg}; border-color: ${border};"
                     title="${title}"
+                    aria-label=${title}
+                    aria-pressed=${selected ? "true" : "false"}
                     @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
-                  ></div>
+                  ></button>
                 `;
               })}
             </div>
@@ -451,10 +462,6 @@ function renderUsageMosaic(
       </div>
     `,
   );
-}
-
-function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
 }
 
 function formatIsoDate(date: Date): string {
@@ -673,7 +680,7 @@ const buildAggregatesFromSessions = (
 
     if (usage.modelUsage) {
       for (const entry of usage.modelUsage) {
-        const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+        const modelKey = usageModelIdentity(entry.provider, entry.model);
         const modelExisting = modelMap.get(modelKey) ?? {
           provider: entry.provider,
           model: entry.model,
@@ -739,7 +746,7 @@ const buildAggregatesFromSessions = (
     }
     mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
     for (const day of usage.dailyModelUsage ?? []) {
-      const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
+      const key = usageDailyModelIdentity(day.date, day.provider, day.model);
       const existing = modelDailyMap.get(key) ?? {
         date: day.date,
         provider: day.provider,
@@ -858,11 +865,11 @@ export {
   buildPeakErrorHours,
   buildUsageInsightStats,
   charsToTokens,
-  formatCost,
+  formatUsageCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 };

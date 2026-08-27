@@ -31,6 +31,11 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
+async function hasDistinctRootMemoryFiles(directory: string): Promise<boolean> {
+  const entries = new Set(await fs.readdir(directory));
+  return entries.has("MEMORY.md") && entries.has("memory.md");
+}
+
 function firstNoteCall() {
   return note.mock.calls[0];
 }
@@ -67,8 +72,7 @@ describe("root memory repair", () => {
   it("merges true split-brain root memory files into MEMORY.md", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
-    const entries = new Set(await fs.readdir(tmpDir));
-    if (!entries.has("MEMORY.md") || !entries.has("memory.md")) {
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
       return;
     }
 
@@ -95,6 +99,9 @@ describe("root memory repair", () => {
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
     await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
 
     const rename = vi.spyOn(fs, "rename");
     rename.mockImplementationOnce(async (sourcePath, targetPath) => {
@@ -115,6 +122,9 @@ describe("root memory repair", () => {
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
     await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
 
     const rename = vi.spyOn(fs, "rename");
     rename.mockImplementationOnce(async (sourcePath, targetPath) => {
@@ -140,6 +150,9 @@ describe("root memory repair", () => {
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
     await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
 
     const rename = vi.spyOn(fs, "rename");
     rename.mockImplementationOnce(async (sourcePath, targetPath) => {
@@ -164,11 +177,12 @@ describe("root memory repair", () => {
   it("warns and repairs split-brain root memory through workspace doctor helpers", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
-    const entries = new Set(await fs.readdir(tmpDir));
-    if (!entries.has("MEMORY.md") || !entries.has("memory.md")) {
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
       return;
     }
-    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+    } as OpenClawConfig;
     const prompter = {
       confirmRuntimeRepair: vi.fn(async () => true),
     } as unknown as DoctorPrompter;
@@ -225,6 +239,9 @@ describe("root memory repair", () => {
   it("does not archive or remove an oversized legacy memory file", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
     expect(migration.changed).toBe(false);
@@ -239,6 +256,9 @@ describe("root memory repair", () => {
   it("does not archive or remove a valid legacy memory file when canonical is oversized", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n".repeat(1_000_000), "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
     expect(migration.changed).toBe(false);
@@ -255,6 +275,9 @@ describe("root memory repair", () => {
     await fs.writeFile(targetFile, "# Canonical\n", "utf8");
     await fs.symlink(targetFile, path.join(tmpDir, "MEMORY.md"));
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
     expect(migration.changed).toBe(false);
@@ -272,7 +295,12 @@ describe("root memory repair", () => {
     await fs.writeFile(targetFile, "# Canonical\n", "utf8");
     await fs.symlink(targetFile, path.join(tmpDir, "MEMORY.md"));
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
-    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+    } as OpenClawConfig;
     const prompter = {
       confirmRuntimeRepair: vi.fn(async () => true),
     } as unknown as DoctorPrompter;
@@ -292,7 +320,12 @@ describe("root memory repair", () => {
   it("reports a skipped repair when a root memory file is oversized", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
-    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+    } as OpenClawConfig;
     const prompter = {
       confirmRuntimeRepair: vi.fn(async () => true),
     } as unknown as DoctorPrompter;
@@ -316,6 +349,9 @@ describe("root memory repair", () => {
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
     await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
     const rename = vi
       .spyOn(fs, "rename")
       .mockRejectedValueOnce(Object.assign(new Error("cross-device rename"), { code: "EXDEV" }));
@@ -337,7 +373,12 @@ describe("root memory repair", () => {
   it("reports when legacy memory cannot be archived atomically", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
-    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+    } as OpenClawConfig;
     const prompter = {
       confirmRuntimeRepair: vi.fn(async () => true),
     } as unknown as DoctorPrompter;
@@ -366,7 +407,12 @@ describe("root memory repair", () => {
     const legacyPath = path.join(tmpDir, "memory.md");
     await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
     await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
-    const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+    const cfg = {
+      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+    } as OpenClawConfig;
     const prompter = {
       confirmRuntimeRepair: vi.fn(async () => true),
     } as unknown as DoctorPrompter;

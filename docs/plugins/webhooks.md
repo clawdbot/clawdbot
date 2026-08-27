@@ -56,7 +56,7 @@ Route fields:
 | `controllerId` | no       | `webhooks/<routeId>`          | Used as the default `create_flow` controller. |
 | `description`  | no       | -                             | Operator note only.                           |
 
-`secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec", provider: "default", id: "..." }`.
+`secret` accepts a plain string or a SecretRef: `{ source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }`.
 
 SecretRefs resolve into the Gateway's startup config snapshot. When one route's
 secret cannot resolve, the Gateway keeps running and that exact route stays
@@ -142,9 +142,14 @@ with any other status returns `400 invalid_request`.
   "flowId": "flow_123",
   "runtime": "acp",
   "childSessionKey": "agent:main:acp:worker",
+  "runId": "run_123",
   "task": "Inspect the next message batch"
 }
 ```
+
+`childSessionKey` identifies the backing run but does not grant authority over it. For automatic
+lifecycle tracking and cancellation, include the exact `runId`; the backing task must be owned by
+the route's configured session. Foreign, stale, or replaced runs are rejected at use time.
 
 ## Response shape
 

@@ -3,6 +3,14 @@ import { describe, expect, it } from "vitest";
 import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
 
 describe("collectRuntimeChannelCapabilities", () => {
+  it("advertises markdown details for internal webchat", () => {
+    expect(collectRuntimeChannelCapabilities({ channel: "webchat" })).toEqual(["markdownDetails"]);
+  });
+
+  it("does not advertise markdown details for a plugin-less non-webchat channel", () => {
+    expect(collectRuntimeChannelCapabilities({ channel: "heartbeat" })).toBeUndefined();
+  });
+
   it("adds thread-bound spawn capabilities when the channel account allows unified spawns", () => {
     const capabilities = collectRuntimeChannelCapabilities({
       channel: "discord",

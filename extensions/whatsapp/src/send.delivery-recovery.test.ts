@@ -4,7 +4,7 @@ import {
   createEmptyPluginRegistry,
   createOutboundTestPlugin,
   createTestRegistry,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -70,7 +70,7 @@ describe("WhatsApp delivery recovery", () => {
 
   afterEach(() => {
     runtimeContextMocks.controllers.clear();
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 

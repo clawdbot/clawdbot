@@ -83,6 +83,17 @@
       "activation": ["agent.tool.read.image.bmp"],
       "risk": ["wasm", "parser", "untrusted-files"]
     },
+    "@trycua/cua-driver": {
+      "owner": "plugin:cua-computer",
+      "class": "plugin-runtime",
+      "activation": ["plugins.entries.cua-computer.enabled"],
+      "risk": ["native", "computer-control"]
+    },
+    "acorn": {
+      "owner": "core:code-mode-and-release-verification",
+      "class": "core-runtime",
+      "risk": ["parser", "untrusted-javascript"]
+    },
     "chalk": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -132,11 +143,6 @@
       "owner": "core:media-admission",
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
-    },
-    "glob": {
-      "owner": "core:package-manager",
-      "class": "core-runtime",
-      "risk": ["filesystem-glob"]
     },
     "grammy": {
       "owner": "plugin:telegram",
@@ -194,11 +200,6 @@
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
-    "markdown-it": {
-      "owner": "core:markdown-rendering",
-      "class": "core-runtime",
-      "risk": ["parser", "markdown"]
-    },
     "minimatch": {
       "owner": "core:pattern-matching",
       "class": "core-runtime",
@@ -243,11 +244,6 @@
       "owner": "core:duration-formatting",
       "class": "core-runtime",
       "risk": ["formatting"]
-    },
-    "proper-lockfile": {
-      "owner": "core:session-storage",
-      "class": "core-runtime",
-      "risk": ["filesystem-locking"]
     },
     "quickjs-wasi": {
       "owner": "core:code-mode",

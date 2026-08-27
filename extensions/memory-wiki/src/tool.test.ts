@@ -65,6 +65,18 @@ describe("memory-wiki tools", () => {
     expect(evidenceProperties.confidence).toEqual({ type: "number", minimum: 0, maximum: 1 });
   });
 
+  it("rejects non-object wiki_apply arguments without throwing a TypeError", async () => {
+    const { config } = await harness.createVault({ initialize: true });
+    const tool = createWikiApplyTool(config);
+
+    await expect(tool.execute("malformed-null", null)).rejects.toThrow(
+      "wiki mutation requires lookup for update_metadata.",
+    );
+    await expect(tool.execute("malformed-undefined", undefined)).rejects.toThrow(
+      "wiki mutation requires lookup for update_metadata.",
+    );
+  });
+
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });

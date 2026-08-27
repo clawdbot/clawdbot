@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  resolvePreferredBunPath: vi.fn(),
   resolvePreferredNodePath: vi.fn(),
   resolveNodeProgramArguments: vi.fn(),
   resolveSystemNodeInfo: vi.fn(),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
+  resolvePreferredBunPath: mocks.resolvePreferredBunPath,
   resolvePreferredNodePath: mocks.resolvePreferredNodePath,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
@@ -42,7 +44,7 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
 
     const plan = await buildNodeInstallPlan({
@@ -50,15 +52,17 @@ describe("buildNodeInstallPlan", () => {
       host: "127.0.0.1",
       port: 18789,
       runtime: "node",
-      nodePath: "/custom/node/bin/node",
+      runtimePath: "/custom/node/bin/node",
     });
 
     expect(plan.environment).toEqual({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      CF_ACCESS_CLIENT_ID: "file",
+      CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
     });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -67,7 +71,36 @@ describe("buildNodeInstallPlan", () => {
     });
   });
 
-  it("does not prepend '.' when nodePath is a bare executable name", async () => {
+  it("resolves and forwards Bun for a managed node-host install plan", async () => {
+    const bunPath = "/home/test/.bun/bin/bun";
+    mocks.resolvePreferredBunPath.mockResolvedValue(bunPath);
+    mocks.resolveNodeProgramArguments.mockResolvedValue({
+      programArguments: [bunPath, "node-host"],
+    });
+    mocks.buildNodeServiceEnvironment.mockReturnValue({});
+
+    await buildNodeInstallPlan({
+      env: { HOME: "/home/test" },
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "bun",
+    });
+
+    expect(mocks.resolvePreferredBunPath).toHaveBeenCalledWith({
+      env: { HOME: "/home/test" },
+      runtime: "bun",
+    });
+    expect(mocks.resolveNodeProgramArguments).toHaveBeenCalledWith(
+      expect.objectContaining({ runtime: "bun", runtimePath: bunPath }),
+    );
+    expect(mocks.resolveSystemNodeInfo).not.toHaveBeenCalled();
+    expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
+      env: { HOME: "/home/test" },
+      extraPathDirs: ["/home/test/.bun/bin"],
+    });
+  });
+
+  it("does not prepend '.' when runtimePath is a bare executable name", async () => {
     mocks.resolveNodeProgramArguments.mockResolvedValue({
       programArguments: ["node", "node-host"],
       workingDirectory: "/Users/me",
@@ -79,7 +112,7 @@ describe("buildNodeInstallPlan", () => {
     });
     mocks.renderSystemNodeWarning.mockReturnValue(undefined);
     mocks.buildNodeServiceEnvironment.mockReturnValue({
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
 
     await buildNodeInstallPlan({
@@ -87,7 +120,7 @@ describe("buildNodeInstallPlan", () => {
       host: "127.0.0.1",
       port: 18789,
       runtime: "node",
-      nodePath: "node",
+      runtimePath: "node",
     });
 
     expect(mocks.buildNodeServiceEnvironment).toHaveBeenCalledWith({
@@ -110,7 +143,7 @@ describe("buildNodeInstallPlan", () => {
     mocks.buildNodeServiceEnvironment.mockReturnValue({
       OPENCLAW_GATEWAY_TOKEN: "node-token",
       OPENCLAW_GATEWAY_PASSWORD: "node-password",
-      OPENCLAW_SERVICE_VERSION: "2026.3.22",
+      OPENCLAW_SERVICE_MARKER: "openclaw",
     });
 
     const plan = await buildNodeInstallPlan({
@@ -125,9 +158,12 @@ describe("buildNodeInstallPlan", () => {
 
     expect(plan.environment.OPENCLAW_GATEWAY_TOKEN).toBe("node-token");
     expect(plan.environment.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
+    expect(plan.description).toBe("OpenClaw Node Host");
     expect(plan.environmentValueSources).toEqual({
       OPENCLAW_GATEWAY_TOKEN: "file",
       OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      CF_ACCESS_CLIENT_ID: "file",
+      CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
     });
   });
 });

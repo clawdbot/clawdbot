@@ -19,17 +19,18 @@ import type {
 import { normalizeExecutableToken } from "../infra/exec-wrapper-tokens.js";
 import {
   isShellWrapperExecutable,
-  POSIX_SHELL_WRAPPERS,
+  POSIX_PARSEABLE_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
 } from "../infra/shell-wrapper-resolution.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { markToolDecisionRecorded } from "./agent-tools.before-tool-call.decision.js";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
+const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_PARSEABLE_SHELL_WRAPPERS;
 
 const loadExecApprovalCommandSpansRuntime = createLazyPromise(
   () => import("./bash-tools.exec-approval-request.runtime.js"),
@@ -64,6 +65,7 @@ type RequestExecApprovalDecisionParams = {
   approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
+  deliverToApprovalClientsOnly?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -103,6 +105,7 @@ function buildExecApprovalRequestToolParams(
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -161,6 +164,7 @@ async function registerExecApprovalRequest(
     buildExecApprovalRequestToolParams(params),
     { expectFinal: false },
   );
+  markToolDecisionRecorded();
   const decision = parseDecision(registrationResult);
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
@@ -228,6 +232,7 @@ type HostExecApprovalParams = {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
   approvalReviewerDeviceIds?: string[];
+  trigger?: string;
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -338,7 +343,19 @@ async function buildHostApprovalDecisionParams(
     runId: params.runId,
     toolCallId: params.toolCallId,
     requireDeliveryRoute: params.requireDeliveryRoute,
-    suppressDelivery: params.suppressDelivery,
+    // Gateway-host cron cards go only to connected approval clients (Control
+    // UI/TUI); allow-always there mints a standing grant that ends the
+    // recurrence. With no client connected, the request still registers and
+    // expires no-route into the headless denial (#128031). Node-host cron has
+    // no grant mint/consume path yet, so it keeps the fully suppressed
+    // headless policy instead of raising cards whose allow-always could not
+    // stick as a scoped grant.
+    suppressDelivery:
+      params.suppressDelivery === true || (params.trigger === "cron" && params.host !== "gateway")
+        ? true
+        : undefined,
+    deliverToApprovalClientsOnly:
+      params.trigger === "cron" && params.host === "gateway" ? true : undefined,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };

@@ -4,17 +4,21 @@ import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
 type CodeModeBridgeMethod =
   | "search"
   | "describe"
-  | "call"
   | "callValue"
+  | "nodes"
   | "yield"
   | "namespace"
   | "agentSpawn"
   | "agentWait"
+  | "skillsList"
+  | "skillsRead"
+  | "sleep"
   | "swarmNote";
 
 export type CodeModeConfig = {
   timeoutMs: number;
   memoryLimitBytes: number;
+  maxOutputBytes: number;
   maxPendingToolCalls: number;
   maxSnapshotBytes: number;
 };
@@ -40,7 +44,7 @@ export type CodeModeNamespaceDescriptor = {
   scope: SerializedCodeModeNamespaceValue;
 };
 
-export type CodeModeWorkerInput =
+type CodeModeWorkerInput =
   | {
       kind: "exec";
       source: string;
@@ -55,9 +59,20 @@ export type CodeModeWorkerInput =
       snapshotBytes: Uint8Array;
       config: CodeModeConfig;
       settledRequests: SettledBridgeRequest[];
+      pendingRequests?: PendingBridgeRequest[];
     };
 
-export type CodeModeWorkerResult =
+export type CodeModeWorkerPayload = CodeModeWorkerInput & {
+  wasmModule: WebAssembly.Module;
+};
+
+export type CodeModeSettlementMode =
+  | { kind: "awaiting" }
+  | { kind: "draining"; requiredRequestIds: string[] };
+
+export type CodeModeFailurePhase = "input" | "guest" | "bridge" | "host";
+
+export type CodeModeWorkerThreadResult =
   | {
       status: "completed";
       value: unknown;
@@ -67,6 +82,8 @@ export type CodeModeWorkerResult =
       status: "waiting";
       snapshotBytes: Uint8Array;
       pendingRequests: PendingBridgeRequest[];
+      canceledRequestIds: string[];
+      settlementMode: CodeModeSettlementMode;
       output: unknown[];
     }
   | {
@@ -78,5 +95,7 @@ export type CodeModeWorkerResult =
         | "timeout"
         | "snapshot_limit_exceeded"
         | "internal_error";
+      failurePhase: Extract<CodeModeFailurePhase, "input" | "guest">;
+      bridgeDispatchStarted: false;
       output: unknown[];
     };

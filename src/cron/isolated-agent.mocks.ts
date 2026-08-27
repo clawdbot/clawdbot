@@ -17,8 +17,17 @@ vi.mock("../agents/prepared-model-catalog.js", async () => {
     await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
   return {
     loadPreparedModelCatalog,
+    loadPreparedModelCatalogSnapshot: vi.fn(async (params) => ({
+      entries: (await loadPreparedModelCatalog(params)) ?? [],
+      routeVariants: [],
+    })),
+    loadProviderScopedThinkingCatalog: vi.fn(
+      async (params) => (await loadPreparedModelCatalog(params)) ?? [],
+    ),
     loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
-    loadPublishedPreparedModelCatalogOwnerSnapshot: vi.fn(
+    publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+      owner.agentId === agentId.trim().toLowerCase(),
+    loadResolvedPublishedModelCatalogOwner: vi.fn(
       async (params: {
         agentId?: string;
         agentDir?: string;
@@ -52,12 +61,16 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(),
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
-vi.mock("../plugins/runtime-plugins.runtime.js", () => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
+vi.mock("../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
+}));
+
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
+  runSubagentAnnounceFlow: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", () => ({

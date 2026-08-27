@@ -28,6 +28,7 @@ vi.mock("./graph-users.js", () => ({
 
 import {
   looksLikeMSTeamsTargetId,
+  projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsTeamsConfig,
@@ -122,6 +123,46 @@ describe("projectStableMSTeamsUserAllowlist", () => {
         "Alice Example",
       ]),
     ).toEqual(["*", "accessGroup:operators", "40a1a0ed-4ff2-4164-a219-55518990c197"]);
+  });
+
+  it("does not authorize group conversation IDs in the direct-message allowlist", () => {
+    expect(
+      projectStableMSTeamsUserAllowlist([
+        "19:group@thread.tacv2",
+        "19:legacy@thread.skype",
+        "user:40a1a0ed-4ff2-4164-a219-55518990c197",
+      ]),
+    ).toEqual(["40a1a0ed-4ff2-4164-a219-55518990c197"]);
+  });
+});
+
+describe("projectStableMSTeamsGroupAllowlist", () => {
+  it("keeps normalized group conversation IDs alongside stable sender entries", () => {
+    expect(
+      projectStableMSTeamsGroupAllowlist([
+        "19:group@thread.tacv2;messageid=1740123456789",
+        "19:GROUP@THREAD.TACV2",
+        "19:modern-group@thread.v2;messageid=1740123456789",
+        "msteams:conversation:19:legacy@thread.skype",
+        "accessGroup:operators",
+        "msteams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
+        "Mutable Display Name",
+        "a:personal-chat",
+        "19:personal@unq.gbl.spaces",
+      ]),
+    ).toEqual([
+      "19:group@thread.tacv2",
+      "19:GROUP@THREAD.TACV2",
+      "19:modern-group@thread.v2",
+      "19:legacy@thread.skype",
+      "accessGroup:operators",
+      "40a1a0ed-4ff2-4164-a219-55518990c197",
+    ]);
+  });
+
+  it("preserves absent and empty group allowlists", () => {
+    expect(projectStableMSTeamsGroupAllowlist()).toBeUndefined();
+    expect(projectStableMSTeamsGroupAllowlist([])).toEqual([]);
   });
 });
 
@@ -463,12 +504,14 @@ describe("looksLikeMSTeamsTargetId", () => {
     expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
   });
 
-  it.each(["19:AdviChannelId@thread.tacv2", "19:abc@thread.tacv2", "19:abc@thread.skype"])(
-    "accepts bare channel/group conversation ids (%s)",
-    (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
-    },
-  );
+  it.each([
+    "19:AdviChannelId@thread.tacv2",
+    "19:abc@thread.tacv2",
+    "19:abc@thread.skype",
+    "19:abc@thread.v2",
+  ])("accepts bare channel/group conversation ids (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+  });
 
   it("accepts the Graph 1:1 chat thread format", () => {
     expect(
@@ -500,12 +543,29 @@ describe("looksLikeMSTeamsTargetId", () => {
     expect(looksLikeMSTeamsTargetId("user:40a1a0ed-4ff2-4164-a219-55518990c197")).toBe(true);
   });
 
-  it.each(["", "   ", "user:John Smith", "Product Team/Roadmap", "Engineering", "hello"])(
-    "rejects non-id inputs (%s)",
-    (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
-    },
-  );
+  it.each([
+    "teams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
+    "msteams:user:40a1a0ed-4ff2-4164-a219-55518990c197",
+    "TEAMS:conversation:19:abc@thread.tacv2",
+    "msteams:19:abc@thread.tacv2",
+    "teams:29:1a2b3c4d5e6f",
+    "  teams:user:40a1a0ed-4ff2-4164-a219-55518990c197  ",
+  ])("accepts provider-prefixed explicit ids (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "   ",
+    "user:John Smith",
+    "teams:user:John Smith",
+    "msteams:user:John Smith",
+    "Product Team/Roadmap",
+    "Engineering",
+    "hello",
+  ])("rejects non-id inputs (%s)", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(false);
+  });
 
   it("normalizes leading/trailing whitespace before classifying", () => {
     expect(looksLikeMSTeamsTargetId("  19:abc@thread.tacv2  ")).toBe(true);

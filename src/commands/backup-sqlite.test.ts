@@ -1,16 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.generated.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   backupSqliteCreateCommand,
   backupSqliteListCommand,
@@ -18,11 +18,23 @@ import {
   backupSqliteVerifyCommand,
 } from "./backup-sqlite.js";
 
+const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return { ...actual, getRuntimeConfig: configMocks.getRuntimeConfig };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let previousStateDir: string | undefined;
 
 beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  configMocks.getRuntimeConfig.mockReset().mockReturnValue({
+    agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+  });
 });
 
 afterEach(() => {
@@ -151,6 +163,15 @@ describe("SQLite backup commands", () => {
     expect(listed.snapshots).toHaveLength(1);
     expect(listed.snapshots[0]?.manifest.snapshotId).toBe(created.manifest.snapshotId);
 
+    const missingScratchPath = path.join(tempDir, "missing-scratch");
+    await expect(
+      backupSqliteVerifyCommand(runtime, created.snapshotPath, {
+        scratch: missingScratchPath,
+      }),
+    ).rejects.toThrow(
+      `SQLite validation root does not exist: ${missingScratchPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
+    );
+
     const verified = await backupSqliteVerifyCommand(runtime, created.snapshotPath, {
       scratch: scratchPath,
       json: true,
@@ -183,30 +204,69 @@ describe("SQLite backup commands", () => {
     }
   });
 
-  it("creates a snapshot for a normalized per-agent database", async () => {
-    const tempDir = tempDirs.make("openclaw-backup-sqlite-");
-    const stateDir = path.join(tempDir, "state");
+  it("reports missing snapshot paths for verify and restore", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-missing-");
     const repositoryPath = path.join(tempDir, "snapshots");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    createAgentDatabase(databasePath, "ops-team");
+    const snapshotPath = path.join(repositoryPath, "missing-snapshot");
+    const restorePath = path.join(tempDir, "restored.sqlite");
     const runtime = createRuntimeCapture();
+    const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
 
-    const created = await backupSqliteCreateCommand(runtime, {
-      agent: "Ops Team",
-      repository: repositoryPath,
-    });
+    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
+      missingRepositoryMessage,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
+    ).rejects.toThrow(missingRepositoryMessage);
 
-    expect(created.manifest.database).toEqual({
-      role: "agent",
-      agentId: "ops-team",
-      basename: "openclaw-agent.sqlite",
-      userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-    });
-    expect(runtime.logs).toEqual([expect.stringContaining("Database: agent:ops-team")]);
-    expect(runtime.errors).toEqual([]);
+    await fs.mkdir(repositoryPath, { mode: 0o700 });
+    const missingSnapshotMessage = `SQLite snapshot does not exist: ${snapshotPath}. Run \`openclaw backup sqlite list --repository ${repositoryPath}\` to inspect available snapshots.`;
+    await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
+      missingSnapshotMessage,
+    );
+    await expect(
+      backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
+    ).rejects.toThrow(missingSnapshotMessage);
   });
+
+  it.each([
+    { label: "default", customAgentDir: false },
+    { label: "configured external", customAgentDir: true },
+  ])(
+    "creates a snapshot for a normalized $label per-agent database",
+    async ({ customAgentDir }) => {
+      const tempDir = tempDirs.make("openclaw-backup-sqlite-");
+      const stateDir = path.join(tempDir, "state");
+      const repositoryPath = path.join(tempDir, "snapshots");
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      const agentDir = customAgentDir ? path.join(tempDir, "external-agent") : undefined;
+      if (agentDir) {
+        configMocks.getRuntimeConfig.mockReturnValue({
+          agents: { entries: { "ops-team": { agentDir } } },
+        });
+      }
+      const databasePath = agentDir
+        ? path.join(agentDir, "openclaw-agent.sqlite")
+        : resolveOpenClawAgentSqlitePath({ agentId: "ops-team" });
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      createAgentDatabase(databasePath, "ops-team");
+      const runtime = createRuntimeCapture();
+
+      const created = await backupSqliteCreateCommand(runtime, {
+        agent: "Ops Team",
+        repository: repositoryPath,
+      });
+
+      expect(created.manifest.database).toEqual({
+        role: "agent",
+        agentId: "ops-team",
+        basename: "openclaw-agent.sqlite",
+        userVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+      expect(runtime.logs).toEqual([expect.stringContaining("Database: agent:ops-team")]);
+      expect(runtime.errors).toEqual([]);
+    },
+  );
 
   it("requires exactly one named OpenClaw database source", async () => {
     const runtime = createRuntimeCapture();
@@ -221,6 +281,44 @@ describe("SQLite backup commands", () => {
         repository: "/tmp/snapshots",
       }),
     ).rejects.toThrow("Choose exactly one SQLite snapshot source");
+  });
+
+  it.each([
+    [
+      "unknown",
+      "nope-agent",
+      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+    ],
+    ["empty", "", "--agent must not be blank"],
+    ["whitespace-only", "   ", "--agent must not be blank"],
+  ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
+    process.env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-backup-sqlite-agent-rejection-");
+    await expect(
+      backupSqliteCreateCommand(createRuntimeCapture(), {
+        agent,
+        repository: "/tmp/snapshots",
+      }),
+    ).rejects.toThrow(message);
+  });
+
+  it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-sqlite-corrupt-");
+    const stateDir = path.join(tempDir, "state");
+    const repositoryPath = path.join(tempDir, "snapshots");
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    const databasePath = resolveOpenClawStateSqlitePath();
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.writeFile(databasePath, Buffer.alloc(32));
+    const runtime = createRuntimeCapture();
+
+    await expect(
+      backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
+    ).rejects.toThrow(/cannot be snapshotted safely/u);
+
+    expect(runtime.errors).toEqual([
+      "Warning: the backup outcome could not be recorded: file is not a database",
+    ]);
+    await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
   it("requires repository, snapshot, and restore target paths", async () => {

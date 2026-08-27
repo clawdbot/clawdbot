@@ -1,4 +1,10 @@
+import {
+  buildControlUiUserAvatarPath,
+  canonicalizeControlUiUserAvatarPath,
+} from "../../../src/gateway/control-ui-user-avatar-route.js";
+import { normalizeBasePath } from "../app-route-paths.ts";
 import { formatSenderLabel, type SenderIdentity } from "./chat/sender-label.ts";
+import { fnv1aUtf16 } from "./fnv1a.ts";
 
 // NOTE: this is sender-controlled metadata. It must never carry the trusted
 // gateway origin — that comes only from the app connection via
@@ -10,6 +16,24 @@ export type IdentityAvatarInput = SenderIdentity & {
 const ORIGIN_PROBE = "https://origin-probe.invalid";
 
 let appGatewayOrigin: string | null = null;
+let appGatewayResourceBasePath = "";
+let appGatewayAuthHeader: string | null = null;
+// More than one cache is keyed by the Gateway HTTP context (avatars,
+// geolocation), so every subscriber must be notified on a switch. A single slot
+// would silently drop whichever registered first.
+const gatewayContextResets = new Set<() => void>();
+
+export function registerAvatarGatewayReset(reset: () => void): void {
+  gatewayContextResets.add(reset);
+}
+
+export function readAvatarGatewayContext() {
+  return {
+    origin: appGatewayOrigin,
+    resourceBasePath: appGatewayResourceBasePath,
+    authHeader: appGatewayAuthHeader,
+  };
+}
 
 function toHttpOrigin(url: string | null | undefined): string | null {
   if (!url) {
@@ -25,32 +49,56 @@ function toHttpOrigin(url: string | null | undefined): string | null {
   }
 }
 
-/** Records the connected gateway URL so avatar routes resolve to its origin. */
-export function setAvatarGatewayOrigin(gatewayUrl: string | null | undefined): void {
-  appGatewayOrigin = toHttpOrigin(gatewayUrl);
+/** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */
+export function setAvatarGatewayOrigin(
+  gatewayUrl: string | null | undefined,
+  authHeader: string | null = null,
+  resourceBasePath = "",
+): void {
+  const nextOrigin = toHttpOrigin(gatewayUrl);
+  const documentOrigin = globalThis.location?.origin;
+  const nextResourceBasePath =
+    nextOrigin && documentOrigin === nextOrigin ? normalizeBasePath(resourceBasePath) : "";
+  const nextAuthHeader = authHeader?.trim() || null;
+  if (
+    appGatewayOrigin !== nextOrigin ||
+    appGatewayResourceBasePath !== nextResourceBasePath ||
+    appGatewayAuthHeader !== nextAuthHeader
+  ) {
+    for (const reset of gatewayContextResets) {
+      reset();
+    }
+  }
+  appGatewayOrigin = nextOrigin;
+  appGatewayResourceBasePath = nextResourceBasePath;
+  appGatewayAuthHeader = nextAuthHeader;
 }
-
-// Mirrors the server's user-profiles-http-path matcher. Sender metadata may
-// point only at this image route, never another gateway endpoint.
-const USER_AVATAR_PATHNAME = /^\/api\/users\/[^/]+\/avatar$/u;
 
 /**
  * Returns a browser-safe avatar URL, or null. Only the canonical
  * /api/users/<id>/avatar route is trusted (pathname pinned, fragment dropped).
  * The query is preserved: the gateway stamps a ?v=<updatedAt> revision there so
- * the browser cache-busts a replaced avatar. Since avatars now render as plain
- * <img> with no attached credentials, a varied query cannot amplify any
- * client cache — the browser bounds it. Relative paths resolve against the
- * trusted gateway origin; absolute URLs must match that origin.
+ * replacing an image invalidates its bounded authenticated blob-cache entry.
+ * Relative paths resolve against the trusted gateway origin; absolute URLs
+ * must match that origin.
  */
-function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string | null {
+export function resolveTrustedAvatarUrl(
+  value: string,
+  gatewayOrigin: string | null,
+  resourceBasePath = appGatewayResourceBasePath,
+): string | null {
   try {
     const parsed = new URL(value, ORIGIN_PROBE);
-    if (!USER_AVATAR_PATHNAME.test(parsed.pathname)) {
+    const relativeRoute = parsed.origin === ORIGIN_PROBE;
+    const canonicalPathname = canonicalizeControlUiUserAvatarPath(
+      parsed.pathname,
+      relativeRoute ? "" : resourceBasePath,
+    );
+    if (!canonicalPathname) {
       return null;
     }
-    const suffix = parsed.pathname + parsed.search;
-    if (parsed.origin === ORIGIN_PROBE) {
+    const suffix = `${resourceBasePath}${canonicalPathname}${parsed.search}`;
+    if (relativeRoute) {
       return gatewayOrigin ? new URL(suffix, gatewayOrigin).toString() : suffix;
     }
     return gatewayOrigin && parsed.origin === gatewayOrigin ? gatewayOrigin + suffix : null;
@@ -61,22 +109,12 @@ function toTrustedAvatarUrl(value: string, gatewayOrigin: string | null): string
 
 export type ResolvedIdentityAvatar =
   | { kind: "profile"; url: string }
-  | { kind: "gravatar"; url: string }
   | { kind: "initials"; initials: string; colorSeed: number };
 
 function initialsFromLabel(label: string): string {
   const words = label.trim().split(/\s+/u).filter(Boolean).slice(0, 2);
   const initials = words.map((word) => Array.from(word)[0] ?? "").join("");
   return initials.toUpperCase() || "?";
-}
-
-function stableColorSeed(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
 }
 
 export function resolveAvatarInitials(
@@ -87,7 +125,7 @@ export function resolveAvatarInitials(
   return {
     kind: "initials",
     initials: initialsFromLabel(label),
-    colorSeed: stableColorSeed(id || label),
+    colorSeed: fnv1aUtf16(id || label),
   };
 }
 
@@ -117,7 +155,7 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
 
   const profileAvatarUrl = input.profileAvatarUrl?.trim();
   if (profileAvatarUrl) {
-    const trusted = toTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
+    const trusted = resolveTrustedAvatarUrl(profileAvatarUrl, gatewayOrigin);
     if (trusted) {
       return { kind: "profile", url: trusted };
     }
@@ -127,10 +165,7 @@ export function resolveAvatar(input: IdentityAvatarInput): ResolvedIdentityAvata
   // canonical gateway avatar (upload → Gravatar proxy → 404-to-initials).
   const id = input.id?.trim();
   if (id && PROFILE_ID_RE.test(id)) {
-    const trusted = toTrustedAvatarUrl(
-      `/api/users/${encodeURIComponent(id)}/avatar`,
-      gatewayOrigin,
-    );
+    const trusted = resolveTrustedAvatarUrl(buildControlUiUserAvatarPath(id), gatewayOrigin);
     if (trusted) {
       return { kind: "profile", url: trusted };
     }

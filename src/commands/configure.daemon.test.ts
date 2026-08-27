@@ -121,11 +121,12 @@ describe("maybeInstallDaemon", () => {
       warnings: [],
     });
 
-    await maybeInstallDaemon({
+    const outcome = await maybeInstallDaemon({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       port: 18789,
     });
 
+    expect(outcome).toBe("failed");
     expect(note).toHaveBeenCalledWith(
       "Gateway service install failed: Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun configure.",
       "Gateway",
@@ -139,12 +140,10 @@ describe("maybeInstallDaemon", () => {
       new Error("systemctl is-enabled unavailable: Failed to connect to bus"),
     );
 
-    await expect(
-      maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      }),
-    ).resolves.toBeUndefined();
+    await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });
@@ -169,12 +168,10 @@ describe("maybeInstallDaemon", () => {
       new Error("systemctl --user unavailable: Failed to connect to bus: No medium found"),
     );
 
-    await expect(
-      maybeInstallDaemon({
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        port: 18789,
-      }),
-    ).resolves.toBeUndefined();
+    await maybeInstallDaemon({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      port: 18789,
+    });
 
     expect(serviceInstall).toHaveBeenCalledTimes(1);
   });

@@ -10,6 +10,8 @@ import {
 } from "./channel-setup.test-helpers.js";
 
 type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
+type ChannelSetupWizardAdapter =
+  import("../channels/plugins/setup-wizard-types.js").ChannelSetupWizardAdapter;
 type ResolveChannelSetupEntries =
   typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
 type CollectChannelStatus = typeof import("./channel-setup.status.js").collectChannelStatus;
@@ -33,6 +35,24 @@ function makeSetupPlugin(params: {
     } as unknown as ChannelSetupPlugin["config"],
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
   };
+}
+
+function makeExternalChatSetupPlugin(
+  setupWizard: Pick<ChannelSetupWizardAdapter, "configure"> & Partial<ChannelSetupWizardAdapter>,
+): ChannelSetupPlugin {
+  return makeSetupPlugin({
+    id: "external-chat",
+    label: "External Chat",
+    setupWizard: {
+      channel: "external-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "external-chat",
+        configured: false,
+        statusLines: [],
+      })),
+      ...setupWizard,
+    },
+  });
 }
 
 function externalChatSetupEntries(overrides: Partial<ReturnType<ResolveChannelSetupEntries>> = {}) {
@@ -132,6 +152,9 @@ const collectChannelStatus = vi.hoisted(() =>
     statusLines: [],
   })),
 );
+const resolveChannelSetupWorkspaceDir = vi.hoisted(() =>
+  vi.fn((_cfg?: unknown) => "/tmp/openclaw-workspace"),
+);
 const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channel?: unknown) => true));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -201,16 +224,54 @@ vi.mock("./channel-setup.status.js", () => ({
   resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
   resolveChannelSetupSelectionContributions: vi.fn(() => []),
+  resolveChannelSetupWorkspaceDir: (cfg?: unknown) => resolveChannelSetupWorkspaceDir(cfg),
   resolveQuickstartDefault: vi.fn(() => undefined),
 }));
 
 import { setupChannels } from "./channel-setup.js";
+
+const DEFERRED_CHANNEL_SETUP_OPTIONS = {
+  deferStatusUntilSelection: true,
+  skipConfirm: true,
+  skipDmPolicyPrompt: true,
+} satisfies NonNullable<Parameters<typeof setupChannels>[3]>;
+
+const QUICKSTART_CHANNEL_SETUP_OPTIONS = {
+  quickstartDefaults: true,
+  skipConfirm: true,
+  skipDmPolicyPrompt: true,
+} satisfies NonNullable<Parameters<typeof setupChannels>[3]>;
+
+const TARGETED_CHANNEL_SETUP_OPTIONS = {
+  initialSelection: ["external-chat"],
+  finishAfterInitialSelection: true,
+  deferStatusUntilSelection: true,
+  skipDmPolicyPrompt: true,
+} satisfies NonNullable<Parameters<typeof setupChannels>[3]>;
+
+function runChannelSetup(
+  cfg: OpenClawConfig,
+  prompter: Record<string, unknown>,
+  options?: Parameters<typeof setupChannels>[3],
+) {
+  return setupChannels(
+    cfg,
+    {} as never,
+    {
+      confirm: vi.fn(async () => true),
+      note: vi.fn(async () => undefined),
+      ...prompter,
+    } as never,
+    options,
+  );
+}
 
 describe("setupChannels workspace shadow exclusion", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     resolveDefaultAgentId.mockReturnValue("default");
+    resolveChannelSetupWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     listTrustedChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "external-chat",
@@ -241,14 +302,7 @@ describe("setupChannels workspace shadow exclusion", () => {
   });
 
   it("preloads configured external plugins from the trusted catalog boundary", async () => {
-    await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => false),
-        note: vi.fn(async () => undefined),
-      } as never,
-    );
+    await runChannelSetup({}, { confirm: vi.fn(async () => false) });
 
     const trustedInput = callArg<{ cfg?: unknown; workspaceDir?: string }>(
       listTrustedChannelPluginCatalogEntries,
@@ -265,23 +319,36 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(registryInput.workspaceDir).toBe("/tmp/openclaw-workspace");
   });
 
+  it("resolves plugin discovery through the channel setup workspace owner", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, helper: {}, third: {} },
+      },
+    } as unknown as OpenClawConfig;
+    resolveDefaultAgentId.mockImplementationOnce(() => {
+      throw new Error("legacy default resolver must not own channel setup");
+    });
+
+    await runChannelSetup(cfg, { confirm: vi.fn(async () => false) });
+
+    expect(resolveChannelSetupWorkspaceDir).toHaveBeenCalledWith(cfg);
+  });
+
   it("keeps trusted workspace overrides eligible during preload", async () => {
     listTrustedChannelPluginCatalogEntries.mockReturnValue([
       { id: "external-chat", pluginId: "trusted-external-chat-shadow", origin: "workspace" },
     ]);
 
-    await setupChannels(
+    await runChannelSetup(
       {
         plugins: {
           enabled: true,
           allow: ["trusted-external-chat-shadow"],
         },
       } as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => false),
-        note: vi.fn(async () => undefined),
-      } as never,
+      { confirm: vi.fn(async () => false) },
     );
 
     const registryInput = callArg<{
@@ -298,14 +365,9 @@ describe("setupChannels workspace shadow exclusion", () => {
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     const select = vi.fn(async () => "__done__");
 
-    await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
+    await runChannelSetup(
+      {},
+      { select },
       {
         deferStatusUntilSelection: true,
         skipConfirm: true,
@@ -324,14 +386,9 @@ describe("setupChannels workspace shadow exclusion", () => {
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     const select = vi.fn(async () => "__skip__");
 
-    await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
+    await runChannelSetup(
+      {},
+      { select },
       {
         deferStatusUntilSelection: true,
         quickstartDefaults: true,
@@ -370,14 +427,9 @@ describe("setupChannels workspace shadow exclusion", () => {
     }));
     const select = vi.fn(async () => "__done__");
 
-    await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
+    await runChannelSetup(
+      {},
+      { select },
       {
         deferStatusUntilSelection: true,
         skipConfirm: true,
@@ -391,7 +443,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     expect(collectChannelStatus).not.toHaveBeenCalled();
   });
 
-  it("uses an active deferred setup plugin without enabling config on selection", async () => {
+  it("enables an active deferred setup plugin when explicitly selected", async () => {
     const setupWizard = {
       channel: "custom-chat",
       getStatus: vi.fn(async () => ({
@@ -430,27 +482,62 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     const select = vi.fn().mockResolvedValueOnce("custom-chat").mockResolvedValueOnce("__done__");
 
-    const next = await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    const next = await runChannelSetup({}, { select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
-    expect(callArg<{ cfg?: unknown }>(setupWizard.configure).cfg).toEqual({});
+    expect(callArg<{ cfg?: unknown }>(setupWizard.configure).cfg).toEqual({
+      plugins: {
+        entries: {
+          "custom-chat": { enabled: true },
+        },
+      },
+    });
     expect(next).toEqual({
+      plugins: {
+        entries: {
+          "custom-chat": { enabled: true },
+        },
+      },
       channels: {
         "custom-chat": { token: "secret" },
       },
+    });
+  });
+
+  it("normalizes official external compatibility output from interactive setup", async () => {
+    const setupWizard = {
+      channel: "qqbot",
+      getStatus: vi.fn(async () => ({
+        channel: "qqbot",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(async () => ({
+        cfg: {
+          channels: {
+            qqbot: {
+              appId: "app-id",
+              clientSecret: "secret",
+              allowFrom: ["*"],
+            },
+          },
+        },
+      })),
+    };
+    const activePlugin = makeSetupPlugin({ id: "qqbot", label: "QQ Bot", setupWizard });
+    listActiveChannelSetupPlugins.mockReturnValue([activePlugin]);
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [{ id: "qqbot", meta: makeMeta("qqbot", "QQ Bot") }],
+      }),
+    );
+    const select = vi.fn().mockResolvedValueOnce("qqbot").mockResolvedValueOnce("__done__");
+
+    const next = await runChannelSetup({}, { select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
+
+    expect(next.channels?.qqbot).toMatchObject({
+      dmPolicy: "open",
+      allowFrom: ["openclaw:approval-disabled"],
     });
   });
 
@@ -504,23 +591,14 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     const select = vi.fn().mockResolvedValueOnce("clickclack").mockResolvedValueOnce("__done__");
 
-    const next = await setupChannels(
+    const next = await runChannelSetup(
       {
         plugins: {
           allow: ["memory-core"],
         },
       } as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
+      { select },
+      DEFERRED_CHANNEL_SETUP_OPTIONS,
     );
 
     expect(next.plugins?.allow).toEqual(["memory-core", "clickclack"]);
@@ -577,20 +655,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
 
-    const next = await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    const next = await runChannelSetup({}, { select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(2);
     const firstRegistryInput = callArg<{
@@ -623,30 +688,12 @@ describe("setupChannels workspace shadow exclusion", () => {
 
   it("returns to quickstart selection when install-on-demand is skipped", async () => {
     const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({ cfg }));
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure,
-      } as ChannelSetupPlugin["setupWizard"],
-    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
     const installableCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
       pluginId: "@vendor/external-chat-plugin",
     });
     resolveChannelSetupEntries.mockReturnValue(
-      makeChannelSetupEntries({
-        entries: [
-          {
-            id: "external-chat",
-            meta: makeMeta("external-chat", "External Chat"),
-          },
-        ],
+      externalChatSetupEntries({
         installableCatalogEntries: [installableCatalogEntry],
         installableCatalogById: new Map([["external-chat", installableCatalogEntry]]),
       }),
@@ -685,20 +732,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       return "__done__";
     });
 
-    await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        quickstartDefaults: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    await runChannelSetup({}, { select }, QUICKSTART_CHANNEL_SETUP_OPTIONS);
 
     expect(quickstartSelectionCount).toBe(2);
     expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(2);
@@ -733,20 +767,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     });
     const cfg = { channels: { telegram: { botToken: "keep" } } } as OpenClawConfig;
 
-    const result = await setupChannels(
-      cfg,
-      {} as never,
-      {
-        confirm,
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    const result = await runChannelSetup(cfg, { confirm, select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -794,19 +815,13 @@ describe("setupChannels workspace shadow exclusion", () => {
       });
       const cfg = { channels: { "external-chat": { token: "keep" } } } as OpenClawConfig;
 
-      const result = await setupChannels(
+      const result = await runChannelSetup(
         cfg,
-        {} as never,
         {
           confirm,
-          note: vi.fn(async () => undefined),
           select: vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__"),
-        } as never,
-        {
-          deferStatusUntilSelection: true,
-          skipConfirm: true,
-          skipDmPolicyPrompt: true,
         },
+        DEFERRED_CHANNEL_SETUP_OPTIONS,
       );
 
       expect(confirm).toHaveBeenCalledWith(
@@ -819,6 +834,162 @@ describe("setupChannels workspace shadow exclusion", () => {
     },
   );
 
+  it("enters an explicitly targeted channel before the generic setup prompts", async () => {
+    const promptOrder: string[] = [];
+    const configureInteractive = vi.fn(async ({ cfg }) => {
+      promptOrder.push("channel setup");
+      return {
+        cfg: {
+          ...cfg,
+          channels: { ...cfg.channels, "external-chat": { token: "configured" } },
+        },
+        accountId: "external-account",
+      };
+    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({
+      configure: vi.fn(),
+      configureInteractive,
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const confirm = vi.fn(async () => {
+      promptOrder.push("setup confirmation");
+      return true;
+    });
+    const select = vi.fn(async () => {
+      promptOrder.push("channel picker");
+      return "__done__";
+    });
+
+    const result = await runChannelSetup({}, { confirm, select }, TARGETED_CHANNEL_SETUP_OPTIONS);
+
+    expect(promptOrder).toEqual(["channel setup"]);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(configureInteractive).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      channels: { "external-chat": { token: "configured" } },
+      plugins: { entries: { "external-chat": { enabled: true } } },
+    });
+  });
+
+  it("fails visibly when configured channel setup has no post-write hook sink", async () => {
+    const externalChatPlugin = makeExternalChatSetupPlugin({
+      configure: vi.fn(),
+      configureInteractive: vi.fn(async ({ cfg }) => ({
+        cfg: {
+          ...cfg,
+          channels: { ...cfg.channels, "external-chat": { token: "configured" } },
+        },
+        accountId: "external-account",
+      })),
+      afterConfigWritten: vi.fn(async () => {}),
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+
+    await expect(
+      setupChannels(
+        {} as OpenClawConfig,
+        {} as never,
+        {
+          confirm: vi.fn(async () => true),
+          note: vi.fn(async () => undefined),
+          select: vi.fn(async () => "__done__"),
+        } as never,
+        {
+          initialSelection: ["external-chat"],
+          finishAfterInitialSelection: true,
+          deferStatusUntilSelection: true,
+          skipDmPolicyPrompt: true,
+        },
+      ),
+    ).rejects.toThrow(/post-write hook.*transaction sink/i);
+  });
+
+  it("keeps completed setup when the follow-up status refresh fails", async () => {
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce({
+        channel: "external-chat",
+        configured: false,
+        statusLines: [],
+      })
+      .mockRejectedValueOnce(new Error("controlled status failure"));
+    const externalChatPlugin = makeExternalChatSetupPlugin({
+      getStatus,
+      configure: vi.fn(async ({ cfg }) => ({
+        cfg: {
+          ...cfg,
+          channels: { ...cfg.channels, "external-chat": { token: "configured" } },
+        },
+        accountId: "external-account",
+      })),
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const note = vi.fn(async () => undefined);
+
+    const result = await runChannelSetup(
+      {},
+      { note, select: vi.fn(async () => "__done__") },
+      TARGETED_CHANNEL_SETUP_OPTIONS,
+    );
+
+    expect(result).toMatchObject({
+      channels: { "external-chat": { token: "configured" } },
+    });
+    expect(getStatus).toHaveBeenCalledTimes(2);
+    expect(note).toHaveBeenCalledWith(
+      "Status unavailable (controlled status failure).\n" +
+        "Retry: openclaw channels status --channel external-chat",
+      "Channel status",
+    );
+  });
+
+  it("returns targeted channel setup Back navigation to the channel picker", async () => {
+    const promptOrder: string[] = [];
+    const configureInteractive = vi.fn(async ({ prompter }) => {
+      promptOrder.push("channel setup");
+      await prompter.text({ message: "External Chat token" });
+      return {
+        cfg: {
+          channels: { "external-chat": { token: "should-not-apply" } },
+        } as OpenClawConfig,
+        accountId: "external-account",
+      };
+    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({
+      configure: vi.fn(),
+      configureInteractive,
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const select = vi.fn(async () => {
+      promptOrder.push("channel picker");
+      return "__done__";
+    });
+    const cfg = { channels: { telegram: { botToken: "keep" } } } as OpenClawConfig;
+
+    const result = await runChannelSetup(
+      cfg,
+      {
+        select,
+        text: vi.fn(async () => {
+          throw new WizardNavigationError("back");
+        }),
+      },
+      TARGETED_CHANNEL_SETUP_OPTIONS,
+    );
+
+    expect(promptOrder).toEqual(["channel setup", "channel picker"]);
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Select a channel",
+      }),
+    );
+    expect(result).toEqual(cfg);
+  });
+
   it("returns custom channel setup to channel selection when its first prompt goes back", async () => {
     const configureInteractive = vi.fn(async ({ prompter }) => {
       await prompter.text({ message: "Custom channel token" });
@@ -829,19 +1000,9 @@ describe("setupChannels workspace shadow exclusion", () => {
         accountId: "custom-account",
       };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure: vi.fn(),
-        configureInteractive,
-      } as ChannelSetupPlugin["setupWizard"],
+    const externalChatPlugin = makeExternalChatSetupPlugin({
+      configure: vi.fn(),
+      configureInteractive,
     });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
@@ -849,20 +1010,10 @@ describe("setupChannels workspace shadow exclusion", () => {
     const text = vi.fn(async () => {
       throw new WizardNavigationError("back");
     });
-    const result = await setupChannels(
+    const result = await runChannelSetup(
       { channels: { telegram: { botToken: "keep" } } } as OpenClawConfig,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-        text,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
+      { select, text },
+      DEFERRED_CHANNEL_SETUP_OPTIONS,
     );
 
     expect(configureInteractive).toHaveBeenCalledTimes(1);
@@ -887,39 +1038,17 @@ describe("setupChannels workspace shadow exclusion", () => {
         accountId: "declarative-account",
       };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure,
-      } as ChannelSetupPlugin["setupWizard"],
-    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
     const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
     const text = vi.fn(async () => {
       throw new WizardNavigationError("back");
     });
-    const result = await setupChannels(
+    const result = await runChannelSetup(
       { channels: { telegram: { botToken: "keep" } } } as OpenClawConfig,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-        text,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
+      { select, text },
+      DEFERRED_CHANNEL_SETUP_OPTIONS,
     );
 
     expect(configure).toHaveBeenCalledTimes(1);
@@ -946,19 +1075,14 @@ describe("setupChannels workspace shadow exclusion", () => {
         },
       };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
+    const externalChatPlugin = makeExternalChatSetupPlugin({
+      getStatus: vi.fn(async () => ({
         channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: true,
-          statusLines: [],
-        })),
-        configure: vi.fn(),
-        configureWhenConfigured,
-      } as ChannelSetupPlugin["setupWizard"],
+        configured: true,
+        statusLines: [],
+      })),
+      configure: vi.fn(),
+      configureWhenConfigured,
     });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
@@ -971,20 +1095,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       channels: { "external-chat": { token: "keep" } },
     } as OpenClawConfig;
 
-    const result = await setupChannels(
-      cfg,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    const result = await runChannelSetup(cfg, { select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
     expect(configureWhenConfigured).toHaveBeenCalledTimes(1);
     expect(select).toHaveBeenNthCalledWith(
@@ -1038,21 +1149,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     });
     const cfg = { plugins: { allow: ["memory-core"] } } as OpenClawConfig;
 
-    const result = await setupChannels(
-      cfg,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-        text,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    const result = await runChannelSetup(cfg, { select, text }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
     expect(result).toEqual(cfg);
     expect(result.plugins?.allow).toEqual(["memory-core"]);
@@ -1064,19 +1161,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       await prompter.text({ message: "External Chat token" });
       return { cfg, accountId: "external-account" };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure,
-      } as ChannelSetupPlugin["setupWizard"],
-    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
     const installableCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
       pluginId: "@vendor/external-chat-plugin",
     });
@@ -1126,22 +1211,17 @@ describe("setupChannels workspace shadow exclusion", () => {
     const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
     const beforePersistentEffect = vi.fn(async () => undefined);
 
-    const result = await setupChannels(
+    const result = await runChannelSetup(
       { channels: { telegram: { botToken: "keep" } } } as OpenClawConfig,
-      {} as never,
       {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
         select,
         text: vi.fn(async () => {
           throw new WizardNavigationError("back");
         }),
-      } as never,
+      },
       {
         beforePersistentEffect,
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
+        ...DEFERRED_CHANNEL_SETUP_OPTIONS,
       },
     );
 
@@ -1161,19 +1241,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         cfg: { ...cfg, channels: { ...cfg.channels, "external-chat": { username, token } } },
       };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure,
-      } as ChannelSetupPlugin["setupWizard"],
-    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
     const text = vi
@@ -1183,20 +1251,13 @@ describe("setupChannels workspace shadow exclusion", () => {
       .mockResolvedValueOnce("new-name")
       .mockResolvedValueOnce("secret-token");
 
-    const result = await setupChannels(
-      {} as OpenClawConfig,
-      {} as never,
+    const result = await runChannelSetup(
+      {},
       {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
         select: vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__"),
         text,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
       },
+      DEFERRED_CHANNEL_SETUP_OPTIONS,
     );
 
     expect(configure).toHaveBeenCalledTimes(2);
@@ -1219,19 +1280,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       await prompter.text({ message: "After effect" });
       return { cfg };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure,
-      } as ChannelSetupPlugin["setupWizard"],
-    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
     const navigationError = new WizardNavigationError("back");
@@ -1271,19 +1320,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       await prompter.text({ message: "Token" });
       return { cfg: {} as OpenClawConfig };
     });
-    const externalChatPlugin = makeSetupPlugin({
-      id: "external-chat",
-      label: "External Chat",
-      setupWizard: {
-        channel: "external-chat",
-        getStatus: vi.fn(async () => ({
-          channel: "external-chat",
-          configured: false,
-          statusLines: [],
-        })),
-        configure,
-      } as ChannelSetupPlugin["setupWizard"],
-    });
+    const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
 
@@ -1308,7 +1345,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     ).rejects.toBe(cancelled);
   });
 
-  it("does not load or re-enable an explicitly disabled channel when selected lazily", async () => {
+  it("keeps an explicitly disabled channel unchanged when setup resume is declined", async () => {
     const setupWizard = {
       channel: "external-chat",
       getStatus: vi.fn(async () => ({
@@ -1318,41 +1355,190 @@ describe("setupChannels workspace shadow exclusion", () => {
       })),
       configure: vi.fn(),
     };
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: setupWizard as ChannelSetupPlugin["setupWizard"],
+    });
     resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
     const select = vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__");
-    const note = vi.fn(async () => undefined);
+    const confirm = vi.fn(async () => false);
     const cfg = {
       channels: {
         "external-chat": { enabled: false, token: "secret" },
       },
     };
 
-    const next = await setupChannels(
+    const next = await runChannelSetup(
       cfg as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note,
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
+      { confirm, select },
+      DEFERRED_CHANNEL_SETUP_OPTIONS,
     );
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(
-      "external-chat cannot be configured while disabled. Enable it before setup.",
-      "Channel setup",
-    );
+    expect(confirm).toHaveBeenCalledWith({
+      message: "external-chat is disabled. Enable it and continue setup now?",
+      initialValue: true,
+    });
     expect(setupWizard.configure).not.toHaveBeenCalled();
     expect(next).toEqual({
       channels: {
         "external-chat": { enabled: false, token: "secret" },
       },
     });
+  });
+
+  it("resumes an explicitly selected disabled channel without replacing its config", async () => {
+    const setupWizard = {
+      channel: "external-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "external-chat",
+        configured: true,
+        statusLines: [],
+      })),
+      configure: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        accountId: "default",
+      })),
+    };
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: setupWizard as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const onSelection = vi.fn();
+    const cfg = {
+      channels: {
+        "external-chat": { enabled: false, token: "saved-secret" },
+      },
+    };
+
+    const next = await runChannelSetup(
+      cfg as never,
+      { select: vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__") },
+      { ...DEFERRED_CHANNEL_SETUP_OPTIONS, onSelection },
+    );
+
+    expect(setupWizard.configure).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: {
+          channels: {
+            "external-chat": { enabled: true, token: "saved-secret" },
+          },
+          plugins: {
+            entries: {
+              "external-chat": { enabled: true },
+            },
+          },
+        },
+      }),
+    );
+    expect(onSelection).toHaveBeenCalledWith(["external-chat"]);
+    expect(next).toEqual({
+      channels: {
+        "external-chat": { enabled: true, token: "saved-secret" },
+      },
+      plugins: {
+        entries: {
+          "external-chat": { enabled: true },
+        },
+      },
+    });
+  });
+
+  it("enables an explicitly selected disabled plugin and continues setup", async () => {
+    const setupWizard = {
+      channel: "external-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "external-chat",
+        configured: true,
+        statusLines: [],
+      })),
+      configure: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        accountId: "default",
+      })),
+    };
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: setupWizard as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const confirm = vi.fn(async () => true);
+
+    const next = await runChannelSetup(
+      {
+        channels: {
+          "external-chat": { enabled: true, token: "saved-secret" },
+        },
+        plugins: {
+          entries: {
+            "external-chat": { enabled: false },
+          },
+        },
+      } as never,
+      {
+        confirm,
+        select: vi.fn().mockResolvedValueOnce("external-chat").mockResolvedValueOnce("__done__"),
+      },
+      DEFERRED_CHANNEL_SETUP_OPTIONS,
+    );
+
+    expect(confirm).toHaveBeenCalledWith({
+      message: "external-chat plugin is disabled. Enable it and continue setup now?",
+      initialValue: true,
+    });
+    expect(setupWizard.configure).toHaveBeenCalledOnce();
+    expect(next.plugins?.entries?.["external-chat"]?.enabled).toBe(true);
+    expect(next.channels?.["external-chat"]?.enabled).toBe(true);
+  });
+
+  it("returns paused setup state without marking the channel configured", async () => {
+    const pausedConfig = {
+      channels: {
+        "external-chat": {
+          enabled: false,
+          relayUrl: "wss://relay.example.com",
+          privateKey: "saved-secret",
+        },
+      },
+    };
+    const setupWizard = {
+      channel: "external-chat",
+      getStatus: vi.fn(async () => ({
+        channel: "external-chat",
+        configured: false,
+        statusLines: [],
+      })),
+      configure: vi.fn(async () => ({
+        cfg: pausedConfig as OpenClawConfig,
+        completion: "paused" as const,
+      })),
+    };
+    const externalChatPlugin = makeSetupPlugin({
+      id: "external-chat",
+      label: "External Chat",
+      setupWizard: setupWizard as ChannelSetupPlugin["setupWizard"],
+    });
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
+    listActiveChannelSetupPlugins.mockReturnValue([externalChatPlugin]);
+    const select = vi.fn().mockResolvedValue("external-chat");
+    const onSelection = vi.fn();
+
+    const next = await runChannelSetup(
+      {},
+      { select },
+      { ...DEFERRED_CHANNEL_SETUP_OPTIONS, onSelection },
+    );
+
+    expect(select).toHaveBeenCalledOnce();
+    expect(onSelection).toHaveBeenCalledWith([]);
+    expect(next).toBe(pausedConfig);
   });
 
   it("honors global plugin disablement before lazy channel setup loads plugins", async () => {
@@ -1366,20 +1552,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       },
     };
 
-    await setupChannels(
-      cfg as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note,
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-        skipDmPolicyPrompt: true,
-      },
-    );
+    await runChannelSetup(cfg as never, { note, select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
@@ -1400,19 +1573,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
         cfg: { ...cfg, channels: { "external-chat": { token: "secret" } } },
       }));
-      const externalChatPlugin = makeSetupPlugin({
-        id: "external-chat",
-        label: "External Chat",
-        setupWizard: {
-          channel: "external-chat",
-          getStatus: vi.fn(async () => ({
-            channel: "external-chat",
-            configured: false,
-            statusLines: [],
-          })),
-          configure,
-        } as ChannelSetupPlugin["setupWizard"],
-      });
+      const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
       const installedCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
         pluginId: "@vendor/external-chat-plugin",
         install: { npmSpec: "@vendor/external-chat-plugin" },
@@ -1452,20 +1613,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         .mockResolvedValueOnce("external-chat")
         .mockResolvedValueOnce("__done__");
 
-      await setupChannels(
-        {} as never,
-        {} as never,
-        {
-          confirm: vi.fn(async () => true),
-          note,
-          select,
-        } as never,
-        {
-          deferStatusUntilSelection: true,
-          skipConfirm: true,
-          skipDmPolicyPrompt: true,
-        },
-      );
+      await runChannelSetup({}, { note, select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
       expectExternalCatalogInstallCall();
@@ -1508,20 +1656,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       });
       const note = vi.fn(async () => undefined);
 
-      await setupChannels(
-        {} as never,
-        {} as never,
-        {
-          confirm: vi.fn(async () => true),
-          note,
-          select,
-        } as never,
-        {
-          quickstartDefaults: true,
-          skipConfirm: true,
-          skipDmPolicyPrompt: true,
-        },
-      );
+      await runChannelSetup({}, { note, select }, QUICKSTART_CHANNEL_SETUP_OPTIONS);
 
       // Install prompt ran once, was declined; user returned to channel
       // selection (quickstartSelectionCount === 2) rather than being
@@ -1549,29 +1684,11 @@ describe("setupChannels workspace shadow exclusion", () => {
       const configure = vi.fn(async ({ cfg }: { cfg: Record<string, unknown> }) => ({
         cfg: { ...cfg, channels: { "external-chat": { token: "secret" } } },
       }));
-      const externalChatPlugin = makeSetupPlugin({
-        id: "external-chat",
-        label: "External Chat",
-        setupWizard: {
-          channel: "external-chat",
-          getStatus: vi.fn(async () => ({
-            channel: "external-chat",
-            configured: false,
-            statusLines: [],
-          })),
-          configure,
-        } as ChannelSetupPlugin["setupWizard"],
-      });
+      const externalChatPlugin = makeExternalChatSetupPlugin({ configure });
       // Entries list exposes the channel in the menu, but BOTH discovery
       // buckets are empty — faithfully reproducing the observed bug.
       resolveChannelSetupEntries.mockReturnValue(
-        makeChannelSetupEntries({
-          entries: [
-            {
-              id: "external-chat",
-              meta: makeMeta("external-chat", "External Chat"),
-            },
-          ],
+        externalChatSetupEntries({
           installedCatalogEntries: [],
           installableCatalogEntries: [],
           installedCatalogById: new Map(),
@@ -1607,20 +1724,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         .mockResolvedValueOnce("external-chat")
         .mockResolvedValueOnce("__done__");
 
-      await setupChannels(
-        {} as never,
-        {} as never,
-        {
-          confirm: vi.fn(async () => true),
-          note,
-          select,
-        } as never,
-        {
-          deferStatusUntilSelection: true,
-          skipConfirm: true,
-          skipDmPolicyPrompt: true,
-        },
-      );
+      await runChannelSetup({}, { note, select }, DEFERRED_CHANNEL_SETUP_OPTIONS);
 
       const catalogLookupCall = mockCall(getTrustedChannelPluginCatalogEntry) as [
         string,
@@ -1639,16 +1743,7 @@ describe("setupChannels workspace shadow exclusion", () => {
     "returns to channel selection when the catalog-fallback install is " +
       "declined from the bundled-enable branch",
     async () => {
-      resolveChannelSetupEntries.mockReturnValue(
-        makeChannelSetupEntries({
-          entries: [
-            {
-              id: "external-chat",
-              meta: makeMeta("external-chat", "External Chat"),
-            },
-          ],
-        }),
-      );
+      resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
       const fallbackCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
         pluginId: "@vendor/external-chat-plugin",
         install: { npmSpec: "@vendor/external-chat-plugin" },
@@ -1673,20 +1768,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       });
       const note = vi.fn(async () => undefined);
 
-      await setupChannels(
-        {} as never,
-        {} as never,
-        {
-          confirm: vi.fn(async () => true),
-          note,
-          select,
-        } as never,
-        {
-          quickstartDefaults: true,
-          skipConfirm: true,
-          skipDmPolicyPrompt: true,
-        },
-      );
+      await runChannelSetup({}, { note, select }, QUICKSTART_CHANNEL_SETUP_OPTIONS);
 
       expect(ensureChannelSetupPluginInstalled).toHaveBeenCalledTimes(1);
       expect(quickstartSelectionCount).toBe(2);
@@ -1695,16 +1777,7 @@ describe("setupChannels workspace shadow exclusion", () => {
   );
 
   it("fails closed when the catalog-fallback install guard rejects", async () => {
-    resolveChannelSetupEntries.mockReturnValue(
-      makeChannelSetupEntries({
-        entries: [
-          {
-            id: "external-chat",
-            meta: makeMeta("external-chat", "External Chat"),
-          },
-        ],
-      }),
-    );
+    resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
     const fallbackCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
       pluginId: "@vendor/external-chat-plugin",
       install: { npmSpec: "@vendor/external-chat-plugin" },
@@ -1765,16 +1838,7 @@ describe("setupChannels workspace shadow exclusion", () => {
       // fallback; without it, the test would pass against an unguarded
       // fallback because the QuickStart path's early guard would catch the
       // disabled state first.
-      resolveChannelSetupEntries.mockReturnValue(
-        makeChannelSetupEntries({
-          entries: [
-            {
-              id: "external-chat",
-              meta: makeMeta("external-chat", "External Chat"),
-            },
-          ],
-        }),
-      );
+      resolveChannelSetupEntries.mockReturnValue(externalChatSetupEntries());
       const fallbackCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
         pluginId: "@vendor/external-chat-plugin",
         install: { npmSpec: "@vendor/external-chat-plugin" },
@@ -1798,14 +1862,9 @@ describe("setupChannels workspace shadow exclusion", () => {
         },
       };
 
-      await setupChannels(
+      await runChannelSetup(
         cfg as never,
-        {} as never,
-        {
-          confirm: vi.fn(async () => true),
-          note,
-          select,
-        } as never,
+        { note, select },
         {
           skipConfirm: true,
           skipDmPolicyPrompt: true,
@@ -1863,14 +1922,9 @@ describe("setupChannels workspace shadow exclusion", () => {
         },
       };
 
-      await setupChannels(
+      await runChannelSetup(
         cfg as never,
-        {} as never,
-        {
-          confirm: vi.fn(async () => true),
-          note,
-          select,
-        } as never,
+        { note, select },
         {
           skipConfirm: true,
           skipDmPolicyPrompt: true,

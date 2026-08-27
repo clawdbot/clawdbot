@@ -48,21 +48,23 @@ Per-agent override (optional, at `agents.entries.*.tools.loopDetection`):
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "safe-runner",
+    entries: {
+      "safe-runner": {
+        default: true,
         tools: {
           loopDetection: {
             enabled: true,
           },
         },
       },
-    ],
+    },
   },
 }
 ```
 
 The per-agent setting overrides the global setting.
+
+You can also enable the global rolling-history detectors in **Settings -> Labs** in the Control UI.
 
 ### Field behavior
 
@@ -128,8 +130,13 @@ spend and lockups while preserving normal tool access.
 
 - Warnings come first.
 - Blocking follows once a pattern persists past the warning threshold.
-- Critical thresholds block the next tool-cycle and surface a clear
-  loop-detection reason in the run record.
+- In the embedded agent loop, the first critical loop blocks the whole tool
+  batch before any tool in that batch runs. The model then gets one more
+  response with its normal tools.
+- During that response, the model can answer, ask a question, or continue with
+  a different tool or different arguments.
+- Another critical loop in the same run blocks its whole batch and ends the
+  run. A new user run starts with a fresh recovery allowance.
 - The post-compaction guard emits `compaction_loop_persisted` errors naming
   the offending tool and identical-call count.
 
@@ -145,7 +152,7 @@ spend and lockups while preserving normal tool access.
   <Card title="Sub-agents" href="/tools/subagents" icon="users">
     Spawning isolated agents to bound runaway behavior.
   </Card>
-  <Card title="Configuration reference" href="/gateway/config-tools#toolsloopdetection" icon="gear">
+  <Card title="Configuration reference" href="/gateway/config-tools#tools-loopdetection" icon="gear">
     Full `tools.loopDetection` schema and merging semantics.
   </Card>
 </CardGroup>

@@ -1,9 +1,6 @@
 // Bootstrap extra files hook injects configured extra files into startup context.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import {
-  filterBootstrapFilesForSession,
-  loadExtraBootstrapFilesWithDiagnostics,
-} from "../../../agents/workspace.js";
+import { loadExtraBootstrapFilesWithDiagnostics } from "../../../agents/workspace.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { resolveHookConfig } from "../../config.js";
 import { isAgentBootstrapEvent, type HookHandler } from "../../hooks.js";
@@ -58,12 +55,9 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     if (extras.length === 0) {
       return;
     }
-    // Re-run session filtering after append so extra files obey the same
-    // per-session include rules as the original bootstrap files.
-    context.bootstrapFiles = filterBootstrapFilesForSession(
-      [...context.bootstrapFiles, ...extras],
-      context.sessionKey,
-    );
+    // The final bootstrap resolver owns session policy after every hook has run,
+    // using the authoritative chat type and loader provenance in one place.
+    context.bootstrapFiles = [...context.bootstrapFiles, ...extras];
   } catch (err) {
     log.warn(`failed: ${String(err)}`);
   }

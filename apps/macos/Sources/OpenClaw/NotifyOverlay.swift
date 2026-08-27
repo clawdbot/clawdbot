@@ -36,8 +36,15 @@ final class NotifyOverlayController {
 
         if autoDismissAfter > 0 {
             self.dismissTask = Task { [weak self] in
-                try? await Task.sleep(nanoseconds: UInt64(autoDismissAfter * 1_000_000_000))
-                await MainActor.run { self?.dismiss() }
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(autoDismissAfter * 1_000_000_000))
+                } catch {
+                    return
+                }
+                await MainActor.run {
+                    guard !Task.isCancelled else { return }
+                    self?.dismiss()
+                }
             }
         }
     }

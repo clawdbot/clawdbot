@@ -10,16 +10,17 @@ import {
 import {
   listConversations,
   registerConversationAddresses,
+  resolveConversationRegistryScope,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import { resolveOutboundSessionRoute } from "../infra/outbound/outbound-session.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveConversationRouteEligibilityForAgent } from "./conversation-route-ownership.js";
 
 const log = createSubsystemLogger("gateway/conversations");
 
@@ -36,19 +37,6 @@ const defaultDeps: ConversationListDeps = {
   resolveOutboundChannelPlugin,
   resolveOutboundSessionRoute,
 };
-
-function resolveConversationScope(params: {
-  agentId: string;
-  config: OpenClawConfig;
-}): ConversationRegistryScope {
-  const configuredStore = params.config.session?.store;
-  return {
-    agentId: params.agentId,
-    ...(configuredStore
-      ? { storePath: resolveStorePath(configuredStore, { agentId: params.agentId }) }
-      : {}),
-  };
-}
 
 function presentConversation(conversation: ConversationRecord): ConversationListItem {
   return {
@@ -137,6 +125,7 @@ async function discoverChannelAddresses(params: {
   limit: number;
   scope: ConversationRegistryScope;
   deps: ConversationListDeps;
+  readCurrentConfig?: () => OpenClawConfig;
 }): Promise<{ channel: string; discoveredConversationRefs: ReadonlySet<string> }> {
   const plugin = params.deps.resolveOutboundChannelPlugin({
     channel: params.channel,
@@ -206,8 +195,25 @@ async function discoverChannelAddresses(params: {
       }
     }
   }
-  params.deps.registerConversationAddresses(params.scope, [...identities.values()]);
-  return { channel: plugin.id, discoveredConversationRefs: new Set(identities.keys()) };
+  const currentConfig = params.readCurrentConfig?.() ?? params.config;
+  const eligibleIdentities = [...identities.values()].filter((identity) => {
+    const eligibility = resolveConversationRouteEligibilityForAgent({
+      config: currentConfig,
+      agentId: params.agentId,
+      conversation: { ...identity, target: identity.deliveryTarget },
+    });
+    if (eligibility === "unavailable") {
+      throw new Error("Conversation route ownership is temporarily unavailable");
+    }
+    return eligibility === "eligible";
+  });
+  params.deps.registerConversationAddresses(params.scope, eligibleIdentities);
+  return {
+    channel: plugin.id,
+    discoveredConversationRefs: new Set(
+      eligibleIdentities.map((identity) => identity.conversationRef),
+    ),
+  };
 }
 
 function matchesConversationQuery(conversation: ConversationRecord, rawQuery: string): boolean {
@@ -226,6 +232,7 @@ function matchesConversationQuery(conversation: ConversationRecord, rawQuery: st
 export async function runGatewayConversationList(
   params: {
     config: OpenClawConfig;
+    readCurrentConfig?: () => OpenClawConfig;
     agentId: string;
     channel?: string;
     query?: string;
@@ -233,7 +240,7 @@ export async function runGatewayConversationList(
   },
   deps: ConversationListDeps = defaultDeps,
 ): Promise<ConversationListResult> {
-  const scope = resolveConversationScope(params);
+  const scope = resolveConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
   const discovery = params.channel
     ? await discoverChannelAddresses({
@@ -244,20 +251,33 @@ export async function runGatewayConversationList(
         limit: params.limit,
         scope,
         deps,
+        ...(params.readCurrentConfig ? { readCurrentConfig: params.readCurrentConfig } : {}),
       })
     : undefined;
-  const conversations = deps.listConversations(scope, {
-    ...(query ? {} : { limit: params.limit }),
-    ...(discovery ? { channel: discovery.channel } : {}),
-  });
-  const selected = query
-    ? conversations
-        .filter(
-          (entry) =>
-            discovery?.discoveredConversationRefs.has(entry.conversationRef) === true ||
-            matchesConversationQuery(entry, query),
-        )
-        .slice(0, params.limit)
-    : conversations;
+  const conversations = deps.listConversations(
+    scope,
+    discovery ? { channel: discovery.channel } : {},
+  );
+  const currentConfig = params.readCurrentConfig?.() ?? params.config;
+  const selected = conversations
+    .filter((entry) => {
+      if (
+        query &&
+        discovery?.discoveredConversationRefs.has(entry.conversationRef) !== true &&
+        !matchesConversationQuery(entry, query)
+      ) {
+        return false;
+      }
+      const eligibility = resolveConversationRouteEligibilityForAgent({
+        config: currentConfig,
+        agentId: params.agentId,
+        conversation: entry,
+      });
+      if (eligibility === "unavailable") {
+        throw new Error("Conversation route ownership is temporarily unavailable");
+      }
+      return eligibility === "eligible";
+    })
+    .slice(0, params.limit);
   return { conversations: selected.map(presentConversation) };
 }

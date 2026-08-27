@@ -4,15 +4,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptEvent,
-  listSessionEntries,
+  listSessionEntriesCore,
   loadSessionEntry,
   replaceTranscriptEvents,
-  upsertSessionEntry,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
   appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
+  appendSessionTranscriptMessageByIdentityStrict,
+  appendSessionTranscriptMessagesByIdentity,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   publishSessionTranscriptUpdateByIdentity,
@@ -49,7 +51,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-1", type: "metadata" };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendTranscriptEvent(scope, event);
 
     const identity = await resolveSessionTranscriptIdentity(scope);
@@ -72,13 +74,81 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(resolveSessionTranscriptIdentity(scope)).resolves.toMatchObject({
       memoryKey: "transcript:main:read-only-session",
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntry(scope)?.sessionFile).toBeUndefined();
+  });
+
+  it("atomically appends and idempotently replays an ordered message group", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "batch-session",
+      sessionKey: "agent:main:batch",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const messages = [
+      {
+        eventId: "batch-assistant",
+        idempotencyLookup: "scan" as const,
+        message: { role: "assistant", content: "checking", idempotencyKey: "batch:assistant" },
+        now: 1_000,
+      },
+      {
+        eventId: "batch-result",
+        idempotencyLookup: "scan" as const,
+        message: { role: "toolResult", content: "done", idempotencyKey: "batch:result" },
+        now: 2_000,
+      },
+    ];
+
+    const appended = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
+    const replayed = await appendSessionTranscriptMessagesByIdentity({ ...scope, messages });
+
+    expect(appended.map((result) => result.appended)).toEqual([true, true]);
+    expect(replayed.map((result) => result.appended)).toEqual([false, false]);
+    const events = await readSessionTranscriptEvents(scope);
+    expect(events).toHaveLength(3);
+    expect(events.slice(1)).toMatchObject([
+      { id: "batch-assistant", parentId: null },
+      { id: "batch-result", parentId: "batch-assistant" },
+    ]);
+  });
+
+  it("distinguishes strict singleton results, suppression, and session rebound", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "strict-session",
+      sessionKey: "agent:main:strict",
+      storePath,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "user", content: "blocked" },
+        prepareMessageAfterIdempotencyCheck: () => undefined,
+      }),
+    ).resolves.toEqual({ kind: "suppressed" });
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "user", content: "persisted", idempotencyKey: "strict:user" },
+      }),
+    ).resolves.toMatchObject({ kind: "result", result: { appended: true } });
+
+    await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 20 });
+    await expect(
+      appendSessionTranscriptMessageByIdentityStrict({
+        ...scope,
+        message: { role: "assistant", content: "stale" },
+      }),
+    ).resolves.toEqual({ kind: "rejected", reason: "session-rebound" });
   });
 
   it("pages raw events across appends and resets after replacement", async () => {
@@ -88,7 +158,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:raw-delta",
       storePath,
     };
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     for (const id of ["event-1", "event-2", "event-3"]) {
       await appendTranscriptEvent(scope, { id, type: "custom" });
     }
@@ -144,7 +214,10 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:missing-raw-delta",
       storePath,
     };
-    await upsertSessionEntry(missingScope, { sessionId: missingScope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(missingScope, {
+      sessionId: missingScope.sessionId,
+      updatedAt: 10,
+    });
     await expect(
       readSessionTranscriptRawDelta({ ...missingScope, maxBytes: 10, maxEvents: 1 }),
     ).resolves.toEqual({ kind: "missing" });
@@ -173,6 +246,21 @@ describe("session transcript runtime SDK", () => {
     if (blocked.kind !== "reset") {
       throw new Error("expected invalid cursor reset");
     }
+    const beyondFrontierCursor = Buffer.from(
+      JSON.stringify({
+        ...(JSON.parse(Buffer.from(blocked.cursor, "base64url").toString("utf8")) as object),
+        lastSeq: 1,
+      }),
+      "utf8",
+    ).toString("base64url");
+    await expect(
+      readSessionTranscriptRawDelta({
+        ...scope,
+        cursor: beyondFrontierCursor,
+        maxBytes: 10,
+        maxEvents: 1,
+      }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "invalid_cursor" });
     const unsafeCursor = Buffer.from(
       JSON.stringify({
         agentId: scope.agentId,
@@ -246,7 +334,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const root = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -330,7 +418,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     await expect(
       appendAssistantMirrorMessageByIdentity({
@@ -360,7 +448,7 @@ describe("session transcript runtime SDK", () => {
       sessionId: "unkeyed-mirror-session",
       sessionKey: "agent:main:unkeyed",
     };
-    await upsertSessionEntry(unkeyedScope, {
+    await upsertSessionEntryCore(unkeyedScope, {
       sessionId: unkeyedScope.sessionId,
       updatedAt: 20,
     });
@@ -382,7 +470,7 @@ describe("session transcript runtime SDK", () => {
     );
     expect(unkeyedAssistantMessages).toHaveLength(1);
 
-    await upsertSessionEntry(scope, { sessionId: "new-session", updatedAt: 20 });
+    await upsertSessionEntryCore(scope, { sessionId: "new-session", updatedAt: 20 });
 
     await expect(
       appendAssistantMirrorMessageByIdentity({
@@ -400,7 +488,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const active = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -447,7 +535,7 @@ describe("session transcript runtime SDK", () => {
       storePath,
     };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     const firstAssistant = await appendSessionTranscriptMessageByIdentity({
       ...scope,
       message: {
@@ -487,7 +575,7 @@ describe("session transcript runtime SDK", () => {
       internalUpdates.push(update);
     });
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
 
     try {
       await expect(
@@ -533,7 +621,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-locator", type: "metadata" };
 
-    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
     await appendTranscriptEvent(scope, event);
 
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([event]);
@@ -550,7 +638,7 @@ describe("session transcript runtime SDK", () => {
     };
     const event = { id: "event-active", type: "metadata" };
 
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: path.join(tempDir, "store-default.jsonl"),
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -639,6 +727,7 @@ describe("session transcript runtime SDK", () => {
         agentId: "main",
         sessionId: "publish-session",
         sessionKey: "agent:main:main",
+        storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       },
     });
     expect(internalUpdates).toEqual([
@@ -651,6 +740,7 @@ describe("session transcript runtime SDK", () => {
           agentId: "main",
           sessionId: "publish-session",
           sessionKey: "agent:main:main",
+          storePath: path.join(tempDir, "openclaw-agent.sqlite"),
         },
       },
     ]);
@@ -667,6 +757,8 @@ describe("session transcript runtime SDK", () => {
 
     const target = await withSessionTranscriptWriteLock(scope, async (locked) => {
       expect(await locked.readEvents()).toEqual([]);
+      expect(locked).not.toHaveProperty("appendMessageWithMessageSequence");
+      expect(locked).not.toHaveProperty("readMessageFacts");
       await locked.appendMessage({
         message: {
           role: "assistant",
@@ -775,6 +867,7 @@ describe("session transcript runtime SDK", () => {
         agentId: "main",
         sessionId: "queued-publish-session",
         sessionKey: "agent:main:main",
+        storePath: path.join(tempDir, "openclaw-agent.sqlite"),
       },
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
@@ -838,7 +931,7 @@ describe("session transcript runtime SDK", () => {
       sessionKey: "agent:main:telegram:direct:123",
       storePath,
     };
-    await upsertSessionEntry(scope, {
+    await upsertSessionEntryCore(scope, {
       sessionFile: path.join(tempDir, "legacy-file-name.jsonl"),
       sessionId: scope.sessionId,
       updatedAt: 10,
@@ -847,7 +940,7 @@ describe("session transcript runtime SDK", () => {
     const keys = resolveSessionTranscriptMemoryHitKeyToSessionKeys({
       key: formatSessionTranscriptMemoryHitKey(scope),
       store: Object.fromEntries(
-        listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+        listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
       ),
     });
 

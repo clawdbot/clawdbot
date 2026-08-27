@@ -11,7 +11,7 @@ describe("multi-agent agentDir validation", () => {
     const shared = path.join(tmpdir(), "openclaw-shared-agentdir");
     const res = validateConfigObject({
       agents: {
-        entries: { a: { agentDir: shared }, b: { agentDir: shared } },
+        entries: { a: { agentDir: shared, default: true }, b: { agentDir: shared } },
       },
     });
     expect(res.ok).toBe(false);
@@ -26,7 +26,7 @@ Conflicts:
 - ${shared}: "a", "b"
 
 Fix: remove the shared agents.entries.*.agentDir override (or give each agent its own directory).
-If you want to share credentials, copy auth-profiles.json instead of sharing the entire agentDir.`,
+Auth profiles live in each agent's SQLite store, so a shared agentDir is not how credentials are shared: give each agent its own directory and either leave its store empty to inherit the main agent's profiles, or log it in with \`openclaw models auth login\`.`,
         },
       ]);
     }
@@ -37,7 +37,7 @@ If you want to share credentials, copy auth-profiles.json instead of sharing the
       {
         agents: {
           entries: {
-            a: { agentDir: "~/.openclaw/agents/shared/agent" },
+            a: { agentDir: "~/.openclaw/agents/shared/agent", default: true },
             b: { agentDir: "~/.openclaw/agents/shared/agent" },
           },
         },

@@ -1,19 +1,18 @@
 // Public operation dispatcher. Parsing and mutation helpers live in focused modules.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createAgent } from "../agents/agent-create.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
-import { isReservedSystemAgentId } from "./agent-id.js";
+import { isReservedSystemAgentId, SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SYSTEM_AGENT_AUDIT_STORE_LABEL } from "./audit.js";
+import { redactSystemAgentConfig } from "./config-redaction.js";
 import {
   CONFIG_GET_OUTPUT_MAX_CHARS,
   CONFIG_SCHEMA_CHILDREN_MAX,
   applyPersistentOperation,
   assertConfigWriteDoesNotBypassInferenceVerification,
   createNoExitRuntime,
-  executePluginInstall,
   executeSetDefaultModel,
   executeSetup,
   formatChannelDocsUrl,
@@ -23,7 +22,6 @@ import {
   loadOverviewForOperation,
   readConfigFileSnapshotLazy,
   readConfigValueAtPath,
-  redactConfigValue,
   resolveChannelSetupState,
   resolveTuiAgentId,
   runConfigSetOperation,
@@ -31,6 +29,7 @@ import {
   type ExecuteOptions,
 } from "./operations-execution-helpers.js";
 import type { SystemAgentOperation, SystemAgentOperationResult } from "./operations-parse.js";
+import { executePluginInstall } from "./plugin-install.js";
 
 const loadOverviewModule = async () => await import("./overview.js");
 
@@ -123,18 +122,19 @@ export async function executeSystemAgentOperation(
         runtime.log(`Config missing: ${shortenHomePath(snapshot.path)}`);
         return { applied: false };
       }
-      const cfg = snapshot.valid
-        ? (snapshot.sourceConfig ?? snapshot.config)
-        : snapshot.sourceConfig;
-      const lookup = readConfigValueAtPath(cfg ?? {}, operation.path);
+      const cfg = snapshot.sourceConfig;
+      // Redact before selecting a subtree so wildcard channel/plugin hints retain full paths.
+      const lookup = readConfigValueAtPath(
+        redactSystemAgentConfig(cfg, { config: cfg, valid: snapshot.valid }),
+        operation.path,
+      );
       if (!lookup.found) {
         runtime.log(
           `${operation.path}: not set. Use \`config schema ${operation.path}\` to see what is allowed.`,
         );
         return { applied: false };
       }
-      const redacted = redactConfigValue(lookup.value, operation.path);
-      const rendered = JSON.stringify(redacted, null, 2) ?? "null";
+      const rendered = JSON.stringify(lookup.value, null, 2) ?? "null";
       runtime.log(
         rendered.length > CONFIG_GET_OUTPUT_MAX_CHARS
           ? `${operation.path} = ${truncateUtf16Safe(rendered, CONFIG_GET_OUTPUT_MAX_CHARS)}\n… (truncated)`
@@ -143,8 +143,8 @@ export async function executeSystemAgentOperation(
       return { applied: false };
     }
     case "config-schema": {
-      const { buildConfigSchema, lookupConfigSchema } = await import("../config/schema.js");
-      const response = buildConfigSchema();
+      const { buildConfigSchemaCore, lookupConfigSchema } = await import("../config/schema.js");
+      const response = buildConfigSchemaCore();
       const path = operation.path ?? ".";
       const result = lookupConfigSchema(response, path);
       if (!result) {
@@ -251,11 +251,47 @@ export async function executeSystemAgentOperation(
         ].join("\n"),
       );
       return { applied: false };
+    case "skills-setup":
+      runtime.log(
+        [
+          "Skills setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure skills`,",
+          "or run `openclaw configure --section skills` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "search-setup":
+      runtime.log(
+        [
+          "Web search setup needs an interactive session.",
+          "Run `openclaw setup` and say `configure search`,",
+          "or run `openclaw configure --section web` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "gateway-config-setup":
+      runtime.log(
+        [
+          "Gateway configuration needs an interactive session.",
+          "Run `openclaw setup` and say `configure gateway`,",
+          "or run `openclaw configure --section gateway` for the masked terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
+    case "memory-import":
+      runtime.log(
+        [
+          "Memory import needs an interactive session.",
+          "Open the Memory page in the Control UI,",
+          "or run `openclaw onboard` for the terminal wizard.",
+        ].join("\n"),
+      );
+      return { applied: false };
     case "model-setup":
       runtime.log(
         [
           "Changing model providers must happen outside the inference session that powers OpenClaw.",
-          "Exit OpenClaw and run `openclaw onboard`; it stages credentials, live-tests the candidate route, and saves only a passing setup.",
+          "Stop the OpenClaw host through whatever started it. Run `openclaw onboard` on the machine running OpenClaw: it stages credentials, live-tests the candidate route, and saves only a passing setup. Then restart the host.",
         ].join("\n"),
       );
       return { applied: false };
@@ -265,9 +301,13 @@ export async function executeSystemAgentOperation(
           ? "openclaw onboard"
           : operation.target === "classic"
             ? "openclaw onboard --classic"
-            : `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`;
+            : operation.target === "channels"
+              ? `openclaw channels add${operation.channel ? ` --channel ${operation.channel}` : ""}`
+              : operation.target === "search"
+                ? "openclaw configure --section web"
+                : "openclaw configure --section gateway";
       runtime.log(
-        `One-shot mode cannot open an interactive wizard. Run \`${command}\` in a terminal.`,
+        `This session cannot host an interactive wizard. Run \`${command}\` on the machine running OpenClaw.`,
       );
       return { applied: false };
     }
@@ -310,7 +350,7 @@ export async function executeSystemAgentOperation(
       if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
         const message = [
           `Uninstalling ${operation.pluginId} could remove the provider behind OpenClaw's own active inference route.`,
-          `Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+          `Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
         ].join("\n");
         runtime.log(message);
         return { applied: false, message };
@@ -334,7 +374,7 @@ export async function executeSystemAgentOperation(
             // moment so the destructive removal never hits the active route.
             if (await isPluginBackingDefaultInferenceRoute(operation.pluginId)) {
               throw new Error(
-                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Exit OpenClaw and run \`openclaw plugins uninstall ${operation.pluginId}\` from a terminal.`,
+                `Uninstall aborted: ${operation.pluginId} now backs the active inference route. Removing it has to happen with OpenClaw stopped: run \`openclaw plugins uninstall ${operation.pluginId}\` on the machine running it.`,
               );
             }
             await runPluginUninstall(operation.pluginId, createNoExitRuntime(ctx.runtime));
@@ -367,10 +407,16 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const createAgentForOperation =
+            ctx.deps?.createAgent ?? (await import("../agents/agent-create.js")).createAgent;
           const result = await ctx.commit(async () => {
-            return await (ctx.deps?.createAgent ?? createAgent)({
+            return await createAgentForOperation({
               name: operation.agentId,
               ...(operation.workspace ? { workspace: operation.workspace } : {}),
+              provenance: {
+                createdVia: "agent",
+                creatorAgentId: operation.requesterAgentId ?? SYSTEM_AGENT_ID,
+              },
             });
           });
           if (result.status === "error") {
@@ -396,7 +442,7 @@ export async function executeSystemAgentOperation(
     }
     case "doctor-fix":
       runtime.log(
-        "Doctor repairs can change the inference route that powers this session. Exit OpenClaw and run `openclaw doctor --fix` in a terminal.",
+        "Doctor repairs can change the inference route that powers this session, so they run with OpenClaw stopped: `openclaw doctor --fix` on the machine running it.",
       );
       return { applied: false };
     case "status": {
@@ -445,25 +491,35 @@ export async function executeSystemAgentOperation(
         runtime,
         opts,
         run: async (ctx) => {
+          const gatewayHosted = ctx.deps?.setupSurface === "gateway";
           const runGatewayRestart =
-            ctx.deps?.runGatewayRestart ?? (() => runGatewayLifecycle("restart"));
+            ctx.deps?.runGatewayRestart ??
+            (() => runGatewayLifecycle("restart", gatewayHosted ? "gateway" : undefined));
           const restarted = await ctx.commit(runGatewayRestart);
           if (restarted === false) {
             throw new Error("Gateway restart did not complete");
           }
-          return { summary: "Restarted Gateway" };
+          const summary = gatewayHosted ? "Scheduled Gateway restart" : "Restarted Gateway";
+          if (gatewayHosted) {
+            ctx.runtime.log(summary);
+          }
+          return { summary };
         },
       });
     case "open-tui": {
-      const agentId = await resolveTuiAgentId({
+      const overview = await loadOverviewForOperation(opts.deps);
+      const agentId = resolveTuiAgentId({
         requestedAgentId: operation.agentId,
         requestedWorkspace: operation.workspace,
-        deps: opts.deps,
+        overview,
       });
       const session = agentId ? buildAgentMainSessionKey({ agentId }) : undefined;
       const runTui = opts.deps?.runTui ?? (await import("../tui/tui.js")).runTui;
+      // A reachable Gateway owns the state lock, so embedded mode would fail during hatch.
+      // Keep embedded mode only as the no-Gateway fallback for standalone sessions.
+      const useEmbeddedTui = !overview.gateway.reachable;
       const result = await runTui({
-        local: true,
+        local: useEmbeddedTui,
         session,
         deliver: false,
         historyLimit: 200,

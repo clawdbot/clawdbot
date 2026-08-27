@@ -1,5 +1,6 @@
 import { notifyLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 // LLM idle-timeout tests cover timeout selection and stream wrapping for
 // embedded provider calls, including local-provider and cron exceptions.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
@@ -421,7 +422,42 @@ describe("resolveLlmIdleTimeoutMs", () => {
         },
       }),
     ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "ollama/gpt-oss:120b-cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
+
+  it.each([
+    ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
+    ["gpt-oss:120b-cloud", "http://127.0.0.1:11434", 0],
+    ["kimi-k2.5:cloud", "http://ollama-box:11434", SELF_HOSTED_LLM_IDLE_TIMEOUT_MS],
+    ["gpt-oss:120b-cloud", "http://ollama-box:11434", SELF_HOSTED_LLM_IDLE_TIMEOUT_MS],
+  ])(
+    "keeps hosted watchdogs for custom Ollama model %s through %s",
+    (id, baseUrl, localIdleTimeoutMs) => {
+      const providerConfig = { api: "ollama", apiKey: "ollama-local", baseUrl, models: [] };
+      const cfg = { models: { providers: { "local-ollama": providerConfig } } } as OpenClawConfig;
+      const model = { provider: "local-ollama", id, baseUrl };
+
+      expect({
+        idle: resolveLlmIdleTimeoutMs({ cfg, model }),
+        firstEvent: resolveLlmFirstEventTimeoutMs({ cfg, model }),
+        cron: resolveLlmIdleTimeoutMs({ cfg, trigger: "cron", runTimeoutMs: 600_000, model }),
+        local: resolveLlmIdleTimeoutMs({ cfg, model: { ...model, id: "gemma4:latest" } }),
+      }).toEqual({
+        idle: DEFAULT_LLM_IDLE_TIMEOUT_MS,
+        firstEvent: CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS,
+        cron: CRON_LLM_IDLE_TIMEOUT_MS,
+        local: localIdleTimeoutMs,
+      });
+    },
+  );
 
   it.each([
     "http://172.32.0.1:11434",
@@ -586,6 +622,15 @@ describe("resolveLlmFirstEventTimeoutMs", () => {
     expect(
       resolveLlmFirstEventTimeoutMs({
         model: { provider: "ollama", id: "ollama/kimi-k2.6:cloud", baseUrl: "http://127.0.0.1" },
+      }),
+    ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "ollama/gpt-oss:120b-cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
       }),
     ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
   });
@@ -875,7 +920,6 @@ describe("streamWithIdleTimeout", () => {
       results.push(chunk);
     }
 
-    expect(results).toHaveLength(3);
     expect(results).toEqual(chunks);
   });
 
@@ -1149,19 +1193,3 @@ describe("streamWithIdleTimeout", () => {
     expect((timeoutError as Error).message).toMatch(/LLM idle timeout/);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  // Abort reasons can be arbitrary values; normalize them into Error objects
-  // so rejection assertions and provider wrappers see a stable shape.
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

@@ -18,7 +18,7 @@ const TRANSIENT_FALLBACK_REASONS = new Set([
   "unclassified",
 ]);
 const TRANSIENT_ERROR_DETAIL_HINT_RE =
-  /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl)\b/i;
+  /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl\w*)\b/i;
 
 function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
   const text = value.replace(/\s+/g, " ").trim();
@@ -154,9 +154,9 @@ export function resolveFallbackTransition(params: {
   const selectedModelRef = formatProviderModelRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = formatProviderModelRef(params.activeProvider, params.activeModel);
   const previousState = {
-    selectedModel: normalizeOptionalString(params.state?.fallbackNoticeSelectedModel),
-    activeModel: normalizeOptionalString(params.state?.fallbackNoticeActiveModel),
-    reason: normalizeOptionalString(params.state?.fallbackNoticeReason),
+    selectedModel: normalizeOptionalString(params.state?.fallbackNotice?.selectedModel),
+    activeModel: normalizeOptionalString(params.state?.fallbackNotice?.activeModel),
+    reason: normalizeOptionalString(params.state?.fallbackNotice?.reason),
   };
   const comparisonOptions = { config: params.cfg };
   const fallbackActive = !areRuntimeModelRefsEquivalent(

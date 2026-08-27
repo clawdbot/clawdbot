@@ -34,12 +34,36 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
   message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
 };
 
+const GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE: LegacyConfigRule = {
+  path: ["gateway", "tailscale", "resetOnExit"],
+  message:
+    'gateway.tailscale.resetOnExit is retired because managed routes now follow the Gateway lifecycle automatically. Run "openclaw doctor --fix".',
+  match: (value) => typeof value === "boolean",
+};
+
+const GATEWAY_TAILSCALE_SERVICE_NAME_RULE: LegacyConfigRule = {
+  path: ["gateway", "tailscale", "serviceName"],
+  message:
+    'gateway.tailscale.serviceName is retired because named Services require persistent background routes that cannot follow the Gateway lifecycle. Run "openclaw doctor --fix".',
+};
+
 const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
   path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
   message:
-    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve authenticated, pairing-only access for remediation, remove the legacy key, and prompt you to reopen the Control UI over HTTPS or localhost before clicking Secure this browser. Run "openclaw doctor --fix".',
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired and ignored. Control UI browsers pair through the normal device flow; run "openclaw doctor --fix" to remove the legacy key.',
   match: (value) => typeof value === "boolean",
 };
+
+const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
+  ["0.0.0.0", "lan"],
+  ["::", "lan"],
+  ["[::]", "lan"],
+  ["*", "lan"],
+  ["127.0.0.1", "loopback"],
+  ["localhost", "loopback"],
+  ["::1", "loopback"],
+  ["[::1]", "loopback"],
+]);
 
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   return normalizeLegacyGatewayBindHostAlias(value) !== null;
@@ -47,35 +71,7 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
 
 function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return null;
-  }
-  if (
-    normalized === "auto" ||
-    normalized === "loopback" ||
-    normalized === "lan" ||
-    normalized === "tailnet" ||
-    normalized === "custom"
-  ) {
-    return null;
-  }
-  if (
-    normalized === "0.0.0.0" ||
-    normalized === "::" ||
-    normalized === "[::]" ||
-    normalized === "*"
-  ) {
-    return "lan";
-  }
-  if (
-    normalized === "127.0.0.1" ||
-    normalized === "localhost" ||
-    normalized === "::1" ||
-    normalized === "[::1]"
-  ) {
-    return "loopback";
-  }
-  return null;
+  return normalized ? (LEGACY_GATEWAY_BIND_HOST_ALIASES.get(normalized) ?? null) : null;
 }
 
 function escapeControlForLog(value: string): string {
@@ -85,8 +81,54 @@ function escapeControlForLog(value: string): string {
 /** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
+    id: "gateway.tailscale.service-name-remove",
+    describe: "Disable managed ingress and remove the retired Tailscale Service name",
+    legacyRules: [GATEWAY_TAILSCALE_SERVICE_NAME_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!gateway || !tailscale || !Object.hasOwn(tailscale, "serviceName")) {
+        return;
+      }
+      const wasManagedService = tailscale.mode === "serve";
+      delete tailscale.serviceName;
+      if (wasManagedService) {
+        tailscale.mode = "off";
+      }
+      gateway.tailscale = tailscale;
+      raw.gateway = gateway;
+      changes.push(
+        wasManagedService
+          ? "Removed gateway.tailscale.serviceName and set gateway.tailscale.mode=off because named Services cannot use lifecycle-owned routes. " +
+              "Inspect the retained Service route, then run `tailscale serve clear <service-name>`; set gateway.tailscale.mode=serve to use device Serve instead."
+          : "Removed retired gateway.tailscale.serviceName; the current Tailscale mode is unchanged because named Services applied only to Serve.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.tailscale.reset-on-exit-remove",
+    describe: "Remove the retired Tailscale route-cleanup preference",
+    legacyRules: [GATEWAY_TAILSCALE_RESET_ON_EXIT_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      const tailscale = getRecord(gateway?.tailscale);
+      if (!gateway || !tailscale || !Object.hasOwn(tailscale, "resetOnExit")) {
+        return;
+      }
+      const cleanupWasEnabled = tailscale.resetOnExit === true;
+      delete tailscale.resetOnExit;
+      gateway.tailscale = tailscale;
+      raw.gateway = gateway;
+      changes.push(
+        cleanupWasEnabled
+          ? "Removed gateway.tailscale.resetOnExit; managed Tailscale routes now end automatically with the Gateway lifecycle."
+          : "Removed retired gateway.tailscale.resetOnExit config.",
+      );
+    },
+  }),
+  defineLegacyConfigMigration({
     id: "gateway.control-ui-device-auth-bypass->pairing-migration",
-    describe: "Convert the retired Control UI device-auth bypass into explicit pairing",
+    describe: "Remove the retired Control UI device-auth bypass",
     legacyRules: [CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE],
     apply: (raw, changes) => {
       const gateway = getRecord(raw.gateway);
@@ -94,13 +136,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
         return;
       }
-      const migrationRequired = controlUi.dangerouslyDisableDeviceAuth === true;
       delete controlUi.dangerouslyDisableDeviceAuth;
-      changes.push(
-        migrationRequired
-          ? "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser."
-          : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
-      );
+      changes.push("Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.");
     },
   }),
   defineLegacyConfigMigration({

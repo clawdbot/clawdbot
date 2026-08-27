@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { formatErrorMessage } from "../../src/infra/errors.ts";
 import { createPluginStateKeyedStore } from "../../src/plugin-state/plugin-state-store.ts";
-import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -1114,14 +1114,9 @@ async function main(argv = process.argv.slice(2)): Promise<number> {
 export const testing = {
   parseDriverMode,
   parseArgs,
-  parseNumber,
-  DISCORD_RESPONSE_BODY_MAX_BYTES,
   redactDiscordApiPath,
-  readDiscordResponseText,
   remainingTimeoutMs,
   requestDiscordJson,
-  resolveStateDir,
-  safeErrorMessage,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

@@ -7,6 +7,7 @@ export { runEmbeddedAgent } from "./embedded-agent-runner/run.js";
 export {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
+  preemptAndDrainEmbeddedHeartbeatRun,
   isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,

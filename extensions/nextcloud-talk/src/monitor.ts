@@ -1,10 +1,12 @@
 // Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
+  resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
@@ -13,6 +15,8 @@ import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
 
 const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const PREAUTH_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
+const NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE = "durable";
 const PREAUTH_WEBHOOK_BODY_TIMEOUT_MS = 5_000;
 const HEALTH_PATH = "/healthz";
 const WEBHOOK_AUTH_RATE_LIMIT_SCOPE = "nextcloud-talk-webhook-auth";
@@ -24,13 +28,6 @@ const WEBHOOK_ERRORS = {
   payloadTooLarge: "Payload too large",
   internalServerError: "Internal server error",
 } as const;
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return typeof err === "string" ? err : JSON.stringify(err);
-}
 
 function writeJsonResponse(
   res: ServerResponse,
@@ -148,7 +145,10 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         return;
       }
 
-      const clientIp = req.socket.remoteAddress ?? "unknown";
+      const clientIp =
+        resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback) ??
+        req.socket.remoteAddress ??
+        "unknown";
       if (!webhookAuthRateLimiter.check(clientIp, WEBHOOK_AUTH_RATE_LIMIT_SCOPE).allowed) {
         res.writeHead(429);
         res.end("Too Many Requests");
@@ -181,7 +181,15 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
 
         // Nextcloud retries only a few times. Acknowledge only after the raw
         // envelope is durably admitted; append failure must remain retryable.
-        await onWebhook(body);
+        const admission = await onWebhook(body);
+        if (admission === "accepted") {
+          // Ignored non-message events still receive 200 but must not claim
+          // durable adoption.
+          res.setHeader(
+            NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER,
+            NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE,
+          );
+        }
         writeJsonResponse(res, 200);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
@@ -196,7 +204,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
           writeWebhookError(res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
           return;
         }
-        const error = err instanceof Error ? err : new Error(formatError(err));
+        const error = err instanceof Error ? err : new Error(formatErrorMessage(err));
         onError?.(error);
         writeWebhookError(res, 500, WEBHOOK_ERRORS.internalServerError);
       }
@@ -222,6 +230,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
   const stop = async () => {
     stopRequested = true;
     await closeIfListening();
+    webhookAuthRateLimiter.dispose();
   };
 
   const start = (): Promise<void> => {

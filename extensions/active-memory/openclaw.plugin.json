@@ -1,5 +1,9 @@
 {
   "id": "active-memory",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "activation": {
     "onStartup": true
   },
@@ -10,6 +14,10 @@
     "additionalProperties": false,
     "properties": {
       "enabled": { "type": "boolean" },
+      "mode": {
+        "type": "string",
+        "enum": ["escalate", "always", "off"]
+      },
       "agents": {
         "type": "array",
         "items": { "type": "string" }
@@ -37,7 +45,7 @@
       },
       "thinking": {
         "type": "string",
-        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
+        "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"]
       },
       "fastMode": {
         "anyOf": [
@@ -82,23 +90,17 @@
       "transcriptDir": { "type": "string" },
       "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
       "circuitBreakerMaxTimeouts": { "type": "integer", "minimum": 1, "maximum": 20 },
-      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 },
-      "qmd": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "searchMode": {
-            "type": "string",
-            "enum": ["inherit", "search", "vsearch", "query"]
-          }
-        }
-      }
+      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 }
     }
   },
   "uiHints": {
     "enabled": {
       "label": "Active Memory Recall",
       "help": "Globally enable or pause Active Memory recall while keeping the plugin command available. Remember across conversations requires this plugin to remain enabled."
+    },
+    "mode": {
+      "label": "Recall Mode",
+      "help": "Escalate runs deep recall only for recall-intent messages without a strong deterministic hit. Always preserves blocking recall on every eligible turn. Off disables deep recall while keeping deterministic trigger recall available."
     },
     "agents": {
       "label": "Target Agents",
@@ -187,10 +189,6 @@
     "transcriptDir": {
       "label": "Transcript Directory",
       "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
-    },
-    "qmd.searchMode": {
-      "label": "QMD Search Mode",
-      "help": "Override the QMD search mode used by the blocking memory sub-agent. Defaults to fast lexical search; use inherit to match the main memory backend setting."
     }
   }
 }

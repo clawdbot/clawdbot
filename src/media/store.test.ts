@@ -26,6 +26,8 @@ describe("media store", () => {
       await tempHome.restore();
     } catch {
       // ignore cleanup failures in tests
+    } finally {
+      vi.resetModules();
     }
   });
 
@@ -78,7 +80,7 @@ describe("media store", () => {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
               const [relativePath] = args;
-              if (!injectedEnoent && relativePath.includes(`${params.segment}${path.sep}`)) {
+              if (!injectedEnoent && relativePath.includes(`${params.segment}/`)) {
                 injectedEnoent = true;
                 await fs.rm(path.dirname(actualStore.path(relativePath)), {
                   recursive: true,
@@ -124,7 +126,7 @@ describe("media store", () => {
             ...actualStore,
             write: async (...args: Parameters<typeof actualStore.write>) => {
               const [relativePath] = args;
-              if (relativePath.includes(`failed-buffer${path.sep}`)) {
+              if (relativePath.includes("failed-buffer/")) {
                 attemptedRelPaths.push(relativePath);
                 const err = new Error("no space left on device") as NodeJS.ErrnoException;
                 err.code = "ENOSPC";
@@ -825,18 +827,18 @@ describe("media store", () => {
         const nested = await storeResult.saveMediaBuffer(
           Buffer.from("old nested"),
           "text/plain",
-          path.join("remote-cache", "session-prune", "images"),
+          path.join("prune-chain", "session-prune", "images"),
         );
         const mediaDir = await storeResult.ensureMediaDir();
         const sessionDir = path.dirname(path.dirname(nested.path));
-        const remoteCacheDir = path.dirname(sessionDir);
+        const pruneChainDir = path.dirname(sessionDir);
         const past = Date.now() - 10_000;
         await fs.utimes(nested.path, past / 1000, past / 1000);
         return {
           removedFiles: [nested.path],
           preservedFiles: [],
-          removedDirs: [sessionDir],
-          preservedDirs: [remoteCacheDir, mediaDir],
+          removedDirs: [sessionDir, pruneChainDir],
+          preservedDirs: [mediaDir],
         };
       },
       run: async (storeValue: typeof import("./store.js")) =>
@@ -1019,9 +1021,9 @@ describe("media store", () => {
         expectedExtractedFilename: "report.txt",
       },
       {
-        name: "sanitizes unsafe characters in original filename",
-        originalFilename: "my<file>:test.txt",
-        expectedIdPattern: /^my_file_test---[a-f0-9-]{36}\.txt$/,
+        name: "strips Windows-invalid and underscores non-portable characters",
+        originalFilename: "my <file>:test!.txt",
+        expectedIdPattern: /^my_filetest---[a-f0-9-]{36}\.txt$/,
       },
       {
         name: "truncates long original filenames",

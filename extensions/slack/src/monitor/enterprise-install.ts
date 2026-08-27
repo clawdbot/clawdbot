@@ -1,14 +1,16 @@
-// Slack plugin module implements explicit Enterprise Grid installation policy.
+// Slack plugin module implements detected Enterprise Grid installation policy.
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId } from "../accounts.js";
-import { formatSlackError } from "../errors.js";
+import { parseSlackTarget } from "../target-parsing.js";
 
 export type SlackInstallationIdentity =
   | {
       kind: "workspace";
       apiAppId?: string;
       teamId: string;
+      teamName?: string;
       enterpriseId?: string;
     }
   | {
@@ -23,25 +25,29 @@ export type SlackInstallationIdentity =
 
 export type SlackIdentityHealth =
   | {
-      healthState: "healthy";
+      lifecycle: "ready";
       lastError: null;
     }
   | {
-      healthState: "degraded";
+      lifecycle: "blocked";
       lastError: string;
     };
 
 export type SlackAuthTestIdentity = {
   app_id?: unknown;
+  team?: unknown;
   team_id?: unknown;
   enterprise_id?: unknown;
   is_enterprise_install?: unknown;
 };
 
 const SLACK_CHANNEL_ID_RE = /^[CDG][A-Z0-9]{8,}$/;
-const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{8,}$/;
+const SLACK_USER_ID_RE = /^[BUW][A-Z0-9]{8,}$/;
 
-function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: boolean }): boolean {
+function isWorkspaceScopedSlackChannelEntry(
+  value: unknown,
+  options?: { allowWildcard?: boolean },
+): boolean {
   if (typeof value !== "string") {
     return false;
   }
@@ -49,11 +55,7 @@ function isStableSlackChannelEntry(value: unknown, options?: { allowWildcard?: b
   if (normalized === "*") {
     return options?.allowWildcard === true;
   }
-  const prefixed = /^channel:([CDG][A-Z0-9]{8,})$/.exec(normalized);
-  if (prefixed?.[1]) {
-    return true;
-  }
-  return SLACK_CHANNEL_ID_RE.test(normalized);
+  return isWorkspaceQualifiedSlackTarget(normalized, "channel");
 }
 
 function isStableSlackAllowlistUserEntry(value: unknown): boolean {
@@ -64,7 +66,10 @@ function isStableSlackAllowlistUserEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
-  const prefixed = /^(?:slack|user):([UW][A-Z0-9]{8,})$/.exec(normalized);
+  if (isWorkspaceQualifiedSlackTarget(normalized, "user")) {
+    return true;
+  }
+  const prefixed = /^(?:slack|user):([BUW][A-Z0-9]{8,})$/.exec(normalized);
   return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
 }
 
@@ -93,6 +98,23 @@ function assertStableEntries(params: {
   }
 }
 
+function isWorkspaceQualifiedSlackTarget(value: unknown, kind: "channel" | "user"): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    const target = parseSlackTarget(value);
+    const idPattern = kind === "channel" ? SLACK_CHANNEL_ID_RE : SLACK_USER_ID_RE;
+    return (
+      target?.kind === kind &&
+      /^T[A-Z0-9]{8,}$/.test(target.teamId ?? "") &&
+      idPattern.test(target.id)
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Validate every policy surface that would otherwise require name resolution. */
 export function assertEnterpriseSlackPolicyConfig(params: {
   config: SlackAccountConfig;
@@ -104,18 +126,15 @@ export function assertEnterpriseSlackPolicyConfig(params: {
       `Slack Enterprise Grid org account "${accountId}" cannot use dangerouslyAllowNameMatching`,
     );
   }
-  if (
-    config.mentionPatterns?.allowIn !== undefined ||
-    config.mentionPatterns?.denyIn !== undefined
-  ) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${accountId}" cannot use mentionPatterns.allowIn or mentionPatterns.denyIn because Slack channel IDs are not workspace-qualified`,
-    );
-  }
   assertStableEntries({
-    values: config.allowFrom,
-    path: `channels.slack.accounts.${accountId}.allowFrom`,
-    predicate: isStableSlackAllowlistUserEntry,
+    values: config.mentionPatterns?.allowIn,
+    path: `channels.slack.accounts.${accountId}.mentionPatterns.allowIn`,
+    predicate: (value) => isWorkspaceQualifiedSlackTarget(value, "channel"),
+  });
+  assertStableEntries({
+    values: config.mentionPatterns?.denyIn,
+    path: `channels.slack.accounts.${accountId}.mentionPatterns.denyIn`,
+    predicate: (value) => isWorkspaceQualifiedSlackTarget(value, "channel"),
   });
   assertStableEntries({
     values: config.allowFrom,
@@ -125,7 +144,7 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   assertStableEntries({
     values: config.dm?.groupChannels,
     path: `channels.slack.accounts.${accountId}.dm.groupChannels`,
-    predicate: (value) => isStableSlackChannelEntry(value),
+    predicate: (value) => isWorkspaceScopedSlackChannelEntry(value),
   });
   if (config.reactionNotifications === "allowlist") {
     assertStableEntries({
@@ -135,9 +154,9 @@ export function assertEnterpriseSlackPolicyConfig(params: {
     });
   }
   for (const [channelKey, channel] of Object.entries(config.channels ?? {})) {
-    if (!isStableSlackChannelEntry(channelKey, { allowWildcard: true })) {
+    if (!isWorkspaceScopedSlackChannelEntry(channelKey, { allowWildcard: true })) {
       throw new Error(
-        `Slack Enterprise Grid org installs require stable Slack channel IDs; invalid channels key ${JSON.stringify(channelKey)}`,
+        `Slack Enterprise Grid org installs require stable Slack channel IDs with workspace scope; invalid channels key ${JSON.stringify(channelKey)}`,
       );
     }
     assertStableEntries({
@@ -153,75 +172,72 @@ export function assertEnterpriseSlackPolicyConfig(params: {
   }
 }
 
-/** Prevent account-wide user authorization state from crossing workspace boundaries. */
-export function assertEnterpriseSlackDmPolicy(params: {
-  accountId: string;
-  dmEnabled: boolean;
-  dmPolicy: string;
-  allowFrom: readonly string[] | undefined;
-}) {
-  if (!params.dmEnabled || params.dmPolicy === "disabled") {
-    return;
-  }
-  if (params.dmPolicy === "open" && params.allowFrom?.includes("*")) {
-    return;
-  }
-  throw new Error(
-    `Slack Enterprise Grid org account "${params.accountId}" supports DMs only with dm.enabled=false, dmPolicy="disabled", or dmPolicy="open" with effective allowFrom containing "*"; dmPolicy=${JSON.stringify(params.dmPolicy)} and allowFrom=${JSON.stringify(params.allowFrom ?? [])} would share per-user authorization across workspaces`,
-  );
-}
-
-export function assertNoEnterpriseSlackBindings(params: {
+export function assertEnterpriseSlackBindingsAreWorkspaceQualified(params: {
   cfg: OpenClawConfig;
   accountId: string;
 }) {
-  const defaultAccountId = resolveDefaultSlackAccountId(params.cfg);
-  const configured = params.cfg.bindings?.find((binding) => {
+  const accountId = normalizeAccountId(params.accountId);
+  const defaultAccountId = normalizeAccountId(resolveDefaultSlackAccountId(params.cfg));
+  const configured = params.cfg.bindings?.filter((binding) => {
     if (binding.match.channel.trim().toLowerCase() !== "slack") {
       return false;
     }
-    const accountId = binding.match.accountId?.trim();
+    const bindingAccountId = binding.match.accountId?.trim();
     return (
-      accountId === "*" ||
-      accountId === params.accountId ||
-      (!accountId && params.accountId === defaultAccountId)
+      bindingAccountId === "*" ||
+      (bindingAccountId
+        ? normalizeAccountId(bindingAccountId) === accountId
+        : accountId === defaultAccountId)
     );
   });
-  if (configured) {
-    throw new Error(
-      `Slack Enterprise Grid org account "${params.accountId}" cannot use configured Slack bindings`,
-    );
+  for (const binding of configured ?? []) {
+    if (binding.type === "acp") {
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" cannot use configured ACP bindings because current-conversation bindings are not workspace-qualified`,
+      );
+    }
+    const peerId = binding.match.peer?.id.trim();
+    if (!peerId || peerId === "*") {
+      if (/^T[A-Z0-9]{8,}$/.test(binding.match.teamId?.trim() ?? "")) {
+        continue;
+      }
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" requires match.teamId on configured Slack bindings without a workspace-qualified peer`,
+      );
+    }
+    let target: ReturnType<typeof parseSlackTarget>;
+    try {
+      target = parseSlackTarget(peerId);
+    } catch {
+      target = undefined;
+    }
+    const expectedKind = binding.match.peer?.kind === "direct" ? "user" : "channel";
+    if (!target?.teamId || !isWorkspaceQualifiedSlackTarget(peerId, expectedKind)) {
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" requires configured Slack binding peers to use team:<team-id>:channel:<channel-id> or team:<team-id>:user:<user-id>`,
+      );
+    }
+    const matchTeamId = binding.match.teamId?.trim();
+    if (matchTeamId && matchTeamId.toLowerCase() !== target.teamId.toLowerCase()) {
+      throw new Error(
+        `Slack Enterprise Grid org account "${params.accountId}" has conflicting workspace IDs in configured Slack binding match.teamId and peer.id`,
+      );
+    }
   }
 }
 
 export function resolveSlackInstallationIdentity(params: {
-  enterpriseOrgInstall: boolean;
   auth?: SlackAuthTestIdentity;
-  authError?: unknown;
   transportApiAppId?: string;
 }): SlackInstallationIdentity {
   const auth = params.auth;
   if (!auth) {
-    if (params.enterpriseOrgInstall) {
-      throw new Error(
-        `Slack enterpriseOrgInstall=true requires a successful auth.test (${formatSlackError(params.authError)})`,
-      );
-    }
     return { kind: "degraded", reason: "auth_test_failed" };
   }
-
   const isEnterpriseInstall = auth.is_enterprise_install === true;
-  if (isEnterpriseInstall !== params.enterpriseOrgInstall) {
-    throw new Error(
-      isEnterpriseInstall
-        ? "Slack auth.test detected an org-wide installation; set enterpriseOrgInstall=true"
-        : "Slack enterpriseOrgInstall=true requires an org-wide bot installation",
-    );
-  }
-
   const apiAppId = normalizeOptionalString(auth.app_id);
   const enterpriseId = normalizeOptionalString(auth.enterprise_id);
-  if (params.enterpriseOrgInstall) {
+  if (isEnterpriseInstall) {
     if (!enterpriseId) {
       throw new Error("Slack org-wide auth.test returned no enterprise_id");
     }
@@ -244,9 +260,11 @@ export function resolveSlackInstallationIdentity(params: {
   if (!teamId) {
     throw new Error("Slack workspace auth.test returned no team_id");
   }
+  const teamName = normalizeOptionalString(auth.team);
   return {
     kind: "workspace",
     teamId,
+    ...(teamName ? { teamName } : {}),
     ...(apiAppId ? { apiAppId } : {}),
     ...(enterpriseId ? { enterpriseId } : {}),
   };
@@ -258,20 +276,11 @@ export function resolveSlackIdentityHealth(params: {
   authTestError?: string;
   authIdentityWarning?: string;
 }): SlackIdentityHealth {
-  // Org-wide installs intentionally have no single workspace bot user. Their
-  // enterprise identity is sufficient; applying the workspace gate would
-  // report every healthy org install as degraded.
-  if (params.installationIdentity.kind === "enterprise") {
-    return { healthState: "healthy", lastError: null };
-  }
-
   const lastError =
     normalizeOptionalString(params.authTestError) ??
     normalizeOptionalString(params.authIdentityWarning) ??
     (params.installationIdentity.kind === "degraded" || !params.botUserId.trim()
       ? "slack bot identity unavailable"
       : undefined);
-  return lastError
-    ? { healthState: "degraded", lastError }
-    : { healthState: "healthy", lastError: null };
+  return lastError ? { lifecycle: "blocked", lastError } : { lifecycle: "ready", lastError: null };
 }

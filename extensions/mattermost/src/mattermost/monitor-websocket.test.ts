@@ -224,7 +224,41 @@ describe("mattermost websocket monitor", () => {
       seq: 1,
     });
     expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
-    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
+    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(3);
+    expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));
+    expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "recovering" }));
+  });
+
+  it("publishes ready only after the authentication challenge is acknowledged", async () => {
+    const socket = new FakeWebSocket();
+    const patches: Array<Record<string, unknown>> = [];
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 7,
+      onPosted: async () => {},
+      statusSink: (patch) => patches.push(patch as Record<string, unknown>),
+      webSocketFactory: () => socket,
+    });
+    const connected = connectOnce();
+
+    socket.emitOpen();
+    expect(patches).toContainEqual({ connected: true, lifecycle: "starting" });
+    expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
+
+    socket.emitMessage(Buffer.from(JSON.stringify({ status: "OK", seq_reply: 7 })));
+    expect(patches).toContainEqual({
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
+
+    socket.emitClose(1000);
+    await connected;
   });
 
   it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
@@ -343,7 +377,7 @@ describe("mattermost websocket monitor", () => {
     });
   });
 
-  it("hands posted envelopes to ingress raw and keeps post_edited out", async () => {
+  it("hands posted envelopes to ingress raw without duplicate decoding", async () => {
     const socket = new FakeWebSocket();
     const onPosted = vi.fn(async () => {});
     const connectOnce = createMattermostConnectOnce({
@@ -364,6 +398,9 @@ describe("mattermost websocket monitor", () => {
         }),
       },
     };
+    const raw = JSON.stringify(posted);
+    const frame = Buffer.from(raw);
+    const decode = vi.spyOn(frame, "toString");
 
     const connected = connectOnce();
     socket.emitOpen();
@@ -379,14 +416,15 @@ describe("mattermost websocket monitor", () => {
       queueMicrotask(resolve);
     });
     expect(onPosted).not.toHaveBeenCalled();
-    socket.emitMessage(Buffer.from(JSON.stringify(posted)));
+    socket.emitMessage(frame);
     await vi.waitFor(() => {
       expect(onPosted).toHaveBeenCalledTimes(1);
     });
     socket.emitClose(1000);
     await connected;
 
-    expect(onPosted).toHaveBeenCalledWith(JSON.stringify(posted));
+    expect(onPosted).toHaveBeenCalledWith(raw);
+    expect(decode.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
   it("terminates when bot update_at changes (disable/enable cycle)", async () => {

@@ -25,7 +25,6 @@ scenario:
     - extensions/matrix/src/matrix/monitor/handler.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
-    profiles: { "matrix:adapter": 12, "matrix:all": 17, "matrix:transport": 16 }
     kind: flow
     channel: matrix
     summary: Send consecutive DMs in two Matrix rooms and require per-room isolation.
@@ -58,6 +57,27 @@ flow:
               ref: config.primaryMarker
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
+        - call: readRawQaSessionStore
+          saveAs: primarySessionStore
+          args:
+            - ref: env
+        - set: primarySession
+          value:
+            expr: |-
+              Object.entries(primarySessionStore)
+                .filter(([, entry]) =>
+                  entry?.delivery?.kind === 'external' &&
+                  entry.delivery.context?.channel === 'matrix' &&
+                  entry.delivery.context?.accountId === transport.accountId &&
+                  entry.delivery.origin?.chatType === 'direct' &&
+                  typeof entry.delivery.origin?.nativeDirectUserId === 'string' &&
+                  entry.delivery.origin.nativeDirectUserId.length > 0 &&
+                  typeof entry.delivery.origin?.nativeChannelId === 'string' &&
+                  typeof entry.sessionId === 'string')
+                .toSorted(([, left], [, right]) => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))[0]
+        - assert:
+            expr: Boolean(primarySession)
+            message: first Matrix DM turn did not create a persisted account-scoped direct session
         - set: secondaryStartIndex
           value:
             expr: state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound').length
@@ -82,6 +102,31 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 45000)
           saveAs: reply
+        - call: readRawQaSessionStore
+          saveAs: secondarySessionStore
+          args:
+            - ref: env
+        - set: secondarySession
+          value:
+            expr: |-
+              Object.entries(secondarySessionStore)
+                .filter(([, entry]) =>
+                  entry?.delivery?.kind === 'external' &&
+                  entry.delivery.context?.channel === 'matrix' &&
+                  entry.delivery.context?.accountId === transport.accountId &&
+                  entry.delivery.origin?.chatType === 'direct' &&
+                  entry.delivery.origin?.nativeDirectUserId === primarySession[1].delivery.origin.nativeDirectUserId &&
+                  entry.delivery.origin?.nativeChannelId !== primarySession[1].delivery.origin.nativeChannelId &&
+                  typeof entry.delivery.origin?.nativeChannelId === 'string' &&
+                  typeof entry.sessionId === 'string')
+                .toSorted(([, left], [, right]) => Number(right.updatedAt ?? 0) - Number(left.updatedAt ?? 0))[0]
+        - assert:
+            expr: Boolean(secondarySession)
+            message: second Matrix DM turn did not create a persisted session for a distinct room
+        - assert:
+            expr: "secondarySession[0] !== primarySession[0] && secondarySession[1].sessionId !== primarySession[1].sessionId"
+            message:
+              expr: "`Matrix per-room DM rooms must own distinct session keys and transcripts: ${JSON.stringify({ primaryKey: primarySession[0], secondaryKey: secondarySession[0], primarySessionId: primarySession[1].sessionId, secondarySessionId: secondarySession[1].sessionId })}`"
         - call: sleep
           args:
             - 1500

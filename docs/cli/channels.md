@@ -31,11 +31,16 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+In an explicit multi-agent setup, workspace-scoped channel plugins come from
+`agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
+returns the shared bundled, managed, and global inventory with a diagnostic;
+it does not guess one agent workspace.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
-- `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--kind <auto|user|group>` (default `auto`), `--json`
+- `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
@@ -79,6 +84,25 @@ openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
 openclaw channels remove --channel telegram --delete
 ```
 
+For a headless host, complete non-interactive onboarding first, then add each channel with explicit credential flags or its environment-backed setup option:
+
+```bash
+export OPENAI_API_KEY="<provider-key>"
+export TELEGRAM_BOT_TOKEN="<bot-token>"
+
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --skip-channels \
+  --no-install-daemon
+openclaw channels add --channel telegram --use-env
+```
+
+`--use-env` validates the environment variables declared by the selected channel plugin before writing config. For Telegram, the command requires `TELEGRAM_BOT_TOKEN`; other plugins name their missing variables in the error. The Gateway service must receive the same environment variables as the bootstrap shell. If the Gateway is already running with config reload enabled, it watches the config write and restarts the affected channel automatically.
+
+See [CLI automation](/start/wizard-cli-automation) for additional non-interactive provider and Gateway options. Container deployments should also follow the [Docker headless bootstrap](/install/docker#headless-bootstrap) environment guidance.
+
 <Tip>
 `openclaw channels add telegram --help` or `openclaw channels add --channel telegram --help` shows only Telegram's setup flags. `openclaw channels add --help` shows only the shared command envelope.
 </Tip>
@@ -106,12 +130,14 @@ If a channel plugin needs to be installed during a flag-driven add command, Open
 
 Both guided setup and flag-driven setup pass through the selected channel's parser, validation, account resolution, config writer, and post-write hooks. Unsupported flags fail with the owning channel's setup error instead of being accepted through a global input bag.
 
-When you run `openclaw channels add` with no direct account, credential, or channel-config flags, the interactive wizard can prompt. A positional channel id and `--channel <id>` both preselect that channel without bypassing guidance:
+When you run `openclaw channels add` with no direct account, credential, or channel-config flags, the interactive wizard can prompt. A positional channel id and `--channel <id>` both open that channel's guided setup immediately. Back returns to the full channel picker:
 
 ```bash
 openclaw channels add telegram
 openclaw channels add --channel telegram
 ```
+
+Guided setup requires an interactive terminal. In a non-TTY shell, OpenClaw exits immediately instead of waiting for input; use `openclaw channels add --channel <id> --use-env` or pass the selected plugin's credential flags.
 
 The wizard can prompt for:
 
@@ -176,11 +202,14 @@ Resolve channel/user names to IDs using the provider directory:
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels resolve --channel discord "My Server/#support" "@someone"
 openclaw channels resolve --channel matrix "Project Room"
+openclaw channels --agent ops resolve --channel slack "#general"
+openclaw channels resolve --agent ops --channel slack "#general"
 ```
 
 Notes:
 
-- Use `--kind user|group|auto` to force the target type.
+- In multi-agent configurations, use `--agent <id>` in either parent or leaf position to select the agent-owned workspace and channel plugin context.
+- Use `--kind user|group|channel|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.
 - `channels resolve` is read-only. If a selected account is configured via SecretRef but that credential is unavailable in the current command path, the command returns degraded unresolved results with notes instead of aborting the entire run.
 - `channels resolve` does not install channel plugins. Use `channels add --channel <name>` before resolving names for an installable catalog channel.

@@ -40,7 +40,7 @@ openclaw onboard --auth-choice baseten-api-key
 ```
 
 ```bash Direct flag
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice baseten-api-key \
   --baseten-api-key "$BASETEN_API_KEY"
 ```
@@ -76,7 +76,7 @@ export BASETEN_API_KEY=...
 }
 ```
 
-Use `/model baseten/thinkingmachines/inkling` to switch an existing chat.
+Use `/model baseten/thinkingmachines/inkling -s` to switch the current session.
 
 ## Bundled fallback catalog
 
@@ -88,7 +88,8 @@ The authenticated live catalog is authoritative. These rows keep setup and model
 | `baseten/zai-org/GLM-4.7`                          | text        |    200k |       200k |
 | `baseten/zai-org/GLM-5`                            | text        |    202k |       202k |
 | `baseten/zai-org/GLM-5.1`                          | text        |    202k |       202k |
-| `baseten/zai-org/GLM-5.2`                          | text        |    202k |       202k |
+| `baseten/zai-org/GLM-5.2`                          | text        |    524k |       262k |
+| `baseten/zai-org/GLM-5.2-Fast`                     | text        |    524k |       262k |
 | `baseten/thinkingmachines/inkling`                 | text, image |  1.048M |        32k |
 | `baseten/moonshotai/Kimi-K2.5`                     | text, image |    262k |       262k |
 | `baseten/moonshotai/Kimi-K2.6`                     | text, image |    262k |       262k |
@@ -109,7 +110,7 @@ Most setups only need the API key. To pin the provider explicitly:
 
 ```json5
 {
-  env: { BASETEN_API_KEY: "..." },
+  env: { vars: { BASETEN_API_KEY: "..." } },
   agents: {
     defaults: {
       model: { primary: "baseten/thinkingmachines/inkling" },

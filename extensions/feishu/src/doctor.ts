@@ -7,18 +7,21 @@ import type {
   ChannelDoctorSequenceResult,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
   deleteSessionEntry,
   listSessionEntries,
   loadTranscriptEventsSync,
-  parseSqliteSessionFileMarker,
   resolveSessionStoreBackupPaths,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 
 const FEISHU_STATE_DIR = "feishu";
@@ -123,23 +126,12 @@ function resolveFeishuAgentSessionsDir(agentId: string): string {
   return path.join(resolveStateDir(), "agents", normalizeAgentId(agentId), "sessions");
 }
 
-function isSqliteTranscriptMarker(value: string): boolean {
-  return parseSqliteSessionFileMarker(value) !== undefined;
-}
-
 function safeReadDir(dir: string): fs.Dirent[] {
   try {
     return fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
-}
-
-function isPathWithinRoot(targetPath: string, rootPath: string): boolean {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedRoot = path.resolve(rootPath);
-  const relative = path.relative(resolvedRoot, resolvedTarget);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function formatDisplayPath(filePath: string): string {
@@ -180,10 +172,6 @@ function isFeishuAcpBindingSessionKey(key: string): boolean {
   return /^agent:[^:]+:acp:binding:feishu(?::|$)/.test(key.trim().toLowerCase());
 }
 
-function normalizeMetadataString(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function isFeishuSessionEntry(key: string, value: unknown): boolean {
   if (isFeishuAcpBindingSessionKey(key)) {
     return false;
@@ -195,29 +183,29 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
     return false;
   }
   if (
-    normalizeMetadataString(value.channel) === "feishu" ||
-    normalizeMetadataString(value.lastChannel) === "feishu"
+    normalizeLowercaseStringOrEmpty(value.channel) === "feishu" ||
+    normalizeLowercaseStringOrEmpty(value.lastChannel) === "feishu"
   ) {
     return true;
   }
   const route = isRecord(value.route) ? value.route : null;
-  if (normalizeMetadataString(route?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(route?.channel) === "feishu") {
     return true;
   }
   const deliveryContext = isRecord(value.deliveryContext) ? value.deliveryContext : null;
-  if (normalizeMetadataString(deliveryContext?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(deliveryContext?.channel) === "feishu") {
     return true;
   }
   const pendingDeliveryContext = isRecord(value.pendingFinalDeliveryContext)
     ? value.pendingFinalDeliveryContext
     : null;
-  if (normalizeMetadataString(pendingDeliveryContext?.channel) === "feishu") {
+  if (normalizeLowercaseStringOrEmpty(pendingDeliveryContext?.channel) === "feishu") {
     return true;
   }
   const origin = isRecord(value.origin) ? value.origin : null;
-  const originProvider = normalizeMetadataString(origin?.provider);
-  const originSurface = normalizeMetadataString(origin?.surface);
-  const originFrom = normalizeMetadataString(origin?.from);
+  const originProvider = normalizeLowercaseStringOrEmpty(origin?.provider);
+  const originSurface = normalizeLowercaseStringOrEmpty(origin?.surface);
+  const originFrom = normalizeLowercaseStringOrEmpty(origin?.from);
   return (
     originProvider === "feishu" ||
     originSurface.startsWith("feishu") ||
@@ -333,8 +321,8 @@ function resolveSessionTranscriptCandidates(params: {
     const resolved = path.isAbsolute(candidate)
       ? path.resolve(candidate)
       : path.resolve(sessionsDir, candidate);
-    const isStoreCandidate = isPathWithinRoot(resolved, sessionsDir);
-    const isAgentSessionCandidate = isPathWithinRoot(resolved, agentSessionsDir);
+    const isStoreCandidate = isPathStrictlyInside(sessionsDir, resolved);
+    const isAgentSessionCandidate = isPathStrictlyInside(agentSessionsDir, resolved);
     if (
       resolved === sessionsDir ||
       resolved === agentSessionsDir ||
@@ -345,24 +333,6 @@ function resolveSessionTranscriptCandidates(params: {
     candidates.add(resolved);
     return true;
   };
-
-  if (
-    typeof params.entry.sessionId === "string" &&
-    /^[a-z0-9][a-z0-9._-]{0,127}$/i.test(params.entry.sessionId)
-  ) {
-    let addedExplicitCandidate = false;
-    if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
-      const explicitSessionFile = params.entry.sessionFile.trim();
-      if (isSqliteTranscriptMarker(explicitSessionFile)) {
-        return [];
-      }
-      addedExplicitCandidate = addSafeCandidate(explicitSessionFile);
-    }
-    if (!addedExplicitCandidate) {
-      candidates.add(path.join(sessionsDir, `${params.entry.sessionId}.jsonl`));
-    }
-    return [...candidates].toSorted();
-  }
 
   if (typeof params.entry.sessionFile === "string" && params.entry.sessionFile.trim()) {
     addSafeCandidate(params.entry.sessionFile.trim());
@@ -518,44 +488,33 @@ function inspectSessionTranscript(params: {
   return inspectTranscriptEntries({ ...params, entries, malformedLines });
 }
 
-function inspectSqliteSessionTranscript(params: {
+function inspectCanonicalSessionTranscript(params: {
   agentId: string;
+  sessionId: string;
   sessionKey: string;
   storePath: string;
-  entry: FeishuSessionEntry;
 }): FeishuDoctorFinding | null {
-  if (typeof params.entry.sessionFile !== "string") {
-    return null;
-  }
-  const marker = parseSqliteSessionFileMarker(params.entry.sessionFile);
-  if (!marker) {
-    return null;
-  }
-  const sessionId =
-    typeof params.entry.sessionId === "string" && params.entry.sessionId.trim()
-      ? params.entry.sessionId.trim()
-      : marker.sessionId;
   let entries: unknown[];
   try {
     entries = loadTranscriptEventsSync({
-      agentId: marker.agentId,
-      sessionId,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      storePath: marker.storePath,
+      storePath: params.storePath,
     });
   } catch {
     return {
       kind: "invalid-session-transcript",
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-      path: params.entry.sessionFile,
+      path: params.storePath,
       reason: "unreadable",
     };
   }
   return inspectTranscriptEntries({
     sessionKey: params.sessionKey,
     storePath: params.storePath,
-    transcriptPath: params.entry.sessionFile,
+    transcriptPath: params.storePath,
     allowMissingSessionHeader: true,
     entries,
   });
@@ -567,9 +526,15 @@ function collectFeishuSessionFindings(params: {
   storePath: string;
   entry: FeishuSessionEntry;
 }): FeishuDoctorFinding[] {
-  const sqliteFinding = inspectSqliteSessionTranscript(params);
-  if (sqliteFinding) {
-    return [sqliteFinding];
+  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  if (sessionId) {
+    const finding = inspectCanonicalSessionTranscript({
+      agentId: params.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    return finding ? [finding] : [];
   }
   const transcriptCandidates = resolveSessionTranscriptCandidates(params);
   const existing = transcriptCandidates.filter(existsFile);

@@ -200,7 +200,7 @@ describe("task-registry audit", () => {
     expect(findings.map((finding) => finding.code)).toEqual(["lost"]);
   });
 
-  it("does not flag count-retained cron history as missing cleanup", () => {
+  it("flags terminal cron history that is missing cleanup", () => {
     const findings = listTaskAuditFindings({
       tasks: [
         createTask({
@@ -213,6 +213,6 @@ describe("task-registry audit", () => {
       ],
     });
 
-    expect(findings).toEqual([]);
+    expect(findings.map((finding) => finding.code)).toEqual(["missing_cleanup"]);
   });
 });

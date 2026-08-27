@@ -5,7 +5,9 @@ import type { PluginRegistry } from "../../../plugins/registry.js";
 /**
  * Shared plugin-registry fixtures for gateway server tests.
  */
-export const createTestRegistry = (overrides: Partial<PluginRegistry> = {}): PluginRegistry => {
+export const createGatewayTestRegistry = (
+  overrides: Partial<PluginRegistry> = {},
+): PluginRegistry => {
   const registry = createEmptyPluginRegistry();
   for (const key of Object.keys(overrides) as Array<keyof PluginRegistry>) {
     const value = overrides[key];

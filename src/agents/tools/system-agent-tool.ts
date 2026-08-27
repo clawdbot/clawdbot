@@ -5,6 +5,7 @@
  * union with approval assertions and the audit log.
  */
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -12,10 +13,9 @@ import {
   isPersistentSystemAgentOperation,
   type SystemAgentOperation,
 } from "../../system-agent/operations.js";
-import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install.js";
+import { validateSystemAgentPluginInstallSpec } from "../../system-agent/plugin-install-spec.js";
 import { stringEnum } from "../schema/typebox.js";
-import { stableStringify } from "../stable-stringify.js";
-import { textResult, ToolInputError, readStringParam, type AnyAgentTool } from "./common.js";
+import { textResult, ToolInputError, readToolStringParam, type AnyAgentTool } from "./common.js";
 
 export type SystemAgentToolOptions = {
   /** Where setup side effects run; the gateway surface never manages its own daemon. */
@@ -45,6 +45,10 @@ export type SystemAgentToolOptions = {
 /** Host directives the hosting chat engine handles after the turn. */
 export type SystemAgentToolDirective =
   | { kind: "channel-setup"; channel: string }
+  | { kind: "skills-setup" }
+  | { kind: "search-setup" }
+  | { kind: "gateway-config-setup" }
+  | { kind: "memory-import" }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "open-tui"; agentId?: string; workspace?: string }
   | Extract<SystemAgentOperation, { kind: "open-setup" }>
@@ -97,6 +101,14 @@ function directiveForOperation(
 ): SystemAgentHostNavigationDirective | null {
   if (operation.kind === "channel-setup") {
     return { kind: "channel-setup", channel: operation.channel };
+  }
+  if (
+    operation.kind === "skills-setup" ||
+    operation.kind === "search-setup" ||
+    operation.kind === "gateway-config-setup" ||
+    operation.kind === "memory-import"
+  ) {
+    return operation;
   }
   if (operation.kind === "model-setup") {
     return {
@@ -168,6 +180,10 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "plugin_search",
   // Host directives handled by the hosting chat after this turn.
   "connect_channel",
+  "configure_skills",
+  "configure_search",
+  "configure_gateway",
+  "import_memory",
   "configure_model_provider",
   "open_agent",
   "open_setup",
@@ -200,9 +216,9 @@ const SystemAgentToolSchema = Type.Object({
     }),
   ),
   target: Type.Optional(
-    stringEnum(["guided", "classic", "channels"], {
+    stringEnum(["guided", "classic", "channels", "search", "gateway"], {
       description:
-        "Setup target for open_setup. channels runs in this chat; guided/classic require exiting OpenClaw and running openclaw onboard.",
+        "Setup target for open_setup. channels/search/gateway open masked terminal flows; guided/classic require exiting OpenClaw and running openclaw onboard.",
     }),
   ),
   query: Type.Optional(Type.String({ description: "Search query for plugin_search" })),
@@ -229,23 +245,31 @@ function createCaptureRuntime(): RuntimeEnv & { read: () => string } {
 }
 
 function requireParam(params: Record<string, unknown>, name: string): string {
-  const value = readStringParam(params, name);
+  const value = readToolStringParam(params, name);
   if (!value?.trim()) {
     throw new ToolInputError(`openclaw: "${name}" is required for this action`);
   }
   return value.trim();
 }
 
-function readSetupTarget(params: Record<string, unknown>): "guided" | "classic" | "channels" {
-  const target = readStringParam(params, "target")?.trim() ?? "guided";
-  if (target === "guided" || target === "classic" || target === "channels") {
+function readSetupTarget(
+  params: Record<string, unknown>,
+): "guided" | "classic" | "channels" | "search" | "gateway" {
+  const target = readToolStringParam(params, "target")?.trim() ?? "guided";
+  if (
+    target === "guided" ||
+    target === "classic" ||
+    target === "channels" ||
+    target === "search" ||
+    target === "gateway"
+  ) {
     return target;
   }
   throw new ToolInputError(`openclaw: unknown setup target "${target}"`);
 }
 
 function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
-  const action = readStringParam(params, "action", { required: true });
+  const action = readToolStringParam(params, "action", { required: true });
   switch (action) {
     case "status":
       return { kind: "status" };
@@ -266,20 +290,28 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "config_get":
       return { kind: "config-get", path: requireParam(params, "path") };
     case "config_schema": {
-      const path = readStringParam(params, "path")?.trim();
+      const path = readToolStringParam(params, "path")?.trim();
       return { kind: "config-schema", ...(path ? { path } : {}) };
     }
     case "gateway_status":
       return { kind: "gateway-status" };
     case "connect_channel":
       return { kind: "channel-setup", channel: requireParam(params, "channel").toLowerCase() };
+    case "configure_skills":
+      return { kind: "skills-setup" };
+    case "configure_search":
+      return { kind: "search-setup" };
+    case "configure_gateway":
+      return { kind: "gateway-config-setup" };
+    case "import_memory":
+      return { kind: "memory-import" };
     case "configure_model_provider": {
-      const workspace = readStringParam(params, "workspace")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
       return { kind: "model-setup", ...(workspace ? { workspace } : {}) };
     }
     case "open_agent": {
-      const agentId = readStringParam(params, "agentId")?.trim();
-      const workspace = readStringParam(params, "workspace")?.trim();
+      const agentId = readToolStringParam(params, "agentId")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
       return {
         kind: "open-tui",
         ...(agentId ? { agentId } : {}),
@@ -288,7 +320,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     }
     case "open_setup": {
       const target = readSetupTarget(params);
-      const channel = readStringParam(params, "channel")?.trim().toLowerCase();
+      const channel = readToolStringParam(params, "channel")?.trim().toLowerCase();
       return {
         kind: "open-setup",
         target,
@@ -314,8 +346,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
     case "plugin_uninstall":
       return { kind: "plugin-uninstall", pluginId: requireParam(params, "pluginId") };
     case "setup": {
-      const workspace = readStringParam(params, "workspace")?.trim();
-      const model = readStringParam(params, "model")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
+      const model = readToolStringParam(params, "model")?.trim();
       return {
         kind: "setup",
         ...(workspace ? { workspace } : {}),
@@ -323,7 +355,7 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "set_default_model": {
-      const agentId = readStringParam(params, "agentId")?.trim();
+      const agentId = readToolStringParam(params, "agentId")?.trim();
       return {
         kind: "set-default-model",
         model: requireParam(params, "model"),
@@ -331,8 +363,8 @@ function operationForAction(params: Record<string, unknown>): SystemAgentOperati
       };
     }
     case "create_agent": {
-      const workspace = readStringParam(params, "workspace")?.trim();
-      const model = readStringParam(params, "model")?.trim();
+      const workspace = readToolStringParam(params, "workspace")?.trim();
+      const model = readToolStringParam(params, "model")?.trim();
       return {
         kind: "create-agent",
         agentId: requireParam(params, "agentId"),
@@ -368,7 +400,7 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
     description: [
       "System agent. Setup, config, channels, plugins, agents, repair.",
       "Read now: status, models, agents, channels, channel_info, config_get, config_schema, gateway_status, plugin_search, validate_config, doctor, audit.",
-      "Handoff: connect_channel; open_setup target=channels; open_agent.",
+      "Handoff: connect_channel, configure_skills, configure_search, configure_gateway, import_memory; open_setup target=channels|search|gateway; open_agent.",
       "Provider/auth/credentials: exit; run `openclaw onboard`. Never request credentials.",
       "Write: setup, set_default_model (agentId optional; live-tested), config_set, config_set_ref, create_agent, gateway_*, plugin_install, plugin_uninstall. Exact user approval required; then approved=true. Host applies after turn; rechecks inference owner.",
       "plugin_install: ClawHub/bundled/official only. Arbitrary source: exit, trusted shell.",
@@ -389,13 +421,25 @@ export function createSystemAgentTool(options: SystemAgentToolOptions): AnyAgent
         return textResult(
           directive.kind === "channel-setup"
             ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts the guided ${directive.channel} setup with the user. Tell the user the setup questions come next; do not describe steps yourself.`
-            : directive.kind === "model-setup"
-              ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the active inference route cannot be changed inside OpenClaw. Tell the user to exit OpenClaw and run \`openclaw onboard\`; do not ask for provider credentials here.`
-              : directive.kind === "open-tui"
-                ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
-                : directive.target === "channels"
-                  ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
-                  : `${SYSTEM_AGENT_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside OpenClaw because it may change the active inference route. Tell the user to exit OpenClaw and run \`openclaw onboard\`.`,
+            : directive.kind === "skills-setup"
+              ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts skills dependency setup with the user. Tell the user the skills status and setup steps come next; do not describe steps yourself.`
+              : directive.kind === "search-setup"
+                ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided web search provider setup with the user. Tell the user the provider setup questions come next; never ask for or repeat a credential yourself.`
+                : directive.kind === "gateway-config-setup"
+                  ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided local Gateway configuration with the user. Tell the user the Gateway setup questions come next; never ask for or repeat a credential yourself.`
+                  : directive.kind === "memory-import"
+                    ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host chat now starts guided copy-only memory import with the user. Tell the user the detected local-agent memory choices come next; do not describe steps yourself.`
+                    : directive.kind === "model-setup"
+                      ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the active inference route cannot be changed inside OpenClaw. Tell the user to exit OpenClaw and run \`openclaw onboard\`; do not ask for provider credentials here.`
+                      : directive.kind === "open-tui"
+                        ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now hands the user over to their normal agent. Say goodbye briefly.`
+                        : directive.target === "channels"
+                          ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens channel setup${directive.channel ? ` for ${directive.channel}` : ""}. Tell the user the channel setup questions come next.`
+                          : directive.target === "search"
+                            ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens masked terminal web search setup. Tell the user the terminal wizard comes next.`
+                            : directive.target === "gateway"
+                              ? `${SYSTEM_AGENT_DIRECTIVE_PREFIX} the host now opens masked terminal Gateway setup. Tell the user the terminal wizard comes next.`
+                              : `${SYSTEM_AGENT_DIRECTIVE_PREFIX} ${directive.target} setup cannot run inside OpenClaw because it may change the active inference route. Tell the user to exit OpenClaw and run \`openclaw onboard\`.`,
           {},
         );
       }

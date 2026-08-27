@@ -3,7 +3,11 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  requireActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptor,
@@ -70,20 +74,25 @@ describe("handleGatewayRequest plugin gateway dispatch", () => {
   });
 
   it("dispatches a method owned by the caller-attached registry even when global state lacks it (#94343)", async () => {
+    const attachedPluginRegistry = createEmptyPluginRegistry();
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
+      expect(requireActivePluginRegistry()).toBe(attachedPluginRegistry);
       respond(true, { ok: true, source: "attached" });
     });
     // Active plugin registry does NOT carry the method; only the caller-attached
     // snapshot owns it, so dispatch must prefer the attached registry.
     setActivePluginRegistry(createEmptyPluginRegistry());
-    const attachedRegistry = createGatewayMethodRegistry([
-      createPluginGatewayMethodDescriptor({
-        pluginId: "demo",
-        name: "demo.attached",
-        handler,
-        scope: WRITE_SCOPE,
-      }),
-    ]);
+    const attachedRegistry = createGatewayMethodRegistry(
+      [
+        createPluginGatewayMethodDescriptor({
+          pluginId: "demo",
+          name: "demo.attached",
+          handler,
+          scope: WRITE_SCOPE,
+        }),
+      ],
+      attachedPluginRegistry,
+    );
     const respond = vi.fn();
     await handleGatewayRequest({
       req: { type: "req", id: "proof-94343", method: "demo.attached", params: {} },

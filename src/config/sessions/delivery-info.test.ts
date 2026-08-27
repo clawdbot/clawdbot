@@ -1,21 +1,41 @@
 // Session delivery info tests cover persisted delivery metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type SessionEntryFixture = SessionEntry & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
 
 const storeState = vi.hoisted(() => {
   const state = {
-    store: {} as Record<string, SessionEntry>,
-    stores: {} as Record<string, Record<string, SessionEntry>>,
+    store: {} as Record<string, SessionEntryFixture>,
+    stores: {} as Record<string, Record<string, SessionEntryFixture>>,
     // Mirrors the accessor view contract: raw exact-key get, enumeration only via entries().
     openSessionEntryReadView: vi.fn((scope: { storePath?: string }) => {
       const store = state.stores[scope.storePath ?? ""] ?? state.store;
       return {
         get: (sessionKey: string) =>
-          Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined,
-        entries: () => Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+          Object.hasOwn(store, sessionKey)
+            ? normalizeLegacySessionEntryDelivery(store[sessionKey] as SessionEntry)
+            : undefined,
+        entries: () =>
+          Object.entries(store).map(([sessionKey, entry]) => ({
+            sessionKey,
+            entry: normalizeLegacySessionEntryDelivery(entry),
+          })),
       };
     }),
   };
@@ -27,7 +47,7 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+  resolveSessionStorePathCore: (_store?: string, opts?: { agentId?: string }) =>
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
@@ -45,11 +65,19 @@ vi.mock("./targets.js", () => ({
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
 
-const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
+const buildEntry = (deliveryContext: DeliveryContext): SessionEntryFixture => ({
   sessionId: "session-1",
   updatedAt: Date.now(),
   deliveryContext,
 });
+
+function createMixedCaseMatrixDelivery(): DeliveryContext {
+  return { channel: "matrix", to: "room:!MixedCase:Example.Org", accountId: "matrix-account" };
+}
+
+function createTelegramUserDelivery(): DeliveryContext {
+  return { channel: "telegram", to: "telegram:user-123", accountId: "default" };
+}
 
 beforeAll(async () => {
   ({ extractDeliveryInfo } = await import("./delivery-info.js"));
@@ -100,33 +128,25 @@ describe("extractDeliveryInfo", () => {
   });
 
   it("reads borrowed accessor views for direct session keys", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
-    storeState.store[sessionKey] = buildEntry({
-      channel: "webchat",
-      to: "webchat:user-123",
-      accountId: "default",
-    });
+    const sessionKey = "agent:main:telegram:dm:user-123";
+    storeState.store[sessionKey] = buildEntry(createTelegramUserDelivery());
 
     const result = extractDeliveryInfo(sessionKey);
 
-    expect(result.deliveryContext?.to).toBe("webchat:user-123");
+    expect(result.deliveryContext?.to).toBe("telegram:user-123");
     expect(storeState.openSessionEntryReadView).toHaveBeenCalledWith({
       storePath: "/tmp/sessions.json",
     });
   });
 
   it("does not enumerate the store when an exact routable key is present", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
+    const sessionKey = "agent:main:telegram:dm:user-123";
     // Enumeration trap: the accessor-view mock lists rows via Object.entries, so
     // building the normalized fallback index on this cheap path throws here and
     // extractDeliveryInfo would return no delivery context.
     storeState.store = new Proxy(
       {
-        [sessionKey]: buildEntry({
-          channel: "webchat",
-          to: "webchat:user-123",
-          accountId: "default",
-        }),
+        [sessionKey]: buildEntry(createTelegramUserDelivery()),
       },
       {
         ownKeys() {
@@ -138,31 +158,19 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-123",
-        accountId: "default",
-      },
+      deliveryContext: createTelegramUserDelivery(),
       threadId: undefined,
     });
   });
 
   it("returns deliveryContext for direct session keys", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
-    storeState.store[sessionKey] = buildEntry({
-      channel: "webchat",
-      to: "webchat:user-123",
-      accountId: "default",
-    });
+    const sessionKey = "agent:main:telegram:dm:user-123";
+    storeState.store[sessionKey] = buildEntry(createTelegramUserDelivery());
 
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-123",
-        accountId: "default",
-      },
+      deliveryContext: createTelegramUserDelivery(),
       threadId: undefined,
     });
   });
@@ -189,12 +197,12 @@ describe("extractDeliveryInfo", () => {
   });
 
   it("looks up deliveryContext in per-agent session stores", () => {
-    const sessionKey = "agent:worker:webchat:dm:user-456";
+    const sessionKey = "agent:worker:telegram:dm:user-456";
     storeState.stores["/tmp/sessions.json"] = {};
     storeState.stores["/tmp/worker-sessions.json"] = {
       [sessionKey]: buildEntry({
-        channel: "webchat",
-        to: "webchat:user-456",
+        channel: "telegram",
+        to: "telegram:user-456",
         accountId: "worker-account",
       }),
     };
@@ -203,8 +211,8 @@ describe("extractDeliveryInfo", () => {
 
     expect(result).toEqual({
       deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-456",
+        channel: "telegram",
+        to: "telegram:user-456",
         accountId: "worker-account",
       },
       threadId: undefined,
@@ -212,7 +220,7 @@ describe("extractDeliveryInfo", () => {
   });
 
   it("continues across per-agent stores until it finds a routable deliveryContext", () => {
-    const sessionKey = "agent:shadow:webchat:dm:user-789";
+    const sessionKey = "agent:shadow:telegram:dm:user-789";
     storeState.stores["/tmp/sessions.json"] = {
       [sessionKey]: {
         sessionId: "stale-shadow",
@@ -221,8 +229,8 @@ describe("extractDeliveryInfo", () => {
     };
     storeState.stores["/tmp/shadow-sessions.json"] = {
       [sessionKey]: buildEntry({
-        channel: "webchat",
-        to: "webchat:user-789",
+        channel: "telegram",
+        to: "telegram:user-789",
         accountId: "shadow-account",
       }),
     };
@@ -231,8 +239,8 @@ describe("extractDeliveryInfo", () => {
 
     expect(result).toEqual({
       deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-789",
+        channel: "telegram",
+        to: "telegram:user-789",
         accountId: "shadow-account",
       },
       threadId: undefined,
@@ -246,8 +254,8 @@ describe("extractDeliveryInfo", () => {
       channel: "telegram",
       to: "group:98765",
       accountId: "main",
+      threadId: "55",
     });
-    storeState.store[baseKey].lastThreadId = "55";
 
     const result = extractDeliveryInfo(topicKey);
 
@@ -346,11 +354,7 @@ describe("extractDeliveryInfo", () => {
     storeState.store[sessionKey] = {
       sessionId: "direct-routable-session",
       updatedAt: Date.now() - 1_000,
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
     };
     storeState.store[canonicalKey] = {
       sessionId: "fresh-normalized-session",
@@ -363,11 +367,7 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(sessionKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
       threadId: undefined,
     });
   });
@@ -472,11 +472,7 @@ describe("extractDeliveryInfo", () => {
     storeState.store[queriedKey] = {
       sessionId: "exact-mixedcase-session",
       updatedAt: Date.now() - 1_000,
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
     };
     storeState.store[legacyFoldedKey] = {
       sessionId: "fresher-legacy-folded-session",
@@ -491,11 +487,7 @@ describe("extractDeliveryInfo", () => {
     const result = extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
       threadId: undefined,
     });
   });
@@ -549,11 +541,7 @@ describe("extractDeliveryInfo", () => {
   it("does not return a mixed-case Matrix sibling for a lowercase room query", () => {
     const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
     const mixedSiblingKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
-    storeState.store[mixedSiblingKey] = buildEntry({
-      channel: "matrix",
-      to: "room:!MixedCase:Example.Org",
-      accountId: "matrix-account",
-    });
+    storeState.store[mixedSiblingKey] = buildEntry(createMixedCaseMatrixDelivery());
 
     const result = extractDeliveryInfo(queriedKey);
 
@@ -565,11 +553,7 @@ describe("extractDeliveryInfo", () => {
 
   it("does not return an exact lowercase Matrix key with mixed-case delivery metadata", () => {
     const queriedKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    storeState.store[queriedKey] = buildEntry({
-      channel: "matrix",
-      to: "room:!MixedCase:Example.Org",
-      accountId: "matrix-account",
-    });
+    storeState.store[queriedKey] = buildEntry(createMixedCaseMatrixDelivery());
 
     const result = extractDeliveryInfo(queriedKey);
 
@@ -582,20 +566,12 @@ describe("extractDeliveryInfo", () => {
   it("returns a confirmed lowercased Matrix legacy artifact for a mixed-case key", () => {
     const queriedKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
     const legacyArtifactKey = "agent:main:matrix:channel:!mixedcase:example.org";
-    storeState.store[legacyArtifactKey] = buildEntry({
-      channel: "matrix",
-      to: "room:!MixedCase:Example.Org",
-      accountId: "matrix-account",
-    });
+    storeState.store[legacyArtifactKey] = buildEntry(createMixedCaseMatrixDelivery());
 
     const result = extractDeliveryInfo(queriedKey);
 
     expect(result).toEqual({
-      deliveryContext: {
-        channel: "matrix",
-        to: "room:!MixedCase:Example.Org",
-        accountId: "matrix-account",
-      },
+      deliveryContext: createMixedCaseMatrixDelivery(),
       threadId: undefined,
     });
   });

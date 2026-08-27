@@ -1,5 +1,6 @@
 // Defines message queue and delivery configuration types.
-import type { QueueDropPolicy, QueueMode, QueueModeByProvider } from "./types.queue.js";
+import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { QueueDropPolicy, QueueModeByProvider } from "./types.queue.js";
 
 export type MentionPatternsMode = "allow" | "deny";
 
@@ -82,7 +83,7 @@ export type MessagesConfig = {
    * Prefix auto-added to all outbound replies.
    *
    * - string: explicit prefix (may include template variables)
-   * - special value: `"auto"` derives `[{agents.list[].identity.name}]` for the routed agent (when set)
+   * - special value: `"auto"` derives `[{agents.entries.*.identity.name}]` for the routed agent (when set)
    *
    * Supported template variables (case-insensitive):
    * - `{model}` - short model name (e.g., `claude-opus-4-6`, `gpt-4o`)

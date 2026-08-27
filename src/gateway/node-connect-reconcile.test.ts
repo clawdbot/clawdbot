@@ -7,9 +7,14 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
+import type { NodePairingRequestInput, PairedDeviceNode } from "../infra/device-pairing-node.js";
+import {
+  registerComputerUseProvider,
+  type ComputerUseCapabilityDescriptor,
+} from "../plugins/computer-use-contract.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
@@ -27,7 +32,7 @@ function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParam
   };
 }
 
-function makePairedNode(overrides?: Partial<NodePairingPairedNode>): NodePairingPairedNode {
+function makePairedNode(overrides?: Partial<PairedDeviceNode>): PairedDeviceNode {
   return {
     nodeId: "openclaw-ios",
     createdAtMs: 1,
@@ -42,6 +47,18 @@ function makePendingPairingRequest(requestId: string) {
     request: { ...input, requestId, ts: 1 },
     created: true,
   }));
+}
+
+function computerUseDescriptor(): ComputerUseCapabilityDescriptor {
+  return {
+    contractVersion: 2 as const,
+    provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+    actions: ["screenshot", "left_click"],
+    targets: ["screen"],
+    deliveryModes: ["foreground"],
+    observations: ["image"],
+    features: { recording: false, agentCursor: false, multiDisplay: false },
+  };
 }
 
 function expectNodePairingRequest(
@@ -205,7 +222,7 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(approvedPairingRequest).not.toHaveBeenCalled();
   });
 
-  it("keeps an approved computer.act surface effective without re-pairing while unarmed", async () => {
+  it("keeps an approved computer.act surface effective without re-pairing", async () => {
     const connectParams = makeNodeConnectParams({
       client: {
         id: GATEWAY_CLIENT_IDS.NODE_HOST,
@@ -216,12 +233,12 @@ describe("reconcileNodePairingOnConnect", () => {
       },
       caps: ["screen", "computer"],
       commands: ["screen.snapshot", "computer.act"],
+      computerUse: computerUseDescriptor(),
     });
     const requestPairing = vi.fn();
 
-    // No commands.allow entry (unarmed): the previously approved dangerous
-    // surface must reconcile cleanly instead of demanding a pairing upgrade
-    // on every reconnect.
+    // The previously approved, node-enabled surface must reconcile cleanly
+    // instead of demanding a pairing upgrade on every reconnect.
     const result = await reconcileNodePairingOnConnect({
       cfg: {} as never,
       connectParams,
@@ -235,7 +252,126 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(requestPairing).not.toHaveBeenCalled();
     expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
     expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
+    expect(result.declaredComputerUse).toEqual(computerUseDescriptor());
+    expect(
+      resolveEffectiveComputerUseDescriptor({
+        commands: result.effectiveCommands,
+        declared: result.declaredComputerUse,
+      }),
+    ).toEqual(computerUseDescriptor());
     expect(result.shouldClearPendingPairings).toBe(true);
+  });
+
+  it("keeps an approved computer.act surface effective while a computer-use provider plugin is active", async () => {
+    // Reproduces a default macOS Gateway: the bundled computer-use provider plugin
+    // auto-starts there, so its own registrations are in the active registry while
+    // a native macOS node reconnects on an already-approved desktop surface.
+    const registry = createEmptyPluginRegistry();
+    registerComputerUseProvider(
+      {
+        registerNodeHostCommand: (command) => {
+          registry.nodeHostCommands.push({
+            pluginId: "cua-computer",
+            pluginName: "CUA Computer",
+            source: "/extensions/cua-computer/index.ts",
+            rootDir: "/extensions/cua-computer",
+            command,
+          });
+        },
+      },
+      {
+        id: "fixture",
+        label: "Fixture",
+        capabilities: () => computerUseDescriptor(),
+        isAvailable: () => true,
+        openExecution: () => {
+          throw new Error("unused");
+        },
+      },
+    );
+    registry.nodeInvokePolicies.push({
+      pluginId: "cua-computer",
+      pluginName: "CUA Computer",
+      source: "/extensions/cua-computer/index.ts",
+      rootDir: "/extensions/cua-computer",
+      pluginConfig: {},
+      policy: {
+        commands: ["computer.act"],
+        dangerous: true,
+        handle: async (ctx) => await ctx.invokeNode(),
+      },
+    });
+    setActivePluginRegistry(registry);
+    const requestPairing = vi.fn();
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot", "computer.act"],
+        computerUse: computerUseDescriptor(),
+      }),
+      pairedNode: makePairedNode({
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot", "computer.act"],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).not.toHaveBeenCalled();
+    expect(result.declaredCommands).toEqual(["screen.snapshot", "computer.act"]);
+    expect(result.effectiveCommands).toEqual(["screen.snapshot", "computer.act"]);
+    expect(result.declaredCaps).toEqual(["screen", "computer"]);
+    expect(result.effectiveCaps).toEqual(["screen", "computer"]);
+    expect(
+      resolveEffectiveComputerUseDescriptor({
+        commands: result.effectiveCommands,
+        declared: result.declaredComputerUse,
+      }),
+    ).toEqual(computerUseDescriptor());
+  });
+
+  it("drops a capability whose declared commands were all filtered by policy", async () => {
+    // Capability and command are one advertisement. An operator deny that removes
+    // every declared computer command must remove the capability with it instead
+    // of leaving a surface that reads as available and rejects every invoke.
+    const requestPairing = makePendingPairingRequest("req-denied-computer");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {
+        gateway: { nodes: { commands: { deny: ["computer.act"] } } },
+      } as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: GATEWAY_CLIENT_IDS.NODE_HOST,
+          version: "test",
+          platform: "macos",
+          deviceFamily: "Mac",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot", "computer.act"],
+        computerUse: computerUseDescriptor(),
+      }),
+      pairedNode: makePairedNode({
+        caps: ["screen", "computer"],
+        commands: ["screen.snapshot"],
+      }),
+      requestPairing,
+    });
+
+    expect(result.declaredCommands).toEqual(["screen.snapshot"]);
+    expect(result.declaredCaps).toEqual(["screen"]);
+    expect(result.effectiveCaps).toEqual(["screen"]);
+    expect(result.withheldCommands).toEqual(["computer.act"]);
+    expect(requestPairing).not.toHaveBeenCalled();
   });
 
   it("requests pairing when a macOS node first declares computer.act", async () => {
@@ -253,6 +389,7 @@ describe("reconcileNodePairingOnConnect", () => {
         },
         caps: ["screen", "computer"],
         commands: ["screen.snapshot", "computer.act"],
+        computerUse: computerUseDescriptor(),
       }),
       pairedNode: makePairedNode({
         caps: ["screen"],
@@ -268,6 +405,13 @@ describe("reconcileNodePairingOnConnect", () => {
       }),
     );
     expect(result.effectiveCommands).toEqual(["screen.snapshot"]);
+    expect(result.declaredComputerUse).toEqual(computerUseDescriptor());
+    expect(
+      resolveEffectiveComputerUseDescriptor({
+        commands: result.effectiveCommands,
+        declared: result.declaredComputerUse,
+      }),
+    ).toBeUndefined();
     expect(result.pendingPairing?.request.requestId).toBe("req-computer");
   });
 

@@ -3,7 +3,13 @@
  * Converts malformed file-tool arguments into retryable errors and fixes the
  * specific XML suffix and Office-extension corruption seen in path arguments.
  */
+import { asOptionalObjectRecord as getToolParamsRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { preserveAtPrefixedRelativePath } from "./path-policy.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
+
+/** Return a record view of model-supplied tool params when possible. */
+export { getToolParamsRecord };
 
 export type RequiredParamGroup = {
   keys: readonly string[];
@@ -106,11 +112,6 @@ export const REQUIRED_PARAM_GROUPS = {
   ],
 } as const;
 
-/** Return a record view of model-supplied tool params when possible. */
-export function getToolParamsRecord(params: unknown): Record<string, unknown> | undefined {
-  return params && typeof params === "object" ? (params as Record<string, unknown>) : undefined;
-}
-
 /** Strip extra closing markers sometimes produced in XML arg_value path params. */
 function stripMalformedXmlArgValueSuffix(value: string): string {
   return value.includes("</arg_value>") ? value.replace(XML_ARG_VALUE_SUFFIX_RE, "") : value;
@@ -124,8 +125,19 @@ function normalizeHallucinatedOfficePathExtension(value: string): string {
 }
 
 /** Normalize model-supplied file-tool path params without touching payload text. */
-export function normalizeFileToolPathParam(value: string): string {
-  return normalizeHallucinatedOfficePathExtension(stripMalformedXmlArgValueSuffix(value));
+export function normalizeFileToolPathParam(value: string): string;
+export function normalizeFileToolPathParam(
+  value: string,
+  cwd: string,
+  bridge?: SandboxFsBridge,
+): Promise<string>;
+export function normalizeFileToolPathParam(
+  value: string,
+  cwd?: string,
+  bridge?: SandboxFsBridge,
+): string | Promise<string> {
+  const repaired = normalizeHallucinatedOfficePathExtension(stripMalformedXmlArgValueSuffix(value));
+  return cwd ? Promise.resolve(preserveAtPrefixedRelativePath(repaired, cwd, bridge)) : repaired;
 }
 
 /** Strip malformed XML suffixes from selected string fields without mutating input. */
@@ -149,17 +161,21 @@ export function stripMalformedXmlArgValueSuffixFromKeys<T extends Record<string,
 }
 
 /** Normalize selected file-tool path fields without mutating input. */
-export function normalizeFileToolPathParamsFromKeys<T extends Record<string, unknown>>(
+export async function normalizeFileToolPathParamsFromKeys<T extends Record<string, unknown>>(
   record: T,
   keys: readonly string[],
-): T {
+  cwd?: string,
+  bridge?: SandboxFsBridge,
+): Promise<T> {
   let normalized: T | undefined;
   for (const key of keys) {
     const value = record[key];
     if (typeof value !== "string") {
       continue;
     }
-    const normalizedValue = normalizeFileToolPathParam(value);
+    const normalizedValue = cwd
+      ? await normalizeFileToolPathParam(value, cwd, bridge)
+      : normalizeFileToolPathParam(value);
     if (normalizedValue !== value) {
       normalized ??= { ...record };
       normalized[key as keyof T] = normalizedValue as T[keyof T];
@@ -226,6 +242,8 @@ export function assertRequiredParams(
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
   requiredParamGroups?: readonly RequiredParamGroup[],
+  cwd?: string,
+  bridge?: SandboxFsBridge,
 ): AnyAgentTool {
   return {
     ...tool,
@@ -234,7 +252,7 @@ export function wrapToolParamValidation(
       const pathKeys = resolveFileToolPathParamKeys(requiredParamGroups);
       const normalizedParams =
         record && pathKeys.length > 0
-          ? normalizeFileToolPathParamsFromKeys(record, pathKeys)
+          ? await normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd, bridge)
           : params;
       if (requiredParamGroups?.length) {
         assertRequiredParams(getToolParamsRecord(normalizedParams), requiredParamGroups, tool.name);

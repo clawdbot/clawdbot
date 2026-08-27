@@ -146,6 +146,32 @@ describe("scanPlainTextJsonToolCall", () => {
 });
 
 describe("stripPlainTextToolCallBlocks", () => {
+  it("preserves protected candidates while stripping adjacent unprotected calls", () => {
+    const protectedCall = '[read]\n{"path":"example.txt"}\n[/read]';
+    const unprotectedCall = '[read]\n{"path":"secret.txt"}\n[/read]';
+    const raw = [protectedCall, unprotectedCall].join("\n");
+
+    expect(
+      stripPlainTextToolCallBlocks(raw, {
+        resolveProtectedRanges: () => [{ start: 0, end: protectedCall.length }],
+      }),
+    ).toBe(`${protectedCall}\n`);
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("");
+  });
+
+  it("checks protection for every adjacent candidate", () => {
+    const first = '[read]\n{"path":"secret.txt"}\n[/read]';
+    const second = '[server]\n{"host":"example.test"}\n[/server]';
+    const raw = `${first}\n${second}`;
+    const secondStart = raw.indexOf(second);
+
+    expect(
+      stripPlainTextToolCallBlocks(raw, {
+        resolveProtectedRanges: () => [{ start: secondStart, end: raw.length }],
+      }),
+    ).toBe(second);
+  });
+
   it("preserves a balanced tool block whose JSON is invalid", () => {
     const raw = '[read]\n{"path":}\n[/read]';
 

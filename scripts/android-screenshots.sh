@@ -46,7 +46,8 @@ DRY_RUN=0
 SCENES=(home chat settings gateway voice-wake)
 OUTPUT_TYPE="phoneScreenshots"
 GRADLE_ASSEMBLE_TASK=":app:assemblePlayDebug"
-ACTIVITY_COMPONENT="ai.openclaw.app/.MainActivity"
+APP_PACKAGE="ai.openclaw.app.debug"
+ACTIVITY_COMPONENT="$APP_PACKAGE/ai.openclaw.app.MainActivity"
 EMULATOR_PID=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
@@ -147,7 +148,7 @@ case "$FORM_FACTOR" in
     SCENES=(chat voice controls)
     OUTPUT_TYPE="wearScreenshots"
     GRADLE_ASSEMBLE_TASK=":wear:assembleDebug"
-    ACTIVITY_COMPONENT="ai.openclaw.app/ai.openclaw.wear.MainActivity"
+    ACTIVITY_COMPONENT="$APP_PACKAGE/ai.openclaw.wear.MainActivity"
     ARTIFACT_DIR="${ARTIFACT_ROOT}/wear"
     ;;
   *)
@@ -292,10 +293,6 @@ avdmanager_bin() {
     printf '%s\n' "$AVDMANAGER"
     return
   fi
-  if command -v avdmanager >/dev/null 2>&1; then
-    command -v avdmanager
-    return
-  fi
   for sdk_root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk"; do
     for relative_path in cmdline-tools/latest/bin/avdmanager cmdline-tools/bin/avdmanager tools/bin/avdmanager; do
       if [[ -n "$sdk_root" && -x "$sdk_root/$relative_path" ]]; then
@@ -304,6 +301,10 @@ avdmanager_bin() {
       fi
     done
   done
+  if command -v avdmanager >/dev/null 2>&1; then
+    command -v avdmanager
+    return
+  fi
   echo "avdmanager not found. Install Android SDK command-line tools or set AVDMANAGER." >&2
   return 127
 }
@@ -729,8 +730,8 @@ elif [[ "$SKIP_BUILD" != "1" ]]; then
   )
 fi
 
-"$ADB_BIN" -s "$ADB_SERIAL" shell pm clear ai.openclaw.app >/dev/null
-"$ADB_BIN" -s "$ADB_SERIAL" shell pm grant ai.openclaw.app android.permission.RECORD_AUDIO >/dev/null
+"$ADB_BIN" -s "$ADB_SERIAL" shell pm clear "$APP_PACKAGE" >/dev/null
+"$ADB_BIN" -s "$ADB_SERIAL" shell pm grant "$APP_PACKAGE" android.permission.RECORD_AUDIO >/dev/null
 "$ADB_BIN" -s "$ADB_SERIAL" logcat -c >/dev/null 2>&1 || true
 
 for scene in "${SCENES[@]}"; do
@@ -739,7 +740,7 @@ for scene in "${SCENES[@]}"; do
   artifact_path="${ARTIFACT_DIR}/screenshots/openclaw-${scene}.jpg"
   ui_dump_path="${ARTIFACT_DIR}/ui-dumps/openclaw-${scene}.xml"
   activity_start_path="${ARTIFACT_DIR}/activity-start/openclaw-${scene}.txt"
-  "$ADB_BIN" -s "$ADB_SERIAL" shell am force-stop ai.openclaw.app >/dev/null
+  "$ADB_BIN" -s "$ADB_SERIAL" shell am force-stop "$APP_PACKAGE" >/dev/null
   "$ADB_BIN" -s "$ADB_SERIAL" shell input keyevent 224 >/dev/null 2>&1 || true
   "$ADB_BIN" -s "$ADB_SERIAL" shell wm dismiss-keyguard >/dev/null 2>&1 || true
   "$ADB_BIN" -s "$ADB_SERIAL" shell am start -W \

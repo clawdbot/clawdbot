@@ -5,7 +5,7 @@ import type {
   CodexAppServerConnectionClass,
   CodexDynamicToolsLoading,
   CodexPluginConfig,
-} from "./config.js";
+} from "./config-contracts.js";
 
 /** Tool names owned by Codex app-server and normally excluded from OpenClaw dynamic tools. */
 const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
@@ -22,6 +22,13 @@ const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_search_code",
 ] as const;
 const CODEX_NATIVE_GOAL_TOOL_EXCLUDES = ["get_goal", "create_goal", "update_goal"] as const;
+const CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES = new Set([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  ...CODEX_NATIVE_GOAL_TOOL_EXCLUDES,
+]);
 const CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES = new Set(["exec", "process"]);
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
@@ -46,6 +53,18 @@ export function isSystemAgentOnlyCodexDynamicToolAllowlist(
 ): boolean {
   return (
     toolsAllow?.length === 1 && normalizeCodexDynamicToolName(toolsAllow[0] ?? "") === "openclaw"
+  );
+}
+
+/** True when a private source reply may use the message delivery tool only. */
+export function isMessageOnlyCodexSourceReply(params: {
+  toolsAllow?: readonly string[];
+  sourceReplyDeliveryMode?: string;
+}): boolean {
+  return (
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.toolsAllow?.length === 1 &&
+    normalizeCodexDynamicToolName(params.toolsAllow[0] ?? "") === "message"
   );
 }
 
@@ -117,18 +136,21 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   env: CodexDynamicToolProfileEnv = process.env,
 ): T[] {
   return filterCodexDynamicToolsWithOptions(tools, config, env, {
+    preserveOpenClawReplacements: false,
     preserveOpenClawShell: false,
   });
 }
 
-/** Keeps exec/process only when Codex cannot advertise an environment-backed native shell. */
-export function filterCodexDynamicToolsWithOpenClawShell<T extends { name: string }>(
+/** Keeps OpenClaw coding tools that replace a disabled Codex native surface. */
+export function filterCodexDynamicToolsForDisabledNativeSurface<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
+  options: { preserveShell: boolean },
   env: CodexDynamicToolProfileEnv = process.env,
 ): T[] {
   return filterCodexDynamicToolsWithOptions(tools, config, env, {
-    preserveOpenClawShell: true,
+    preserveOpenClawReplacements: true,
+    preserveOpenClawShell: options.preserveShell,
   });
 }
 
@@ -136,14 +158,26 @@ function filterCodexDynamicToolsWithOptions<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
   env: CodexDynamicToolProfileEnv,
-  options: { preserveOpenClawShell: boolean },
+  options: { preserveOpenClawReplacements: boolean; preserveOpenClawShell: boolean },
 ): T[] {
   const excludes = new Set<string>();
-  for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
-    excludes.add(name);
+  if (!options.preserveOpenClawReplacements) {
+    for (const name of CODEX_NATIVE_GOAL_TOOL_EXCLUDES) {
+      excludes.add(name);
+    }
   }
-  if (!isForcedPrivateQaCodexRuntime(env)) {
+  if (isForcedPrivateQaCodexRuntime(env)) {
+    // Native apply_patch is registered first; advertising a second handler
+    // makes Codex reject the duplicate before either QA patch can execute.
+    excludes.add("apply_patch");
+  } else {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
+      if (
+        options.preserveOpenClawReplacements &&
+        CODEX_APP_SERVER_OWNED_REPLACEABLE_TOOL_EXCLUDES.has(name)
+      ) {
+        continue;
+      }
       if (options.preserveOpenClawShell && CODEX_APP_SERVER_OWNED_SHELL_TOOL_EXCLUDES.has(name)) {
         continue;
       }

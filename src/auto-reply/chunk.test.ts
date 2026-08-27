@@ -215,6 +215,14 @@ describe("chunkText", () => {
       },
     },
     {
+      name: "trims trailing whitespace from the final outbound reply chunk",
+      text: "alpha beta   ",
+      limit: 8,
+      assert: (chunks: string[]) => {
+        expect(chunks).toEqual(["alpha", "beta"]);
+      },
+    },
+    {
       name: "falls back to a hard break when no whitespace is present",
       text: "Supercalifragilisticexpialidocious",
       limit: 10,
@@ -562,6 +570,15 @@ describe("chunkByNewline", () => {
     expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/u.test(chunk))).toBe(true);
     expect(chunks.every((chunk) => !/^[\uDC00-\uDFFF]/u.test(chunk))).toBe(true);
   });
+
+  it("normalizes fractional limits before an astral hard split", () => {
+    const text = "😀😀";
+    const chunks = chunkByNewline(text, 1.5);
+
+    expect(chunks).toEqual(["😀", "😀"]);
+    expect(chunks).not.toContain("");
+    expect(chunks.join("")).toBe(text);
+  });
 });
 
 describe("chunkTextWithMode", () => {
@@ -657,11 +674,16 @@ describe("chunkMarkdownTextWithMode", () => {
   it("keeps an astral character whole when a positive hard limit starts on its pair", () => {
     expect(chunkMarkdownTextWithMode("A😀B", 1, "length")).toEqual(["A", "😀", "B"]);
   });
+
+  it.each(["length", "newline"] as const)(
+    "keeps astral text with a fractional limit in %s mode",
+    (mode) => {
+      expect(chunkMarkdownTextWithMode("😀", 1.5, mode)).toEqual(["😀"]);
+    },
+  );
 });
 
 describe("resolveChunkMode", () => {
-  // All bundled channels are nested-only now; the flat chunkMode row below
-  // covers the deprecated SDK-plugin fallback that streaming.ts still reads.
   const providerCfg = {
     channels: { signal: { streaming: { chunkMode: "newline" as const } } },
   };
@@ -702,33 +724,6 @@ describe("resolveChunkMode", () => {
       },
       provider: "imessage",
       accountId: "personal",
-      expected: "newline",
-    },
-    {
-      cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
-      provider: "webchat",
-      accountId: undefined,
-      expected: "length",
-    },
-    // Deprecated SDK fallback: nested config wins over a stale flat key, and
-    // a flat-only entry still resolves until the SDK deprecation window ends.
-    {
-      cfg: {
-        channels: {
-          mattermost: {
-            chunkMode: "length" as const,
-            streaming: { chunkMode: "newline" as const },
-          },
-        },
-      },
-      provider: "mattermost",
-      accountId: undefined,
-      expected: "newline",
-    },
-    {
-      cfg: { channels: { "sdk-plugin": { chunkMode: "newline" as const } } },
-      provider: "sdk-plugin",
-      accountId: undefined,
       expected: "newline",
     },
   ] as const)(

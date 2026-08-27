@@ -14,7 +14,7 @@ import {
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmGenerationProjectDirPrefix,
@@ -31,14 +31,36 @@ const MANAGED_NPM_PROJECT_QUARANTINE_DIR = "_openclaw-quarantined-npm-projects";
 const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
   "node_modules",
   "package-lock.json",
+  // Pre-migration projects may retain a root shrinkwrap that npm 11 prefers.
   "npm-shrinkwrap.json",
 ] as const;
 
-export function isNpmAliasOverrideComparatorError(result: {
+type NpmManagedOverrideCompatibility = {
+  npmAliases: boolean;
+  pnpmParentChildSelectors: boolean;
+};
+
+export function classifyNpmManagedOverrideCompatibilityError(result: {
   stdout: string;
   stderr: string;
-}): boolean {
-  return `${result.stderr}\n${result.stdout}`.includes("Invalid comparator: npm:");
+}): NpmManagedOverrideCompatibility | undefined {
+  const output = `${result.stderr}\n${result.stdout}`;
+  const selectorError =
+    output.includes("EINVALIDTAGNAME") ||
+    output.includes("EINVALIDPACKAGENAME") ||
+    output.includes("Override without name:");
+  const selectorFragments = [
+    ...output.matchAll(/"([^"]+)"/gu),
+    ...output.matchAll(/Override without name: ([^\r\n]+)/gu),
+  ].flatMap((match) => match.slice(1));
+  const compatibility = {
+    npmAliases: output.includes("Invalid comparator: npm:"),
+    pnpmParentChildSelectors:
+      selectorError && selectorFragments.some((fragment) => /[^ |@]>/u.test(fragment)),
+  };
+  return compatibility.npmAliases || compatibility.pnpmParentChildSelectors
+    ? compatibility
+    : undefined;
 }
 
 export async function rollbackManagedNpmPluginInstall(params: {
@@ -434,8 +456,18 @@ export async function cleanupManagedNpmPluginInstallRollbackSnapshot(params: {
   }
 }
 
-export function formatNpmCommandFailureOutput(result: { stdout: string; stderr: string }): string {
-  return result.stderr.trim() || result.stdout.trim();
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  if (result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
 }
 
 export function isManagedNpmProjectCorruptionInstallFailure(result: {

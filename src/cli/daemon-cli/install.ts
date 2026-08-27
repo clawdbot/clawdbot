@@ -16,8 +16,8 @@ import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
-import { resolveGatewayService } from "../../daemon/service.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
+import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import {
@@ -25,10 +25,7 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
-import {
-  formatExternalSupervisorActionRequired,
-  isGatewayExternallySupervised,
-} from "../../infra/gateway-supervision.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -126,9 +123,12 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
-    // Existing service env may contain host-specific secrets or loader overrides; keep only
-    // portable, non-dangerous values and let the current shell override them.
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+    // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
+    // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    if (
+      isDangerousHostEnvVarName(key) ||
+      (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
+    ) {
       continue;
     }
     const value = rawValue.trim();
@@ -149,10 +149,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
-  if (isGatewayExternallySupervised()) {
-    fail(
-      `Gateway install blocked: ${formatExternalSupervisorActionRequired("install or rewrite the gateway service")}`,
-    );
+  try {
+    assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
+  } catch (error) {
+    fail(`Gateway install blocked: ${String(error)}`);
     return;
   }
 
@@ -179,7 +179,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
   let wrapperPath: string | undefined;
@@ -238,8 +238,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
   const existingServiceEnv: Record<string, string> | undefined =
-    existingServiceCommand?.environment;
+    existingManagedCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
@@ -267,14 +268,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   if (loaded) {
     if (!opts.force) {
       const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
-        currentCommand: existingServiceCommand,
+        currentCommand: existingManagedCommand,
         env: process.env,
         installEnv,
         port,
         runtime: runtimeRaw,
         wrapperPath,
         existingEnvironment: existingServiceEnv,
-        existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+        existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
         config: cfg,
       });
       if (autoRefreshMessage) {
@@ -309,6 +310,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
+    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
@@ -329,7 +331,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtime: runtimeRaw,
       wrapperPath,
       existingEnvironment: existingServiceEnv,
-      existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
       warn: (message) => {
         if (json) {
           warnings.push(message);

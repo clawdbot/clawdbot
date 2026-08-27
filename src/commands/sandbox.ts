@@ -51,8 +51,10 @@ export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const containers = opts.browser ? [] : await listSandboxContainers().catch(() => []);
-  const browsers = opts.browser ? await listSandboxBrowsers().catch(() => []) : [];
+  // A failing backend/registry probe must surface, not render as an empty
+  // list that reads as "no sandboxes".
+  const containers = opts.browser ? [] : await listSandboxContainers();
+  const browsers = opts.browser ? await listSandboxBrowsers() : [];
 
   if (opts.json) {
     writeRuntimeJson(runtime, { containers, browsers });
@@ -121,8 +123,8 @@ function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeE
 }
 
 async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
-  const allContainers = await listSandboxContainers().catch(() => []);
-  const allBrowsers = await listSandboxBrowsers().catch(() => []);
+  const allContainers = await listSandboxContainers();
+  const allBrowsers = await listSandboxBrowsers();
 
   let containers = opts.browser ? [] : allContainers;
   let browsers = opts.browser ? allBrowsers : [];

@@ -6,6 +6,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MEDIA_MAX_BYTES } from "../../media/store.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 
 const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => ({
   resolveChannelMessageToolMediaSourceParamKeysMock: vi.fn(() => ["avatarPath", "avatarUrl"]),
@@ -29,19 +30,10 @@ const maybeIt = process.platform === "win32" ? it.skip : it;
 const matrixMediaSourceParamKeys = ["avatarPath", "avatarUrl"] as const;
 
 async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-state-"));
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    return await test(stateDir);
-  } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "msg-params-state-" },
+    (state) => test(state.stateDir),
+  );
 }
 
 describe("message action media helpers", () => {
@@ -106,6 +98,16 @@ describe("message action media helpers", () => {
     });
     expect(
       resolveAttachmentMediaPolicy({
+        sandboxRoot: "/tmp/workspace",
+        sandboxContainerWorkdir: "/sandbox",
+      }),
+    ).toEqual({
+      mode: "sandbox",
+      sandboxRoot: "/tmp/workspace",
+      containerWorkdir: "/sandbox",
+    });
+    expect(
+      resolveAttachmentMediaPolicy({
         sandboxRoot: "   ",
         mediaLocalRoots: ["/tmp/a"],
       }),
@@ -135,39 +137,49 @@ describe("message action media helpers", () => {
     });
   });
 
-  maybeIt("normalizes sandbox media lists and dedupes resolved workspace paths", async () => {
-    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
-    try {
-      await expect(
-        normalizeSandboxMediaList({
-          values: [" data:text/plain;base64,QQ== "],
-        }),
-      ).rejects.toThrow(/data:/i);
-      await expect(
-        normalizeSandboxMediaList({
-          values: [
-            " file:///workspace/assets/photo.png ",
-            "/workspace/assets/photo.png",
-            "buffer://message-send/attachment",
-            " ",
-          ],
-          sandboxRoot: ` ${sandboxRoot} `,
-        }),
-      ).resolves.toEqual([
-        path.join(sandboxRoot, "assets", "photo.png"),
-        "buffer://message-send/attachment",
-      ]);
-    } finally {
-      await fs.rm(sandboxRoot, { recursive: true, force: true });
-    }
-  });
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])(
+    "normalizes $name media lists and dedupes resolved workspace paths",
+    async ({ containerWorkdir }) => {
+      const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-list-"));
+      try {
+        await expect(
+          normalizeSandboxMediaList({
+            values: [" data:text/plain;base64,QQ== "],
+          }),
+        ).rejects.toThrow(/data:/i);
+        await expect(
+          normalizeSandboxMediaList({
+            values: [
+              ` file://${containerWorkdir}/assets/photo.png `,
+              `${containerWorkdir}/assets/photo.png`,
+              "buffer://message-send/attachment",
+              " ",
+            ],
+            sandboxRoot: ` ${sandboxRoot} `,
+            sandboxContainerWorkdir: containerWorkdir,
+          }),
+        ).resolves.toEqual([
+          path.join(sandboxRoot, "assets", "photo.png"),
+          "buffer://message-send/attachment",
+        ]);
+      } finally {
+        await fs.rm(sandboxRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
-  maybeIt("normalizes mediaUrl and fileUrl sandbox media params", async () => {
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])("normalizes $name mediaUrl and fileUrl sandbox media params", async ({ containerWorkdir }) => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-alias-"));
     try {
       const args: Record<string, unknown> = {
-        mediaUrl: " file:///workspace/assets/photo.png ",
-        fileUrl: "/workspace/docs/report.pdf",
+        mediaUrl: ` file://${containerWorkdir}/assets/photo.png `,
+        fileUrl: `${containerWorkdir}/docs/report.pdf`,
       };
 
       await normalizeSandboxMediaParams({
@@ -175,6 +187,7 @@ describe("message action media helpers", () => {
         mediaPolicy: {
           mode: "sandbox",
           sandboxRoot: ` ${sandboxRoot} `,
+          containerWorkdir,
         },
       });
 
@@ -230,11 +243,14 @@ describe("message action media helpers", () => {
     }
   });
 
-  maybeIt("normalizes the selected structured attachment sandbox source", async () => {
+  maybeIt.each([
+    { name: "Docker", containerWorkdir: "/workspace" },
+    { name: "OpenShell", containerWorkdir: "/sandbox" },
+  ])("normalizes the selected $name structured attachment source", async ({ containerWorkdir }) => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-attachment-"));
     try {
       const attachment: Record<string, unknown> = {
-        path: "/workspace/replies/photo.png",
+        path: `${containerWorkdir}/replies/photo.png`,
         mimeType: "image/png",
         name: "photo.png",
       };
@@ -247,10 +263,73 @@ describe("message action media helpers", () => {
         mediaPolicy: {
           mode: "sandbox",
           sandboxRoot,
+          containerWorkdir,
         },
       });
 
       expect(attachment.path).toBe(path.join(sandboxRoot, "replies", "photo.png"));
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt.each([
+    "mediaUrl",
+    "media_url",
+    "path",
+    "filePath",
+    "file_path",
+    "fileUrl",
+    "file_url",
+    "url",
+  ])("rejects an out-of-sandbox %s hidden behind valid attachment media", async (shadowKey) => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-sandbox-"));
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-shadow-host-"));
+    try {
+      await expect(
+        normalizeSandboxMediaParams({
+          args: {
+            attachments: [
+              {
+                media: "/workspace/allowed.png",
+                [shadowKey]: path.join(outsideRoot, "restricted.png"),
+              },
+            ],
+          },
+          mediaPolicy: {
+            mode: "sandbox",
+            sandboxRoot,
+          },
+          structuredAttachments: "all",
+        }),
+      ).rejects.toThrow(/escapes sandbox root/i);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  maybeIt("normalizes every allowed source in one structured attachment", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-multi-source-"));
+    try {
+      const attachment: Record<string, unknown> = {
+        media: "/workspace/allowed.png",
+        file_path: "/workspace/allowed-file.png",
+      };
+
+      await normalizeSandboxMediaParams({
+        args: { attachments: [attachment] },
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+        structuredAttachments: "all",
+      });
+
+      expect(attachment).toEqual({
+        media: path.join(sandboxRoot, "allowed.png"),
+        file_path: path.join(sandboxRoot, "allowed-file.png"),
+      });
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }

@@ -13,7 +13,7 @@ import {
   parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
 } from "openclaw/plugin-sdk/image-generation";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -46,7 +46,6 @@ const MAI_MAX_IMAGE_PIXELS = 1_048_576;
 const MAI_IMAGE_BASE_PATH = "/mai/v1";
 const MAI_IMAGE_MAX_RESULTS = 1;
 const MAI_IMAGE_OUTPUT_MIME = "image/png";
-const MB = 1024 * 1024;
 const MAI_IMAGE_UPLOAD_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png"]);
 
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
@@ -112,16 +111,6 @@ function resolveMaiImageSize(size: string | undefined): { width: number; height:
     );
   }
   return { width, height };
-}
-
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return MAX_IMAGE_BYTES;
 }
 
 function assertSingleImageCount(count: number | undefined): void {
@@ -265,11 +254,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
     label: "Microsoft Foundry",
     defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({
-        provider: PROVIDER_ID,
-        agentDir,
-      }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PROVIDER_ID, ...ctx }),
     capabilities: {
       generate: {
         maxCount: MAI_IMAGE_MAX_RESULTS,
@@ -389,7 +374,7 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
           {
             maxBytes: resolveInlineImageJsonResponseMaxBytes(
               MAI_IMAGE_MAX_RESULTS,
-              resolveGeneratedImageMaxBytes(req),
+              resolveGeneratedMediaMaxBytes(req.cfg, "image"),
             ),
           },
         );

@@ -57,6 +57,7 @@ describe("ClawRouter plugin", () => {
       prepareDynamicModel: expect.any(Function),
       preferRuntimeResolvedModel: expect.any(Function),
       resolveDynamicModel: expect.any(Function),
+      resolveThinkingProfile: expect.any(Function),
       resolveUsageAuth: expect.any(Function),
       sanitizeReplayHistory: expect.any(Function),
       wrapSimpleCompletionStreamFn: expect.any(Function),
@@ -68,6 +69,73 @@ describe("ClawRouter plugin", () => {
       kind: "api_key",
     });
     expect(provider?.wrapSimpleCompletionStreamFn).toBe(provider?.wrapStreamFn);
+  });
+
+  it("resolves authoritative catalog thinking profiles without inventing minimal", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const compat = {
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    };
+    const resolveLevels = (agentRuntime: string | undefined) =>
+      provider
+        ?.resolveThinkingProfile?.({
+          provider: "clawrouter",
+          modelId: "opaque-route-id",
+          agentRuntime,
+          compat,
+        } as never)
+        ?.levels.map((level) => level.id);
+
+    expect(resolveLevels("openclaw")).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(resolveLevels("auto")).toEqual([
+      "off",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(resolveLevels("codex")).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(resolveLevels(undefined)).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(
+      provider?.resolveThinkingProfile?.({
+        provider: "clawrouter",
+        modelId: "opaque-route-id",
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("bounds configured thinking metadata at the provider hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider
+        ?.resolveThinkingProfile?.({
+          provider: "clawrouter",
+          modelId: "opaque-route-id",
+          agentRuntime: "openclaw",
+          compat: {
+            supportedReasoningEfforts: ["ultra", "custom", "none", "none", "max"],
+          },
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(["off", "max", "ultra"]);
+    expect(
+      provider?.resolveThinkingProfile?.({
+        provider: "clawrouter",
+        modelId: "opaque-route-id",
+        compat: { supportedReasoningEfforts: ["ultra", "custom"] },
+      } as never),
+    ).toBeUndefined();
   });
 
   it("attaches the proxy key and native upstream id only at request dispatch", async () => {
@@ -452,6 +520,38 @@ describe("ClawRouter plugin", () => {
     await provider?.prepareDynamicModel?.(context as never);
     expect(provider?.preferRuntimeResolvedModel?.(context as never)).toBe(false);
     expect(provider?.resolveDynamicModel?.(context as never)).toBeUndefined();
+  });
+
+  it("keeps discovered models isolated to their plugin registration", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "resolved-proxy-key",
+      mode: "api-key",
+      source: "auth profile",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(LIVE_CATALOG)),
+    );
+    const first = await registerSingleProviderPlugin(plugin);
+    const second = await registerSingleProviderPlugin(plugin);
+    const context = {
+      config: { models: {} },
+      agentDir: "/agent",
+      workspaceDir: "/workspace",
+      provider: "clawrouter",
+      modelId: "openai/gpt-5.5",
+      modelRegistry: { find: vi.fn(() => null) },
+      authProfileId: "clawrouter-profile",
+      authProfileMode: "api_key",
+    };
+
+    await first.prepareDynamicModel?.(context as never);
+
+    expect(first.resolveDynamicModel?.(context as never)).toMatchObject({
+      id: "openai/gpt-5.5",
+    });
+    expect(second.resolveDynamicModel?.(context as never)).toBeUndefined();
+    expect(second.preferRuntimeResolvedModel?.(context as never)).toBe(false);
   });
 
   it("keeps the previous dynamic model snapshot while rebuilding", async () => {

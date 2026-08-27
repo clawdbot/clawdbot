@@ -11,13 +11,8 @@ export {
   resolveStateDir,
 } from "./openclaw-runtime.js";
 export type {
-  MemoryBackend,
   MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
   MemorySearchConfig,
   OpenClawConfig,
   SecretInput,
-  SessionSendPolicyConfig,
 } from "./openclaw-runtime.js";

@@ -1,6 +1,7 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Reads effective SSH target config from the local ssh client.
 import { runCommandWithTimeout } from "../process/exec.js";
-import { parseStrictPositiveInteger } from "./parse-finite-number.js";
+import { resolveSshClient } from "./ssh-client.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
 
 export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
@@ -62,7 +63,10 @@ export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
 ): Promise<SshResolvedConfig | null> {
-  const sshPath = "/usr/bin/ssh";
+  const sshPath = resolveSshClient();
+  if (!sshPath) {
+    return null;
+  }
   const args = ["-G"];
   if (target.port > 0 && target.port !== 22) {
     args.push("-p", String(target.port));

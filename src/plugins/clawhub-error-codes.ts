@@ -8,6 +8,8 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   UNSUPPORTED_FAMILY: "unsupported_family",
   PRIVATE_PACKAGE: "private_package",
   INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
+  INVALID_GATEWAY_VERSION: "invalid_gateway_version",
+  UNKNOWN_GATEWAY_VERSION: "unknown_gateway_version",
   INCOMPATIBLE_GATEWAY: "incompatible_gateway",
   ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   MISSING_ARCHIVE_INTEGRITY: "missing_archive_integrity",

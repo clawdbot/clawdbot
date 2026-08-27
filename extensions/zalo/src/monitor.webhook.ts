@@ -2,8 +2,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { readWebhookBodyOrReject } from "openclaw/plugin-sdk/webhook-request-guards";
-import type { ResolvedZaloAccount } from "./accounts.js";
-import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import {
   createFixedWindowRateLimiter,
   createWebhookAnomalyTracker,
@@ -18,7 +16,9 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   resolveClientIp,
   type OpenClawConfig,
-} from "./runtime-api.js";
+} from "../runtime-api.js";
+import type { ResolvedZaloAccount } from "./accounts.js";
+import type { ZaloRuntimeEnv } from "./monitor.types.js";
 import { ZaloWebhookPayloadError } from "./webhook-spool.js";
 
 type ZaloWebhookTarget = {
@@ -29,6 +29,9 @@ type ZaloWebhookTarget = {
   path: string;
   acceptWebhook: (rawEvent: string) => Promise<void>;
 };
+
+const ZALO_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const ZALO_WEBHOOK_ACCEPTED_VALUE = "durable";
 
 const webhookTargets = new Map<string, ZaloWebhookTarget[]>();
 const webhookRateLimiter = createFixedWindowRateLimiter({
@@ -45,10 +48,6 @@ const webhookAnomalyTracker = createWebhookAnomalyTracker({
 function clearZaloWebhookSecurityStateForTest(): void {
   webhookRateLimiter.clear();
   webhookAnomalyTracker.clear();
-}
-
-function getZaloWebhookRateLimitStateSizeForTest(): number {
-  return webhookRateLimiter.size();
 }
 
 function getZaloWebhookStatusCounterSizeForTest(): number {
@@ -177,6 +176,9 @@ async function handleZaloWebhookRequest(
         return true;
       }
 
+      // The spool persisted the envelope above; mark the ack as durable so
+      // proxies can distinguish it from other 200s (same marker as #104407).
+      res.setHeader(ZALO_WEBHOOK_ACCEPTED_HEADER, ZALO_WEBHOOK_ACCEPTED_VALUE);
       res.statusCode = 200;
       res.end("ok");
       return true;
@@ -186,7 +188,6 @@ async function handleZaloWebhookRequest(
 
 export const zaloWebhookRuntime = {
   clearZaloWebhookSecurityStateForTest,
-  getZaloWebhookRateLimitStateSizeForTest,
   getZaloWebhookStatusCounterSizeForTest,
   handleZaloWebhookRequest,
   registerZaloWebhookTarget,

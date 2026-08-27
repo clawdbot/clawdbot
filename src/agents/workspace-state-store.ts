@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs, { existsSync } from "node:fs";
 import path from "node:path";
 import {
@@ -7,26 +6,44 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  createWorkspaceStateIdentity,
+  resolveWorkspaceStateAliases,
+  resolveWorkspaceStateIdentity,
+  type WorkspaceStateIdentity,
+} from "./workspace-state-identity.js";
 
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
 export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
-export const WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
-  "AGENTS.md",
-  "SOUL.md",
-  "TOOLS.md",
-  "IDENTITY.md",
-  "USER.md",
-  "HEARTBEAT.md",
-]);
+const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
+// Attested names are joined onto the workspace dir and read back, so keep the
+// accepted set closed rather than denying unsafe forms one at a time: a plain
+// ASCII markdown basename excludes separators, traversal, colons, NUL, and the
+// Win32 superscript/`CONIN$` device aliases in one rule.
+const SAFE_ATTESTATION_BASENAME = /^[A-Za-z0-9._-]+\.md$/u;
+// Win32 keeps these stems special even with an extension, so `NUL.md` names a
+// device rather than a workspace file; the charset above cannot catch them.
+const WINDOWS_RESERVED_DEVICE_STEMS = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/iu;
+
+export function isSafeWorkspaceAttestationFilename(filename: string): boolean {
+  return (
+    filename.length <= MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH &&
+    SAFE_ATTESTATION_BASENAME.test(filename) &&
+    !filename.startsWith(".") &&
+    !WINDOWS_RESERVED_DEVICE_STEMS.test(filename.split(".")[0] ?? "")
+  );
+}
 
 function isCanonicalIsoTimestamp(value: string): boolean {
   const timestamp = new Date(value);
@@ -64,11 +81,6 @@ export type WorkspaceStateSnapshot = {
   attestation?: WorkspaceAttestation;
 };
 
-type WorkspaceStateIdentity = {
-  workspaceKey: string;
-  workspacePath: string;
-};
-
 type WorkspaceStateDeletionPlan = {
   lexicalAlias: WorkspaceStateIdentity;
   currentCanonicalIdentity: WorkspaceStateIdentity;
@@ -85,76 +97,7 @@ type WorkspaceStateDatabase = Pick<
   | "migration_sources"
 >;
 
-const MAX_WORKSPACE_IDENTITY_SYMLINKS = 40;
-
-type WorkspaceIdentityResolution = {
-  identity: WorkspaceStateIdentity;
-  aliases: WorkspaceStateIdentity[];
-  missingAliasKeys: string[];
-};
-
-function normalizeWorkspaceIdentityPath(value: string): string {
-  const normalized = path.normalize(value).normalize("NFC");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function canonicalizeWorkspaceIdentityPath(workspaceDir: string): string {
-  const fallback = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
-  let candidate = fallback;
-  const followedSymlinks = new Set<string>();
-
-  for (let redirectCount = 0; redirectCount < MAX_WORKSPACE_IDENTITY_SYMLINKS; redirectCount += 1) {
-    const missingSegments: string[] = [];
-    let current = candidate;
-    while (true) {
-      try {
-        return normalizeWorkspaceIdentityPath(
-          path.join(fs.realpathSync.native(current), ...missingSegments.toReversed()),
-        );
-      } catch {
-        // A dangling symlink still carries the stable target identity. Resolve
-        // it lexically so vanished-workspace protection cannot be bypassed.
-      }
-      try {
-        if (fs.lstatSync(current).isSymbolicLink()) {
-          const normalizedLink = normalizeWorkspaceIdentityPath(current);
-          if (followedSymlinks.has(normalizedLink)) {
-            return fallback;
-          }
-          followedSymlinks.add(normalizedLink);
-          candidate = path.resolve(
-            path.dirname(current),
-            fs.readlinkSync(current),
-            ...missingSegments.toReversed(),
-          );
-          break;
-        }
-      } catch {
-        // Keep walking to a real existing ancestor.
-      }
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return fallback;
-      }
-      missingSegments.push(path.basename(current));
-      current = parent;
-    }
-  }
-  return fallback;
-}
-
-function createWorkspaceStateIdentity(workspacePath: string): WorkspaceStateIdentity {
-  return {
-    workspacePath,
-    workspaceKey: createHash("sha256").update(workspacePath).digest("hex"),
-  };
-}
-
-function resolveWorkspaceStateAliases(workspaceDir: string): WorkspaceStateIdentity[] {
-  const lexicalPath = normalizeWorkspaceIdentityPath(path.resolve(resolveUserPath(workspaceDir)));
-  const canonicalPath = canonicalizeWorkspaceIdentityPath(workspaceDir);
-  return [...new Set([lexicalPath, canonicalPath])].map(createWorkspaceStateIdentity);
-}
+type WorkspaceStateDatabaseHandle = Pick<ReturnType<typeof openOpenClawStateDatabase>, "db">;
 
 function workspacePathEntryExists(workspaceDir: string): boolean {
   try {
@@ -165,13 +108,15 @@ function workspacePathEntryExists(workspaceDir: string): boolean {
   }
 }
 
-export function resolveWorkspaceStateIdentity(workspaceDir: string): WorkspaceStateIdentity {
-  return createWorkspaceStateIdentity(canonicalizeWorkspaceIdentityPath(workspaceDir));
-}
+type WorkspaceIdentityResolution = {
+  identity: WorkspaceStateIdentity;
+  aliases: WorkspaceStateIdentity[];
+  missingAliasKeys: string[];
+};
 
 function resolveWorkspaceIdentityFromDatabase(params: {
   workspaceDir: string;
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
 }): WorkspaceIdentityResolution {
   const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
   const canonicalIdentity = aliases.at(-1)!;
@@ -221,7 +166,7 @@ function resolveWorkspaceIdentityFromDatabase(params: {
 }
 
 function registerWorkspacePathAliases(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
   identity: WorkspaceStateIdentity;
   aliases: readonly WorkspaceStateIdentity[];
   updatedAtMs: number;
@@ -260,7 +205,7 @@ function registerWorkspacePathAliases(params: {
 }
 
 export function registerWorkspaceStateAliasesInTransaction(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
   workspaceDirs: readonly string[];
   identity: WorkspaceStateIdentity;
   updatedAtMs: number;
@@ -281,7 +226,7 @@ export function registerWorkspaceStateAliasesInTransaction(params: {
 
 function readSnapshotFromDatabase(params: {
   identity: WorkspaceStateIdentity;
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: WorkspaceStateDatabaseHandle;
 }): WorkspaceStateSnapshot {
   const identity = params.identity;
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
@@ -322,8 +267,10 @@ function readSnapshotFromDatabase(params: {
         .orderBy("filename", "asc"),
     ).rows;
     for (const row of hashRows) {
+      // Validate names structurally rather than against today's bootstrap set:
+      // retiring a seeded file must not make an existing attestation unreadable.
       if (
-        !WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES.has(row.filename) ||
+        !isSafeWorkspaceAttestationFilename(row.filename) ||
         !SHA256_HEX_PATTERN.test(row.sha256)
       ) {
         throw new Error("workspace attestation hash row is invalid");
@@ -351,8 +298,28 @@ function readSnapshotFromDatabase(params: {
   };
 }
 
-export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceStateSnapshot {
-  const database = openOpenClawStateDatabase();
+export function readWorkspaceStateSnapshot(
+  workspaceDir: string,
+  options: OpenClawStateDatabaseOptions = {},
+): WorkspaceStateSnapshot {
+  if (options.readOnly) {
+    const snapshot = withExistingOpenClawStateDatabaseReadOnly(
+      (database) =>
+        runSqliteDeferredTransactionSync(database.db, () => {
+          const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
+          return readSnapshotFromDatabase({ identity: resolution.identity, database });
+        }),
+      options,
+    );
+    return (
+      snapshot ?? {
+        identity: resolveWorkspaceStateIdentity(workspaceDir),
+        setupExists: false,
+        setup: { version: WORKSPACE_SETUP_STATE_VERSION },
+      }
+    );
+  }
+  const database = openOpenClawStateDatabase(options);
   const initial = runSqliteDeferredTransactionSync(database.db, () => {
     const resolution = resolveWorkspaceIdentityFromDatabase({ workspaceDir, database });
     return {
@@ -362,6 +329,7 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
   });
   if (
     initial.resolution.missingAliasKeys.length === 0 ||
+    options.readOnly ||
     (!initial.snapshot.setupExists && !initial.snapshot.attestation)
   ) {
     return initial.snapshot;
@@ -396,13 +364,14 @@ export function readWorkspaceStateSnapshot(workspaceDir: string): WorkspaceState
       });
     }
     return snapshot;
-  });
+  }, options);
 }
 
 export function mergeWorkspaceSetupState(
   workspaceDir: string,
   next: Partial<Omit<WorkspaceSetupState, "version">>,
   nowMs = Date.now(),
+  options: OpenClawStateDatabaseOptions = {},
 ): WorkspaceSetupState {
   assertCanonicalIntegerTimestamp(nowMs, "setup update");
   if (next.bootstrapSeededAt) {
@@ -452,7 +421,7 @@ export function mergeWorkspaceSetupState(
       updatedAtMs: nowMs,
     });
     return merged;
-  });
+  }, options);
 }
 
 export function replaceWorkspaceAttestation(params: {
@@ -466,7 +435,7 @@ export function replaceWorkspaceAttestation(params: {
     assertCanonicalIntegerTimestamp(params.nowMs, "attestation update");
   }
   for (const [filename, sha256] of params.generatedHashes) {
-    if (!WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES.has(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
+    if (!isSafeWorkspaceAttestationFilename(filename) || !SHA256_HEX_PATTERN.test(sha256)) {
       throw new Error("workspace attestation hash is invalid");
     }
   }

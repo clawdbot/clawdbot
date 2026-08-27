@@ -1,28 +1,34 @@
 // Workboard plugin module implements store behavior.
 import { randomUUID } from "node:crypto";
-import type { WorkboardAttachment, WorkboardCard } from "@openclaw/workboard-contract";
 import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
+  WorkboardAttachment,
+  WorkboardCard,
+  WorkboardDiagnostic,
+  WorkboardExecution,
+  WorkboardExecutionStatus,
+  WorkboardLaunchState,
+  WorkboardMetadata,
+  WorkboardStaleState,
+  WorkboardStatus,
+} from "@openclaw/workboard-contract";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
+  assertCanMutateClaimedCard,
   cardBoardId,
+  cardRunId,
+  cardSessionKey,
   closeRunningAttempts,
   computeCardDiagnostics,
   isDependencyPromotableStatus,
   latestRunningAttempt,
   mergeDiagnostics,
-  removeUndefinedCardFields,
   retryBudgetExhausted,
+  shouldSkipPersistedLifecycleStatusUpdate,
+  shouldSyncWorkboardLifecycleStatus,
 } from "./store-card-helpers.js";
 import {
-  CLAIM_RECLAIM_MS,
-  MAX_ATTACHMENT_ENTRIES,
-  MAX_CARDS,
+  isWorkboardClaimReclaimable,
   MAX_CARD_NOTIFICATIONS,
   secondsToDurationMs,
 } from "./store-constants.js";
@@ -32,19 +38,390 @@ import type {
   WorkboardDiagnosticsResult,
   WorkboardDispatchOptions,
   WorkboardDispatchResult,
+  WorkboardMutationScope,
 } from "./store-inputs.js";
-import {
-  metadataIsEmpty,
-  normalizeBoardId,
-  normalizeTimestamp,
-  trimMetadataToBudget,
-} from "./store-normalizers.js";
+import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
+export { WorkboardCardConflictError } from "./store-core.js";
+
+type WorkboardExecutionAssociationInput = {
+  expectedSessionKey?: string;
+  expectedRunId?: string;
+  sessionKey: string;
+  runId?: string;
+  execution: WorkboardExecution;
+};
+type WorkboardExecutionAssociationPatchInput = WorkboardExecutionAssociationInput & {
+  launch?: WorkboardLaunchState;
+};
+
+type WorkboardLifecycleAssociation = Omit<WorkboardExecutionAssociationInput, "execution"> & {
+  acceptedAt?: number;
+};
+type WorkboardExecutionAssociationPatch = WorkboardCardPatch & {
+  metadata?: WorkboardMetadata;
+};
+type WorkboardPreparedLaunch = Extract<WorkboardLaunchState, { phase: "prepared" }>;
+
+function preparedLaunchMatchesCard(
+  card: WorkboardCard,
+  expected: WorkboardPreparedLaunch,
+): boolean {
+  const launch = card.metadata?.automation?.launch;
+  return (
+    launch?.phase === "prepared" &&
+    launch.requestedSessionKey === expected.requestedSessionKey &&
+    launch.provisionalRunId === expected.provisionalRunId &&
+    launch.preparedAt === expected.preparedAt &&
+    card.sessionKey === expected.requestedSessionKey &&
+    card.runId === expected.provisionalRunId &&
+    card.execution?.sessionKey === expected.requestedSessionKey &&
+    card.execution?.runId === expected.provisionalRunId
+  );
+}
+
+function acceptedLaunchForAssociation(
+  card: WorkboardCard,
+  association: WorkboardLifecycleAssociation,
+): WorkboardLaunchState | undefined {
+  const launch = card.metadata?.automation?.launch;
+  if (launch?.phase === "prepared") {
+    if (
+      !preparedLaunchMatchesCard(card, launch) ||
+      association.acceptedAt === undefined ||
+      association.acceptedAt < launch.preparedAt
+    ) {
+      return undefined;
+    }
+    return {
+      ...launch,
+      phase: "accepted",
+      acceptedAt: association.acceptedAt,
+      acceptedSessionKey: association.sessionKey,
+      ...(association.runId ? { acceptedRunId: association.runId } : {}),
+    };
+  }
+  if (
+    launch?.phase !== "accepted" ||
+    (launch.acceptedSessionKey === association.sessionKey &&
+      (!association.runId || launch.acceptedRunId === association.runId))
+  ) {
+    return undefined;
+  }
+  return {
+    ...launch,
+    acceptedSessionKey: association.sessionKey,
+    ...(association.runId ? { acceptedRunId: association.runId } : {}),
+  };
+}
+
+function executionAssociationPatch(
+  card: WorkboardCard,
+  input: WorkboardExecutionAssociationPatchInput,
+): WorkboardExecutionAssociationPatch | undefined {
+  if (
+    cardSessionKey(card) !== input.expectedSessionKey ||
+    cardRunId(card) !== input.expectedRunId
+  ) {
+    return undefined;
+  }
+  const attempts = [...(card.metadata?.attempts ?? [])];
+  const attemptIndex = attempts.findLastIndex(
+    (attempt) =>
+      attempt.status === "running" &&
+      ((input.expectedRunId && attempt.runId === input.expectedRunId) ||
+        (!input.expectedRunId &&
+          input.expectedSessionKey &&
+          attempt.sessionKey === input.expectedSessionKey)),
+  );
+  if (attemptIndex >= 0) {
+    const attempt = attempts[attemptIndex];
+    if (attempt) {
+      attempts[attemptIndex] = {
+        ...attempt,
+        id: input.runId ?? attempt.id,
+        sessionKey: input.sessionKey,
+        ...(input.runId ? { runId: input.runId } : {}),
+      };
+    }
+  }
+  const metadata =
+    attemptIndex >= 0 || input.launch
+      ? {
+          ...card.metadata,
+          ...(attemptIndex >= 0 ? { attempts } : {}),
+          ...(input.launch
+            ? { automation: { ...card.metadata?.automation, launch: input.launch } }
+            : {}),
+        }
+      : undefined;
+  return {
+    sessionKey: input.sessionKey,
+    ...(input.runId ? { runId: input.runId } : {}),
+    execution: input.execution,
+    ...(metadata ? { metadata } : {}),
+  };
+}
+
+function lifecycleExecution(params: {
+  card: WorkboardCard;
+  association: WorkboardLifecycleAssociation;
+  status?: WorkboardExecutionStatus;
+  now: number;
+}): WorkboardExecution {
+  const existing = params.card.execution;
+  const runId = params.association.runId ?? existing?.runId;
+  return {
+    id: existing?.id ?? `${params.card.id}:agent-session`,
+    kind: "agent-session",
+    mode: existing?.mode ?? "autonomous",
+    status: params.status ?? existing?.status ?? "running",
+    ...(existing?.engine ? { engine: existing.engine } : {}),
+    ...(existing?.model ? { model: existing.model } : {}),
+    sessionKey: params.association.sessionKey,
+    ...(runId ? { runId } : {}),
+    startedAt: existing?.startedAt ?? params.card.startedAt ?? params.card.updatedAt,
+    updatedAt: params.now,
+  };
+}
 
 // Capability layers split review boundaries only; the core still owns persistence and mutation order.
 export class WorkboardStore extends WorkboardNotificationStore {
+  async prepareExecutionLaunch(
+    id: string,
+    input: {
+      requestedSessionKey: string;
+      now: number;
+      scope: WorkboardMutationScope;
+    },
+  ): Promise<{ card: WorkboardCard; launch: WorkboardPreparedLaunch }> {
+    return await this.enqueueMutation(async () => {
+      const result = await this.updateLatestCard(
+        id,
+        (card) => {
+          assertCanMutateClaimedCard(card, input.scope);
+          const provisionalRunId = `workboard:${card.id}:${card.updatedAt}`;
+          const launch: WorkboardPreparedLaunch = {
+            phase: "prepared",
+            requestedSessionKey: input.requestedSessionKey,
+            provisionalRunId,
+            preparedAt: card.updatedAt,
+          };
+          return {
+            sessionKey: input.requestedSessionKey,
+            runId: provisionalRunId,
+            execution: {
+              id: card.execution?.id ?? `${card.id}:agent-session`,
+              kind: "agent-session",
+              mode: "autonomous",
+              status: "running",
+              sessionKey: input.requestedSessionKey,
+              runId: provisionalRunId,
+              startedAt: input.now,
+              updatedAt: input.now,
+            },
+            metadata: {
+              ...card.metadata,
+              automation: { ...card.metadata?.automation, launch },
+            },
+          };
+        },
+        { allowAutomationLaunch: true },
+      );
+      const launch = result.card.metadata?.automation?.launch;
+      if (launch?.phase !== "prepared") {
+        throw new Error("prepared Workboard launch was not persisted");
+      }
+      return { card: result.card, launch };
+    });
+  }
+
+  async acceptExecutionLaunch(
+    id: string,
+    input: WorkboardExecutionAssociationInput & {
+      expectedLaunch: WorkboardPreparedLaunch;
+      acceptedAt: number;
+    },
+  ): Promise<WorkboardCard | undefined> {
+    return await this.enqueueMutation(async () => {
+      const result = await this.updateLatestCard(
+        id,
+        (card) => {
+          if (
+            !preparedLaunchMatchesCard(card, input.expectedLaunch) ||
+            input.acceptedAt < input.expectedLaunch.preparedAt
+          ) {
+            return undefined;
+          }
+          const launch: WorkboardLaunchState = {
+            ...input.expectedLaunch,
+            phase: "accepted",
+            acceptedAt: input.acceptedAt,
+            acceptedSessionKey: input.sessionKey,
+            ...(input.runId ? { acceptedRunId: input.runId } : {}),
+          };
+          return executionAssociationPatch(card, { ...input, launch });
+        },
+        { allowAutomationLaunch: true },
+      );
+      return result.updated ? result.card : undefined;
+    });
+  }
+
+  async failPreparedLaunch(
+    id: string,
+    input: { expectedLaunch: WorkboardPreparedLaunch; reason: string; failedAt: number },
+  ): Promise<boolean> {
+    const failedAt = Math.max(input.failedAt, input.expectedLaunch.preparedAt);
+    const reason = capText(input.reason, 2000) ?? "Dispatcher could not start worker.";
+    const launchReason = capText(reason, 800) ?? "Prepared launch failed.";
+    return await this.enqueueMutation(async () => {
+      const result = await this.updateLatestCard(
+        id,
+        (card) => {
+          if (!preparedLaunchMatchesCard(card, input.expectedLaunch)) {
+            return undefined;
+          }
+          const blocked = this.buildBlockedCardPatch(card, reason, failedAt, {
+            clearExecutionAssociation: true,
+          });
+          return {
+            ...blocked,
+            metadata: {
+              ...blocked.metadata,
+              automation: {
+                ...card.metadata?.automation,
+                launch: {
+                  ...input.expectedLaunch,
+                  phase: "failed",
+                  failedAt,
+                  reason: launchReason,
+                },
+              },
+            },
+          };
+        },
+        { allowAutomationLaunch: true },
+      );
+      return result.updated;
+    });
+  }
+
+  async syncLifecycle(
+    id: string,
+    input: {
+      targetStatus: WorkboardStatus | undefined;
+      executionStatus: WorkboardExecutionStatus | undefined;
+      sourceUpdatedAt: number | undefined;
+      stale: WorkboardStaleState | undefined;
+      now: number;
+      association?: WorkboardLifecycleAssociation;
+    },
+  ): Promise<boolean> {
+    return await this.enqueueMutation(async () => {
+      const result = await this.updateLatestCard(
+        id,
+        (card) => {
+          if (card.metadata?.archivedAt) {
+            return undefined;
+          }
+          const patch: WorkboardCardPatch = {};
+          let metadata: Record<string, unknown> | undefined;
+          const launch = card.metadata?.automation?.launch;
+          const associationIsCurrent =
+            !input.association ||
+            ((input.sourceUpdatedAt === undefined ||
+              !shouldSkipPersistedLifecycleStatusUpdate(card, input.sourceUpdatedAt)) &&
+              (launch?.phase !== "prepared" ||
+                (input.association.acceptedAt !== undefined &&
+                  input.association.acceptedAt >= launch.preparedAt)) &&
+              cardSessionKey(card) === input.association.expectedSessionKey &&
+              cardRunId(card) === input.association.expectedRunId);
+          // Recompute from the latest row after every cross-host CAS conflict.
+          if (
+            associationIsCurrent &&
+            input.sourceUpdatedAt !== undefined &&
+            shouldSyncWorkboardLifecycleStatus(card, input.targetStatus)
+          ) {
+            patch.status = input.targetStatus;
+            metadata = { lifecycleStatusSourceUpdatedAt: input.sourceUpdatedAt };
+          }
+          const acceptedLaunch = input.association
+            ? acceptedLaunchForAssociation(card, input.association)
+            : undefined;
+          const associationNeedsUpdate =
+            input.association &&
+            (card.sessionKey !== input.association.sessionKey ||
+              (input.association.runId !== undefined && card.runId !== input.association.runId) ||
+              !card.execution ||
+              card.execution.sessionKey !== input.association.sessionKey ||
+              (input.association.runId !== undefined &&
+                card.execution.runId !== input.association.runId) ||
+              (input.executionStatus !== undefined &&
+                card.execution.status !== input.executionStatus) ||
+              Boolean(acceptedLaunch));
+          if (associationIsCurrent && input.association && associationNeedsUpdate) {
+            const associationPatch = executionAssociationPatch(card, {
+              ...input.association,
+              execution: lifecycleExecution({
+                card,
+                association: input.association,
+                status: input.executionStatus,
+                now: input.now,
+              }),
+              ...(acceptedLaunch ? { launch: acceptedLaunch } : {}),
+            });
+            if (associationPatch) {
+              Object.assign(patch, associationPatch);
+              metadata = { ...associationPatch.metadata, ...metadata };
+            }
+          } else if (
+            !input.association &&
+            card.execution &&
+            input.executionStatus &&
+            card.execution.status !== input.executionStatus
+          ) {
+            patch.execution = {
+              ...card.execution,
+              status: input.executionStatus,
+              updatedAt: input.now,
+            };
+          }
+          if (associationIsCurrent && input.stale) {
+            const existing = card.metadata?.stale;
+            if (
+              !existing ||
+              existing.lastSessionUpdatedAt !== input.stale.lastSessionUpdatedAt ||
+              existing.reason !== input.stale.reason
+            ) {
+              metadata = {
+                ...metadata,
+                stale: {
+                  ...input.stale,
+                  detectedAt: existing?.detectedAt ?? input.stale.detectedAt,
+                },
+              };
+            }
+          } else if (associationIsCurrent && card.metadata?.stale) {
+            metadata = { ...metadata, stale: null };
+          }
+          if (metadata) {
+            patch.metadata = metadata;
+          }
+          return Object.keys(patch).length === 0 ? undefined : patch;
+        },
+        { allowAutomationLaunch: true },
+      );
+      return result.updated;
+    });
+  }
+
+  async prepareStart(id: string, now = Date.now()): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => await this.promoteDependencyReady(id, now));
+  }
+
   private async shouldAutoOrchestrate(card: WorkboardCard): Promise<boolean> {
     if (
       card.status !== "triage" ||
@@ -69,6 +446,10 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const orchestrated: WorkboardCard[] = [];
       const orchestratedByBoard = new Map<string, number>();
       for (const card of await this.list({ boardId })) {
+        // Archived cards remain readable and restorable, but must never re-enter automation.
+        if (card.metadata?.archivedAt) {
+          continue;
+        }
         let latest = await this.promoteDependencyReady(card.id, now);
         const wasPromoted = latest.status !== card.status;
         const claim = latest.metadata?.claim;
@@ -78,7 +459,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
         const timedOut =
           Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
           now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
-        const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+        const claimExpired = isWorkboardClaimReclaimable(claim, now);
         const retriesExhausted = retryBudgetExhausted(latest);
         if (latest.status === "running" && (timedOut || claimExpired)) {
           const reason = timedOut
@@ -138,7 +519,7 @@ export class WorkboardStore extends WorkboardNotificationStore {
           });
           blocked.push(latest);
         }
-        if (latest.status === "ready") {
+        if (latest.status === "ready" && !latest.metadata?.archivedAt) {
           latest = await this.recordDispatch(latest, now);
         }
         if (await this.shouldAutoOrchestrate(latest)) {
@@ -223,25 +604,22 @@ export class WorkboardStore extends WorkboardNotificationStore {
       const cards = await this.list();
       const rows: WorkboardDiagnosticsResult["diagnostics"] = [];
       for (const card of cards) {
-        const latest = await this.get(card.id);
-        if (!latest) {
-          continue;
-        }
-        const diagnostics = mergeDiagnostics(
-          latest.metadata?.diagnostics,
-          computeCardDiagnostics(latest, now),
-        );
-        if (diagnostics.length === 0 && !latest.metadata?.diagnostics?.length) {
-          continue;
-        }
-        const metadata = trimMetadataToBudget({ ...latest.metadata, diagnostics });
-        const next = removeUndefinedCardFields({
-          ...latest,
-          metadata: metadataIsEmpty(metadata) ? undefined : metadata,
+        let diagnostics: WorkboardDiagnostic[] = [];
+        const result = await this.updateLatestCard(card.id, (current) => {
+          if (current.metadata?.archivedAt) {
+            return undefined;
+          }
+          diagnostics = mergeDiagnostics(
+            current.metadata?.diagnostics,
+            computeCardDiagnostics(current, now),
+          );
+          if (diagnostics.length === 0 && !current.metadata?.diagnostics?.length) {
+            return undefined;
+          }
+          return { metadata: { ...current.metadata, diagnostics } };
         });
-        await this.store.register(next.id, { version: 1, card: next });
         if (diagnostics.length > 0) {
-          rows.push({ card: next, diagnostics });
+          rows.push({ card: result.card, diagnostics });
         }
       }
       return {
@@ -257,34 +635,6 @@ export class WorkboardStore extends WorkboardNotificationStore {
       throw new Error(`card not found: ${id}`);
     }
     return buildWorkerContext(card, await this.list());
-  }
-
-  static open(
-    openKeyedStore: (options: {
-      namespace: string;
-      maxEntries: number;
-    }) => WorkboardKeyedStore<unknown>,
-  ) {
-    return new WorkboardStore(
-      openKeyedStore({
-        namespace: "workboard.cards",
-        maxEntries: MAX_CARDS,
-      }) as WorkboardKeyedStore,
-      {
-        boards: openKeyedStore({
-          namespace: "workboard.boards",
-          maxEntries: 200,
-        }) as WorkboardKeyedStore<PersistedWorkboardBoard>,
-        subscriptions: openKeyedStore({
-          namespace: "workboard.notify",
-          maxEntries: 2000,
-        }) as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
-        attachments: openKeyedStore({
-          namespace: "workboard.attachments",
-          maxEntries: MAX_ATTACHMENT_ENTRIES,
-        }) as WorkboardKeyedStore<PersistedWorkboardAttachment>,
-      },
-    );
   }
 
   static openSqlite() {

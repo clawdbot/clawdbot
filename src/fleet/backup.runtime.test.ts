@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -114,16 +115,59 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
   await tempRoot.cleanup();
 });
 
 describe("fleet backup runtime", () => {
+  function backupParams(out: string) {
+    return {
+      record,
+      stateDir: root,
+      containers: containerMock(),
+      now: () => 0,
+      checkpoint: () => {},
+      out,
+    };
+  }
+
+  function interruptCopy(archivePath: string, mutate: (targetPath: string) => Promise<void>) {
+    const error = Object.assign(new Error("archive copy interrupted"), { code: "EIO" });
+    vi.spyOn(fs, "link").mockRejectedValue(
+      Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
+    );
+    const copyFile = fs.copyFile.bind(fs);
+    const legacyCopy = vi.spyOn(fs, "copyFile").mockImplementation(async (source, target, mode) => {
+      if (path.resolve(String(target)) !== archivePath) {
+        return await copyFile(source, target, mode);
+      }
+      await fs.writeFile(target, "");
+      await mutate(String(target));
+      throw error;
+    });
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (method, targetPath) => {
+        if (method === "exclusive-copy" && targetPath === archivePath) {
+          await mutate(targetPath);
+          throw error;
+        }
+      },
+    });
+    return legacyCopy;
+  }
+
   it("writes a private archive with manifest, data, and auth while skipping symlinks", async () => {
     const outside = path.join(root, "outside-secret");
     await fs.writeFile(outside, "must-not-archive");
     await fs.symlink(outside, path.join(record.dataDir, "outside-link"));
     const containers = containerMock();
+    const publicationMethods: string[] = [];
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: (method) => {
+        publicationMethods.push(method);
+      },
+    });
     const result = await backupFleetCell({
       record,
       stateDir: root,
@@ -133,6 +177,7 @@ describe("fleet backup runtime", () => {
       out: path.join(root, "backup.tgz"),
     });
     expect((await fs.stat(result.archivePath)).mode & 0o777).toBe(0o600);
+    expect(publicationMethods).toEqual(["hardlink"]);
     expect(result.skippedSymlinks).toBe(1);
     const entries: string[] = [];
     const contents: string[] = [];
@@ -152,6 +197,110 @@ describe("fleet backup runtime", () => {
       name.endsWith(".tmp"),
     );
     expect(leftovers).toEqual([]);
+  });
+
+  it("publishes a complete archive through the copy fallback", async () => {
+    const archivePath = path.join(root, "copy.tgz");
+    vi.spyOn(fs, "link").mockRejectedValue(
+      Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
+    );
+    const methods: string[] = [];
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: (method) => {
+        methods.push(method);
+      },
+    });
+
+    expect((await backupFleetCell(backupParams(archivePath))).archivePath).toBe(archivePath);
+    expect(methods).toEqual(["exclusive-copy"]);
+    await expect(tar.t({ file: archivePath })).resolves.toBeUndefined();
+  });
+
+  it("removes an interrupted owned copy and allows a backup retry", async () => {
+    const archivePath = path.join(root, "interrupted.tgz");
+    const legacyCopy = interruptCopy(archivePath, (targetPath) =>
+      fs.writeFile(targetPath, "partial archive"),
+    );
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
+      /archive copy interrupted/iu,
+    );
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    __setFsSafeTestHooksForTest(undefined);
+    legacyCopy.mockRestore();
+    await expect(backupFleetCell(backupParams(archivePath))).resolves.toMatchObject({
+      archivePath,
+    });
+  });
+
+  it("reports the original failure when an interrupted archive cannot be removed", async () => {
+    const archivePath = path.join(root, "cleanup-unknown.tgz");
+    interruptCopy(archivePath, (targetPath) => fs.writeFile(targetPath, "partial archive"));
+    const remove = fs.rm.bind(fs);
+    vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+      if (path.resolve(String(target)) === archivePath) {
+        throw Object.assign(new Error("archive cleanup busy"), { code: "EBUSY" });
+      }
+      return await remove(target, options);
+    });
+
+    const error = await backupFleetCell(backupParams(archivePath)).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toMatchObject({
+      message: expect.stringMatching(
+        /archive copy interrupted.*partial archive may remain.*inspect.*retry/iu,
+      ),
+      cause: expect.any(Error),
+    });
+    expect((error as Error).message).toContain(archivePath);
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("partial archive");
+  });
+
+  it("preserves a foreign archive that replaces the interrupted publication", async () => {
+    const archivePath = path.join(root, "raced.tgz");
+    interruptCopy(archivePath, async (targetPath) => {
+      await fs.rename(targetPath, `${targetPath}.displaced`);
+      await fs.writeFile(targetPath, "foreign archive");
+    });
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
+      /archive copy interrupted/iu,
+    );
+    await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("foreign archive");
+  });
+
+  it("fails and removes its archive when publication directory synchronization fails", async () => {
+    const archivePath = path.join(root, "sync-failure.tgz");
+    __setFsSafeTestHooksForTest({
+      beforePublishDirectorySync: async (_method, targetPath) => {
+        if (targetPath === archivePath) {
+          throw Object.assign(new Error("archive directory sync failed"), { code: "EIO" });
+        }
+      },
+    });
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(
+      /directory sync failed/iu,
+    );
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects and removes a copy that fails publication content verification", async () => {
+    const archivePath = path.join(root, "integrity-failure.tgz");
+    vi.spyOn(fs, "link").mockRejectedValue(
+      Object.assign(new Error("unsupported"), { code: "ENOTSUP" }),
+    );
+    __setFsSafeTestHooksForTest({
+      afterPublishTargetCreated: async (method, targetPath) => {
+        if (method === "exclusive-copy" && targetPath === archivePath) {
+          await fs.writeFile(targetPath, Buffer.alloc(64 * 1024, 1));
+        }
+      },
+    });
+
+    await expect(backupFleetCell(backupParams(archivePath))).rejects.toThrow(/content fencing/iu);
+    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("refuses unsafe or unavailable backup inputs", async () => {
@@ -211,6 +360,7 @@ describe("fleet backup runtime", () => {
         out: existing,
       }),
     ).rejects.toThrow(/overwrite/iu);
+    await expect(fs.readFile(existing, "utf8")).resolves.toBe("exists");
     await expect(
       backupFleetCell({
         record,
@@ -372,6 +522,35 @@ describe("fleet restore runtime", () => {
       restoreFleetCell({ ...restoreParams(containers, archive), maxEntries: 2 }),
     ).rejects.toThrow(/entry limit/iu);
     expect(containers.remove).not.toHaveBeenCalled();
+  });
+
+  it("rejects an implicitly deep entry before creating output paths", async () => {
+    const source = path.join(root, `deep-${crypto.randomUUID()}`);
+    const deepRelativePath = path.posix.join(
+      "data",
+      ...Array.from({ length: 6 }, (_, index) => `segment-${index}`),
+      "state.txt",
+    );
+    await fs.mkdir(path.join(source, path.dirname(deepRelativePath)), { recursive: true });
+    await fs.mkdir(path.join(source, "auth"));
+    await fs.writeFile(
+      path.join(source, "manifest.json"),
+      JSON.stringify({ schemaVersion: 1, kind: "openclaw-fleet-cell-backup", tenant: "acme" }),
+    );
+    await fs.writeFile(path.join(source, deepRelativePath), "state");
+    const archive = path.join(root, `${path.basename(source)}.tgz`);
+    await tar.c({ gzip: true, file: archive, cwd: source }, [
+      "manifest.json",
+      deepRelativePath,
+      "auth",
+    ]);
+    const containers = containerMock();
+
+    await expect(
+      restoreFleetCell({ ...restoreParams(containers, archive), maxEntries: 5 }),
+    ).rejects.toThrow(/entry limit/iu);
+    expect(containers.remove).not.toHaveBeenCalled();
+    await expect(fs.readdir(path.join(root, "fleet", "restore-tmp"))).resolves.toEqual([]);
   });
 
   it("rejects an archive without the auth tree before any destructive step", async () => {

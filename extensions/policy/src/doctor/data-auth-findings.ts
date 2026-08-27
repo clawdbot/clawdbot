@@ -81,9 +81,6 @@ function scopedDataHandlingAgentMatches(
   policyAgentId: string,
   entries: readonly PolicyDataHandlingEvidence[],
 ): boolean {
-  if (entry.id === "memory-qmd-session-transcripts") {
-    return true;
-  }
   if (scopedAgentIdMatches(entry.agentId, policyAgentId)) {
     return true;
   }
@@ -110,21 +107,9 @@ function dataHandlingFindingsForRule(
     return [];
   }
   const findings: HealthFinding[] = [];
-  if (readPolicyBoolean(dataHandling, ["sensitiveLogging", "requireRedaction"]) === true) {
-    findings.push(
-      ...dataHandlingEntries(evidence, "sensitiveLoggingRedaction")
-        .filter(evidenceFilter)
-        .filter((entry) => entry.value !== true)
-        .map((entry) =>
-          dataHandlingFinding(entry, {
-            checkId: CHECK_IDS.policyDataHandlingRedactionDisabled,
-            message: "Sensitive logging redaction is disabled.",
-            requirement: `oc://${policyDocName}/${requirementBase}/sensitiveLogging/requireRedaction`,
-            fixHint: "Set logging.redactSensitive to tools or update policy after review.",
-          }),
-        ),
-    );
-  }
+  // dataHandling.sensitiveLogging.requireRedaction has no check here on purpose: redaction is
+  // an unconditional runtime invariant (src/logging/redact.ts), so policy state records it as
+  // satisfied evidence (oc://openclaw.invariant/logging/redaction) instead of a finding.
   if (readPolicyBoolean(dataHandling, ["telemetry", "denyContentCapture"]) === true) {
     findings.push(
       ...dataHandlingEntries(evidence, "telemetryContentCapture")

@@ -5,6 +5,10 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import {
+  notifyProviderStreamOpened,
+  withProviderAcceptanceObserver,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
@@ -541,6 +545,21 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions).not.toHaveProperty("temperature");
   });
 
+  it("forwards the private acceptance observer to the shared Anthropic transport", async () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const acceptanceObserver = vi.fn();
+    const onResponse = vi.fn();
+    const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
+
+    void streamFn(makeModel({ id: "claude-sonnet-4-6" }), { messages: [] }, options);
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.onResponse).toBe(onResponse);
+    await notifyProviderStreamOpened({ options: transportOptions, cancelStream: vi.fn() });
+    expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
+  });
+
   it("keeps already-budgeted cache_control markers intact when forwarding payload hooks", async () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);
@@ -589,6 +608,24 @@ describe("createAnthropicVertexStreamFn", () => {
 });
 
 describe("createAnthropicVertexStreamFnForModel", () => {
+  it.each(["us", "eu"])("preserves the %s multi-region SDK endpoint", (region) => {
+    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFnForModel(
+      { baseUrl: `https://aiplatform.${region}.rep.googleapis.com` },
+      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
+      deps,
+    );
+
+    void streamFn(makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 }), { messages: [] }, {});
+
+    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
+      googleAuth: googleAuthClient,
+      projectId: "vertex-project",
+      region,
+      baseURL: `https://aiplatform.${region}.rep.googleapis.com/v1`,
+    });
+  });
+
   it("derives project and region from the model and env", () => {
     const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(

@@ -36,22 +36,22 @@ describe("update banner", () => {
     expect(element.querySelector("button")).toBeNull();
   });
 
-  it("renders the stale Control UI refresh action", async () => {
+  it("renders a status action", async () => {
     const onClick = vi.fn();
     const element = await renderBanner({
       statusBanner: {
-        tone: "info",
-        text: "Server updated — refresh for full capabilities",
+        tone: "warn",
+        text: "Secure this browser to finish migration",
       },
-      action: { label: "Refresh", onClick },
+      action: { label: "Secure", onClick },
     });
 
     expect(element.querySelector(".callout__content")?.textContent).toBe(
-      "Server updated — refresh for full capabilities",
+      "Secure this browser to finish migration",
     );
     expect(element.querySelector(".callout")?.getAttribute("role")).toBe("status");
     const button = element.querySelector<HTMLButtonElement>("button");
-    expect(button?.textContent?.trim()).toBe("Refresh");
+    expect(button?.textContent?.trim()).toBe("Secure");
 
     button?.click();
     expect(onClick).toHaveBeenCalledOnce();

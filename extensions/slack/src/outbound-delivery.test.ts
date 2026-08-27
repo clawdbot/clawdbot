@@ -6,14 +6,14 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
   initializeGlobalHookRunner,
-  releasePinnedPluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
   resetGlobalHookRunner,
   setActivePluginRegistry,
   type PluginHookRegistration,
 } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { slackOutbound } from "./outbound-adapter.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
@@ -54,7 +54,7 @@ describe("slack outbound shared hook wiring", () => {
 
   afterEach(() => {
     resetGlobalHookRunner();
-    releasePinnedPluginChannelRegistry();
+    resetPluginRuntimeStateForTest();
   });
 
   it("fires message_sending once with shared routing fields", async () => {
@@ -62,7 +62,7 @@ describe("slack outbound shared hook wiring", () => {
     const handler = vi.fn().mockResolvedValue(undefined);
     addTestHook({
       registry: hookRegistry,
-      pluginId: "thread-ownership",
+      pluginId: "test-plugin",
       hookName: "message_sending",
       handler: handler as PluginHookRegistration["handler"],
     });
@@ -125,7 +125,7 @@ describe("slack outbound shared hook wiring", () => {
     const handler = vi.fn().mockResolvedValue({ cancel: true });
     addTestHook({
       registry: hookRegistry,
-      pluginId: "thread-ownership",
+      pluginId: "test-plugin",
       hookName: "message_sending",
       handler: handler as PluginHookRegistration["handler"],
     });

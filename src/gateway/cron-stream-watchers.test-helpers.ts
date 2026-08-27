@@ -31,6 +31,19 @@ export function job(overrides: Partial<CronJob> = {}): CronJob {
   };
 }
 
+export function createCronStreamMatchingJob(match: string): CronJob {
+  return job({
+    schedule: {
+      kind: "stream",
+      command: ["stream-source"],
+      mode: "match",
+      match,
+      batchMs: 50,
+      maxBatchBytes: 1_024,
+    },
+  });
+}
+
 export function exitResult(overrides: Partial<RunExit> = {}): RunExit {
   return {
     reason: "exit",
@@ -74,6 +87,21 @@ export function fakeSupervisor() {
     getRecord: vi.fn(),
   } satisfies ProcessSupervisor;
   return { inputs, runs, exits, spawn, supervisor };
+}
+
+export function createCronStreamWatcherFixture<
+  Overrides extends Partial<Parameters<typeof createWatchers>[0]>,
+>(overrides: Overrides = {} as Overrides) {
+  const fake = fakeSupervisor();
+  const callbacks = {
+    getProcessSupervisor: () => fake.supervisor,
+    updateState: vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {}),
+    recordFailure: vi.fn(async () => {}),
+    fireBatch: vi.fn(async (_job: CronJob, _batch: string) => "fired" as const),
+    logger: { info: vi.fn(), warn: vi.fn() },
+    ...overrides,
+  };
+  return { fake, ...callbacks, watchers: createWatchers(callbacks) };
 }
 
 export async function settle(): Promise<void> {

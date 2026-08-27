@@ -9,26 +9,39 @@ import {
   resolveConfigIncludeWritePath,
 } from "../config/includes.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
+import {
+  isPluginCandidateInstallOwnerAmbiguous,
+  resolvePluginCandidateInstallOwner,
+} from "./candidate-install-owner.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { enablePluginInConfig } from "./enable.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
+import type { PluginInstallLogger } from "./install-types.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   recordPluginInstallInRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
-import type { PluginInstallUpdate } from "./installs.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { reconcileNpmPluginLoadPath, type PluginInstallUpdate } from "./installs.js";
+import {
+  isPluginManifestInstallOwnerAmbiguous,
+  resolvePluginManifestInstallOwner,
+} from "./manifest-install-owner.js";
+import { loadPluginManifestRegistryCore, type PluginManifestRecord } from "./manifest-registry.js";
+import { safeRealpathSync } from "./path-safety.js";
 import { tracePluginLifecyclePhaseAsync } from "./plugin-lifecycle-trace.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { buildPluginSnapshotReport } from "./status.js";
+import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   planPluginUninstall,
@@ -92,19 +105,6 @@ export type ConfigMutationPreflight =
   | { mode: "blocked"; scope: "config" | ConfigMutationSection; reason: string };
 
 const CONFIG_MUTATION_ALLOWED = { mode: "allowed" } as const;
-
-export function containsConfigIncludeDirective(value: unknown): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => containsConfigIncludeDirective(entry));
-  }
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    Object.hasOwn(value, "$include") ||
-    Object.values(value).some((entry) => containsConfigIncludeDirective(entry))
-  );
-}
 
 export function supportsInstallConfigSingleTopLevelIncludeShape(authoredSection: unknown): boolean {
   if (!containsConfigIncludeDirective(authoredSection)) {
@@ -319,7 +319,7 @@ function logShadowedNpmInstallWarning(params: {
   config: OpenClawConfig;
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
-  runtime: RuntimeEnv;
+  warn: (message: string, managementMessage: string) => void;
 }): void {
   // Warn when a newly installed npm plugin is shadowed by an explicit config source.
   if (params.install.source !== "npm") {
@@ -343,22 +343,15 @@ function logShadowedNpmInstallWarning(params: {
     return;
   }
 
-  params.runtime.log(
-    theme.warn(
-      [
-        `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
-        `  active config source: ${shortenHomePath(active.source)}`,
-        `  installed npm source: ${shortenHomePath(installedSource)}`,
-        "Run `openclaw plugins doctor` for repair options.",
-      ].join("\n"),
-    ),
+  params.warn(
+    [
+      `Warning: installed plugin "${params.pluginId}" is not the active source because a config-selected plugin with the same id is currently selected:`,
+      `  active config source: ${shortenHomePath(active.source)}`,
+      `  installed npm source: ${shortenHomePath(installedSource)}`,
+      "Run `openclaw plugins doctor` for repair options.",
+    ].join("\n"),
+    `Installed plugin "${params.pluginId}" is shadowed by a configured plugin source. Run \`openclaw plugins doctor\`.`,
   );
-}
-
-function logSlotWarnings(warnings: string[], runtime: RuntimeEnv): void {
-  for (const warning of warnings) {
-    runtime.log(theme.warn(warning));
-  }
 }
 
 function resolveComparableInstallPath(
@@ -404,17 +397,22 @@ function resolveReplacedManagedInstallRemoval(params: {
   ) {
     return null;
   }
-  const plan = planPluginUninstall({
-    config: {
-      plugins: {
-        installs: {
-          [params.pluginId]: params.previousInstall,
-        },
+  const plan = planPluginUninstall(
+    recordPluginPackageUninstallPlan(
+      {
+        config: {
+          plugins: {
+            installs: {
+              [params.pluginId]: params.previousInstall,
+            },
+          },
+        } as OpenClawConfig,
+        pluginId: params.pluginId,
+        deleteFiles: true,
       },
-    } as OpenClawConfig,
-    pluginId: params.pluginId,
-    deleteFiles: true,
-  });
+      { runtimePluginIds: [] },
+    ),
+  );
   if (!plan.ok || !plan.directoryRemoval) {
     return null;
   }
@@ -453,12 +451,9 @@ type PluginConfigEnablement =
 function resolvePluginConfigEnablement(params: {
   config: OpenClawConfig;
   pluginId: string;
-  installRecords: Record<string, PluginInstallRecord>;
+  manifest?: PluginManifestRecord;
 }): PluginConfigEnablement {
-  const manifest = loadPluginManifestRegistry({
-    config: params.config,
-    installRecords: params.installRecords,
-  }).plugins.find((plugin) => plugin.id === params.pluginId);
+  const manifest = params.manifest;
   if (!manifest?.configSchema) {
     return { mode: "ready" };
   }
@@ -488,8 +483,14 @@ export async function persistPluginInstall(params: {
   successMessage?: string;
   warningMessage?: string;
   runtime?: RuntimeEnv;
+  persistenceLogger?: PluginInstallLogger;
 }): Promise<OpenClawConfig> {
   const runtime = params.runtime ?? defaultRuntime;
+  // Terminal diagnostics may contain paths/errors; management receives only producer-authored summaries.
+  const warn = (message: string, managementMessage: string): void => {
+    params.persistenceLogger?.warn?.(managementMessage);
+    runtime.log(theme.warn(message));
+  };
   const installRecords = await tracePluginLifecyclePhaseAsync(
     "install records load",
     () => loadInstalledPluginIndexInstallRecords(),
@@ -505,41 +506,109 @@ export async function persistPluginInstall(params: {
     pluginId: params.pluginId,
     ...params.install,
   });
-  const configEnablement = resolvePluginConfigEnablement({
+  const reconciledConfig = reconcileNpmPluginLoadPath({
     config: params.snapshot.config,
-    pluginId: params.pluginId,
-    installRecords: nextInstallRecords,
+    previousInstall,
+    nextInstall: params.install,
   });
-  if (configEnablement.mode === "invalid") {
+  const installedDiscovery = discoverOpenClawPlugins({ installRecords: nextInstallRecords });
+  const realpathCache = new Map<string, string>();
+  const targetPathKeys = new Set(
+    [params.install.installPath, params.install.sourcePath]
+      .filter((candidate): candidate is string => Boolean(candidate?.trim()))
+      .map((candidate) => {
+        const resolved = resolveUserPath(candidate, process.env);
+        return safeRealpathSync(resolved, realpathCache) ?? path.resolve(resolved);
+      }),
+  );
+  const installedCandidates = installedDiscovery.candidates.filter((candidate) => {
+    if (resolvePluginCandidateInstallOwner(candidate) === params.pluginId) {
+      return true;
+    }
+    const candidatePath = candidate.packageDir ?? candidate.rootDir;
+    const resolved = resolveUserPath(candidatePath, process.env);
+    const pathKey = safeRealpathSync(resolved, realpathCache) ?? path.resolve(resolved);
+    return targetPathKeys.has(pathKey);
+  });
+  if (installedCandidates.some(isPluginCandidateInstallOwnerAmbiguous)) {
     throw new Error(
-      `Plugin "${params.pluginId}" has invalid configured settings: ${configEnablement.error}. Fix plugins.entries.${params.pluginId}.config, then rerun the install.`,
+      `Plugin package "${params.pluginId}" has ambiguous install ownership. Refresh the plugin registry or reinstall the package before retrying.`,
     );
   }
-  const shouldEnable = params.enable !== false && configEnablement.mode === "ready";
-  const configBase =
-    params.enable === false || configEnablement.mode === "ready"
-      ? params.snapshot.config
-      : prepareConfigForDisabledInstall(params.snapshot.config, params.pluginId);
-  const installConfig =
-    params.enable === false
-      ? configBase
-      : removeInstalledPluginFromDenylist(
-          addInstalledPluginToAllowlist(configBase, params.pluginId),
-          params.pluginId,
-        );
-  let next = shouldEnable
-    ? enablePluginInConfig(installConfig, params.pluginId, {
-        updateChannelConfig: false,
-      }).config
-    : installConfig;
-  const slotResult = shouldEnable
-    ? await tracePluginLifecyclePhaseAsync(
-        "slot selection",
-        async () => applySlotSelectionForPlugin(next, params.pluginId),
-        { command: "install", pluginId: params.pluginId },
-      )
-    : { config: next, warnings: [] };
-  next = withoutPluginInstallRecords(slotResult.config);
+  const installedRegistry = loadPluginManifestRegistryCore({
+    config: reconciledConfig,
+    candidates: installedCandidates,
+    diagnostics: installedDiscovery.diagnostics,
+    installRecords: nextInstallRecords,
+  });
+  if (installedRegistry.plugins.some(isPluginManifestInstallOwnerAmbiguous)) {
+    throw new Error(
+      `Plugin package "${params.pluginId}" has ambiguous install ownership. Refresh the plugin registry or reinstall the package before retrying.`,
+    );
+  }
+  const manifests = installedRegistry.plugins.filter(
+    (plugin) => resolvePluginManifestInstallOwner(plugin) === params.pluginId,
+  );
+  if (manifests.length === 0) {
+    throw new Error(
+      `Plugin package "${params.pluginId}" has no authoritative runtime child list. Refresh the plugin registry, then reinstall the package or run openclaw doctor before retrying.`,
+    );
+  }
+  const ownedPluginIds = manifests.map((plugin) => plugin.id).toSorted();
+  const manifestByPluginId = new Map(manifests.map((plugin) => [plugin.id, plugin]));
+  const enablementByPluginId = new Map(
+    ownedPluginIds.map((pluginId) => [
+      pluginId,
+      resolvePluginConfigEnablement({
+        config: reconciledConfig,
+        pluginId,
+        manifest: manifestByPluginId.get(pluginId),
+      }),
+    ]),
+  );
+  for (const [pluginId, configEnablement] of enablementByPluginId) {
+    if (configEnablement.mode === "invalid") {
+      throw new Error(
+        `Plugin "${pluginId}" has invalid configured settings: ${configEnablement.error}. Fix plugins.entries.${pluginId}.config, then rerun the install.`,
+      );
+    }
+  }
+
+  let next = reconciledConfig;
+  const enabledPluginIds: string[] = [];
+  for (const pluginId of ownedPluginIds) {
+    const configEnablement = enablementByPluginId.get(pluginId) ?? { mode: "ready" as const };
+    const explicitlyDisabled = reconciledConfig.plugins?.entries?.[pluginId]?.enabled === false;
+    if (configEnablement.mode === "missing") {
+      next = prepareConfigForDisabledInstall(next, pluginId);
+    }
+    if (params.enable === false) {
+      continue;
+    }
+    next = removeInstalledPluginFromDenylist(
+      addInstalledPluginToAllowlist(next, pluginId),
+      pluginId,
+    );
+    if (configEnablement.mode !== "ready" || explicitlyDisabled) {
+      continue;
+    }
+    const enabled = enablePluginInConfig(next, pluginId, { updateChannelConfig: false });
+    next = enabled.config;
+    if (enabled.enabled) {
+      enabledPluginIds.push(pluginId);
+    }
+  }
+  const slotWarnings: string[] = [];
+  for (const pluginId of enabledPluginIds) {
+    const slotResult = await tracePluginLifecyclePhaseAsync(
+      "slot selection",
+      async () => applySlotSelectionForPlugin(next, pluginId),
+      { command: "install", pluginId },
+    );
+    next = slotResult.config;
+    slotWarnings.push(...slotResult.warnings);
+  }
+  next = withoutPluginInstallRecords(next);
   await tracePluginLifecyclePhaseAsync(
     "config mutation",
     () =>
@@ -562,7 +631,10 @@ export async function persistPluginInstall(params: {
       { command: "install", pluginId: params.pluginId },
     );
     for (const warning of removalResult.warnings) {
-      runtime.log(theme.warn(warning));
+      warn(
+        warning,
+        "A previous plugin installation could not be fully cleaned up. Run `openclaw plugins doctor`.",
+      );
     }
     if (removalResult.directoryRemoved) {
       runtime.log(
@@ -579,24 +651,43 @@ export async function persistPluginInstall(params: {
     invalidateRuntimeCache: params.invalidateRuntimeCache,
     traceCommand: "install",
     logger: {
-      warn: (message) => runtime.log(theme.warn(message)),
+      warn: (message) =>
+        warn(
+          message,
+          "Plugin registry refresh or runtime cache invalidation failed. Restart the gateway.",
+        ),
     },
   });
-  logSlotWarnings(slotResult.warnings, runtime);
+  for (const warning of slotWarnings) {
+    warn(warning, warning);
+  }
+  const configurationRequiredPluginIds = [...enablementByPluginId]
+    .filter(([, state]) => state.mode === "missing")
+    .map(([pluginId]) => pluginId);
   const configWarning =
-    params.enable !== false && configEnablement.mode === "missing"
-      ? `Installed plugin "${params.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.pluginId}\`.`
+    params.enable !== false && configurationRequiredPluginIds.length > 0
+      ? configurationRequiredPluginIds.length === 1
+        ? `Installed plugin "${configurationRequiredPluginIds[0]}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${configurationRequiredPluginIds[0]}\`.`
+        : `Installed plugin entries ${configurationRequiredPluginIds.join(", ")} without enabling them because they require configuration first. Configure each entry, then run \`openclaw plugins enable <plugin-id>\`.`
       : undefined;
   const warningMessage = [params.warningMessage, configWarning].filter(Boolean).join("\n");
   if (warningMessage) {
-    runtime.log(theme.warn(warningMessage));
+    warn(
+      warningMessage,
+      configWarning ?? "Plugin installation reported a warning. Run `openclaw plugins doctor`.",
+    );
   }
-  runtime.log(params.successMessage ?? `Installed plugin: ${params.pluginId}`);
+  runtime.log(
+    params.successMessage ??
+      (ownedPluginIds.length > 1
+        ? `Installed plugin package ${params.pluginId}: ${ownedPluginIds.join(", ")}`
+        : `Installed plugin: ${params.pluginId}`),
+  );
   logShadowedNpmInstallWarning({
     config: next,
     pluginId: params.pluginId,
     install: params.install,
-    runtime,
+    warn,
   });
   runtime.log("Restart the gateway to load plugins.");
   return next;

@@ -5,16 +5,23 @@ connection state machine used by OpenClaw's own Node and browser clients:
 challenge-based authentication, typed protocol frames, request correlation,
 timeouts, reconnect backoff, device-token handling, and event delivery.
 
-The current wire protocol is version 4. General clients must negotiate v4 with
+The current wire protocol is version 4. General clients must advertise exactly v4 with
 `minProtocol: 4` and `maxProtocol: 4`. See the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol) for
 the complete handshake, authentication, role, scope, and method contracts.
+Exact node identities (`role: "node"` plus `mode: "node"`) and probe clients
+can use v3. The built-in node host starts with an exact v4 envelope, then retries
+an exact v3 envelope after a v3 Gateway rejects v4. If that legacy probe reaches
+an upgraded v4 Gateway, the client reconnects with the full v4 envelope before
+reporting readiness. Other exact node identities default to `[3, 4]`. Explicit
+bounds override these defaults; `[3, 4]` on the built-in node host selects the
+same bounded negotiation.
 
 ## Versioning
 
 Package versions follow the OpenClaw calendar release train: `YYYY.M.PATCH`,
 including the OpenClaw prerelease suffix when applicable. The package version is
-separate from the negotiated wire protocol number.
+separate from the Gateway's current wire protocol number reported in `hello-ok`.
 
 ## Install
 
@@ -37,6 +44,8 @@ client surface.
   until the event loop can process Gateway IO.
 - `@openclaw/gateway-client/timeouts` exports timeout constants and safe timer
   resolution helpers.
+- `@openclaw/gateway-client/websocket-data` converts every Node `ws` raw-data
+  shape to UTF-8 text.
 
 ## Node quickstart
 
@@ -69,7 +78,7 @@ client.stop();
 The client waits for the Gateway's `connect.challenge` event before sending its
 `connect` request. It includes the challenge nonce in device authentication and
 does not fall back to a pre-challenge handshake. `onHelloOk` fires only after the
-Gateway accepts the v4 connection, so requests should wait for that callback.
+Gateway accepts a compatible connection, so requests should wait for that callback.
 
 For remote connections, use `wss://`. Plaintext `ws://` is allowed by default
 only for loopback addresses. Authentication material and Gateway traffic must
@@ -88,6 +97,7 @@ The host is responsible for:
 - creating a `GatewayProtocolSocket` adapter around the browser WebSocket;
 - loading and storing browser device identity and issued device tokens;
 - signing the challenge-bound device payload;
+- using the Gateway challenge `ts` as the device proof's `signedAt` value;
 - supplying the client identity, role, scopes, and authentication selection;
 - choosing close and reconnect behavior for product-specific errors.
 
@@ -128,6 +138,9 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
   the socket; `stop()` closes it and rejects pending requests.
 - A request uses `request(method, params)` after `hello-ok`. Passing
   `timeoutMs: null` creates an intentionally unbounded request.
+- Finite request deadlines reject with `GatewayProtocolRequestTimeoutError`,
+  whose `CLIENT_TIMEOUT` code, method, deadline, and send-boundary flag remain
+  distinct from authoritative Gateway response errors.
 - Device identity persistence, signing, proxy routing, TLS formatting, and
   logging stay host-owned through `GatewayClientHostDeps`.
 - Protocol changes are additive first. Incompatible changes require an explicit

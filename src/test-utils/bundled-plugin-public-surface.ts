@@ -70,7 +70,7 @@ type AsyncBundledPluginPublicSurfaceLoader = <T extends object>(params: {
   artifactBasename: string;
 }) => Promise<T>;
 
-export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = (params) => {
+export const loadBundledPluginFacade: AsyncBundledPluginPublicSurfaceLoader = (params) => {
   const metadata = findBundledPluginMetadata(params.pluginId);
   return loadBundledPluginPublicSurfaceModule({
     dirName: metadata.dirName,

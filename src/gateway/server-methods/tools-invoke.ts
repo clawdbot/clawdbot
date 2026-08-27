@@ -4,13 +4,13 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateToolsInvokeParams,
   type ToolsInvokeResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayConversationReadOrigin } from "../conversation-read-origin.js";
 import { invokeGatewayTool } from "../tools-invoke-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 /**
  * RPC adapter for invoking gateway-visible tools from connected clients.
@@ -38,15 +38,7 @@ function resolveRpcErrorCode(params: {
 /** Handles `tools.invoke` with protocol-shaped success and failure payloads. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
   "tools.invoke": async ({ params, respond, context, client }) => {
-    if (!validateToolsInvokeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tools.invoke params: ${formatValidationErrors(validateToolsInvokeParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateToolsInvokeParams, "tools.invoke", respond)) {
       return;
     }
     const requestedToolName = normalizeOptionalString(params.name);
@@ -62,6 +54,9 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
     const outcome = await invokeGatewayTool({
       cfg: context.getRuntimeConfig(),
       input: params,
+      authenticatedUserProfile: client?.authenticatedUserProfile,
+      operatorRoleActor: client?.internal?.operatorRoleActor,
+      operatorScopes: client?.connect.scopes,
       senderIsOwner: client?.connect?.scopes?.includes("operator.admin"),
       clientCaps: client?.connect?.caps,
       conversationReadOrigin: resolveGatewayConversationReadOrigin({

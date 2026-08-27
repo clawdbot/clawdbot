@@ -1,6 +1,8 @@
 // Nextcloud Talk plugin module implements monitor runtime behavior.
 import { resolveLoggerBackedRuntime } from "openclaw/plugin-sdk/extension-shared";
+import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -33,7 +35,7 @@ type NextcloudTalkMonitorOptions = {
     message: NextcloudTalkInboundMessage,
     lifecycle: NextcloudTalkIngressLifecycle,
   ) => void | Promise<void>;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   createSpool?: typeof createNextcloudTalkWebhookSpool;
   createServer?: typeof createNextcloudTalkWebhookServer;
 };
@@ -107,6 +109,8 @@ export async function monitorNextcloudTalkProvider(
     onError: (error) => {
       logger.error(`[nextcloud-talk:${account.accountId}] webhook error: ${error.message}`);
     },
+    trustedProxies: cfg.gateway?.trustedProxies,
+    allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
     abortSignal: opts.abortSignal,
   });
 
@@ -138,6 +142,7 @@ export async function monitorNextcloudTalkProvider(
     await stop();
     return { stop };
   }
+  opts.statusSink?.(channelReadyPatch());
 
   const publicUrl =
     account.config.webhookPublicUrl ??

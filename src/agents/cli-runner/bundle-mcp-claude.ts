@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withOpenClawMcpCaptureHeader } from "./bundle-mcp-runtime.js";
 
 /** Find existing Claude `--mcp-config` argument values. */
 export function findClaudeMcpConfigPaths(args?: string[]): string[] {
@@ -36,15 +37,41 @@ export function findClaudeMcpConfigPaths(args?: string[]): string[] {
   return paths;
 }
 
-/** Find an existing Claude `--mcp-config` argument value. */
-export function findClaudeMcpConfigPath(args?: string[]): string | undefined {
-  return findClaudeMcpConfigPaths(args)[0];
+/** Return Claude args with OpenClaw's strict MCP config path injected. */
+function mergeClaudeDisallowedTools(args: string[], deniedTools: string[]): string[] {
+  if (deniedTools.length === 0) {
+    return args;
+  }
+  const next: string[] = [];
+  const existingDisallowed: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === "--disallowedTools" || arg === "--disallowed-tools") {
+      while (typeof args[i + 1] === "string" && !args[i + 1]?.startsWith("-")) {
+        i += 1;
+        existingDisallowed.push(args[i] ?? "");
+      }
+      continue;
+    }
+    if (arg.startsWith("--disallowedTools=") || arg.startsWith("--disallowed-tools=")) {
+      existingDisallowed.push(arg.slice(arg.indexOf("=") + 1));
+      continue;
+    }
+    next.push(arg);
+  }
+  next.push("--disallowedTools", [...new Set([...existingDisallowed, ...deniedTools])].join(","));
+  return next;
 }
 
-/** Return Claude args with OpenClaw's strict MCP config path injected. */
+export function injectClaudeWebSearchDisabledArgs(args: string[] | undefined): string[] {
+  return mergeClaudeDisallowedTools(args ?? [], ["WebSearch"]);
+}
+
 export function injectClaudeMcpConfigArgs(
   args: string[] | undefined,
   mcpConfigPath: string,
+  mcpToolsDeny?: Record<string, string[]>,
+  webSearchEnabled?: boolean,
 ): string[] {
   const next: string[] = [];
   for (let i = 0; i < (args?.length ?? 0); i += 1) {
@@ -64,7 +91,13 @@ export function injectClaudeMcpConfigArgs(
     next.push(arg);
   }
   next.push("--strict-mcp-config", "--mcp-config", mcpConfigPath);
-  return next;
+  const deniedTools = Object.entries(mcpToolsDeny ?? {}).flatMap(([serverName, toolNames]) =>
+    toolNames.map((toolName) => `mcp__${serverName}__${toolName}`),
+  );
+  if (webSearchEnabled === false) {
+    deniedTools.push("WebSearch");
+  }
+  return mergeClaudeDisallowedTools(next, deniedTools.toSorted());
 }
 
 /** Writes the active per-attempt capture token into OpenClaw's generated Claude MCP config. */
@@ -76,28 +109,14 @@ export async function writeClaudeMcpCaptureConfig(params: {
   if (!isRecord(raw)) {
     throw new Error("Claude MCP capture requires an object config");
   }
-  const mcpServers = isRecord(raw.mcpServers) ? raw.mcpServers : {};
-  const openclaw = isRecord(mcpServers.openclaw) ? mcpServers.openclaw : undefined;
-  if (!openclaw) {
-    throw new Error("Claude MCP capture requires an openclaw server config");
-  }
-  const headers = isRecord(openclaw.headers) ? openclaw.headers : {};
   await fs.writeFile(
     params.mcpConfigPath,
     `${JSON.stringify(
-      {
-        ...raw,
-        mcpServers: {
-          ...mcpServers,
-          openclaw: {
-            ...openclaw,
-            headers: {
-              ...headers,
-              "x-openclaw-cli-capture-key": params.captureKey,
-            },
-          },
-        },
-      },
+      withOpenClawMcpCaptureHeader(
+        raw,
+        params.captureKey,
+        "Claude MCP capture requires an openclaw server config",
+      ),
       null,
       2,
     )}\n`,

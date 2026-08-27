@@ -4,15 +4,15 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { withEnv } from "../../test-utils/env.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
   readBooleanToolParam,
+  resolveGenerateAction,
   resolveMediaToolInboundRoots,
   resolveCapabilityModelConfigForTool,
-  resolveMediaToolLocalRoots,
-  resolveModelFromRegistry,
+  resolveMediaToolReferenceAccess,
 } from "./media-tool-shared.js";
 
 // Keep media-tool-shared tests focused on root separation; channel-inbound
@@ -44,22 +44,6 @@ function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
 }
 
-function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
-  calls: Array<[string, string]>;
-  registry: { find: (provider: string, modelId: string) => unknown };
-} {
-  const calls: Array<[string, string]> = [];
-  return {
-    calls,
-    registry: {
-      find(provider, modelId) {
-        calls.push([provider, modelId]);
-        return resolve(provider, modelId);
-      },
-    },
-  };
-}
-
 describe("readBooleanToolParam", () => {
   it("parses booleans and true/false string tokens", () => {
     expect(readBooleanToolParam({ audio: true }, "audio")).toBe(true);
@@ -68,31 +52,47 @@ describe("readBooleanToolParam", () => {
   });
 });
 
+describe("resolveGenerateAction", () => {
+  it.each([
+    { name: "absent action", args: {}, expected: "generate" },
+    { name: "blank action", args: { action: "   " }, expected: "generate" },
+    { name: "non-string action", args: { action: 1 }, expected: "generate" },
+    { name: "generate action", args: { action: "generate" }, expected: "generate" },
+    { name: "normalized status action", args: { action: " STATUS " }, expected: "status" },
+    { name: "list action", args: { action: "list" }, expected: "list" },
+  ])("$name", ({ args, expected }) => {
+    expect(resolveGenerateAction(args)).toBe(expected);
+  });
+
+  it("rejects invalid actions with the ordered contract message", () => {
+    expect(() => resolveGenerateAction({ action: "invalid" })).toThrowError(
+      /^action must be "generate", "status", or "list"$/,
+    );
+  });
+});
+
 describe("resolveMediaToolLocalRoots", () => {
-  it("does not widen default local roots from media sources", () => {
+  it("does not widen default local roots from media sources", async () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =
       process.platform === "win32" ? "C:\\Users\\peter\\Pictures" : "/Users/peter/Pictures";
-    const moviesDir =
-      process.platform === "win32" ? "C:\\Users\\peter\\Movies" : "/Users/peter/Movies";
 
-    const roots = withEnv({ OPENCLAW_STATE_DIR: stateDir }, () =>
-      resolveMediaToolLocalRoots(path.join(stateDir, "workspace-agent"), undefined, [
-        path.join(picturesDir, "photo.png"),
-        pathToFileURL(path.join(moviesDir, "clip.mp4")).href,
-        "/top-level-file.png",
-      ]),
+    const { localRoots } = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+      resolveMediaToolReferenceAccess({
+        input: path.join(picturesDir, "photo.png"),
+        isDataUrl: false,
+        workspaceDir: path.join(stateDir, "workspace-agent"),
+      }),
     );
 
-    const normalizedRoots = roots.map(normalizeHostPath);
+    const normalizedRoots = localRoots.map(normalizeHostPath);
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace-agent")));
     expect(normalizedRoots).toContain(normalizeHostPath(path.join(stateDir, "workspace")));
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
-    expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
   });
 
-  it("keeps channel inbound attachment roots separate from local roots", () => {
+  it("keeps channel inbound attachment roots separate from local roots", async () => {
     // Inbound channel roots may include broad chat attachment folders; keep them
     // out of local filesystem allowlists unless the channel context asks.
     const accountRoot = path.join("/tmp", "openclaw-imessage-work");
@@ -110,75 +110,91 @@ describe("resolveMediaToolLocalRoots", () => {
       },
     };
 
-    const withoutChannel = resolveMediaToolLocalRoots(undefined, { cfg });
-    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
-    expect(withoutChannel.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    const withoutChannel = await resolveMediaToolReferenceAccess({
+      input: "relative/reference.png",
+      isDataUrl: false,
+      rootOptions: { cfg },
+    });
+    expect(withoutChannel.localRoots.map(normalizeHostPath)).not.toContain(
+      normalizeHostPath(accountRoot),
+    );
+    expect(withoutChannel.localRoots.map(normalizeHostPath)).not.toContain(
+      normalizeHostPath(sharedRoot),
+    );
     expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
 
-    const withImessage = resolveMediaToolLocalRoots(undefined, {
-      cfg,
-      channelId: "imessage",
-      accountId: "work",
+    const withImessage = await resolveMediaToolReferenceAccess({
+      input: "relative/reference.png",
+      isDataUrl: false,
+      rootOptions: { cfg, channelId: "imessage", accountId: "work" },
     });
-    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(accountRoot));
-    expect(withImessage.map(normalizeHostPath)).not.toContain(normalizeHostPath(sharedRoot));
+    expect(withImessage.localRoots.map(normalizeHostPath)).not.toContain(
+      normalizeHostPath(accountRoot),
+    );
+    expect(withImessage.localRoots.map(normalizeHostPath)).not.toContain(
+      normalizeHostPath(sharedRoot),
+    );
     expect(
       resolveMediaToolInboundRoots({
         cfg,
         channelId: "imessage",
         accountId: "work",
-      }),
-    ).toEqual([accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"]);
+      }).map(normalizeHostPath),
+    ).toEqual(
+      [accountRoot, sharedRoot, "/Users/*/Library/Messages/Attachments"].map(normalizeHostPath),
+    );
   });
 });
 
-describe("resolveModelFromRegistry", () => {
-  it("normalizes provider and model refs before registry lookup", () => {
-    const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
-    const { calls, registry } = createModelRegistryStub(() => foundModel);
+describe("resolveMediaToolReferenceAccess", () => {
+  it("decodes a host-local file URL with Unicode and spaces", async () => {
+    const filePath = path.join(process.cwd(), "café reference image.png");
 
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: " OLLAMA ",
-      modelId: " qwen3.5:397b-cloud ",
-    });
-
-    expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
-    expect(result).toBe(foundModel);
-  });
-
-  it("reports the normalized ref when the registry lookup misses", () => {
-    const { registry } = createModelRegistryStub(() => null);
-
-    expect(() =>
-      resolveModelFromRegistry({
-        modelRegistry: registry,
-        provider: " OLLAMA ",
-        modelId: " qwen3.5:397b-cloud ",
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: pathToFileURL(filePath).href,
+        isDataUrl: false,
+        workspaceDir: process.cwd(),
       }),
-    ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
+    ).resolves.toMatchObject({ resolvedPath: filePath });
   });
 
-  it("falls back to provider-prefixed custom model IDs", () => {
-    // Custom providers can store ids with provider prefixes; try both forms so
-    // callers can pass the short local model id.
-    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
-    const { calls, registry } = createModelRegistryStub((_, modelId) =>
-      modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
-    );
+  it.each(["relative/reference.png", "https://example.com/reference.png", "media://inbound/a.png"])(
+    "preserves non-file reference %s",
+    async (input) => {
+      await expect(
+        resolveMediaToolReferenceAccess({
+          input,
+          isDataUrl: false,
+          workspaceDir: process.cwd(),
+        }),
+      ).resolves.toMatchObject({ resolvedPath: input });
+    },
+  );
 
-    const result = resolveModelFromRegistry({
-      modelRegistry: registry,
-      provider: "kimchi",
-      modelId: "claude-opus-4-6",
-    });
+  it("keeps data URLs out of filesystem resolution", async () => {
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input: "data:image/png;base64,cG5n",
+        isDataUrl: true,
+        workspaceDir: process.cwd(),
+      }),
+    ).resolves.toMatchObject({ resolvedPath: null });
+  });
 
-    expect(calls).toEqual([
-      ["kimchi", "claude-opus-4-6"],
-      ["kimchi", "kimchi/claude-opus-4-6"],
-    ]);
-    expect(result).toBe(foundModel);
-  }, 180_000);
+  it.each([
+    ["file://attacker/share.png", /remote hosts/i],
+    ["file:///tmp/encoded%2Fseparator.png", /encode path separators/i],
+    ["file:///tmp/malformed%ZZ.png", /invalid|malformed/i],
+  ])("rejects unsafe or malformed file URL %s", async (input, expected) => {
+    await expect(
+      resolveMediaToolReferenceAccess({
+        input,
+        isDataUrl: false,
+        workspaceDir: process.cwd(),
+      }),
+    ).rejects.toThrow(expected);
+  });
 });
 
 describe("hasGenerationToolAvailability", () => {

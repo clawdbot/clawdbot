@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenClaw Browser Settings</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font:
+          14px/1.45 system-ui,
+          sans-serif;
+      }
+      body {
+        max-width: 620px;
+        margin: 36px auto;
+        padding: 0 20px 48px;
+        color: #f3f5f7;
+        background: #15171b;
+      }
+      h1 {
+        font-size: 23px;
+        margin-bottom: 6px;
+      }
+      h2 {
+        font-size: 15px;
+        margin: 0 0 10px;
+      }
+      section {
+        margin-top: 18px;
+        padding: 16px;
+        border: 1px solid #343941;
+        border-radius: 12px;
+        background: #202329;
+      }
+      label {
+        display: block;
+        margin: 9px 0;
+      }
+      select,
+      textarea,
+      button {
+        font: inherit;
+      }
+      select,
+      textarea {
+        width: 100%;
+        box-sizing: border-box;
+        border: 1px solid #454b55;
+        border-radius: 8px;
+        padding: 9px;
+        background: #17191d;
+        color: inherit;
+      }
+      textarea {
+        min-height: 92px;
+        resize: vertical;
+      }
+      button {
+        margin: 9px 7px 0 0;
+        padding: 8px 12px;
+        border: 0;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .primary {
+        background: #ff5a36;
+        color: white;
+        font-weight: 600;
+      }
+      .danger {
+        background: #633128;
+        color: white;
+      }
+      .muted {
+        color: #aeb5c0;
+      }
+      .status {
+        margin: 8px 0 0;
+      }
+      .hidden {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>OpenClaw Browser Settings</h1>
+    <p class="muted">
+      The extension only relays browser automation. Pairing keys and URLs are never shown here.
+    </p>
+
+    <section id="retiredCustody" class="hidden">
+      <h2>Automation paused</h2>
+      <p>Automation is paused to protect a pre-upgrade copilot session.</p>
+      <p class="muted">
+        Confirm old runs are finished, then use
+        <strong>Disconnect and disable automatic setup</strong> to discard retired recovery state,
+        followed by <strong>Use local OpenClaw</strong> to reconnect.
+      </p>
+    </section>
+
+    <section>
+      <h2>Connection</h2>
+      <p id="connectionStatus" class="status">Checking…</p>
+      <p id="bootstrapStatus" class="muted"></p>
+      <label><input id="automaticSetup" type="checkbox" /> Use automatic local setup</label>
+      <button id="useLocal" class="primary" type="button">Use local OpenClaw</button>
+    </section>
+
+    <section>
+      <h2>Access</h2>
+      <label for="accessMode">Browser access mode</label>
+      <select id="accessMode">
+        <option value="all">All tabs</option>
+        <option value="selected">Selected tabs</option>
+      </select>
+    </section>
+
+    <section>
+      <h2>Advanced manual pairing</h2>
+      <p class="muted">
+        Use this only for a direct remote Gateway or when automatic setup reports that manual action
+        is required.
+      </p>
+      <textarea
+        id="pairingString"
+        spellcheck="false"
+        placeholder="Paste the pairing string"
+      ></textarea>
+      <button id="pair" type="button">Pair manually</button>
+    </section>
+
+    <section>
+      <h2>Diagnostics</h2>
+      <p class="muted">
+        <code>openclaw browser extension status --json</code><br /><code
+          >openclaw browser doctor --browser-profile chrome</code
+        >
+      </p>
+      <button id="disconnect" class="danger" type="button">
+        Disconnect and disable automatic setup
+      </button>
+    </section>
+    <p id="message" class="status"></p>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

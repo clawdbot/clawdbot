@@ -11,7 +11,7 @@ import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
   type AsyncStartedToolMeta,
-} from "./attempt.async-tasks.js";
+} from "./attempt-async-tasks.js";
 
 function requireCreatedTask(task: TaskRecord | null): TaskRecord {
   // Task registry creation returns null for invalid task shapes; tests require

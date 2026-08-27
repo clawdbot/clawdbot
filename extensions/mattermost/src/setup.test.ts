@@ -13,13 +13,8 @@ const resolveMattermostAccount = vi.hoisted(() => vi.fn());
 const normalizeMattermostBaseUrl = vi.hoisted(() => vi.fn((value: string | undefined) => value));
 const hasConfiguredSecretInput = vi.hoisted(() => vi.fn((value: unknown) => Boolean(value)));
 
-vi.mock("./setup.accounts.runtime.js", () => ({
-  listMattermostAccountIds: vi.fn((cfg: OpenClawConfig) => {
-    const accounts = cfg.channels?.mattermost?.accounts;
-    const ids = accounts ? Object.keys(accounts) : [];
-    return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
-  }),
-  resolveMattermostAccount: (params: Parameters<typeof resolveMattermostAccount>[0]) => {
+vi.mock("./setup.accounts.runtime.js", () => {
+  const resolveAccount = (params: Parameters<typeof resolveMattermostAccount>[0]) => {
     const mocked = resolveMattermostAccount(params);
     return (
       mocked ?? {
@@ -32,12 +27,23 @@ vi.mock("./setup.accounts.runtime.js", () => ({
         baseUrl: normalizeMattermostBaseUrl(params.cfg.channels?.mattermost?.baseUrl),
         botTokenSource:
           typeof params.cfg.channels?.mattermost?.botToken === "string" ? "config" : "none",
+        botTokenStatus:
+          typeof params.cfg.channels?.mattermost?.botToken === "string" ? "available" : "missing",
         baseUrlSource: params.cfg.channels?.mattermost?.baseUrl ? "config" : "none",
         config: params.cfg.channels?.mattermost ?? {},
       }
     );
-  },
-}));
+  };
+  return {
+    listMattermostAccountIds: vi.fn((cfg: OpenClawConfig) => {
+      const accounts = cfg.channels?.mattermost?.accounts;
+      const ids = accounts ? Object.keys(accounts) : [];
+      return ids.length > 0 ? ids : [DEFAULT_ACCOUNT_ID];
+    }),
+    inspectMattermostAccount: resolveAccount,
+    resolveMattermostAccount: resolveAccount,
+  };
+});
 
 vi.mock("./setup.client.runtime.js", () => ({
   normalizeMattermostBaseUrl,
@@ -125,7 +131,7 @@ describe("mattermost setup", () => {
     ).toBe(false);
   });
 
-  it("resolves accounts with unresolved secret refs allowed", () => {
+  it("inspects accounts without resolving secret refs", () => {
     resolveMattermostAccount.mockReturnValue({ accountId: "default" });
 
     const cfg = { channels: { mattermost: {} } };
@@ -136,7 +142,6 @@ describe("mattermost setup", () => {
     expect(resolveMattermostAccount).toHaveBeenCalledWith({
       cfg,
       accountId: "default",
-      allowUnresolvedSecretRef: true,
     });
   });
 

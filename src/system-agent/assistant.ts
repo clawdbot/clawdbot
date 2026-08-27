@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
+import { extractAgentRunText } from "../agents/agent-run-result.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
@@ -49,6 +52,16 @@ export type SystemAgentConfiguredModelPlannerDeps = SystemAgentVerifiedInference
   resolveAssistantTimeoutMs?: typeof resolveSystemAgentAssistantTimeoutMs;
 };
 
+const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
+  type: "object",
+  properties: {
+    reply: { type: "string" },
+    command: { type: "string" },
+  },
+  required: ["reply"],
+  additionalProperties: false,
+} as const;
+
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
@@ -85,6 +98,7 @@ export async function planSystemAgentCommandWithConfiguredModel(params: {
     runIdPrefix: "openclaw-planner",
     verifiedInference: params.verifiedInference,
     deps: params.deps,
+    responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
   });
   const parsed = parseSystemAgentAssistantPlanText(result?.text);
   return parsed && result ? { ...parsed, modelLabel: result.modelLabel } : null;
@@ -116,6 +130,7 @@ async function runConfiguredSystemAgentText(params: {
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   deps?: SystemAgentConfiguredModelPlannerDeps;
   timeoutMs?: number;
+  responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
   const route = await requireVerifiedPlannerRoute(params.verifiedInference, params.deps);
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
@@ -130,16 +145,25 @@ async function runConfiguredSystemAgentText(params: {
   }
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   let text: string | undefined;
+  let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
     const timeoutMs =
       params.timeoutMs ??
       (params.deps?.resolveAssistantTimeoutMs ?? resolveSystemAgentAssistantTimeoutMs)(route);
+    preparedRunAdmission = prepareSystemAgentRunAdmission(
+      route.runConfig,
+      runId,
+      route.agentId,
+      "system-agent.assistant",
+    );
     const shared = {
       sessionId: `${runId}-session`,
-      agentId: "openclaw",
+      // OpenClaw is the planner surface, but the configured roster owner supplies runtime policy.
+      agentId: route.agentId,
       trigger: "manual" as const,
-      sessionFile: path.join(tempDir, "session.jsonl"),
+      sessionFile: `in-memory:${runId}`,
+      sessionManager: SessionManager.inMemory(tempDir),
       workspaceDir: tempDir,
       cwd: tempDir,
       agentDir: route.agentDir,
@@ -156,6 +180,7 @@ async function runConfiguredSystemAgentText(params: {
       messageProvider: "openclaw",
       disableTools: true,
       disableTrajectory: true,
+      ...(params.responseFormat ? { streamParams: { responseFormat: params.responseFormat } } : {}),
       ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
     };
     const result =
@@ -163,6 +188,7 @@ async function runConfiguredSystemAgentText(params: {
         ? await (params.deps?.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent)(
             {
               ...shared,
+              preparedRunAdmission,
               executionMode: "side-question",
               cleanupCliLiveSessionOnRunEnd: true,
             },
@@ -172,19 +198,21 @@ async function runConfiguredSystemAgentText(params: {
             (await import("../agents/embedded-agent.js")).runEmbeddedAgent
           )({
             ...shared,
+            preparedRunAdmission,
             toolsAllow: [],
             agentHarnessRuntimeOverride: route.agentHarnessRuntimeOverride,
             ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
             cleanupBundleMcpOnRunEnd: true,
             ...(route.authProfileId ? { authProfileIdSource: "user" as const } : {}),
           });
-    text = extractPlannerResultText(result)?.trim();
+    text = extractAgentRunText(result)?.trim();
   } catch (error) {
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
     }
     text = undefined;
   } finally {
+    preparedRunAdmission?.close();
     await (params.deps?.removeTempDir ?? removeTempPlannerDir)(tempDir);
   }
   if (!text) {
@@ -220,21 +248,4 @@ async function createTempPlannerDir(): Promise<string> {
 
 async function removeTempPlannerDir(dir: string): Promise<void> {
   await fs.rm(dir, { recursive: true, force: true });
-}
-
-function extractPlannerResultText(result: {
-  payloads?: Array<{ text?: string }>;
-  meta?: {
-    finalAssistantVisibleText?: string;
-    finalAssistantRawText?: string;
-  };
-}): string | undefined {
-  return (
-    result.meta?.finalAssistantVisibleText ??
-    result.meta?.finalAssistantRawText ??
-    result.payloads
-      ?.map((payload) => payload.text?.trim())
-      .filter(Boolean)
-      .join("\n")
-  );
 }

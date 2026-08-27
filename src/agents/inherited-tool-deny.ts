@@ -3,7 +3,7 @@
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolName } from "./tool-policy-shared.js";
+import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
 const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = [
   "apply_patch",
@@ -37,7 +37,7 @@ export function normalizeInheritedToolDenylist(value: unknown): string[] {
   }
   return uniqueStrings(
     value.flatMap((entry) => {
-      const normalized = typeof entry === "string" ? normalizeToolName(entry) : "";
+      const normalized = typeof entry === "string" ? normalizeToolPolicyName(entry) : "";
       return normalized ? [normalized] : [];
     }),
   );

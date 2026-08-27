@@ -17,7 +17,6 @@ scenario:
     - extensions/telegram/src/send.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
-    profiles: { "telegram:adapter": 14, "telegram:all": 13 }
     kind: flow
     channel: telegram
     summary: Run the scripted quiet-streaming reply and verify one final message.
@@ -48,7 +47,7 @@ flow:
           args: [4000]
         - set: finalMessages
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => !message.deleted)"
         - assert:
             expr: "finalMessages.length === 1 && finalMessages[0].text.includes(config.marker)"
             message:

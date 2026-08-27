@@ -4,22 +4,22 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { toQaError } from "../errors.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
-import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.scenarios.js";
+import { resolveSlackQaScenarioIds } from "../live-transports/slack/scenario-selection.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
+  copyCrabboxArtifacts,
   type CommandRunner,
-  type CrabboxInspect,
   defaultCommandRunner,
   inspectCrabbox,
   resolveCrabboxBin,
   runCommand,
   shellQuote,
-  sshCommand,
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
@@ -214,12 +214,9 @@ function resolveScenarioIds(params: {
         ].join(", ")}. Unsupported: ${unsupported.join(", ")}.`,
       );
     }
-    const requested = new Set(scenarioIds);
-    // Slack selects scenarios from catalog order, not CLI order. The watcher
-    // must mirror that order or both sides can block on different checkpoints.
-    return listSlackQaScenarioCatalog()
-      .map((scenario) => scenario.id)
-      .filter((scenarioId) => requested.has(scenarioId));
+    // Mirror the YAML catalog order used by the Slack runner so the watcher
+    // and runner cannot block on different approval checkpoints.
+    return resolveSlackQaScenarioIds({ scenarioIds });
   }
   return scenarioIds;
 }
@@ -1239,44 +1236,6 @@ function renderReport(summary: MantisSlackDesktopSmokeSummary) {
   return `${lines.join("\n")}\n`;
 }
 
-async function copyRemoteArtifacts(params: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  inspect: CrabboxInspect;
-  outputDir: string;
-  remoteOutputDir: string;
-  runner: CommandRunner;
-}) {
-  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
-  await fs.mkdir(path.join(params.outputDir, "slack-qa"), { recursive: true });
-  await runCommand({
-    command: "rsync",
-    args: [
-      "-az",
-      "-e",
-      sshArgs,
-      `${sshUser}@${host}:${params.remoteOutputDir}/`,
-      `${params.outputDir}/`,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-  await runCommand({
-    command: "rsync",
-    args: [
-      "-az",
-      "-e",
-      sshArgs,
-      `${sshUser}@${host}:${params.remoteOutputDir}/slack-qa/`,
-      `${path.join(params.outputDir, "slack-qa")}/`,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  }).catch(() => ({ stdout: "", stderr: "" }));
-}
-
 export async function runMantisSlackDesktopSmoke(
   opts: MantisSlackDesktopSmokeOptions = {},
 ): Promise<MantisSlackDesktopSmokeResult> {
@@ -1440,7 +1399,7 @@ export async function runMantisSlackDesktopSmoke(
     );
     leaseHeartbeat?.throwIfFailed();
     await timer.timePhase("artifacts.copy", () =>
-      copyRemoteArtifacts({
+      copyCrabboxArtifacts({
         cwd: repoRoot,
         env,
         inspect: inspected,
@@ -1467,7 +1426,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw toErrorObject(remoteRunError);
+      throw toQaError(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1561,29 +1520,37 @@ export async function runMantisSlackDesktopSmoke(
       videoPath,
     };
   } finally {
-    if (summary) {
-      summary.finishedAt = new Date().toISOString();
-      summary.timings = timer.snapshot();
-      await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-      await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    }
-    if (createdLease && leaseId && !keepLease) {
-      await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
-    }
-    if (leaseHeartbeat) {
-      await leaseHeartbeat.stop().catch((error: unknown) => {
-        console.warn(`Slack credential heartbeat cleanup failed: ${formatErrorMessage(error)}`);
-      });
-    }
-    if (credentialLease) {
-      await credentialLease.release().catch((error: unknown) => {
-        console.warn(`Slack credential release failed: ${formatErrorMessage(error)}`);
-      });
+    try {
+      if (summary) {
+        summary.finishedAt = new Date().toISOString();
+        summary.timings = timer.snapshot();
+        await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+        await fs.writeFile(reportPath, renderReport(summary), "utf8");
+      }
+    } finally {
+      try {
+        if (createdLease && leaseId && !keepLease) {
+          await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+        }
+      } finally {
+        try {
+          if (leaseHeartbeat) {
+            await leaseHeartbeat.stop().catch((error: unknown) => {
+              console.warn(
+                `Slack credential heartbeat cleanup failed: ${formatErrorMessage(error)}`,
+              );
+            });
+          }
+        } finally {
+          if (credentialLease) {
+            await credentialLease.release().catch((error: unknown) => {
+              console.warn(`Slack credential release failed: ${formatErrorMessage(error)}`);
+            });
+          }
+        }
+      }
     }
   }
 }
 
-function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

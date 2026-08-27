@@ -21,4 +21,7 @@ export const GATEWAY_AUX_METHODS = [
   "question.list",
   "secrets.reload",
   "secrets.resolve",
+  "secrets.store.list",
+  "secrets.store.set",
+  "secrets.store.delete",
 ] as const;

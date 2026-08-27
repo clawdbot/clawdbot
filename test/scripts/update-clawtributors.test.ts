@@ -20,9 +20,24 @@ afterEach(() => {
 
 function mockClawtributorsFixture({
   ensureLogins = [],
+  seedEntry,
+  accountLookup,
+  accountLookupError,
+  accountLookupStatus = 404,
+  loginLookupError,
   runGh,
 }: {
   ensureLogins?: string[];
+  seedEntry?: string;
+  accountLookup?: {
+    id: number;
+    login: string;
+    html_url: string;
+    avatar_url: string;
+  } | null;
+  accountLookupError?: Error;
+  accountLookupStatus?: 404 | 410;
+  loginLookupError?: Error;
   runGh?: GhRunner;
 } = {}) {
   const readme = [
@@ -38,7 +53,7 @@ function mockClawtributorsFixture({
   vi.doMock("node:fs", () => ({
     readFileSync: vi.fn((path: string) => {
       if (path.endsWith("scripts/clawtributors-map.json")) {
-        return `${JSON.stringify({ ensureLogins })}\n`;
+        return `${JSON.stringify({ ensureLogins, seedCommit: seedEntry ? "seed-sha" : undefined })}\n`;
       }
       if (path.endsWith("README.md")) {
         return readme;
@@ -54,6 +69,7 @@ function mockClawtributorsFixture({
     }),
   }));
   const contributor = {
+    id: 1,
     login: "octo",
     name: "Octo",
     html_url: "https://github.com/octo",
@@ -63,6 +79,12 @@ function mockClawtributorsFixture({
   const execSync = vi.fn((cmd: string) => {
     if (cmd === "git log --reverse --format=%aN%x1f%aE%x1f%aI --numstat") {
       return "";
+    }
+    if (cmd === "git show seed-sha:README.md" && seedEntry) {
+      return readme.replace(
+        "<!-- clawtributors:start -->\n<!-- clawtributors:end -->",
+        `<!-- clawtributors:start -->\n${seedEntry}\n<!-- clawtributors:end -->`,
+      );
     }
     if (cmd === "git rev-list --max-parents=0 HEAD") {
       return "root-sha\n";
@@ -103,12 +125,27 @@ function mockClawtributorsFixture({
         return "";
       }
       if (args[0] === "api" && args[1]?.startsWith("users/")) {
+        if (loginLookupError) {
+          throw loginLookupError;
+        }
         const login = args[1].slice("users/".length);
         return JSON.stringify({
+          id: 2,
           login,
           html_url: `https://github.com/${login}`,
           avatar_url: "https://avatars.githubusercontent.com/u/2?v=4",
         });
+      }
+      if (args[0] === "api" && args[1]?.startsWith("user/")) {
+        if (accountLookupError) {
+          throw accountLookupError;
+        }
+        if (!accountLookup) {
+          throw Object.assign(new Error("gh api failed"), {
+            stderr: Buffer.from(`gh: account missing (HTTP ${accountLookupStatus})\n`),
+          });
+        }
+        return JSON.stringify(accountLookup);
       }
       throw new Error(`unexpected gh arguments: ${args.join(" ")}`);
     },
@@ -188,6 +225,87 @@ describe("update-clawtributors", () => {
       signal: "SIGKILL",
     });
     expect(fixture.execPlainGh).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts on transient login lookup failures", async () => {
+    const fixture = mockClawtributorsFixture({
+      ensureLogins: ["extra"],
+      loginLookupError: new Error("GitHub login lookup unavailable"),
+    });
+
+    await expect(importUpdateClawtributors()).rejects.toThrow("GitHub login lookup unavailable");
+
+    expect(fixture.readWrittenReadme()).toBe("");
+  });
+
+  it("resolves renamed seed profiles by stable account id", async () => {
+    const fixture = mockClawtributorsFixture({
+      seedEntry:
+        '<a href="https://github.com/old-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Original credit"></a>',
+      accountLookup: {
+        id: 42,
+        login: "new-handle",
+        html_url: "https://github.com/new-handle",
+        avatar_url: "https://avatars.githubusercontent.com/u/42?v=4",
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await importUpdateClawtributors();
+
+    expect(fixture.execPlainGh).toHaveBeenCalledWith(
+      ["api", "user/42"],
+      expect.objectContaining({ timeout: 120_000, killSignal: "SIGKILL" }),
+    );
+    expect(fixture.readWrittenReadme()).toContain(
+      '<a href="https://github.com/new-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Original credit"></a>',
+    );
+    expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
+  });
+
+  it.each([404, 410] as const)(
+    "keeps deleted seed profiles as unlinked credit on HTTP %s",
+    async (accountLookupStatus) => {
+      const fixture = mockClawtributorsFixture({
+        seedEntry:
+          '<a href="https://github.com/gone-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Gone contributor"></a>',
+        accountLookup: null,
+        accountLookupStatus,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response(null, { status: 404 })),
+      );
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await importUpdateClawtributors();
+
+      expect(fixture.readWrittenReadme()).toContain(
+        '<img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Gone contributor">',
+      );
+      expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/gone-handle"');
+    },
+  );
+
+  it("aborts instead of unlinking credit on transient account lookup failures", async () => {
+    const fixture = mockClawtributorsFixture({
+      seedEntry:
+        '<a href="https://github.com/current-handle"><img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="Current contributor"></a>',
+      accountLookupError: new Error("GitHub API unavailable"),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 404 })),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await expect(importUpdateClawtributors()).rejects.toThrow("GitHub API unavailable");
+
+    expect(fixture.readWrittenReadme()).toBe("");
   });
 
   it("rejects unsafe avatar probe content lengths before reading the body", async () => {

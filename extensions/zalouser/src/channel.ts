@@ -1,19 +1,15 @@
 // Zalouser plugin module implements channel behavior.
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
+import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
-  createAsyncComputedAccountStatusAdapter,
+  createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import {
-  checkZcaAuthenticated,
-  resolveZalouserAccountSync,
-  type ResolvedZalouserAccount,
-} from "./accounts.js";
-import type { ChannelDirectoryEntry, ChannelPlugin } from "./channel-api.js";
-import { DEFAULT_ACCOUNT_ID } from "./channel-api.js";
+import { resolveZalouserAccountSync, type ResolvedZalouserAccount } from "./accounts.js";
 import {
   zalouserAuthAdapter,
   zalouserGroupsAdapter,
@@ -29,11 +25,7 @@ import {
 } from "./channel.adapters.js";
 import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import type { ZalouserProbeResult } from "./probe.js";
-import {
-  createZalouserSetupWizardProxy,
-  zalouserSetupAdapter,
-  zalouserSetupContract,
-} from "./setup-core.js";
+import { createZalouserSetupWizardProxy, zalouserSetupContract } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
 
@@ -75,7 +67,6 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
     base: {
       ...createZalouserPluginBase({
         setupWizard: zalouserSetupWizardProxy,
-        setup: zalouserSetupAdapter,
         setupContract: zalouserSetupContract,
       }),
       groups: zalouserGroupsAdapter,
@@ -139,31 +130,22 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
       resolver: zalouserResolverAdapter,
       auth: zalouserAuthAdapter,
       message: zalouserMessageAdapter,
-      status: createAsyncComputedAccountStatusAdapter<ResolvedZalouserAccount, ZalouserProbeResult>(
-        {
-          defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
-          collectStatusIssues: collectZalouserStatusIssues,
-          buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
-          probeAccount: async ({ account, timeoutMs }) =>
-            (await loadZalouserChannelRuntime()).probeZalouser(account.profile, timeoutMs),
-          resolveAccountSnapshot: async ({ account, runtime }) => {
-            const configured = await checkZcaAuthenticated(account.profile);
-            const configError = "not authenticated";
-            return {
-              accountId: account.accountId,
-              name: account.name,
-              enabled: account.enabled,
-              configured,
-              extra: {
-                dmPolicy: account.config.dmPolicy ?? "pairing",
-                lastError: configured
-                  ? (runtime?.lastError ?? null)
-                  : (runtime?.lastError ?? configError),
-              },
-            };
+      status: createComputedAccountStatusAdapter<ResolvedZalouserAccount, ZalouserProbeResult>({
+        defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+        collectStatusIssues: collectZalouserStatusIssues,
+        buildChannelSummary: ({ snapshot }) => buildPassiveProbedChannelStatusSummary(snapshot),
+        probeAccount: async ({ account, timeoutMs }) =>
+          (await loadZalouserChannelRuntime()).probeZalouser(account.profile, timeoutMs),
+        resolveAccountSnapshot: ({ account }) => ({
+          accountId: account.accountId,
+          name: account.name,
+          enabled: account.enabled,
+          configured: Boolean(account.profile),
+          extra: {
+            dmPolicy: account.config.dmPolicy ?? "pairing",
           },
-        },
-      ),
+        }),
+      }),
       gateway: {
         startAccount: async (ctx) => {
           const { getZaloUserInfo } = await loadZalouserChannelRuntime();

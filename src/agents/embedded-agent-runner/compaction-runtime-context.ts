@@ -1,7 +1,7 @@
 /**
  * Builds runtime context for context-engine backed embedded compaction.
  */
-import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -12,10 +12,11 @@ import {
 } from "../bash-process-references.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_PROVIDER } from "../defaults.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import {
   buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
-  resolveModelRefFromString,
+  listModelAliasCandidates,
 } from "../model-selection-shared.js";
 import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
 import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
@@ -66,12 +67,14 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
   provider: string;
   modelId: string;
   inheritedLevel?: ThinkLevel;
+  catalog?: ThinkingCatalogEntry[];
   agentId?: string;
   sessionKey?: string;
   agentRuntime?: string | null;
 }): ThinkLevel {
+  const configuredLevel = params.config?.agents?.defaults?.compaction?.thinkingLevel;
   const requestedLevel =
-    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+    configuredLevel === "inherit" ? params.inheritedLevel : (configuredLevel ?? "low");
   if (!requestedLevel) {
     return "off";
   }
@@ -84,6 +87,7 @@ export function resolveEmbeddedCompactionThinkingLevel(params: {
       provider: params.provider,
       modelId: params.modelId,
       level: requestedLevel,
+      catalog: params.catalog,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       agentRuntime: params.agentRuntime,
@@ -147,29 +151,26 @@ export function resolveEmbeddedCompactionTarget(params: {
       ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
     };
   };
-  if (!override) {
-    const authProfileId = params.authProfileId ?? undefined;
+  const assembleTarget = (targetProvider: string | undefined, targetModel: string | undefined) => {
+    // A provider switch cannot inherit credentials selected for the session's
+    // original provider; all target paths share that boundary.
+    const authProfileId =
+      targetProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
-      provider,
-      ...resolveTargetProviders(provider, authProfileId),
-      model,
+      provider: targetProvider,
+      ...resolveTargetProviders(targetProvider, authProfileId),
+      model: targetModel,
       authProfileId,
     };
+  };
+  if (!override) {
+    return assembleTarget(provider, model);
   }
   const slashIdx = override.indexOf("/");
   if (slashIdx > 0) {
     const overrideProvider = override.slice(0, slashIdx).trim();
     const overrideModel = override.slice(slashIdx + 1).trim() || params.defaultModel;
-    // When switching provider via override, drop the primary auth profile to
-    // avoid sending the wrong credentials.
-    const authProfileId =
-      overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: overrideProvider,
-      ...resolveTargetProviders(overrideProvider, authProfileId),
-      model: overrideModel,
-      authProfileId,
-    };
+    return assembleTarget(overrideProvider, overrideModel);
   }
   const config = params.config ?? {};
   const currentProvider = provider?.trim();
@@ -181,56 +182,28 @@ export function resolveEmbeddedCompactionTarget(params: {
       model: override,
     })
   ) {
-    const authProfileId = params.authProfileId ?? undefined;
-    return {
-      provider: currentProvider,
-      ...resolveTargetProviders(currentProvider, authProfileId),
-      model: override,
-      authProfileId,
-    };
+    return assembleTarget(currentProvider, override);
   }
   const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
     cfg: config,
     model: override,
+    allowManifestNormalization: false,
   });
   if (inferredLiteralProvider) {
-    const authProfileId =
-      inferredLiteralProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: inferredLiteralProvider,
-      ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
-      model: override,
-      authProfileId,
-    };
+    return assembleTarget(inferredLiteralProvider, override);
   }
   const defaultProvider = provider || DEFAULT_PROVIDER;
-  const aliasResolution = resolveModelRefFromString({
-    cfg: config,
-    raw: override,
-    defaultProvider,
-    aliasIndex: buildModelAliasIndex({
-      cfg: config,
-      defaultProvider,
-    }),
-  });
-  if (aliasResolution?.alias) {
-    const resolvedProvider = aliasResolution.ref.provider;
-    const authProfileId =
-      resolvedProvider !== provider ? undefined : (params.authProfileId ?? undefined);
-    return {
-      provider: resolvedProvider,
-      ...resolveTargetProviders(resolvedProvider, authProfileId),
-      model: aliasResolution.ref.model,
-      authProfileId,
-    };
+  const aliasKey = normalizeCompactionConfigKey(splitTrailingAuthProfile(override).model);
+  // Unrelated aliases must not cold-load provider runtime for a literal override.
+  const alias = listModelAliasCandidates(config).some(
+    ({ alias: candidate }) => normalizeCompactionConfigKey(candidate) === aliasKey,
+  )
+    ? buildModelAliasIndex({ cfg: config, defaultProvider }).byAlias.get(aliasKey)
+    : undefined;
+  if (alias) {
+    return assembleTarget(alias.ref.provider, alias.ref.model);
   }
-  const authProfileId = params.authProfileId ?? undefined;
-  return {
-    provider,
-    ...resolveTargetProviders(provider, authProfileId),
-    model: override,
-    authProfileId,
-  };
+  return assembleTarget(provider, override);
 }
 
 function normalizeCompactionConfigKey(value: string): string {
@@ -305,9 +278,11 @@ export function resolveCompactionContextTokenBudget(params: {
   provider: string;
   modelId: string;
   model?: ProviderRuntimeModel;
+  agentId?: string;
   requestedTokenBudget?: number;
   fallbackTokenBudget?: number;
 }) {
+  // Caller budgets stay bounded by the selected model ceiling.
   const resolvedBudget =
     normalizeContextTokenBudget(
       resolveContextWindowInfo({
@@ -372,8 +347,12 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
+    permissionMode: params.permissionMode,
+    sessionRoot: params.sessionRoot,
     agentDir: params.agentDir,
     config: params.config,
+    toolOverrides: params.toolOverrides,
+    toolsAllow: params.toolsAllow,
     skillsSnapshot: params.skillsSnapshot,
     senderIsOwner: params.senderIsOwner,
     senderId: params.senderId ?? undefined,
@@ -383,6 +362,7 @@ export function buildEmbeddedCompactionRuntimeContext(
     modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
+    execOverrides: params.execOverrides,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,

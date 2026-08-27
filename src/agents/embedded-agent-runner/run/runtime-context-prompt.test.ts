@@ -172,9 +172,9 @@ describe("runtime context prompt submission", () => {
   it("strips hidden prompt context on both sides without removing repeated hook text", () => {
     const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
     const userText = "Hello";
-    const untrustedContext = "Untrusted channel metadata";
+    const channelMetadata = "Untrusted channel metadata";
     const hookContext = systemEvent;
-    const effectivePrompt = [systemEvent, userText, untrustedContext].join("\n\n");
+    const effectivePrompt = [systemEvent, userText, channelMetadata].join("\n\n");
     const modelPrompt = [hookContext, effectivePrompt, hookContext].join("\n\n");
 
     expect(
@@ -192,7 +192,7 @@ describe("runtime context prompt submission", () => {
     ).toEqual({
       prompt: userText,
       modelPrompt: [hookContext, userText, hookContext].join("\n\n"),
-      runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+      runtimeContext: [systemEvent, channelMetadata].join("\n\n"),
     });
   });
 
@@ -222,8 +222,8 @@ describe("runtime context prompt submission", () => {
   it("strips the last matching prompt occurrence when prepend hooks quote the body", () => {
     const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
     const userText = "Hello";
-    const untrustedContext = "Untrusted channel metadata";
-    const effectivePrompt = [systemEvent, userText, untrustedContext].join("\n\n");
+    const channelMetadata = "Untrusted channel metadata";
+    const effectivePrompt = [systemEvent, userText, channelMetadata].join("\n\n");
 
     expect(
       resolveRuntimeContextPromptParts({
@@ -239,7 +239,7 @@ describe("runtime context prompt submission", () => {
     ).toEqual({
       prompt: userText,
       modelPrompt: [effectivePrompt, userText].join("\n\n"),
-      runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+      runtimeContext: [systemEvent, channelMetadata].join("\n\n"),
     });
   });
 
@@ -612,7 +612,7 @@ describe("runtime context prompt submission", () => {
       role: "custom",
       customType: "openclaw.runtime-context",
       content: [
-        "OpenClaw runtime context for the immediately preceding user message.",
+        "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",

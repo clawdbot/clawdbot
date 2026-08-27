@@ -106,6 +106,7 @@ describe("sandboxListCommand", () => {
       const container2 = createContainer({
         containerName: "container-2",
         imageMatch: false,
+        running: false,
       });
       mocks.listSandboxContainers.mockResolvedValue([container1, container2]);
 
@@ -114,6 +115,10 @@ describe("sandboxListCommand", () => {
       expectLogContains(runtime, "📦 Sandbox Runtimes");
       expectLogContains(runtime, container1.containerName);
       expectLogContains(runtime, container2.containerName);
+      expect(runtime.log).toHaveBeenCalledWith("    Status:  🟢 running");
+      expect(runtime.log).toHaveBeenCalledWith("    Image:   openclaw/sandbox:latest ✓");
+      expect(runtime.log).toHaveBeenCalledWith("    Status:  ⚫ stopped");
+      expect(runtime.log).toHaveBeenCalledWith("    Image:   openclaw/sandbox:latest ⚠️  mismatch");
       expectLogContains(runtime, "Total");
     });
 
@@ -164,12 +169,15 @@ describe("sandboxListCommand", () => {
   });
 
   describe("error handling", () => {
-    it("should handle errors gracefully", async () => {
+    it("propagates backend probe failures instead of rendering an empty list", async () => {
       mocks.listSandboxContainers.mockRejectedValue(new Error("Docker not available"));
 
-      await sandboxListCommand({ browser: false, json: false }, runtime as never);
-
-      expect(runtime.log).toHaveBeenCalledWith("No sandbox runtimes found.");
+      // A failing probe must reach the CLI error path (message + exit 1),
+      // not masquerade as "No sandbox runtimes found."
+      await expect(
+        sandboxListCommand({ browser: false, json: false }, runtime as never),
+      ).rejects.toThrow("Docker not available");
+      expect(runtime.log).not.toHaveBeenCalledWith("No sandbox runtimes found.");
     });
   });
 });
@@ -242,11 +250,16 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should remove all when --all flag set", async () => {
-      const containers = [createContainer(), createContainer()];
+      const containers = [
+        createContainer({ containerName: "running-container" }),
+        createContainer({ containerName: "stopped-container", running: false }),
+      ];
       mocks.listSandboxContainers.mockResolvedValue(containers);
 
       await sandboxRecreateCommand({ all: true, browser: false, force: true }, runtime as never);
 
+      expect(runtime.log).toHaveBeenCalledWith("  - running-container [docker] (running)");
+      expect(runtime.log).toHaveBeenCalledWith("  - stopped-container [docker] (stopped)");
       expect(mocks.removeSandboxContainer).toHaveBeenCalledTimes(2);
     });
 

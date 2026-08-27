@@ -1,5 +1,6 @@
 // Terminal progress reporter used by long-running CLI commands.
 import { spinner } from "@clack/prompts";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   createOscProgressController,
   supportsOscProgress,
@@ -10,7 +11,6 @@ import {
   unregisterActiveProgressLine,
 } from "../../packages/terminal-core/src/progress-line.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_DELAY_MS = 0;
 // Only one active progress renderer may own the terminal line at a time.
@@ -89,6 +89,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   }
 
   let started = false;
+  let finished = false;
   let label = options.label;
   const total = options.total ?? null;
   let completed = 0;
@@ -144,7 +145,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   let timer: NodeJS.Timeout | null = null;
 
   const applyState = () => {
-    if (!started) {
+    if (!started || finished) {
       return;
     }
     if (controller) {
@@ -203,6 +204,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   };
 
   const done = () => {
+    // A finally block may finish an already-stopped reporter; never clear a newer owner's line.
+    if (finished) {
+      return;
+    }
+    finished = true;
     if (timer) {
       clearTimeout(timer);
       timer = null;

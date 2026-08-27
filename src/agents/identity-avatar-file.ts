@@ -3,8 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import { isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import {
   AVATAR_MAX_BYTES,
@@ -29,20 +29,19 @@ type LocalAgentAvatarFailureReason =
 export type OpenedLocalAgentAvatarFile = {
   path: string;
   fd: number;
+  stat: {
+    ctimeMs: number;
+    dev: number;
+    ino: number;
+    mtimeMs: number;
+    size: number;
+  };
 };
 
 type LocalAgentAvatarPath = {
   filePath: string;
   workspaceRoot: string;
 };
-
-function resolveExistingPath(value: string): string {
-  try {
-    return fs.realpathSync(value);
-  } catch {
-    return path.resolve(value);
-  }
-}
 
 /** Resolve one local avatar source while retaining its canonical workspace root. */
 export function resolveLocalAgentAvatarPath(params: {
@@ -51,12 +50,12 @@ export function resolveLocalAgentAvatarPath(params: {
 }):
   | { ok: true; value: LocalAgentAvatarPath }
   | { ok: false; reason: LocalAgentAvatarFailureReason } {
-  const workspaceRoot = resolveExistingPath(params.workspaceDir);
+  const workspaceRoot = resolveRealpathOrAbsolute(params.workspaceDir);
   const resolved =
     params.raw.startsWith("~") || path.isAbsolute(params.raw)
       ? resolveUserPath(params.raw)
       : path.resolve(workspaceRoot, params.raw);
-  const filePath = resolveExistingPath(resolved);
+  const filePath = resolveRealpathOrAbsolute(resolved);
   if (!isPathWithinRoot(workspaceRoot, filePath)) {
     return { ok: false, reason: "outside_workspace" };
   }
@@ -97,7 +96,17 @@ function openResolvedLocalAgentAvatarFile(
       fs.closeSync(opened.fd);
       return null;
     }
-    return { path: opened.path, fd: opened.fd };
+    return {
+      path: opened.path,
+      fd: opened.fd,
+      stat: {
+        ctimeMs: opened.stat.ctimeMs,
+        dev: opened.stat.dev,
+        ino: opened.stat.ino,
+        mtimeMs: opened.stat.mtimeMs,
+        size: opened.stat.size,
+      },
+    };
   } catch {
     return null;
   }

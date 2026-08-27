@@ -41,7 +41,7 @@ vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
 }));
 
-vi.mock("../agents/subagent-control.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-control.js", () => ({
   killSubagentRunAdmin: killSubagentRunAdminMock,
 }));
 
@@ -209,6 +209,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
       sessionKey: WORKER_SESSION_KEY,
+      agentId: "main",
     });
   });
 
@@ -264,6 +265,7 @@ describe("POST /sessions/:sessionKey/kill", () => {
     expect(killSubagentRunAdminMock).toHaveBeenCalledWith({
       cfg,
       sessionKey: WORKER_SESSION_KEY,
+      agentId: "main",
     });
   });
 

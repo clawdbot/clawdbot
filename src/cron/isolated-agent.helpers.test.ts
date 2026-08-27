@@ -1,6 +1,10 @@
 // Isolated agent helper tests cover utility behavior used by cron agent runs.
 import { describe, expect, it } from "vitest";
-import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
 
 describe("resolveCronPayloadOutcome", () => {
@@ -27,6 +31,33 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toContain("command not found");
     expect(result.summary).toContain("Exec failed");
+  });
+
+  it.each([
+    ["token", "NO_REPLY"],
+    ["JSON string", '"NO_REPLY"'],
+    ["envelope", '{"action":"NO_REPLY"}'],
+    ["reasoning-prefixed", "<think>internal reasoning</think>\nNO_REPLY"],
+  ])("keeps tool warnings fatal when terminal output is a silent %s", (_label, text) => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      finalAssistantVisibleText: text,
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("Bash failed");
+  });
+
+  it("keeps genuine visible terminal output as recovery proof", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      finalAssistantVisibleText: "Mount restored; report written.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.outputText).toBe("Mount restored; report written.");
   });
 
   it("lets preferred final assistant text recover a plain tool warning", () => {
@@ -274,12 +305,16 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
-  it("truncates long summaries", () => {
+  it.each([
+    ["a".repeat(2001), `${"a".repeat(2000)}…`],
+    [`${"a".repeat(1999)}🦞`, `${"a".repeat(1999)}…`],
+  ])("bounds summaries without truncating the selected output", (text, summary) => {
     const result = resolveCronPayloadOutcome({
-      payloads: [{ text: "a".repeat(2001) }],
+      payloads: [{ text }],
     });
 
-    expect(result.summary ?? "").toMatch(/…$/);
+    expect(result.summary).toBe(summary);
+    expect(result.outputText).toBe(text);
   });
 
   it("preserves all successful deliverable payloads when no final assistant text is available", () => {
@@ -311,6 +346,66 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.synthesizedText).toBe("section 1\nsection 2");
     expect(result.deliveryPayloads).toEqual([{ text: "section 1\nsection 2" }]);
     expect(result.deliveryPayload).toEqual({ text: "section 2" });
+  });
+
+  it.each([
+    {
+      name: "matching final answer",
+      texts: ["Final report"],
+      finalText: "Final report",
+      speech: true,
+    },
+    { name: "replaced answer", texts: ["Draft report"], finalText: "Final report", speech: false },
+    {
+      name: "earlier matching answer",
+      texts: ["Final report", "Later answer"],
+      finalText: "Final report",
+      speech: false,
+    },
+    {
+      name: "merged partial answers",
+      texts: ["section 1", "section 2"],
+      finalText: "section 1\nsection 2",
+      speech: false,
+    },
+    {
+      name: "matching recovered tool warning",
+      texts: ["⚠️ 🛠️ Exec failed"],
+      finalText: "⚠️ 🛠️ Exec failed",
+      speech: false,
+      isError: true,
+    },
+  ])("keeps only speech facts owned by the $name", ({ texts, finalText, speech, isError }) => {
+    const tts = { tagged: true as const, text: "Authored spoken report" };
+    const payloads = texts.map((text) =>
+      setReplyPayloadMetadata<ReplyPayload>(
+        { text, ...(isError ? { isError } : {}) },
+        {
+          tts,
+          sourceReplyTranscriptMirror: { sessionKey: "agent:main:source" },
+          pendingFinalDeliveryCompletion: {
+            deliveryId: "delivery-1",
+            intentId: "intent-1",
+            sessionId: "session-1",
+            sessionKey: "agent:main:source",
+            storePath: "/tmp/cron-speech-test.sqlite",
+          },
+          deliverDespiteSourceReplySuppression: true,
+        },
+      ),
+    );
+    const result = resolveCronPayloadOutcome({
+      payloads,
+      finalAssistantVisibleText: finalText,
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: finalText }]);
+    const metadata = getReplyPayloadMetadata(result.deliveryPayloads[0]!);
+    expect(metadata?.tts).toEqual(speech ? tts : undefined);
+    expect(metadata?.sourceReplyTranscriptMirror).toBeUndefined();
+    expect(metadata?.pendingFinalDeliveryCompletion).toBeUndefined();
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBeUndefined();
   });
 
   it("keeps structured-content detection scoped to the last delivery payload", () => {
@@ -374,6 +469,74 @@ describe("resolveCronPayloadOutcome", () => {
       { text: "Working on it..." },
       { text: "Final weather summary" },
     ]);
+  });
+
+  it("removes an earlier heartbeat acknowledgement from a substantive final result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }, { text: "Critical deployment failure" }],
+      finalAssistantVisibleText: "Critical deployment failure",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("uses producer-owned terminal text when trailing empty payloads follow a result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Critical deployment failure" }, { text: "  " }],
+      finalAssistantVisibleText: "Critical deployment failure",
+    });
+
+    expect(result.deliveryPayloads).toEqual([{ text: "Critical deployment failure" }]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("keeps a terminal heartbeat acknowledgement intentionally quiet", () => {
+    const payloads = [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }];
+    const result = resolveCronPayloadOutcome({
+      payloads,
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual(payloads);
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: false });
+  });
+
+  it("records a pure heartbeat acknowledgement as a control-only terminal", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryDisposition).toEqual({ kind: "heartbeat", controlOnly: true });
+  });
+
+  it("preserves structured output while removing a sibling heartbeat acknowledgement", () => {
+    const mediaPayload = {
+      text: "Here's the report",
+      mediaUrl: "https://example.com/report.png",
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "HEARTBEAT_OK" }, mediaPayload],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
+  });
+
+  it("keeps a heartbeat-labelled payload when the same payload carries media", () => {
+    const mediaPayload = {
+      text: "HEARTBEAT_OK",
+      mediaUrl: "https://example.com/report.png",
+    };
+    const result = resolveCronPayloadOutcome({
+      payloads: [mediaPayload],
+      finalAssistantVisibleText: "HEARTBEAT_OK",
+    });
+
+    expect(result.deliveryPayloads).toEqual([mediaPayload]);
+    expect(result.deliveryDisposition).toEqual({ kind: "visible" });
   });
 
   it("does not promote narrated denial markers in summary text to fatal errors", () => {

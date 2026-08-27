@@ -31,7 +31,11 @@ function mockHttpResponse(body: string, init: ResponseInit = {}): void {
   });
 }
 
-function createContractTool(options?: { cacheTtlMinutes?: number; maxChars?: number }) {
+function createContractTool(options?: {
+  cacheTtlMinutes?: number;
+  maxChars?: number;
+  userAgent?: string;
+}) {
   return createWebFetchTool({
     config: {
       tools: {
@@ -39,6 +43,7 @@ function createContractTool(options?: { cacheTtlMinutes?: number; maxChars?: num
           fetch: {
             cacheTtlMinutes: options?.cacheTtlMinutes ?? 0,
             maxChars: options?.maxChars,
+            userAgent: options?.userAgent,
           },
         },
       },
@@ -147,6 +152,40 @@ describe("web_fetch output contract", () => {
     expect(second).not.toHaveProperty("fullOutputPath");
     expect(second).not.toHaveProperty("spilledChars");
     expect(second).not.toHaveProperty("spillTruncated");
+  });
+
+  it("does not reuse cached responses across configured user agents", async () => {
+    fetchWithWebToolsNetworkGuardMock.mockImplementation(
+      async ({ init }: { init?: RequestInit }) => {
+        const userAgent = new Headers(init?.headers).get("User-Agent") ?? "";
+        return {
+          response: new Response(userAgent, {
+            status: 200,
+            headers: { "content-type": "text/plain; charset=utf-8" },
+          }),
+          finalUrl: "https://example.com/user-agent-cache-contract",
+          release: async () => {},
+        };
+      },
+    );
+    const args = { url: "https://example.com/user-agent-cache-contract" };
+    const first = requireDetails(
+      (await createContractTool({
+        cacheTtlMinutes: 1,
+        userAgent: "OpenClaw-Test-UA-A",
+      })?.execute("user-agent-a", args))!,
+    );
+    const second = requireDetails(
+      (await createContractTool({
+        cacheTtlMinutes: 1,
+        userAgent: "OpenClaw-Test-UA-B",
+      })?.execute("user-agent-b", args))!,
+    );
+
+    expect(first.text).toContain("OpenClaw-Test-UA-A");
+    expect(second.text).toContain("OpenClaw-Test-UA-B");
+    expect(second.cached).toBeUndefined();
+    expect(fetchWithWebToolsNetworkGuardMock).toHaveBeenCalledTimes(2);
   });
 
   it("shares cached responses across equivalent URL scheme and host casing", async () => {

@@ -2,11 +2,12 @@
 // On these machines the local gateway daemon is absent by design, but the node service may point at a remote gateway.
 
 import { DEFAULT_GATEWAY_PORT } from "../config/paths.js";
-import { loadNodeHostConfig } from "../node-host/config.js";
+import type { GatewayServiceLoadState } from "../daemon/service-types.js";
+import { loadNodeHostConfigReadOnly } from "../node-host/config.js";
 
 type NodeOnlyServiceLike = {
   installed: boolean | null;
-  loaded?: boolean | null;
+  loadState?: GatewayServiceLoadState;
   externallyManaged?: boolean;
   runtime?:
     | {
@@ -14,7 +15,6 @@ type NodeOnlyServiceLike = {
         pid?: number;
       }
     | undefined;
-  runtimeShort?: string | null;
 };
 
 export type NodeOnlyGatewayInfo = {
@@ -48,13 +48,10 @@ function isNodeServiceActive(node: NodeOnlyServiceLike): boolean {
     // Externally managed node services can be healthy even without local launchd/systemd loaded state.
     return true;
   }
-  if (node.loaded === true) {
+  if (node.loadState?.status === "loaded") {
     return true;
   }
-  if (hasRunningRuntime(node.runtime)) {
-    return true;
-  }
-  return typeof node.runtimeShort === "string" && node.runtimeShort.startsWith("running");
+  return hasRunningRuntime(node.runtime);
 }
 
 /** Returns node-only gateway context when node is active and the local gateway is intentionally absent. */
@@ -66,7 +63,7 @@ export async function resolveNodeOnlyGatewayInfo(params: {
     return null;
   }
 
-  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfig())?.gateway);
+  const gatewayTarget = resolveNodeGatewayTarget((await loadNodeHostConfigReadOnly())?.gateway);
   return {
     gatewayTarget,
     gatewayValue: `node → ${gatewayTarget} · no local gateway`,

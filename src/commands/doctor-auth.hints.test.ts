@@ -1,11 +1,17 @@
 // Doctor auth hint tests cover OAuth refresh failure formatting and auth repair guidance.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   collectAuthProfileHealthFindings,
   noteLegacyCodexProviderOverride,
+  noteSharedAuthStoreStatus,
 } from "./doctor-auth.js";
-import { legacyCodexProviderOverrideToHealthFinding } from "./doctor-auth.test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
@@ -64,20 +70,45 @@ describe("doctor auth hints", () => {
     );
   });
 
-  it("maps legacy Codex overrides to structured auth profile findings", () => {
-    expect(
-      legacyCodexProviderOverrideToHealthFinding({
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      }),
-    ).toMatchObject({
-      checkId: "core/doctor/auth-profiles",
-      severity: "warning",
-      message:
-        "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.",
-      path: "models.providers.openai-codex",
-      target: "openai-codex",
-    });
+  it("does not report a legacy shared auth owner without stored credentials", () => {
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-shared-auth-"),
+    };
+    noteSharedAuthStoreStatus(env);
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("reports the legacy shared auth owner with stored credentials", () => {
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-shared-auth-"),
+    };
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+        },
+      },
+      resolveSharedMainAuthAgentDir(env),
+    );
+    noteSharedAuthStoreStatus(env);
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw doctor --fix"),
+      "Shared auth store",
+    );
+
+    mocks.note.mockClear();
+    const relocatedEnv = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-relocated-auth-"),
+    };
+    writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: relocatedEnv });
+    noteSharedAuthStoreStatus(relocatedEnv);
+    expect(mocks.note).not.toHaveBeenCalled();
   });
 
   it("collects legacy Codex override structured findings", async () => {
@@ -104,6 +135,9 @@ describe("doctor auth hints", () => {
     expect(findings).toEqual([
       expect.objectContaining({
         checkId: "core/doctor/auth-profiles",
+        severity: "warning",
+        message:
+          "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.",
         path: "models.providers.openai-codex",
         target: "openai-codex",
       }),

@@ -1,4 +1,5 @@
 // WhatsApp tests cover outbound retry behavior.
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { describe, expect, it, vi } from "vitest";
 import { sendWhatsAppOutboundWithRetry } from "./outbound-retry.js";
 import { withWhatsAppSocketOperationTimeout } from "./socket-timing.js";
@@ -72,6 +73,23 @@ describe("sendWhatsAppOutboundWithRetry", () => {
       name: "WhatsAppSocketOperationTimeoutError",
       deliveryState: "unknown",
     });
+    expect(send).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it("never replays a send whose disconnect error already carries an accepted receipt", async () => {
+    const acceptedFailure = createChannelPartialDeliveryError(new Error("connection closed"), {
+      messageIds: ["accepted-1"],
+      visibleReplySent: true,
+    });
+    const send = vi.fn<() => Promise<string>>().mockRejectedValue(acceptedFailure);
+    const onRetry = vi.fn();
+
+    const failure = await runWithFakeTimers(() =>
+      sendWhatsAppOutboundWithRetry({ send, onRetry }).catch((caught: unknown) => caught),
+    );
+
+    expect(failure).toBe(acceptedFailure);
     expect(send).toHaveBeenCalledOnce();
     expect(onRetry).not.toHaveBeenCalled();
   });

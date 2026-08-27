@@ -291,6 +291,19 @@ describe("handleWorkboardCommand", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
+  it("shows when an archived card is excluded from dispatch", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const card = await store.create({ title: "Archived slash card", status: "ready" });
+    await store.archive(card.id, true);
+
+    await expect(runWorkboardCommand({ api, store, args: `show ${card.id}` })).resolves.toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("archived: yes (excluded from dispatch)"),
+      }),
+    );
+  });
+
   it("moves claimed cards for operators on slash-command surfaces", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = createApi();

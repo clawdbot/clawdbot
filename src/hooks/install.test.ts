@@ -344,6 +344,52 @@ describe("installHooksFromPath", () => {
     expect(result).toEqual({ ok: false, error, code });
   });
 
+  it.each([
+    { mode: "install", options: {}, names: ["shared-hook", "shared-hook"] },
+    { mode: "dry run", options: { dryRun: true }, names: ["shared-hook", "shared-hook"] },
+    {
+      mode: "package inspection",
+      options: { inspection: "package-kind" as const },
+      names: ["shared-hook", "shared-hook"],
+    },
+    { mode: "case-sensitive install", options: {}, names: ["shared-hook", "Shared-Hook"] },
+  ])("validates hook-name uniqueness before $mode side effects", async ({ options, names }) => {
+    const pkgDir = makeTempDir();
+    const hooksDir = path.join(makeTempDir(), "managed-hooks");
+    writeHookPackManifest({
+      pkgDir,
+      hooks: names.map((_, index) => `./hooks/${index}`),
+    });
+    for (const [index, name] of names.entries()) {
+      const hookDir = path.join(pkgDir, "hooks", String(index));
+      fs.mkdirSync(hookDir, { recursive: true });
+      fs.writeFileSync(path.join(hookDir, "HOOK.md"), `---\nname: ${name}\n---\n`);
+      fs.writeFileSync(path.join(hookDir, "handler.js"), "export default async () => {};\n");
+    }
+    const targetAvailability = vi.spyOn(hookInstallRuntime, "ensureInstallTargetAvailable");
+
+    try {
+      const result = await installHooksFromPath({ path: pkgDir, hooksDir, ...options });
+      if (names[0] !== names[1]) {
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.hooks).toEqual(names);
+        }
+        return;
+      }
+      expect(result).toEqual({
+        ok: false,
+        error: 'duplicate hook name "shared-hook" in hook package',
+      });
+      expect(targetAvailability).not.toHaveBeenCalled();
+      expect(scanPackageInstallSourceMock).not.toHaveBeenCalled();
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      expect(fs.existsSync(hooksDir)).toBe(false);
+    } finally {
+      targetAvailability.mockRestore();
+    }
+  });
+
   it("uses --ignore-scripts for dependency install", async () => {
     const workDir = makeTempDir();
     const stateDir = makeTempDir();

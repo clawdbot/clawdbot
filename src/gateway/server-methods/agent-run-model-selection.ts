@@ -3,11 +3,11 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentTurnContext } from "../agent-turn/types.js";
 import { updateChatRunProvider } from "../chat-abort.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function createAgentRunModelSelectionHandler(params: {
-  context: GatewayRequestHandlerOptions["context"];
+  context: Pick<AgentTurnContext, "chatAbortControllers">;
   runId: string;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -15,8 +15,14 @@ export function createAgentRunModelSelectionHandler(params: {
   resolvedSessionKey?: string;
   lifecycleStorePath: string;
   activeSessionAgentId: string;
+  trustedInternalHandoff?: { provider: string; model: string };
 }): (selection: { provider: string; model: string }) => Promise<void> {
   return async ({ provider, model }) => {
+    if (params.trustedInternalHandoff) {
+      // The one-use grant remains tied to this run while its active model falls back.
+      params.trustedInternalHandoff.provider = provider.trim().toLowerCase();
+      params.trustedInternalHandoff.model = model.trim();
+    }
     updateChatRunProvider(params.context.chatAbortControllers, {
       runId: params.runId,
       providerId: provider,

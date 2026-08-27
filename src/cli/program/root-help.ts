@@ -1,7 +1,7 @@
 // Root help renderer that combines core, sub-CLI, and optional plugin command descriptors.
 import { Command } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getPluginCliCommandDescriptors } from "../../plugins/cli.js";
+import { getPluginCliCommandDescriptors } from "../../plugins/cli-root-descriptors.js";
 import type { PluginLoadOptions } from "../../plugins/loader.js";
 import { VERSION } from "../../version.js";
 import {
@@ -10,7 +10,7 @@ import {
 } from "./command-descriptor-utils.js";
 import { getCoreCliCommandDescriptors } from "./core-command-descriptors.js";
 import { configureProgramHelp, formatProgramHelpOutput } from "./help.js";
-import { getSubCliEntries } from "./subcli-descriptors.js";
+import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
 /** Options for rendering root help without fully registering the live CLI. */
 export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
@@ -48,7 +48,7 @@ async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Prom
     program,
     collectUniqueCommandDescriptors([
       getCoreCliCommandDescriptors(),
-      getSubCliEntries(),
+      getSubCliEntriesCore(),
       pluginDescriptors,
     ]),
   );

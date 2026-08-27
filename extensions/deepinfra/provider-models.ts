@@ -359,13 +359,15 @@ export function buildDeepInfraModelDefinition(model: ModelDefinitionConfig): Mod
 }
 
 function chatSurfaceModelToModelDefinition(model: DeepInfraSurfaceModel): ModelDefinitionConfig {
+  const manifestModel = DEEPINFRA_MODEL_CATALOG.find((entry) => entry.id === model.id);
   const input: Array<"text" | "image"> = model.tags.includes("vlm") ? ["text", "image"] : ["text"];
   const reasoning = model.tags.includes("reasoning") || model.tags.includes("reasoning_effort");
   return buildDeepInfraModelDefinition({
     id: model.id,
     name: model.name,
-    reasoning,
+    reasoning: manifestModel?.reasoning ?? reasoning,
     input,
+    ...(manifestModel?.compat ? { compat: manifestModel.compat } : {}),
     contextWindow: model.contextWindow ?? DEEPINFRA_DEFAULT_CONTEXT_WINDOW,
     maxTokens: model.maxTokens ?? DEEPINFRA_DEFAULT_MAX_TOKENS,
     cost: {
@@ -411,11 +413,11 @@ export async function discoverDeepInfraSurfaces(options?: {
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
 }): Promise<DeepInfraDiscoveredCatalog> {
-  if (process.env.NODE_ENV === "test" || process.env.VITEST) {
+  const env = options?.env ?? process.env;
+  if (env.NODE_ENV === "test" || env.VITEST) {
     return manifestFallbackCatalog();
   }
 
-  const env = options?.env ?? process.env;
   const hasKey = options?.hasApiKey ?? hasDeepInfraApiKey({ env, agentDir: options?.agentDir });
   if (!hasKey) {
     return manifestFallbackCatalog();
@@ -468,6 +470,11 @@ export async function discoverDeepInfraModels(options?: {
   agentDir?: string;
 }): Promise<ModelDefinitionConfig[]> {
   const catalog = await discoverDeepInfraSurfaces(options);
+  if (!catalog.live) {
+    // Keep manifest-owned chat compatibility metadata intact. The generic
+    // surface projection intentionally carries only cross-surface fields.
+    return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
+  }
   const chatModels = catalog.chat.length > 0 ? catalog.chat : [...catalog.chat, ...catalog.vlm];
   if (chatModels.length === 0) {
     // True empty (no manifest entries either) — keep behavior stable.
@@ -475,14 +482,10 @@ export async function discoverDeepInfraModels(options?: {
   }
   const liveModels = chatModels.map(chatSurfaceModelToModelDefinition);
   const seen = new Set(liveModels.map((model) => model.id));
-  const manifestModels = DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition).filter(
-    (model) => {
-      if (seen.has(model.id)) {
-        return false;
-      }
-      seen.add(model.id);
-      return true;
-    },
-  );
+  const manifestModels = DEEPINFRA_MODEL_CATALOG.filter((model) => {
+    const unseen = !seen.has(model.id);
+    seen.add(model.id);
+    return unseen;
+  }).map(buildDeepInfraModelDefinition);
   return [...liveModels, ...manifestModels];
 }

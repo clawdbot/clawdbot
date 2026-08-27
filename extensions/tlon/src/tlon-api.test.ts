@@ -39,6 +39,43 @@ const mockAuthenticate = vi.mocked(authenticate);
 const mockScryUrbitPath = vi.mocked(scryUrbitPath);
 const mockGuardedFetch = vi.mocked(fetchWithSsrFGuard);
 
+const MEMEX_ENDPOINT = "https://memex.tlon.network/v1/zod/upload";
+const MEMEX_UPLOAD_URL = "https://uploads.tlon.network/put";
+const S3_UPLOAD_URL = "https://s3.example.com/uploads/file?sig=abc";
+const AVATAR_UPLOAD = {
+  blob: new Blob(["image-bytes"], { type: "image/png" }),
+  fileName: "avatar.png",
+  contentType: "image/png",
+};
+
+const MEMEX_STORAGE = {
+  configuration: {
+    currentBucket: "uploads",
+    buckets: ["uploads"],
+    publicUrlBase: "https://files.tlon.network/",
+    presignedUrl: "https://files.tlon.network/presigned",
+    region: "us-east-1",
+    service: "presigned-url",
+  },
+  secret: "genuine-secret",
+};
+
+const CUSTOM_STORAGE = {
+  configuration: {
+    currentBucket: "uploads",
+    buckets: ["uploads"],
+    publicUrlBase: "https://files.example.com/",
+    presignedUrl: "",
+    region: "us-east-1",
+    service: "custom",
+  },
+  credentials: {
+    endpoint: "https://s3.example.com",
+    accessKeyId: "AKIAFAKE",
+    secretAccessKey: "fake-secret",
+  },
+};
+
 function createMemexResponse(
   uploadUrl: string,
   filePath = "https://memex.tlon.network/files/uploaded.png",
@@ -87,63 +124,77 @@ function guardedFetchCall(index: number): Parameters<typeof fetchWithSsrFGuard>[
   return call;
 }
 
+function configureTestClient(shipUrl: string, dangerouslyAllowPrivateNetwork?: boolean): void {
+  configureClient({
+    shipUrl,
+    shipName: "~zod",
+    verbose: false,
+    getCode: async () => "123456",
+    dangerouslyAllowPrivateNetwork,
+  });
+}
+
+function mockStorageScry(params: {
+  configuration: Record<string, unknown>;
+  credentials?: Record<string, unknown>;
+  secret?: string;
+}): void {
+  mockScryUrbitPath.mockImplementation(async (_deps, { path }) => {
+    if (path === "/storage/configuration.json") {
+      return params.configuration;
+    }
+    if (path === "/storage/credentials.json") {
+      return { "storage-update": params.credentials ? { credentials: params.credentials } : {} };
+    }
+    if (path === "/genuine/secret.json" && params.secret) {
+      return { secret: params.secret };
+    }
+    throw new Error(`Unexpected scry path: ${path}`);
+  });
+}
+
+function mockMemexLookup(uploadUrl = MEMEX_UPLOAD_URL, filePath?: string): void {
+  mockGuardedFetch.mockResolvedValueOnce(
+    createGuardedResult(createMemexResponse(uploadUrl, filePath), MEMEX_ENDPOINT),
+  );
+}
+
+function mockGuardedResponse(
+  finalUrl: string,
+  response = new Response(null, { status: 200 }),
+): void {
+  mockGuardedFetch.mockResolvedValueOnce(createGuardedResult(response, finalUrl));
+}
+
+function uploadAvatar() {
+  return uploadFile(AVATAR_UPLOAD);
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubGlobal("fetch", vi.fn());
+  mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
+
 describe("uploadFile memex upload hardening", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.stubGlobal("fetch", vi.fn());
-    mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
-    configureClient({
-      shipUrl: "https://groups.tlon.network",
-      shipName: "~zod",
-      verbose: false,
-      getCode: async () => "123456",
-    });
-    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
-      if (params.path === "/storage/configuration.json") {
-        return {
-          currentBucket: "uploads",
-          buckets: ["uploads"],
-          publicUrlBase: "https://files.tlon.network/",
-          presignedUrl: "https://files.tlon.network/presigned",
-          region: "us-east-1",
-          service: "presigned-url",
-        };
-      }
-      if (params.path === "/storage/credentials.json") {
-        return { "storage-update": {} };
-      }
-      if (params.path === "/genuine/secret.json") {
-        return { secret: "genuine-secret" };
-      }
-      throw new Error(`Unexpected scry path: ${params.path}`);
-    });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+    configureTestClient("https://groups.tlon.network");
+    mockStorageScry(MEMEX_STORAGE);
   });
 
   it("routes the memex upload URL through the SSRF guard", async () => {
-    const lookupResponse = createMemexResponse("https://uploads.tlon.network/put");
+    const lookupResponse = createMemexResponse(MEMEX_UPLOAD_URL);
     const lookupCancel = vi.spyOn(lookupResponse.body!, "cancel");
     const uploadCancel = vi.fn();
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(lookupResponse, "https://memex.tlon.network/v1/zod/upload"),
-      )
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          responseWithCancelableBody(200, uploadCancel),
-          "https://uploads.tlon.network/put",
-        ),
-      );
+    mockGuardedResponse(MEMEX_ENDPOINT, lookupResponse);
+    mockGuardedResponse(MEMEX_UPLOAD_URL, responseWithCancelableBody(200, uploadCancel));
 
-    const result = await uploadFile({
-      blob: new Blob(["image-bytes"], { type: "image/png" }),
-      fileName: "avatar.png",
-      contentType: "image/png",
-    });
+    const result = await uploadAvatar();
 
     expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
@@ -196,13 +247,7 @@ describe("uploadFile memex upload hardening", () => {
       ),
     );
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Memex upload request failed: 500");
+    await expect(uploadAvatar()).rejects.toThrow("Memex upload request failed: 500");
 
     expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
@@ -210,22 +255,10 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("surfaces guarded upload failures for hosted Memex targets", async () => {
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse("https://uploads.tlon.network/put"),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockRejectedValueOnce(new Error("Blocked upload target"));
+    mockMemexLookup();
+    mockGuardedFetch.mockRejectedValueOnce(new Error("Blocked upload target"));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Blocked upload target");
+    await expect(uploadAvatar()).rejects.toThrow("Blocked upload target");
 
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
@@ -239,27 +272,10 @@ describe("uploadFile memex upload hardening", () => {
 
   it("cancels failed Memex upload responses before releasing their guard", async () => {
     const cancelBody = vi.fn();
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse("https://uploads.tlon.network/put"),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          responseWithCancelableBody(500, cancelBody),
-          "https://uploads.tlon.network/put",
-        ),
-      );
+    mockMemexLookup();
+    mockGuardedResponse(MEMEX_UPLOAD_URL, responseWithCancelableBody(500, cancelBody));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Upload failed: 500");
+    await expect(uploadAvatar()).rejects.toThrow("Upload failed: 500");
 
     expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(2);
@@ -267,47 +283,23 @@ describe("uploadFile memex upload hardening", () => {
 
   it("cancels hosted upload responses when their final URL is untrusted", async () => {
     const cancelBody = vi.fn();
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse("https://uploads.tlon.network/put"),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          responseWithCancelableBody(200, cancelBody),
-          "https://evil.example/put",
-        ),
-      );
+    mockMemexLookup();
+    mockGuardedResponse("https://evil.example/put", responseWithCancelableBody(200, cancelBody));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Memex final upload URL must target a trusted hosted Tlon domain");
+    await expect(uploadAvatar()).rejects.toThrow(
+      "Memex final upload URL must target a trusted hosted Tlon domain",
+    );
 
     expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(2);
   });
 
   it("rejects Memex upload targets outside the hosted Tlon domain allowlist", async () => {
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(
-        createMemexResponse("https://eviltlon.network/upload"),
-        "https://memex.tlon.network/v1/zod/upload",
-      ),
-    );
+    mockMemexLookup("https://eviltlon.network/upload");
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Memex upload URL must target a trusted hosted Tlon domain");
+    await expect(uploadAvatar()).rejects.toThrow(
+      "Memex upload URL must target a trusted hosted Tlon domain",
+    );
 
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
@@ -315,30 +307,12 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("rejects Memex hosted result URLs outside the hosted Tlon domain allowlist", async () => {
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse(
-            "https://uploads.tlon.network/put",
-            "https://evil.example/files/uploaded.png",
-          ),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          new Response(null, { status: 200 }),
-          "https://uploads.tlon.network/put",
-        ),
-      );
+    mockMemexLookup(MEMEX_UPLOAD_URL, "https://evil.example/files/uploaded.png");
+    mockGuardedResponse(MEMEX_UPLOAD_URL);
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Memex hosted URL must target a trusted hosted Tlon domain");
+    await expect(uploadAvatar()).rejects.toThrow(
+      "Memex hosted URL must target a trusted hosted Tlon domain",
+    );
 
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
@@ -346,20 +320,11 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("rejects Memex upload targets with a non-standard port", async () => {
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(
-        createMemexResponse("https://uploads.tlon.network:8443/put"),
-        "https://memex.tlon.network/v1/zod/upload",
-      ),
-    );
+    mockMemexLookup("https://uploads.tlon.network:8443/put");
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Memex upload URL must not specify a non-standard port");
+    await expect(uploadAvatar()).rejects.toThrow(
+      "Memex upload URL must not specify a non-standard port",
+    );
 
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
@@ -367,22 +332,10 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("disables redirects for Memex upload targets", async () => {
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse("https://uploads.tlon.network/put"),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockRejectedValueOnce(new Error("Too many redirects (limit: 0)"));
+    mockMemexLookup();
+    mockGuardedFetch.mockRejectedValueOnce(new Error("Too many redirects (limit: 0)"));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Too many redirects (limit: 0)");
+    await expect(uploadAvatar()).rejects.toThrow("Too many redirects (limit: 0)");
 
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
@@ -413,13 +366,7 @@ describe("uploadFile memex upload hardening", () => {
       ),
     );
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Memex upload: JSON response exceeds 65536 bytes");
+    await expect(uploadAvatar()).rejects.toThrow("Memex upload: JSON response exceeds 65536 bytes");
 
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(bodyReads).toBeLessThan(10);
@@ -428,31 +375,11 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("routes scheme-less hosted ship URLs through the Memex upload path", async () => {
-    configureClient({
-      shipUrl: "foo.tlon.network",
-      shipName: "~zod",
-      verbose: false,
-      getCode: async () => "123456",
-    });
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse("https://uploads.tlon.network/put"),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          new Response(null, { status: 200 }),
-          "https://uploads.tlon.network/put",
-        ),
-      );
+    configureTestClient("foo.tlon.network");
+    mockMemexLookup();
+    mockGuardedResponse(MEMEX_UPLOAD_URL);
 
-    const result = await uploadFile({
-      blob: new Blob(["image-bytes"], { type: "image/png" }),
-      fileName: "avatar.png",
-      contentType: "image/png",
-    });
+    const result = await uploadAvatar();
 
     expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
@@ -460,61 +387,21 @@ describe("uploadFile memex upload hardening", () => {
   });
 
   it("rejects truly unparseable ship URLs as not hosted", async () => {
-    configureClient({
-      shipUrl: "   ",
-      shipName: "~zod",
-      verbose: false,
-      getCode: async () => "123456",
-    });
-    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
-      if (params.path === "/storage/configuration.json") {
-        return {
-          currentBucket: "uploads",
-          buckets: ["uploads"],
-          publicUrlBase: "https://files.tlon.network/",
-          presignedUrl: "https://files.tlon.network/presigned",
-          region: "us-east-1",
-          service: "presigned-url",
-        };
-      }
-      if (params.path === "/storage/credentials.json") {
-        return { "storage-update": {} };
-      }
-      throw new Error(`Unexpected scry path: ${params.path}`);
-    });
+    configureTestClient("   ");
+    mockStorageScry({ configuration: MEMEX_STORAGE.configuration });
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("No storage credentials configured");
+    await expect(uploadAvatar()).rejects.toThrow("No storage credentials configured");
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).not.toHaveBeenCalled();
     expect(mockRelease).not.toHaveBeenCalled();
   });
 
   it("accepts hosted Memex upload URLs with an explicit :443 port", async () => {
-    mockGuardedFetch
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          createMemexResponse("https://uploads.tlon.network:443/put"),
-          "https://memex.tlon.network/v1/zod/upload",
-        ),
-      )
-      .mockResolvedValueOnce(
-        createGuardedResult(
-          new Response(null, { status: 200 }),
-          "https://uploads.tlon.network:443/put",
-        ),
-      );
+    const uploadUrl = "https://uploads.tlon.network:443/put";
+    mockMemexLookup(uploadUrl);
+    mockGuardedResponse(uploadUrl);
 
-    const result = await uploadFile({
-      blob: new Blob(["image-bytes"], { type: "image/png" }),
-      fileName: "avatar.png",
-      contentType: "image/png",
-    });
+    const result = await uploadAvatar();
 
     expect(result).toEqual({ url: "https://memex.tlon.network/files/uploaded.png" });
     expect(mockGuardedFetch).toHaveBeenCalledTimes(2);
@@ -524,13 +411,7 @@ describe("uploadFile memex upload hardening", () => {
   it("disables redirects for the Memex upload URL lookup", async () => {
     mockGuardedFetch.mockRejectedValueOnce(new Error("Too many redirects (limit: 0)"));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Too many redirects (limit: 0)");
+    await expect(uploadAvatar()).rejects.toThrow("Too many redirects (limit: 0)");
 
     expect(vi.mocked(globalThis.fetch)).not.toHaveBeenCalled();
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
@@ -545,63 +426,18 @@ describe("uploadFile memex upload hardening", () => {
 
 describe("uploadFile custom S3 upload hardening", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.stubGlobal("fetch", vi.fn());
-    mockAuthenticate.mockResolvedValue("urbauth-~zod=fake-cookie");
-    configureClient({
-      shipUrl: "https://ship.example.com",
-      shipName: "~zod",
-      verbose: false,
-      getCode: async () => "123456",
-    });
-    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
-      if (params.path === "/storage/configuration.json") {
-        return {
-          currentBucket: "uploads",
-          buckets: ["uploads"],
-          publicUrlBase: "https://files.example.com/",
-          presignedUrl: "",
-          region: "us-east-1",
-          service: "custom",
-        };
-      }
-      if (params.path === "/storage/credentials.json") {
-        return {
-          "storage-update": {
-            credentials: {
-              endpoint: "https://s3.example.com",
-              accessKeyId: "AKIAFAKE",
-              secretAccessKey: "fake-secret",
-            },
-          },
-        };
-      }
-      throw new Error(`Unexpected scry path: ${params.path}`);
-    });
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+    configureTestClient("https://ship.example.com");
+    mockStorageScry(CUSTOM_STORAGE);
   });
 
   it("routes the custom S3 signed URL through the SSRF guard", async () => {
     const cancelBody = vi.fn(async () => {
       throw new Error("stream cancellation failed");
     });
-    mockGetSignedUrl.mockResolvedValueOnce("https://s3.example.com/uploads/file?sig=abc");
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(
-        responseWithCancelableBody(200, cancelBody),
-        "https://s3.example.com/uploads/file?sig=abc",
-      ),
-    );
+    mockGetSignedUrl.mockResolvedValueOnce(S3_UPLOAD_URL);
+    mockGuardedResponse(S3_UPLOAD_URL, responseWithCancelableBody(200, cancelBody));
 
-    const result = await uploadFile({
-      blob: new Blob(["image-bytes"], { type: "image/png" }),
-      fileName: "avatar.png",
-      contentType: "image/png",
-    });
+    const result = await uploadAvatar();
 
     expect(result.url.startsWith("https://files.example.com/")).toBe(true);
     const signedUrlCall = mockGetSignedUrl.mock.calls[0];
@@ -628,13 +464,7 @@ describe("uploadFile custom S3 upload hardening", () => {
     mockGetSignedUrl.mockResolvedValueOnce("https://169.254.169.254/uploads/file?sig=abc");
     mockGuardedFetch.mockRejectedValueOnce(new Error("Blocked private network target"));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Blocked private network target");
+    await expect(uploadAvatar()).rejects.toThrow("Blocked private network target");
 
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(mockRelease).not.toHaveBeenCalled();
@@ -643,34 +473,17 @@ describe("uploadFile custom S3 upload hardening", () => {
 
   it("cancels failed custom S3 upload responses before releasing their guard", async () => {
     const cancelBody = vi.fn();
-    mockGetSignedUrl.mockResolvedValueOnce("https://s3.example.com/uploads/file?sig=abc");
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(
-        responseWithCancelableBody(500, cancelBody),
-        "https://s3.example.com/uploads/file?sig=abc",
-      ),
-    );
+    mockGetSignedUrl.mockResolvedValueOnce(S3_UPLOAD_URL);
+    mockGuardedResponse(S3_UPLOAD_URL, responseWithCancelableBody(500, cancelBody));
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Upload failed: 500");
+    await expect(uploadAvatar()).rejects.toThrow("Upload failed: 500");
 
     expect(cancelBody).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);
   });
 
   it("passes the private-network opt-in to guarded custom S3 uploads", async () => {
-    configureClient({
-      shipUrl: "https://ship.example.com",
-      shipName: "~zod",
-      verbose: false,
-      getCode: async () => "123456",
-      dangerouslyAllowPrivateNetwork: true,
-    });
+    configureTestClient("https://ship.example.com", true);
     mockGetSignedUrl.mockResolvedValueOnce("https://10.0.0.15/uploads/file?sig=abc");
     mockGuardedFetch.mockResolvedValueOnce(
       createGuardedResult(
@@ -679,11 +492,7 @@ describe("uploadFile custom S3 upload hardening", () => {
       ),
     );
 
-    const result = await uploadFile({
-      blob: new Blob(["image-bytes"], { type: "image/png" }),
-      fileName: "avatar.png",
-      contentType: "image/png",
-    });
+    const result = await uploadAvatar();
 
     expect(result.url.startsWith("https://files.example.com/")).toBe(true);
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
@@ -697,45 +506,17 @@ describe("uploadFile custom S3 upload hardening", () => {
   });
 
   it("rejects custom S3 result URLs that are not http(s)", async () => {
-    mockScryUrbitPath.mockImplementation(async (_deps, params) => {
-      if (params.path === "/storage/configuration.json") {
-        return {
-          currentBucket: "uploads",
-          buckets: ["uploads"],
-          publicUrlBase: "ftp://files.example.com/",
-          presignedUrl: "",
-          region: "us-east-1",
-          service: "custom",
-        };
-      }
-      if (params.path === "/storage/credentials.json") {
-        return {
-          "storage-update": {
-            credentials: {
-              endpoint: "https://s3.example.com",
-              accessKeyId: "AKIAFAKE",
-              secretAccessKey: "fake-secret",
-            },
-          },
-        };
-      }
-      throw new Error(`Unexpected scry path: ${params.path}`);
+    mockStorageScry({
+      ...CUSTOM_STORAGE,
+      configuration: {
+        ...CUSTOM_STORAGE.configuration,
+        publicUrlBase: "ftp://files.example.com/",
+      },
     });
-    mockGetSignedUrl.mockResolvedValueOnce("https://s3.example.com/uploads/file?sig=abc");
-    mockGuardedFetch.mockResolvedValueOnce(
-      createGuardedResult(
-        new Response(null, { status: 200 }),
-        "https://s3.example.com/uploads/file?sig=abc",
-      ),
-    );
+    mockGetSignedUrl.mockResolvedValueOnce(S3_UPLOAD_URL);
+    mockGuardedResponse(S3_UPLOAD_URL);
 
-    await expect(
-      uploadFile({
-        blob: new Blob(["image-bytes"], { type: "image/png" }),
-        fileName: "avatar.png",
-        contentType: "image/png",
-      }),
-    ).rejects.toThrow("Upload result URL must use http or https");
+    await expect(uploadAvatar()).rejects.toThrow("Upload result URL must use http or https");
 
     expect(mockGuardedFetch).toHaveBeenCalledTimes(1);
     expect(mockRelease).toHaveBeenCalledTimes(1);

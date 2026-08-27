@@ -213,7 +213,6 @@ describe("nvidia provider hooks", () => {
       "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m3",
       "deepseek-ai/deepseek-v4-pro",
-      "qwen/qwen3.5-397b-a17b",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
@@ -232,13 +231,12 @@ describe("nvidia provider hooks", () => {
       "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m3",
       "deepseek-ai/deepseek-v4-pro",
-      "qwen/qwen3.5-397b-a17b",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces live featured NVIDIA models via augmentModelCatalog", async () => {
+  it("surfaces republished NVIDIA featured models via augmentModelCatalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -247,13 +245,22 @@ describe("nvidia provider hooks", () => {
           context: 196608,
           "max-output": 8192,
         },
+        {
+          model: "qwen/qwen3.5-397b-a17b",
+          "model-name": "Qwen3.5 397B A17B",
+          context: 262144,
+          "max-output": 32768,
+        },
       ],
     });
     const provider = await registerNvidiaProvider();
 
     const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
 
-    expect(entries?.map((entry) => entry.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(entries?.map((entry) => entry.id)).toEqual([
+      "minimaxai/minimax-m3",
+      "qwen/qwen3.5-397b-a17b",
+    ]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
@@ -285,6 +292,12 @@ describe("nvidia provider hooks", () => {
           context: 196608,
           "max-output": 8192,
         },
+        {
+          model: "qwen/qwen3.5-397b-a17b",
+          "model-name": "Qwen3.5 397B A17B",
+          context: 262144,
+          "max-output": 32768,
+        },
       ],
     });
     const { registeredModelCatalogProviders } = registerNvidiaPluginApi();
@@ -301,7 +314,6 @@ describe("nvidia provider hooks", () => {
       "static:nvidia/moonshotai/kimi-k2.6",
       "static:nvidia/minimaxai/minimax-m3",
       "static:nvidia/deepseek-ai/deepseek-v4-pro",
-      "static:nvidia/qwen/qwen3.5-397b-a17b",
     ]);
 
     await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);
@@ -309,6 +321,7 @@ describe("nvidia provider hooks", () => {
     const liveRows = await catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test"));
     expect(liveRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "live:nvidia/minimaxai/minimax-m3",
+      "live:nvidia/qwen/qwen3.5-397b-a17b",
     ]);
   });
 

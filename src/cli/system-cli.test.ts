@@ -31,6 +31,10 @@ function gatewayCall(callIndex = 0): ReadonlyArray<unknown> {
   return call;
 }
 
+function jsonFailure(message: string) {
+  return { ok: false, error: { type: "cli_error", message } };
+}
+
 describe("system-cli", () => {
   async function runCli(args: string[]) {
     const program = new Command();
@@ -69,11 +73,79 @@ describe("system-cli", () => {
     expect(runtimeLogs).toEqual([JSON.stringify({ id: "wake-1" }, null, 2)]);
   });
 
+  it("reports a rejected system event instead of claiming it was enqueued", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({ ok: false, reason: "unwakeable-session-key" });
+
+    await runCli(["system", "event", "--text", "hello"]);
+
+    expect(runtimeLogs).toEqual([]);
+    expect(runtimeErrors[0]).toContain("unwakeable-session-key");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("handles invalid wake mode as runtime error", async () => {
     await runCli(["system", "event", "--text", "hello", "--mode", "later"]);
 
     expect(callGatewayFromCli).not.toHaveBeenCalled();
+    expect(runtimeLogs).toEqual([]);
     expect(runtimeErrors[0]).toContain("--mode must be now or next-heartbeat");
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    {
+      name: "invalid wake mode",
+      args: ["system", "event", "--text", "hello", "--mode", "later", "--json"],
+      gatewayResult: undefined,
+      expectedError: "--mode must be now or next-heartbeat",
+      gatewayCalls: 0,
+    },
+    {
+      name: "rejected Gateway call",
+      args: ["system", "event", "--text", "hello", "--json"],
+      gatewayResult: { ok: false, reason: "unwakeable-session-key" },
+      expectedError: "unwakeable-session-key",
+      gatewayCalls: 1,
+    },
+  ])(
+    "writes JSON when $name fails",
+    async ({ args, gatewayResult, expectedError, gatewayCalls }) => {
+      if (gatewayResult) {
+        callGatewayFromCli.mockResolvedValueOnce(gatewayResult);
+      }
+
+      await runCli(args);
+
+      expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
+      expect(runtimeErrors).toEqual([]);
+      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(callGatewayFromCli).toHaveBeenCalledTimes(gatewayCalls);
+    },
+  );
+
+  it.each([
+    { mode: "human", args: ["system", "event", "--text", "hello"] },
+    { mode: "JSON", args: ["system", "event", "--text", "hello", "--json"] },
+  ])("renders named errors without class names in $mode mode", async ({ mode, args }) => {
+    const error = new Error("Multiple agents are configured, but this operation has no owner.");
+    error.name = "AgentSelectionRequiredError";
+    callGatewayFromCli.mockRejectedValueOnce(error);
+
+    await runCli(args);
+
+    if (mode === "JSON") {
+      const payload = JSON.parse(runtimeLogs.at(-1) ?? "");
+      expect(payload).toEqual(jsonFailure(error.message));
+      expect(runtimeErrors).toEqual([]);
+    } else {
+      expect(runtimeErrors).toEqual([error.message]);
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    }
+    expect([...runtimeLogs, ...runtimeErrors].join("\n")).not.toContain(error.name);
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("forwards --session-key on system event", async () => {
@@ -112,6 +184,24 @@ describe("system-cli", () => {
     expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const params = gatewayCall()[2];
     expect(params).not.toHaveProperty("sessionKey");
+  });
+
+  it("writes JSON when an implicit machine-output command fails", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(new Error("Gateway unavailable"));
+
+    await runCli(["system", "heartbeat", "last"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
+    const [method, gatewayOptions, params, requestOptions] = gatewayCall();
+    expect(method).toBe("last-heartbeat");
+    expect(typeof gatewayOptions).toBe("object");
+    expect(params).toBeUndefined();
+    expect(requestOptions).toEqual({ expectFinal: false });
+    const expectedError = "Gateway unavailable";
+    expect(runtimeLogs).toEqual([JSON.stringify(jsonFailure(expectedError), null, 2)]);
+    expect(runtimeErrors).toEqual([]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(jsonFailure(expectedError));
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it.each([

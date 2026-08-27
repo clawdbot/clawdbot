@@ -5,9 +5,11 @@
  * resolves agent routes, and handles replies.
  */
 
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { checkTwitchAccessControl } from "./access-control.js";
@@ -28,7 +30,7 @@ type TwitchMonitorOptions = {
   config: unknown; // OpenClawConfig
   runtime: TwitchRuntimeEnv;
   abortSignal: AbortSignal;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
 
 type TwitchMonitorResult = {
@@ -49,11 +51,34 @@ async function processTwitchMessage(params: {
   runtime: TwitchRuntimeEnv;
   core: TwitchCoreRuntime;
   turnAdoptionLifecycle: TwitchIngressLifecycle;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 }): Promise<void> {
   const { message, account, accountId, config, runtime, core, turnAdoptionLifecycle, statusSink } =
     params;
   const cfg = config as OpenClawConfig;
+  const route = core.channel.routing.resolveAgentRoute({
+    cfg,
+    channel: "twitch",
+    accountId,
+    peer: {
+      kind: "group",
+      id: message.channel,
+    },
+  });
+  const exactAccess = await checkTwitchAccessControl({
+    message,
+    account,
+    botUsername: normalizeLowercaseStringOrEmpty(account.username),
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: message.id,
+      inboundEventKind: "user_request",
+    },
+  });
+  if (!exactAccess.allowed) {
+    return;
+  }
 
   await core.channel.inbound.run({
     channel: "twitch",
@@ -70,15 +95,6 @@ async function processTwitchMessage(params: {
         raw: incoming,
       }),
       resolveTurn: async (input) => {
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "twitch",
-          accountId,
-          peer: {
-            kind: "group",
-            id: message.channel,
-          },
-        });
         const senderId = message.userId ?? message.username;
         const fromLabel = message.displayName ?? message.username;
         const body = createChannelInboundEnvelopeBuilder({ cfg, route })({
@@ -88,6 +104,7 @@ async function processTwitchMessage(params: {
           body: input.rawText,
         });
         const ctxPayload = core.channel.inbound.buildContext({
+          channelIngress: exactAccess.channelIngress,
           channel: "twitch",
           accountId,
           messageId: input.id,
@@ -188,12 +205,11 @@ async function deliverTwitchReply(params: {
       debug: (msg) => runtime.log?.(msg),
     });
 
-    if (!payload.text) {
-      runtime.error?.(`No text to send in reply payload`);
-      return { visibleReplySent: false };
-    }
-    const textToSend = stripMarkdownForTwitch(payload.text);
+    const textToSend = stripMarkdownForTwitch(
+      [payload.text, ...resolveOutboundMediaUrls(payload)].filter(Boolean).join(" "),
+    );
     if (!textToSend) {
+      runtime.error?.(`No text to send in reply payload`);
       return { visibleReplySent: false };
     }
     const result = await clientManager.sendMessage(
@@ -241,7 +257,7 @@ export async function monitorTwitchProvider(
     debug: logVerboseMessage,
   };
 
-  const clientManager = getOrCreateClientManager(accountId, logger);
+  const clientManager = getOrCreateClientManager(accountId, logger, statusSink);
 
   try {
     await clientManager.getClient(

@@ -15,7 +15,8 @@ scenario:
     - The runtime continues from settled tool results without replaying the write.
     - Telegram receives the exact recovery marker.
   codeRefs:
-    - src/agents/embedded-agent-runner/run/incomplete-turn.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts
+    - src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts
     - src/agents/embedded-agent-runner/run/terminal-resolution.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:

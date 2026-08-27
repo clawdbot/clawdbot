@@ -13,6 +13,8 @@ Two paths:
 
 ## Easy path (CLI still installed)
 
+The command attempts independent requested cleanup scopes and returns a nonzero status if any scope fails or is blocked. Service teardown remains the safety gate for state and workspace deletion; if that gate fails, those data scopes are preserved while app cleanup is still attempted. Partial cleanup is reported explicitly and is never followed by an unconditional completion result.
+
 Recommended: use the built-in uninstaller:
 
 ```bash
@@ -36,7 +38,10 @@ npx -y openclaw uninstall --all --yes --non-interactive
 
 Flags: `--service`, `--state`, `--workspace`, `--app` select individual scopes; `--all` selects all four.
 
-Manual steps (same result):
+Manual steps provide a complete removal path, but a raw state-directory deletion
+does not have the built-in uninstaller's workspace-preservation behavior. If
+you want the equivalent of `openclaw uninstall --state`, preserve every
+configured workspace before deleting state.
 
 1. Stop the gateway service:
 
@@ -50,22 +55,32 @@ openclaw gateway stop
 openclaw gateway uninstall
 ```
 
-3. Delete state + config:
+3. Decide whether to preserve the workspace.
+
+`openclaw uninstall --state` deliberately preserves configured workspace
+directories, including the default `~/.openclaw/workspace`. Before using the
+manual `rm -rf` below, move any workspace you want to keep outside the state
+directory. If you want to remove it too, no separate deletion is needed when it
+lives inside the state directory.
+
+4. Delete state + config:
 
 ```bash
 rm -rf "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 ```
 
 If you set `OPENCLAW_CONFIG_PATH` to a custom location outside the state dir, delete that file too.
-If you want to keep a workspace inside the state dir, such as `~/.openclaw/workspace`, move it aside before running `rm -rf` or delete state contents selectively.
+Restore any preserved workspace to its configured path after recreating the
+parent directory, or update the workspace path in your next installation.
 
-4. Delete your workspace (optional, removes agent files):
+5. Delete a workspace stored outside the state directory only if you want to
+   remove its agent files too:
 
 ```bash
-rm -rf ~/.openclaw/workspace
+rm -rf /path/to/external/workspace
 ```
 
-5. Remove the CLI install (pick the one you used):
+6. Remove the CLI install (pick the one you used):
 
 ```bash
 npm rm -g openclaw
@@ -73,7 +88,7 @@ pnpm remove -g openclaw
 bun remove -g openclaw
 ```
 
-6. If you installed the macOS app:
+7. If you installed the macOS app:
 
 ```bash
 rm -rf /Applications/OpenClaw.app
@@ -81,7 +96,7 @@ rm -rf /Applications/OpenClaw.app
 
 Notes:
 
-- If you used profiles (`--profile` / `OPENCLAW_PROFILE`), repeat step 3 for each state dir (defaults are `~/.openclaw-<profile>`).
+- If you used profiles (`--profile` / `OPENCLAW_PROFILE`), repeat steps 3-4 for each state dir (defaults are `~/.openclaw-<profile>`).
 - In remote mode, the state dir lives on the **gateway host**, so run steps 1-4 there too.
 
 ## Manual service removal (CLI not installed)

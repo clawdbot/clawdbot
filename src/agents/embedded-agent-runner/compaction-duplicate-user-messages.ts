@@ -2,6 +2,7 @@
  * Removes short-window duplicate user turns from compaction summaries.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 
 const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
 const MIN_DUPLICATE_USER_MESSAGE_CHARS = 24;
@@ -11,12 +12,6 @@ type MessageLike = {
   content?: unknown;
   timestamp?: unknown;
   __openclaw?: unknown;
-};
-
-type EntryLike = {
-  id?: unknown;
-  type?: unknown;
-  message?: unknown;
 };
 
 type DuplicateUserMessageOptions = {
@@ -50,7 +45,7 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
     return undefined;
   }
   const text = normalizeUserMessageContent(message.content);
-  if (!text || text.length < MIN_DUPLICATE_USER_MESSAGE_CHARS) {
+  if (!text || text.length < MIN_DUPLICATE_USER_MESSAGE_CHARS || hasPersistedMedia(message)) {
     return undefined;
   }
   // Persisted sender identity keeps distinct participants separate while senderless legacy
@@ -59,7 +54,7 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   const senderId =
     isRecord(metadata) && typeof metadata.senderId === "string" ? metadata.senderId : "";
   return {
-    key: JSON.stringify([senderId, text.normalize("NFC").toLowerCase()]),
+    key: JSON.stringify([senderId, text.normalize("NFC")]),
     timestamp: message.timestamp,
   };
 }
@@ -76,12 +71,21 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   for (const message of messages) {
     const signature = duplicateSignature(message);
     if (!signature) {
+      // A reply ends the retry batch; identical later asks are real user turns.
+      if (message.role === "assistant") {
+        lastSeenAtByKey.clear();
+      }
       result.push(message);
       continue;
     }
     const lastSeenAt = lastSeenAtByKey.get(signature.key);
-    lastSeenAtByKey.set(signature.key, signature.timestamp);
-    if (typeof lastSeenAt === "number" && signature.timestamp - lastSeenAt <= windowMs) {
+    const newestTimestamp = Math.max(lastSeenAt ?? signature.timestamp, signature.timestamp);
+    lastSeenAtByKey.set(signature.key, newestTimestamp);
+    if (
+      typeof lastSeenAt === "number" &&
+      signature.timestamp >= lastSeenAt &&
+      signature.timestamp - lastSeenAt <= windowMs
+    ) {
       // Keep the first prompt and drop only later repeats. The first copy anchors the summarized
       // branch while duplicate retries no longer inflate compaction context.
       removed += 1;
@@ -90,31 +94,4 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     result.push(message);
   }
   return removed > 0 ? result : [...messages];
-}
-
-/** Collects session entry ids that should be skipped when building a compaction branch summary. */
-export function collectDuplicateUserMessageEntryIdsForCompaction(
-  entries: readonly EntryLike[],
-  options: DuplicateUserMessageOptions = {},
-): Set<string> {
-  const windowMs = options.windowMs ?? DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS;
-  const lastSeenAtByKey = new Map<string, number>();
-  const duplicateIds = new Set<string>();
-  for (const entry of entries) {
-    if (entry.type !== "message" || typeof entry.id !== "string") {
-      continue;
-    }
-    const signature = duplicateSignature(
-      isRecord(entry.message) ? (entry.message as MessageLike) : undefined,
-    );
-    if (!signature) {
-      continue;
-    }
-    const lastSeenAt = lastSeenAtByKey.get(signature.key);
-    lastSeenAtByKey.set(signature.key, signature.timestamp);
-    if (typeof lastSeenAt === "number" && signature.timestamp - lastSeenAt <= windowMs) {
-      duplicateIds.add(entry.id);
-    }
-  }
-  return duplicateIds;
 }

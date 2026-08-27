@@ -7,6 +7,7 @@ import type {
   OutboundDeliveryResult,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { canonicalBytes, REEF_MAX_PLAINTEXT_BYTES } from "../protocol/index.js";
 import { normalizeReefTarget } from "./config-schema.js";
 import { isPermanentReefOutboundRejection, prepareReefMessageId } from "./flow.js";
@@ -133,7 +134,12 @@ async function send(
     }
     throw cause;
   }
-  return { channel: "reef", messageId: id, chatId: peer, toJid: `reef:${peer}` };
+  return {
+    channel: "reef",
+    messageId: id,
+    target: { kind: "chat", id: peer },
+    toJid: `reef:${peer}`,
+  };
 }
 
 export const reefOutboundAdapter: ChannelOutboundAdapter = {
@@ -141,6 +147,7 @@ export const reefOutboundAdapter: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
   textChunkLimit: REEF_MAX_PLAINTEXT_BYTES,
   chunker: chunkReefText,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   prepareConversationTurnMessageId: ({ text, threadId }) => {
     // Runs in Gateway correlation setup before the operation and queue row exist.
     assertAtomicReefMessageFits({ text, threadId });

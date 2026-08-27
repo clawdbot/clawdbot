@@ -1,8 +1,8 @@
 /** Ensures bundled plugin command manifests are scanned without loading command runtimes. */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
@@ -16,7 +16,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => ({ diagnostics: [], plugins: mocks.plugins }),
+  loadPluginManifestRegistryCore: () => ({ diagnostics: [], plugins: mocks.plugins }),
 }));
 
 vi.mock("./plugin-registry-contributions.js", () => ({
@@ -37,19 +37,13 @@ vi.mock("./config-state.js", () => ({
 
 const { loadEnabledClaudeBundleCommands } = await import("./bundle-commands.js");
 
-const tempDirs: string[] = [];
+const tempDirs = createTempDirTracker();
 
-afterEach(async () => {
+afterEach(() => {
   mocks.plugins = [];
   mocks.warn.mockReset();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+  tempDirs.cleanup();
 });
-
-async function createTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
 
 function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
   return path.join(homeDir, ".openclaw", "extensions", pluginId);
@@ -101,8 +95,8 @@ function expectEnabledClaudeBundleCommands(
 
 describe("loadEnabledClaudeBundleCommands", () => {
   it("loads enabled Claude bundle markdown commands and honors invocation policy", async () => {
-    const homeDir = await createTempDir("openclaw-bundle-commands-home-");
-    const workspaceDir = await createTempDir("openclaw-bundle-commands-workspace-");
+    const homeDir = tempDirs.make("openclaw-bundle-commands-home-");
+    const workspaceDir = tempDirs.make("openclaw-bundle-commands-workspace-");
     await withEnvAsync(
       {
         HOME: homeDir,
@@ -232,8 +226,8 @@ describe("loadEnabledClaudeBundleCommands", () => {
   });
 
   it("warns and skips oversized bundle commands without dropping siblings", async () => {
-    const homeDir = await createTempDir("openclaw-bundle-commands-oversized-");
-    const workspaceDir = await createTempDir("openclaw-bundle-commands-oversized-ws-");
+    const homeDir = tempDirs.make("openclaw-bundle-commands-oversized-");
+    const workspaceDir = tempDirs.make("openclaw-bundle-commands-oversized-ws-");
 
     await writeClaudeBundleCommandFixture({
       homeDir,

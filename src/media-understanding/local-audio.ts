@@ -2,9 +2,10 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { fileExists } from "./fs.js";
+import { optionalPathExists } from "./fs.js";
 
 type LocalAudioCandidate = {
   id: "parakeet-mlx" | "whisper-cli" | "sherpa-onnx-offline" | "whisper";
@@ -35,7 +36,45 @@ type InspectionOptions = {
   checkExecutable?: (filePath: string, platform: NodeJS.Platform) => Promise<boolean>;
   resolveRealpath?: (filePath: string) => Promise<string>;
   inspectLinkedLibraries?: (filePath: string, platform: NodeJS.Platform) => Promise<string | null>;
+  listDirectory?: (dirPath: string) => Promise<string[]>;
 };
+
+const WHISPER_CPP_MODEL_DIRS = [
+  "/opt/homebrew/share/whisper-cpp",
+  "/usr/local/share/whisper-cpp",
+  "/usr/share/whisper-cpp",
+];
+
+async function listDirectoryEntries(dirPath: string): Promise<string[]> {
+  try {
+    return await fs.readdir(dirPath);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Picks an installed ggml whisper.cpp model without hardcoding a filename.
+ * Larger models transcribe better, so prefer non-tiny when several exist;
+ * WHISPER_CPP_MODEL remains the explicit override.
+ */
+async function discoverWhisperCppModel(
+  listDirectory: (dirPath: string) => Promise<string[]>,
+): Promise<string | null> {
+  for (const dir of WHISPER_CPP_MODEL_DIRS) {
+    const models = (await listDirectory(dir))
+      .filter((name) => name.startsWith("ggml-") && name.endsWith(".bin"))
+      .toSorted((a, b) => {
+        const tinyA = a.includes("tiny") ? 1 : 0;
+        const tinyB = b.includes("tiny") ? 1 : 0;
+        return tinyA - tinyB || a.localeCompare(b);
+      });
+    if (models[0]) {
+      return path.join(dir, models[0]);
+    }
+  }
+  return null;
+}
 
 const binaryCache = new Map<string, Promise<string | null>>();
 const libraryCache = new Map<string, Promise<string | null>>();
@@ -130,11 +169,11 @@ async function isExecutable(filePath: string, platform: NodeJS.Platform): Promis
   }
 }
 
-function binaryNames(name: string, platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
+function binaryNames(name: string, platform: NodeJS.Platform, pathExtensions?: string): string[] {
   if (platform !== "win32" || path.extname(name)) {
     return [name];
   }
-  const extensions = (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+  const extensions = (pathExtensions ?? ".EXE;.CMD;.BAT;.COM")
     .split(";")
     .map((extension) => extension.trim())
     .filter(Boolean);
@@ -158,36 +197,43 @@ async function findBinary(
   platform: NodeJS.Platform,
   checkExecutable: (filePath: string, platform: NodeJS.Platform) => Promise<boolean> = isExecutable,
 ): Promise<string | null> {
-  const key = `${platform}\0${env.PATH ?? ""}\0${env.PATHEXT ?? ""}\0${name}`;
-  return await getOrCreatePromise(binaryCache, key, async () => {
-    const direct = name.trim();
-    const candidates = binaryNames(direct, platform, env);
-    if (direct.includes("/") || direct.includes("\\")) {
-      for (const candidate of candidates) {
-        const expanded =
-          candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")
-            ? path.join(env.HOME ?? "~", candidate.slice(candidate === "~" ? 1 : 2))
-            : candidate;
-        if (await checkExecutable(expanded, platform)) {
-          return expanded;
+  const pathValue = resolveEnvironmentValue(env, "PATH", platform) ?? "";
+  const pathExtensions = resolveEnvironmentValue(env, "PATHEXT", platform);
+  const key = `${platform}\0${pathValue}\0${pathExtensions ?? ""}\0${name}`;
+  return await getOrCreatePromise(
+    binaryCache,
+    key,
+    async () => {
+      const direct = name.trim();
+      const candidates = binaryNames(direct, platform, pathExtensions);
+      if (direct.includes("/") || direct.includes("\\")) {
+        for (const candidate of candidates) {
+          const expanded =
+            candidate === "~" || candidate.startsWith("~/") || candidate.startsWith("~\\")
+              ? path.join(env.HOME ?? "~", candidate.slice(candidate === "~" ? 1 : 2))
+              : candidate;
+          if (await checkExecutable(expanded, platform)) {
+            return expanded;
+          }
+        }
+        return null;
+      }
+      for (const directory of pathValue.split(path.delimiter)) {
+        const expandedDirectory = expandHomeDir(directory, env);
+        if (!expandedDirectory) {
+          continue;
+        }
+        for (const candidate of candidates) {
+          const fullPath = path.join(expandedDirectory, candidate);
+          if (await checkExecutable(fullPath, platform)) {
+            return fullPath;
+          }
         }
       }
       return null;
-    }
-    for (const directory of (env.PATH ?? "").split(path.delimiter)) {
-      const expandedDirectory = expandHomeDir(directory, env);
-      if (!expandedDirectory) {
-        continue;
-      }
-      for (const candidate of candidates) {
-        const fullPath = path.join(expandedDirectory, candidate);
-        if (await checkExecutable(fullPath, platform)) {
-          return fullPath;
-        }
-      }
-    }
-    return null;
-  });
+    },
+    { cacheRejections: false },
+  );
 }
 
 async function inspectLinkedLibraries(
@@ -195,19 +241,24 @@ async function inspectLinkedLibraries(
   platform: NodeJS.Platform,
 ): Promise<string | null> {
   const key = `${platform}\0${filePath}`;
-  return await getOrCreatePromise(libraryCache, key, async () => {
-    const command = platform === "darwin" ? "otool" : platform === "linux" ? "readelf" : null;
-    if (!command) {
-      return null;
-    }
-    try {
-      const args = platform === "darwin" ? ["-L", filePath] : ["-d", filePath];
-      const result = await runExec(command, args, { timeoutMs: 1500 });
-      return `${result.stdout}\n${result.stderr ?? ""}`;
-    } catch {
-      return null;
-    }
-  });
+  return await getOrCreatePromise(
+    libraryCache,
+    key,
+    async () => {
+      const command = platform === "darwin" ? "otool" : platform === "linux" ? "readelf" : null;
+      if (!command) {
+        return null;
+      }
+      try {
+        const args = platform === "darwin" ? ["-L", filePath] : ["-d", filePath];
+        const result = await runExec(command, args, { timeoutMs: 1500 });
+        return `${result.stdout}\n${result.stderr ?? ""}`;
+      } catch {
+        return null;
+      }
+    },
+    { cacheRejections: false },
+  );
 }
 
 async function inspectWhisperBackend(params: {
@@ -272,9 +323,11 @@ export async function inspectLocalAudioSelection(
   );
 
   const envModel = env.WHISPER_CPP_MODEL?.trim();
-  const defaultWhisperModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
-  const whisperModel = envModel && (await fileExists(envModel)) ? envModel : defaultWhisperModel;
-  const whisperReady = Boolean(whisperCommand) && (await fileExists(whisperModel));
+  const whisperModel =
+    envModel && (await optionalPathExists(envModel))
+      ? envModel
+      : await discoverWhisperCppModel(options.listDirectory ?? listDirectoryEntries);
+  const whisperReady = Boolean(whisperCommand) && Boolean(whisperModel);
   const whisperBackend = whisperCommand
     ? await inspectWhisperBackend({
         command: whisperCommand,
@@ -296,10 +349,10 @@ export async function inspectLocalAudioSelection(
   const sherpaReady =
     Boolean(sherpaCommand) &&
     sherpaFiles.length === 4 &&
-    (await Promise.all(sherpaFiles.map(fileExists))).every(Boolean);
+    (await Promise.all(sherpaFiles.map(optionalPathExists))).every(Boolean);
   const parakeetReady = Boolean(parakeetCommand) && platform === "darwin" && arch === "arm64";
   const parakeetArgs = [
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
     "--output-format",
     "txt",
     "--output-dir",
@@ -309,19 +362,20 @@ export async function inspectLocalAudioSelection(
   ];
   const whisperArgs = [
     "-m",
-    whisperModel,
+    // Args are only executed when whisperReady, which requires a model.
+    whisperModel ?? "",
     "-otxt",
     "-of",
     "{{OutputBase}}",
     "-nt",
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
   const sherpaArgs = [
     `--tokens=${sherpaFiles[0]}`,
     `--encoder=${sherpaFiles[1]}`,
     `--decoder=${sherpaFiles[2]}`,
     `--joiner=${sherpaFiles[3]}`,
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
   const pythonArgs = [
     "--model",
@@ -332,7 +386,7 @@ export async function inspectLocalAudioSelection(
     "{{OutputDir}}",
     "--verbose",
     "False",
-    "{{MediaPath}}",
+    "{{AttachmentPath}}",
   ];
 
   const candidates: LocalAudioCandidate[] = [

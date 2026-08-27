@@ -6,8 +6,6 @@ scenario:
   coverage:
     primary:
       - channels.room-session-group-messages
-    secondary:
-      - agent-runtime.session-turn-ordering
   objective: Verify a reply in a secondary conversation stays isolated from the primary conversation.
   successCriteria:
     - The primary conversation receives only its marker.
@@ -19,7 +17,6 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
-    profiles: { "matrix:adapter": 6, "matrix:all": 19, "matrix:transport": 18 }
     kind: flow
     summary: Send sequential turns to primary and secondary channel conversations and assert isolation.
     transportPolicy:
@@ -72,7 +69,7 @@ flow:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: secondaryOutbound
         - assert:
-            expr: "!String(primaryOutbound.text ?? '').includes(config.secondaryMarker) && !String(secondaryOutbound.text ?? '').includes(config.primaryMarker)"
+            expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && ((String(message.text ?? '').includes(config.primaryMarker) && (message.accountId !== primaryOutbound.accountId || message.conversation.kind !== primaryOutbound.conversation.kind || message.conversation.id !== primaryOutbound.conversation.id)) || (String(message.text ?? '').includes(config.secondaryMarker) && (message.accountId !== secondaryOutbound.accountId || message.conversation.kind !== secondaryOutbound.conversation.kind || message.conversation.id !== secondaryOutbound.conversation.id))))"
             message:
-              expr: "`secondary conversation leaked into primary route; transcript=${formatTransportTranscript(state)}`"
+              expr: "`secondary conversation leaked into primary route; transcript=${recentOutboundSummary(state)}`"
       detailsExpr: "`${primaryOutbound.conversation.id} -> ${secondaryOutbound.conversation.id}`"

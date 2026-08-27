@@ -1,3 +1,4 @@
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 // Googlechat plugin module implements monitor types behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -10,6 +11,8 @@ export type GoogleChatRuntimeEnv = {
   error?: (message: string) => void;
 };
 
+export type GoogleChatStatusSink = (patch: Partial<ChannelAccountSnapshot>) => void;
+
 export type GoogleChatMonitorOptions = {
   account: ResolvedGoogleChatAccount;
   config: OpenClawConfig;
@@ -17,7 +20,7 @@ export type GoogleChatMonitorOptions = {
   abortSignal: AbortSignal;
   webhookPath?: string;
   webhookUrl?: string;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: GoogleChatStatusSink;
 };
 
 export type GoogleChatCoreRuntime = ReturnType<typeof getGoogleChatRuntime>;
@@ -30,7 +33,7 @@ export type WebhookTarget = {
   path: string;
   audienceType?: GoogleChatAudienceType;
   audience?: string;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  statusSink?: GoogleChatStatusSink;
   mediaMaxMb: number;
   ingress: Pick<GoogleChatIngressMonitor, "receive">;
 };

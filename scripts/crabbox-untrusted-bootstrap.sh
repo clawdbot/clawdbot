@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.15.0"
-pnpm_spec="pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f"
+node_version="24.19.0"
+pnpm_spec="pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2

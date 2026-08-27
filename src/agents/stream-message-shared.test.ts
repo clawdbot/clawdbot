@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   STREAM_ERROR_FALLBACK_TEXT,
   buildStreamErrorAssistantMessage,
+  buildUsageWithNoCost,
 } from "./stream-message-shared.js";
 
 const model = {
@@ -41,5 +42,53 @@ describe("buildStreamErrorAssistantMessage", () => {
     expect(message.content).toEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
     // Original errorMessage is preserved verbatim for clients that surface it.
     expect(message.errorMessage).toBe("   ");
+  });
+});
+
+describe("buildUsageWithNoCost", () => {
+  it("synthesizes a cache-inclusive total when no upstream aggregate is present", () => {
+    // Claude CLI transcripts carry input/output/cache buckets without a total_tokens
+    // aggregate. The persisted total must cover cacheRead/cacheWrite so context
+    // accounting sees the real context instead of input + output (issue #117470).
+    const usage = buildUsageWithNoCost({
+      input: 2,
+      output: 1,
+      cacheRead: 133_495,
+      cacheWrite: 1_432,
+    });
+    expect(usage.totalTokens).toBe(134_930);
+    expect(usage.input).toBe(2);
+    expect(usage.output).toBe(1);
+    expect(usage.cacheRead).toBe(133_495);
+    expect(usage.cacheWrite).toBe(1_432);
+  });
+
+  it("does not count cached OpenAI input twice after provider normalization", () => {
+    // OpenAI reports cached input inside input_tokens; CLI normalization already
+    // splits 15 input tokens into 9 uncached and 6 cached before this owner.
+    expect(buildUsageWithNoCost({ input: 9, output: 4, cacheRead: 6 }).totalTokens).toBe(19);
+  });
+
+  it("counts normalized Codex cache reads and writes only once", () => {
+    const usage = buildUsageWithNoCost({ input: 0, output: 10, cacheRead: 40, cacheWrite: 60 });
+
+    expect(usage.totalTokens).toBe(110);
+  });
+
+  it("keeps the explicit aggregate total when one is provided", () => {
+    const usage = buildUsageWithNoCost({
+      input: 2,
+      output: 1,
+      cacheRead: 133_495,
+      cacheWrite: 1_432,
+      totalTokens: 158_719,
+    });
+    expect(usage.totalTokens).toBe(158_719);
+  });
+
+  it("keeps a zero-cost empty usage record unchanged", () => {
+    const usage = buildUsageWithNoCost({});
+    expect(usage.totalTokens).toBe(0);
+    expect(usage.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
   });
 });

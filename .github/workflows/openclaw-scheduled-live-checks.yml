@@ -33,6 +33,7 @@ jobs:
       include_openwebui: true
       include_live_suites: true
       allow_unreleased_changelog: true
+      enable_prepublish_plugin_registry: true
       shared_image_artifact_namespace: scheduled-live
       shared_image_policy: no-push-artifact
     secrets:

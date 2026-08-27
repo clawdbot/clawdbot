@@ -4,11 +4,11 @@
 import type { Command } from "commander";
 import {
   registerCommandGroups,
-  resolveCliArgvInvocation,
   shouldEagerRegisterSubcommands,
   type CommandGroupEntry,
   type CommandGroupPlaceholder,
 } from "openclaw/plugin-sdk/cli-runtime";
+import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
@@ -31,17 +31,6 @@ type BrowserCommandGroupDefinition = {
   placeholders: readonly CommandGroupPlaceholder[];
   register: BrowserCommandRegistrar;
 };
-
-const ROOT_BOOLEAN_OPTIONS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_OPTIONS = new Set(["--profile", "--log-level", "--container"]);
-const BROWSER_BOOLEAN_OPTIONS = new Set(["--json", "--expect-final"]);
-const BROWSER_VALUE_OPTIONS = new Set([
-  "--browser-profile",
-  "--url",
-  "--token",
-  "--timeout",
-  "--gateway-url",
-]);
 
 const command = (
   name: string,
@@ -81,6 +70,15 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
+      command("cookie-sync", "Sync allowlisted macOS browser cookies to a managed profile"),
+    ],
+    register: async (args) => {
+      const module = await import("./browser-cli-cookie-sync.js");
+      module.registerBrowserCookieSyncCommand(args.browser, args.parentOpts);
+    },
+  },
+  {
+    placeholders: [
       command("screenshot", "Capture a screenshot (prints the saved path)"),
       command("snapshot", "Capture a snapshot (default: ai; aria is the accessibility tree)"),
     ],
@@ -108,6 +106,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("fill", "Fill a form with JSON field descriptors"),
       command("wait", "Wait for time, selector, URL, load state, or JS conditions"),
       command("evaluate", "Evaluate a function against the page or a ref"),
+      command("batch", "Run a batch of browser actions in one call"),
     ],
     register: async (args) => {
       const module = await import("./browser-cli-actions-input.js");
@@ -149,7 +148,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
     },
   },
   {
-    placeholders: [command("extension", "Chrome extension load path and pairing")],
+    placeholders: [command("extension", "Chrome extension install, status, and pairing")],
     register: async (args) => {
       const module = await import("./browser-cli-extension.js");
       module.registerBrowserExtensionCommands(args.browser, args.parentOpts, args.pluginRoot);
@@ -166,81 +165,6 @@ function buildBrowserCommandGroups(params: {
     placeholders: entry.placeholders,
     register: async () => await entry.register(params),
   }));
-}
-
-function isValueToken(arg: string | undefined): boolean {
-  return Boolean(arg && arg !== "--" && (!arg.startsWith("-") || /^-\d+(?:\.\d+)?$/.test(arg)));
-}
-
-function consumeOption(
-  args: readonly string[],
-  index: number,
-  booleanOptions: ReadonlySet<string>,
-  valueOptions: ReadonlySet<string>,
-): number {
-  const arg = args[index];
-  if (!arg || arg === "--" || !arg.startsWith("-")) {
-    return 0;
-  }
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (booleanOptions.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-  if (!valueOptions.has(flag)) {
-    return 0;
-  }
-  if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
-  }
-  return isValueToken(args[index + 1]) ? 2 : 1;
-}
-
-function resolveBrowserLazySubcommand(argv: string[]): string | null {
-  const { primary } = resolveCliArgvInvocation(argv);
-  if (primary !== "browser") {
-    return null;
-  }
-
-  const args = argv.slice(2);
-  let sawBrowser = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg || arg === "--") {
-      break;
-    }
-    if (!sawBrowser) {
-      const consumed = consumeOption(args, i, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
-      if (consumed > 0) {
-        i += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        continue;
-      }
-      if (arg === "browser") {
-        sawBrowser = true;
-        continue;
-      }
-      return null;
-    }
-
-    const consumed = consumeOption(args, i, BROWSER_BOOLEAN_OPTIONS, BROWSER_VALUE_OPTIONS);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return arg;
-  }
-
-  return null;
-}
-
-function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
-  return cmd.optsWithGlobals<BrowserParentOpts>();
 }
 
 function registerLazyBrowserCommands(
@@ -289,7 +213,7 @@ export function registerBrowserCli(
 
   addGatewayClientOptions(browser);
 
-  const parentOpts = resolveBrowserParentOpts;
+  const parentOpts = () => browser.opts<BrowserParentOpts>();
 
   registerLazyBrowserCommands(browser, parentOpts, argv, pluginRoot);
 }

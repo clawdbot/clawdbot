@@ -19,22 +19,7 @@ export type ResolvedLinuxNodePluginConfig = {
 };
 
 export function createLinuxNodePluginConfigSchema() {
-  return buildPluginConfigSchema(LinuxNodePluginConfigSchema, {
-    uiHints: {
-      "notify.enabled": {
-        label: "Desktop Notifications",
-        help: "Expose system.notify when notify-send is installed. Enabled by default.",
-      },
-      "camera.enabled": {
-        label: "Camera",
-        help: "Expose camera commands when FFmpeg is installed. Requires a node service restart.",
-      },
-      "location.enabled": {
-        label: "Location",
-        help: "Expose location.get when the GeoClue where-am-i demo is installed. Requires a node service restart.",
-      },
-    },
-  });
+  return buildPluginConfigSchema(LinuxNodePluginConfigSchema);
 }
 
 export function resolveLinuxNodePluginConfig(value: unknown): ResolvedLinuxNodePluginConfig {

@@ -12,6 +12,7 @@ import {
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { getFreePort } from "../test-utils/ports.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -59,6 +60,7 @@ async function createLingeringPluginFixture(): Promise<{
     JSON.stringify({
       id: "linger",
       name: "Linger",
+      activation: { onCapabilities: ["hook"] },
       configSchema: { type: "object", additionalProperties: false, properties: {} },
     }),
   );
@@ -69,8 +71,9 @@ async function createLingeringPluginFixture(): Promise<{
       "export default {",
       '  id: "linger",',
       '  name: "Linger",',
-      "  register() {",
+      "  register(api) {",
       '    fs.writeFileSync(process.env.LINGER_MARKER, "registered\\n");',
+      '    api.registerHook("command:new", () => {}, { name: "fixture-hook", description: "Fixture hook" });',
       "    setInterval(() => {}, 60_000);",
       "  },",
       "};",
@@ -244,35 +247,6 @@ async function runHooksCli(params: {
   });
 }
 
-async function runHooksRelay(params: { event: "post_tool_use" | "pre_tool_use"; stdin: string }) {
-  const fixture = await createLingeringPreloadFixture();
-  const result = await runHooksCli({
-    args: [
-      "hooks",
-      "relay",
-      "--provider",
-      "codex",
-      "--relay-id",
-      "missing-relay",
-      "--event",
-      params.event,
-      "--timeout",
-      "50",
-    ],
-    completion: params.event === "post_tool_use" ? "exit" : "output-then-exit",
-    label: `hooks relay ${params.event}`,
-    env: {
-      LINGER_MARKER: fixture.markerPath,
-      NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: fixture.stateDir,
-    },
-    stdin: params.stdin,
-  });
-  await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
-  return result;
-}
-
 describe("hooks CLI process lifecycle", () => {
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
@@ -343,7 +317,7 @@ describe("hooks CLI process lifecycle", () => {
     60_000,
   );
 
-  it("uses the explicit relay database when the child has a different state directory", async () => {
+  it("uses the explicit relay database and exits despite a lingering handle", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       relayId: "process-explicit-state-db",
@@ -355,8 +329,7 @@ describe("hooks CLI process lifecycle", () => {
       .poll(() => nativeHookRelayTesting.getNativeHookRelayBridgeRecordForTests(relay.relayId))
       .toBeDefined();
 
-    const childStateDir = path.join(tempDirs.make("openclaw-hooks-relay-other-state-"), "state");
-    await fs.mkdir(childStateDir, { recursive: true });
+    const fixture = await createLingeringPreloadFixture();
     const result = await runHooksCli({
       args: [
         "hooks",
@@ -377,8 +350,10 @@ describe("hooks CLI process lifecycle", () => {
       completion: "exit",
       label: "hooks relay explicit state database",
       env: {
+        LINGER_MARKER: fixture.markerPath,
+        NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: childStateDir,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
       },
       stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
     });
@@ -386,13 +361,13 @@ describe("hooks CLI process lifecycle", () => {
     expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
     expect(result.stderr).toBe("");
     expect(result.stdout).toBe("");
+    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
   }, 90_000);
 
-  it("exits after one-shot outputs when plugins leave ref'd handles", async () => {
+  it("exits after hooks list output when plugin registration leaves a ref'd handle", async () => {
     const fixture = await createLingeringPluginFixture();
+    const unavailableGatewayPort = await getFreePort();
 
-    // Both command families need real process coverage. Keep their expensive CLI
-    // bootstraps sequential so low-core shards test lifecycle, not startup contention.
     const listResult = await runHooksCli({
       args: ["hooks", "list", "--json"],
       completion: "output-then-exit",
@@ -401,22 +376,16 @@ describe("hooks CLI process lifecycle", () => {
         LINGER_MARKER: fixture.markerPath,
         OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_GATEWAY_PORT: String(unavailableGatewayPort),
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
     });
-    const relayResult = await runHooksRelay({ event: "pre_tool_use", stdin: "{}" });
 
     expect(listResult, listResult.stderr).toMatchObject({ code: 0, signal: null });
     expect(listResult.stderr).not.toContain("Error:");
-    expect(JSON.parse(listResult.stdout)).toMatchObject({ hooks: expect.any(Array) });
-    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
-    expect(relayResult, relayResult.stderr).toMatchObject({ code: 0, signal: null });
-    expect(JSON.parse(relayResult.stdout)).toMatchObject({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: expect.any(String),
-      },
+    expect(JSON.parse(listResult.stdout)).toMatchObject({
+      hooks: expect.arrayContaining([expect.objectContaining({ name: "fixture-hook" })]),
     });
+    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
   }, 150_000);
 });

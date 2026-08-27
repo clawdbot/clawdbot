@@ -1,8 +1,9 @@
 // Googlechat plugin module implements monitor webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeWebhookPath,
+  canonicalizeWebhookRouteKey,
   resolveRequestClientIp,
   type FixedWindowRateLimiter,
 } from "openclaw/plugin-sdk/webhook-ingress";
@@ -35,15 +36,13 @@ function extractBearerToken(header: unknown): string {
 
 const ADD_ON_PREAUTH_MAX_BYTES = 16 * 1024;
 const ADD_ON_PREAUTH_TIMEOUT_MS = 3_000;
+const GOOGLECHAT_WEBHOOK_ACCEPTED_HEADER = "x-openclaw-delivery-accepted";
+const GOOGLECHAT_WEBHOOK_ACCEPTED_VALUE = "durable";
 
 type ParsedGoogleChatInboundSuccess = {
   raw: Record<string, unknown>;
   addOnBearerToken: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parseGoogleChatInboundPayloadOrReject(
   raw: unknown,
@@ -155,7 +154,7 @@ export function createGoogleChatWebhookRequestHandler(params: {
   processEvent: (event: GoogleChatEvent, target: WebhookTarget) => Promise<void>;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   return async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
-    const path = normalizeWebhookPath(new URL(req.url ?? "/", "http://localhost").pathname);
+    const path = canonicalizeWebhookRouteKey(new URL(req.url ?? "/", "http://localhost").pathname);
     // Shared-path registrations use the same gateway proxy settings in normal runtime setup.
     const config = params.webhookTargets.get(path)?.[0]?.config;
     const clientIp =
@@ -272,6 +271,11 @@ export function createGoogleChatWebhookRequestHandler(params: {
                 );
               },
             );
+          }
+          if (admission.kind === "durable") {
+            // Only durably persisted turns claim the marker; ignored non-turn
+            // actions ack without it (same contract as #104407).
+            res.setHeader(GOOGLECHAT_WEBHOOK_ACCEPTED_HEADER, GOOGLECHAT_WEBHOOK_ACCEPTED_VALUE);
           }
         } catch (error) {
           dispatchTarget.runtime.error?.(

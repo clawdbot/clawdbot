@@ -5,9 +5,18 @@ import { parseMd } from "../../parse.js";
 import { resolveMdOcPath as resolveOcPath } from "../../resolve.js";
 
 const perfBudgetMultiplier = process.env.CI ? 4 : 1;
+const perfSampleCount = 3;
 
-function expectWithinPerfBudget(elapsedMs: number, localBudgetMs: number) {
-  expect(elapsedMs).toBeLessThan(localBudgetMs * perfBudgetMultiplier);
+function expectWithinPerfBudget(run: () => void, localBudgetMs: number) {
+  // Loaded shared-vCPU CI can pause any single sample, so use the best of a few runs.
+  // The minimum still catches consistently slow regressions without treating contention as one.
+  let bestElapsedMs = Number.POSITIVE_INFINITY;
+  for (let sample = 0; sample < perfSampleCount; sample++) {
+    const start = performance.now();
+    run();
+    bestElapsedMs = Math.min(bestElapsedMs, performance.now() - start);
+  }
+  expect(bestElapsedMs).toBeLessThan(localBudgetMs * perfBudgetMultiplier);
 }
 
 describe("perf + determinism", () => {
@@ -20,32 +29,27 @@ describe("perf + determinism", () => {
       }
     }
     const raw = lines.join("\n");
-    const start = performance.now();
-    parseMd(raw);
-    const elapsed = performance.now() - start;
-    expectWithinPerfBudget(elapsed, 200);
+    expectWithinPerfBudget(() => parseMd(raw), 200);
   });
 
   it("parses 1000 small files in under 500 ms", () => {
     const raw = `## H\n- a\n- b: c\n## I\n- d\n`;
-    const start = performance.now();
-    for (let i = 0; i < 1000; i++) {
-      parseMd(raw);
-    }
-    const elapsed = performance.now() - start;
-    expectWithinPerfBudget(elapsed, 500);
+    expectWithinPerfBudget(() => {
+      for (let i = 0; i < 1000; i++) {
+        parseMd(raw);
+      }
+    }, 500);
   });
 
   it("100k OcPath resolutions on parsed AST in under 500 ms", () => {
     const raw = `## A\n- a1\n- a2\n## B\n- b1\n- b2\n## C\n- c1: cv\n`;
     const { ast } = parseMd(raw);
     const path = { file: "X.md", section: "b", item: "b1" };
-    const start = performance.now();
-    for (let i = 0; i < 100_000; i++) {
-      resolveOcPath(ast, path);
-    }
-    const elapsed = performance.now() - start;
-    expectWithinPerfBudget(elapsed, 500);
+    expectWithinPerfBudget(() => {
+      for (let i = 0; i < 100_000; i++) {
+        resolveOcPath(ast, path);
+      }
+    }, 500);
   });
 
   it("same input → byte-identical AST.raw across runs", () => {
@@ -115,11 +119,11 @@ describe("perf + determinism", () => {
       lines.push("");
     }
     const raw = lines.join("\n");
-    const start = performance.now();
-    const { ast } = parseMd(raw);
-    const out = emitMd(ast);
-    const elapsed = performance.now() - start;
+    let out = "";
+    expectWithinPerfBudget(() => {
+      const { ast } = parseMd(raw);
+      out = emitMd(ast);
+    }, 100);
     expect(out).toBe(raw);
-    expectWithinPerfBudget(elapsed, 100);
   });
 });

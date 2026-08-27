@@ -8,9 +8,20 @@ import { listRecommendedToolInstalls } from "../plugins/recommended-tool-install
 import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
 import type { SetupInferenceDetection } from "./setup-inference.js";
 
-const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 10_000;
+const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 30_000;
 
 const log = createSubsystemLogger("system-agent/setup-inference-detection");
+
+class SetupInferenceDetectionTimeoutError extends Error {
+  override name = "SetupInferenceDetectionTimeoutError";
+
+  constructor(timeoutMs: number) {
+    super(
+      `AI access detection did not finish after ${timeoutMs / 1_000}s. ` +
+        "This Gateway may still be checking — try again.",
+    );
+  }
+}
 
 type DetectionWorkerMessage =
   | { type: "partial"; detection: SetupInferenceDetection }
@@ -18,16 +29,17 @@ type DetectionWorkerMessage =
   | { ok: false; error: string };
 
 type DetectionWorkerOptions = {
+  agentId?: string;
   timeoutMs?: number;
   workerUrl?: URL;
   workerData?: WorkerOptions["workerData"];
-  fallback?: () => Promise<SetupInferenceDetection>;
   fallbackEnv?: NodeJS.ProcessEnv;
 };
 
-let inFlightDetection: Promise<SetupInferenceDetection> | undefined;
+let inFlightDetection:
+  | { agentId: string | undefined; promise: Promise<SetupInferenceDetection> }
+  | undefined;
 let workerShutdown: Promise<void> | undefined;
-let workerShutdownResult: SetupInferenceDetection | undefined;
 
 function trackWorkerShutdown(worker: Worker): void {
   const current = worker.terminate().then(
@@ -40,7 +52,6 @@ function trackWorkerShutdown(worker: Worker): void {
   void current.finally(() => {
     if (workerShutdown === current) {
       workerShutdown = undefined;
-      workerShutdownResult = undefined;
     }
   });
 }
@@ -97,21 +108,18 @@ function withAmbientCandidates(
   return { ...detection, candidates: [...detection.candidates, ...ambient] };
 }
 
-function createUndetectedFallback(env: NodeJS.ProcessEnv = process.env): SetupInferenceDetection {
+function createUndetectedFallback(): SetupInferenceDetection {
   // This fallback must stay independent of the detection/plugin graph. The worker
   // supplies richer partial data when that graph loads before the deadline.
-  return withAmbientCandidates(
-    {
-      candidates: [],
-      unavailableCandidates: [],
-      manualProviders: [],
-      authOptions: [],
-      recommendedInstalls: listRecommendedToolInstalls(),
-      workspace: DEFAULT_AGENT_WORKSPACE_DIR,
-      setupComplete: false,
-    },
-    env,
-  );
+  return {
+    candidates: [],
+    unavailableCandidates: [],
+    manualProviders: [],
+    authOptions: [],
+    recommendedInstalls: listRecommendedToolInstalls(),
+    workspace: DEFAULT_AGENT_WORKSPACE_DIR,
+    setupComplete: false,
+  };
 }
 
 async function runDetectionWorker(
@@ -121,7 +129,11 @@ async function runDetectionWorker(
   const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   const worker = new Worker(workerUrl, {
     execArgv,
-    ...(options.workerData === undefined ? {} : { workerData: options.workerData }),
+    ...(options.workerData === undefined
+      ? options.agentId
+        ? { workerData: { agentId: options.agentId } }
+        : {}
+      : { workerData: options.workerData }),
   });
   const timeoutMs = options.timeoutMs ?? SETUP_INFERENCE_DETECTION_TIMEOUT_MS;
 
@@ -155,7 +167,6 @@ async function runDetectionWorker(
           reject(new Error(message.error));
           return;
         }
-        workerShutdownResult = message.detection;
         resolve(message.detection);
       });
     });
@@ -174,19 +185,18 @@ async function runDetectionWorker(
     const timer = setTimeout(() => {
       settle(() => {
         log.warn(
-          `Setup inference detection timed out after ${timeoutMs}ms; returning partial detection.`,
+          `Setup inference detection timed out after ${timeoutMs}ms; using partial signal if available.`,
         );
-        if (options.fallback) {
-          void options.fallback().then(resolve, reject);
-          return;
-        }
         const env = options.fallbackEnv ?? process.env;
         const detection = withAmbientCandidates(
-          partialDetection ?? createUndetectedFallback(env),
+          partialDetection ?? createUndetectedFallback(),
           env,
         );
-        workerShutdownResult = detection;
-        resolve(detection);
+        if (detection.candidates.length > 0 || detection.unavailableCandidates.length > 0) {
+          resolve(detection);
+          return;
+        }
+        reject(new SetupInferenceDetectionTimeoutError(timeoutMs));
       });
     }, timeoutMs);
     // Installing a message listener references the underlying MessagePort.
@@ -199,20 +209,28 @@ async function runDetectionWorker(
 export async function detectSetupInferenceIsolated(
   options: DetectionWorkerOptions = {},
 ): Promise<SetupInferenceDetection> {
+  const agentId = options.agentId?.trim() || undefined;
   if (inFlightDetection) {
-    return await inFlightDetection;
+    if (inFlightDetection.agentId === agentId) {
+      return await inFlightDetection.promise;
+    }
+    // Native provider discovery is process-global. Serialize different owners,
+    // then rerun against the requested owner instead of sharing stale results.
+    await inFlightDetection.promise.catch(() => undefined);
+    return await detectSetupInferenceIsolated(options);
   }
-  // A native provider probe can delay Worker termination. Reuse the bounded
-  // result until exit instead of allowing repeat UI requests to stack threads.
+  // A native provider probe can delay Worker termination. Wait for exit before
+  // retrying so repeat UI requests neither stack threads nor reuse stale results.
   if (workerShutdown) {
-    return workerShutdownResult ?? createUndetectedFallback();
+    await workerShutdown;
+    return await detectSetupInferenceIsolated(options);
   }
   const current = runDetectionWorker(options);
-  inFlightDetection = current;
+  inFlightDetection = { agentId, promise: current };
   try {
     return await current;
   } finally {
-    if (inFlightDetection === current) {
+    if (inFlightDetection?.promise === current) {
       inFlightDetection = undefined;
     }
   }

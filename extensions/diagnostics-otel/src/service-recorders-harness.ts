@@ -1,10 +1,13 @@
 import { SpanStatusCode } from "@opentelemetry/api";
+import {
+  normalizeDiagnosticValue,
+  normalizeDiagnosticLane,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
 } from "../api.js";
-import { lowCardinalityAttr, lowCardinalityQueueLaneAttr } from "./service-attributes.js";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { HarnessRunDiagnosticEvent, ModelFailoverDiagnosticEvent } from "./service-types.js";
@@ -18,7 +21,6 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     trustedTraceContext,
     activeTrustedParentContext,
     trackTrustedSpan,
-    takeTrackedTrustedSpan,
     setSpanAttrs,
     completeTrackedLifecycleSpan,
     addRunAttrs,
@@ -26,16 +28,16 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
   } = runtime;
 
   const harnessRunMetricAttrs = (evt: HarnessRunDiagnosticEvent) => ({
-    "openclaw.harness.id": lowCardinalityAttr(evt.harnessId, "unknown"),
-    "openclaw.harness.plugin": lowCardinalityAttr(evt.pluginId),
+    "openclaw.harness.id": normalizeDiagnosticValue(evt.harnessId, "unknown"),
+    "openclaw.harness.plugin": normalizeDiagnosticValue(evt.pluginId),
     ...(evt.type === "harness.run.started"
       ? {}
       : {
           "openclaw.outcome": evt.type === "harness.run.error" ? "error" : evt.outcome,
         }),
-    "openclaw.provider": lowCardinalityAttr(evt.provider, "unknown"),
-    "openclaw.model": lowCardinalityAttr(evt.model, "unknown"),
-    ...(evt.channel ? { "openclaw.channel": lowCardinalityAttr(evt.channel) } : {}),
+    "openclaw.provider": normalizeDiagnosticValue(evt.provider, "unknown"),
+    "openclaw.model": normalizeDiagnosticValue(evt.model, "unknown"),
+    ...(evt.channel ? { "openclaw.channel": normalizeDiagnosticValue(evt.channel) } : {}),
   });
 
   const recordHarnessRunStarted = (
@@ -68,7 +70,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       ...harnessRunMetricAttrs(evt),
     };
     if (evt.resultClassification) {
-      spanAttrs["openclaw.harness.result_classification"] = lowCardinalityAttr(
+      spanAttrs["openclaw.harness.result_classification"] = normalizeDiagnosticValue(
         evt.resultClassification,
       );
     }
@@ -103,7 +105,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       });
     }
     if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
+      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
       return;
     }
     span.end(evt.ts);
@@ -114,7 +116,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     metadata: DiagnosticEventMetadata,
     privateData: DiagnosticEventPrivateData,
   ) => {
-    const errorType = lowCardinalityAttr(evt.errorCategory, "other");
+    const errorType = normalizeDiagnosticValue(evt.errorCategory, "other");
     const attrs = {
       ...harnessRunMetricAttrs(evt),
       "openclaw.harness.phase": evt.phase,
@@ -132,8 +134,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       ...(redactedError ? { "openclaw.error": redactedError } : {}),
       ...(evt.cleanupFailed ? { "openclaw.harness.cleanup_failed": true } : {}),
     };
+    const trustedTrace = trustedTraceContext(evt, metadata);
+    const trackedSpan = trustedTrace?.spanId
+      ? activeTrustedSpans.get(trustedTrace.spanId)
+      : undefined;
     const span =
-      takeTrackedTrustedSpan(evt, metadata) ??
+      trackedSpan ??
       spanWithDuration("openclaw.harness.run", spanAttrs, evt.durationMs, {
         parentContext: activeTrustedParentContext(evt, metadata),
         endTimeMs: evt.ts,
@@ -143,6 +149,12 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       code: SpanStatusCode.ERROR,
       message: redactedError ?? errorType,
     });
+    // Retain on the error path too: for the openclaw harness this span is the only
+    // ancestor a late child can attach to, and aborted turns emit no run.completed.
+    if (trackedSpan && trustedTrace?.spanId) {
+      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
+      return;
+    }
     span.end(evt.ts);
   };
 
@@ -181,21 +193,21 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
     metadata: DiagnosticEventMetadata,
   ) => {
     const metricAttrs: Record<string, string> = {
-      "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+      "openclaw.failover.reason": normalizeDiagnosticValue(evt.reason, "unknown"),
       "openclaw.failover.suspended":
         evt.suspended === undefined ? "unknown" : String(evt.suspended),
-      "openclaw.lane": lowCardinalityQueueLaneAttr(evt.lane, "unknown"),
-      "openclaw.model": lowCardinalityAttr(evt.fromModel),
-      "openclaw.provider": lowCardinalityAttr(evt.fromProvider),
-      "openclaw.failover.to_model": lowCardinalityAttr(evt.toModel),
-      "openclaw.failover.to_provider": lowCardinalityAttr(evt.toProvider),
+      "openclaw.lane": normalizeDiagnosticLane(evt.lane, "unknown"),
+      "openclaw.model": normalizeDiagnosticValue(evt.fromModel),
+      "openclaw.provider": normalizeDiagnosticValue(evt.fromProvider),
+      "openclaw.failover.to_model": normalizeDiagnosticValue(evt.toModel),
+      "openclaw.failover.to_provider": normalizeDiagnosticValue(evt.toProvider),
     };
     modelFailoverCounter.add(1, metricAttrs);
     if (!tracesEnabled) {
       return;
     }
     const spanAttrs: Record<string, string | number | boolean> = {
-      "openclaw.failover.reason": lowCardinalityAttr(evt.reason, "unknown"),
+      "openclaw.failover.reason": normalizeDiagnosticValue(evt.reason, "unknown"),
     };
     if (evt.fromProvider) {
       spanAttrs["openclaw.provider"] = evt.fromProvider;
@@ -210,7 +222,7 @@ export function createHarnessRecorders(runtime: DiagnosticsRecorderRuntime) {
       spanAttrs["openclaw.failover.to_model"] = evt.toModel;
     }
     if (evt.lane) {
-      spanAttrs["openclaw.lane"] = lowCardinalityQueueLaneAttr(evt.lane, "unknown");
+      spanAttrs["openclaw.lane"] = normalizeDiagnosticLane(evt.lane, "unknown");
     }
     if (evt.suspended !== undefined) {
       spanAttrs["openclaw.failover.suspended"] = evt.suspended;

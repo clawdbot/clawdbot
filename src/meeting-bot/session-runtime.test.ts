@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TranscriptsStore } from "../transcripts/store.js";
 import { createMeetingSession } from "./session-factory.js";
@@ -134,7 +135,7 @@ function createTestRuntime(params: {
   >({
     logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
     logScope: "[meeting-test]",
-    formatError: (error) => (error instanceof Error ? error.message : String(error)),
+    formatError: coerceErrorMessage,
     messages: {
       previousBrowserLeaveFailed: "previous leave failed",
       reassignedSessionNote: "reassigned",
@@ -144,7 +145,6 @@ function createTestRuntime(params: {
       speech: {
         audioBridgeUnavailable: "bridge unavailable",
         browserUnverified: "browser unverified",
-        manualActionFallback: "manual action",
         microphoneMuted: "microphone muted",
         microphoneMutedReason: "microphone-muted",
         notInCall: "not in call",
@@ -632,9 +632,7 @@ describe("MeetingSessionRuntime leave cleanup", () => {
           health: {
             inCall: true,
             micMuted: false,
-            manualActionMessage: "old action",
-            manualActionReason: "old-action",
-            manualActionRequired: true,
+            manualAction: { reason: "old-action", message: "old action" },
             speechReady: true,
             speechBlockedMessage: "old speech block",
             speechBlockedReason: "old-speech-block",
@@ -655,14 +653,13 @@ describe("MeetingSessionRuntime leave cleanup", () => {
         browser: {
           health: {
             inCall: false,
-            manualActionRequired: false,
+            manualAction: undefined,
             speechReady: false,
           },
         },
       },
     });
-    expect(session.browser?.health?.manualActionReason).toBeUndefined();
-    expect(session.browser?.health?.manualActionMessage).toBeUndefined();
+    expect(session.browser?.health?.manualAction).toBeUndefined();
     expect(session.browser?.health?.micMuted).toBeUndefined();
     expect(session.browser?.health?.speechBlockedReason).toBeUndefined();
     expect(session.browser?.health?.speechBlockedMessage).toBeUndefined();

@@ -9,7 +9,9 @@ import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatGatewayCommandFailure } from "./error-format.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+import { registerSecretStoreCli } from "./secrets-store-cli.js";
 
 type FsModule = typeof import("node:fs");
 type ClackPromptsModule = typeof import("@clack/prompts");
@@ -117,6 +119,8 @@ export function registerSecretsCli(program: Command): void {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/gateway/security", "docs.openclaw.ai/gateway/security")}\n`,
     );
 
+  registerSecretStoreCli(secrets);
+
   addGatewayClientOptions(
     secrets
       .command("reload")
@@ -140,6 +144,7 @@ export function registerSecretsCli(program: Command): void {
       }
       defaultRuntime.log("Secrets reloaded.");
     } catch (err) {
+      rethrowExpectedCliError(err);
       defaultRuntime.error(
         danger(
           formatGatewayCommandFailure({
@@ -174,7 +179,7 @@ export function registerSecretsCli(program: Command): void {
           defaultRuntime.writeJson(report);
         } else {
           defaultRuntime.log(
-            `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, legacy=${report.summary.legacyResidueCount}.`,
+            `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
           );
           if (report.findings.length > 0) {
             for (const finding of report.findings.slice(0, 20)) {

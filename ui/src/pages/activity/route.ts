@@ -1,12 +1,9 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
-  id: "activity",
-  path: "/activity",
-  component: () =>
-    import("./activity-page.ts").then(() => ({
-      header: true,
-      render: () => html`<openclaw-activity-page></openclaw-activity-page>`,
-    })),
+  ...routePageSpec("activity"),
+  loaderDeps: (_context, { search }) => search,
+  loader: (_context, { deps }) => deps,
+  component: () => import("./activity-page.ts").then((module) => module.activityPageComponent),
 });

@@ -1,9 +1,45 @@
 import { describe, expect, it, vi } from "vitest";
-import { ClickClackHttpError } from "../http-client.js";
+import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
+import type { ClickClackChannel } from "../types.js";
+import { controlSessionUrl } from "./control-session-url.js";
 import { fallbackDiscussionLabel } from "./naming.js";
 import { MANAGED_CONTRACT_FIELDS, createHarness, testExternalRef } from "./service-test-support.js";
 
+function legacyCreateResponse(
+  input: Parameters<ClickClackClient["createChannel"]>[1],
+): ClickClackChannel {
+  const response: ClickClackChannel = {
+    id: "chn_discussion",
+    route_id: "discussion-route",
+    workspace_id: "wsp_team",
+    ...input,
+    kind: "public",
+    created_at: "2026-07-19T00:00:00.000Z",
+  };
+  Reflect.deleteProperty(response, "display_title");
+  return response;
+}
+
 describe("ClickClack discussion service", () => {
+  it("reaches the host session URL seam through the published plugin wrapper", () => {
+    expect(controlSessionUrl(undefined, "agent:main:main", "main", undefined)).toBeUndefined();
+    expect(controlSessionUrl("https://control.example", "agent:main:main", "main", undefined)).toBe(
+      "https://control.example/chat/main",
+    );
+    expect(controlSessionUrl("https://control.example", "main", "research", undefined)).toBe(
+      "https://control.example/chat/research",
+    );
+    expect(
+      controlSessionUrl(
+        "https://control.example/control///?tenant=alpha#old",
+        "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+        "main",
+        undefined,
+        "Control Link",
+      ),
+    ).toBe("https://control.example/control/chat/main/control-link-12345678?tenant=alpha");
+  });
+
   it("opens a managed channel once and returns stable info URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });
     harness.config.channels!.clickclack!.apiBaseUrl = "http://127.0.0.1:8484";
@@ -17,7 +53,8 @@ describe("ClickClack discussion service", () => {
 
     expect(opened).toEqual({
       state: "open",
-      embedUrl: "https://clickclack.example/embed/channel/team-route/discussion-route",
+      embedUrl:
+        "https://clickclack.example/embed/channel/team-route/discussion-route?openclawHostTheme=1",
       openUrl: "https://clickclack.example/app/team-route/discussion-route",
     });
     expect(reopened).toEqual(opened);
@@ -40,30 +77,162 @@ describe("ClickClack discussion service", () => {
       kind: "public",
       external_managed: true,
       external_ref: testExternalRef(sessionKey),
-      external_url: "https://control.example/control/chat?session=agent%3Amain%3Amain",
+      external_url: "https://control.example/control/chat/main",
       sidebar_section: "Projects",
+      display_title: "Release Planning",
     });
   });
 
-  it("pins an owning agent for an unqualified global session key", async () => {
-    const harness = createHarness({ label: "Global session" });
-
-    expect(await harness.service.open("global")).toMatchObject({ state: "open" });
-    expect(harness.store.lookup("global")).toMatchObject({ agentId: "main" });
-  });
-
-  it("builds control links from URL path and query components", async () => {
-    const harness = createHarness({ label: "Control link" });
-    harness.config.channels!.clickclack!.discussions!.controlUrlBase =
-      "https://control.example/control///?tenant=alpha#old";
-    const sessionKey = "agent:main:control-link";
+  it("clears display_title for fallback labels", async () => {
+    const harness = createHarness({});
+    const sessionKey = "agent:main:untitled";
 
     await harness.service.open(sessionKey);
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
       expect.objectContaining({
-        external_url: `https://control.example/control/chat?tenant=alpha&session=${encodeURIComponent(sessionKey)}`,
+        name: fallbackDiscussionLabel(sessionKey, "main"),
+        display_title: "",
+      }),
+    );
+  });
+
+  it("truncates display_title by Unicode code point", async () => {
+    const harness = createHarness({ label: "😀".repeat(201) });
+
+    await harness.service.open("agent:main:long-title");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({ display_title: "😀".repeat(200) }),
+    );
+  });
+
+  it("records display_title confirmation only when create responses include it", async () => {
+    const modern = createHarness({ label: "Confirmed title" });
+    await modern.service.open("agent:main:confirmed-title");
+    expect(modern.store.lookup("agent:main:confirmed-title")).toMatchObject({
+      displayTitle: "Confirmed title",
+    });
+
+    const legacy = createHarness({ label: "Unconfirmed title" });
+    vi.mocked(legacy.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await legacy.service.open("agent:main:unconfirmed-title");
+    expect(legacy.store.lookup("agent:main:unconfirmed-title")).not.toHaveProperty("displayTitle");
+  });
+
+  it("backfills an unchanged title after a sibling confirms server support", async () => {
+    const harness = createHarness({ label: "Needs Backfill" });
+    const sessionKey = "agent:main:needs-backfill";
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await harness.service.open(sessionKey);
+
+    harness.setSessionEntry({ label: "Confirmed Sibling" });
+    await harness.service.open("agent:main:confirmed-sibling");
+    expect(harness.store.lookup("agent:main:confirmed-sibling")).toMatchObject({
+      displayTitle: "Confirmed Sibling",
+    });
+
+    harness.updateChannel.mockClear();
+    harness.setSessionEntry({ label: "Needs Backfill" });
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
+      display_title: "Needs Backfill",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ displayTitle: "Needs Backfill" });
+  });
+
+  it("does not retry an unchanged title without server capability confirmation", async () => {
+    const harness = createHarness({ label: "Legacy title" });
+    const sessionKey = "agent:main:legacy-title-no-retry";
+    vi.mocked(harness.createChannel).mockImplementationOnce(async (_workspaceId, input) =>
+      legacyCreateResponse(input),
+    );
+    await harness.service.open(sessionKey);
+
+    harness.updateChannel.mockClear();
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+  });
+
+  it("pins the configured default for global keys and preserves qualified owners", async () => {
+    const globalHarness = createHarness({ label: "Global session" });
+    globalHarness.config.agents = { list: [{ id: "ops", default: true }] };
+
+    expect(await globalHarness.service.open("global")).toMatchObject({ state: "open" });
+    expect(globalHarness.store.lookup("global")).toMatchObject({ agentId: "ops" });
+
+    const qualifiedHarness = createHarness({ label: "Qualified session" });
+    qualifiedHarness.config.agents = { list: [{ id: "ops" }, { id: "worker" }] };
+    const qualifiedKey = "agent:worker:qualified";
+
+    expect(await qualifiedHarness.service.open(qualifiedKey)).toMatchObject({ state: "open" });
+    expect(qualifiedHarness.store.lookup(qualifiedKey)).toMatchObject({ agentId: "worker" });
+    expect(qualifiedHarness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({ external_url: expect.stringContaining("/chat/worker/") }),
+    );
+  });
+
+  it("uses the account agent for unscoped links without changing the configured owner", async () => {
+    const harness = createHarness({ label: "Telegram peer" });
+    harness.config.agents = { list: [{ id: "ops", default: true }] };
+    harness.config.channels!.clickclack!.agentId = "research";
+
+    await harness.service.open("telegram:12345");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url: "https://control.example/control/chat/research/telegram/12345",
+      }),
+    );
+    expect(harness.store.lookup("telegram:12345")).toMatchObject({ agentId: "ops" });
+
+    await harness.service.reconcile("telegram:12345");
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+
+    harness.config.channels!.clickclack!.agentId = "writer";
+    await harness.service.reconcile("telegram:12345");
+    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", {
+      external_url: "https://control.example/control/chat/writer/telegram/12345",
+    });
+  });
+
+  it("uses the configured main key when building control links", async () => {
+    const harness = createHarness({ label: "Workspace main" });
+    harness.config.session = { mainKey: "workspace" };
+
+    await harness.service.open("agent:research:workspace");
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url: "https://control.example/control/chat/research",
+      }),
+    );
+  });
+
+  it("builds control links from URL path and query components", async () => {
+    const harness = createHarness({ label: "Control link" });
+    harness.config.channels!.clickclack!.discussions!.controlUrlBase =
+      "https://control.example/control///?tenant=alpha#old";
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+
+    await harness.service.open(sessionKey);
+
+    expect(harness.createChannel).toHaveBeenCalledWith(
+      "wsp_team",
+      expect.objectContaining({
+        external_url:
+          "https://control.example/control/chat/main/control-link-12345678?tenant=alpha",
       }),
     );
   });
@@ -87,7 +256,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
-  it("maps archive, label, category, restore, and deletion state to channel patches", async () => {
+  it("keeps the room durable across session archive, restore, and deletion", async () => {
     const harness = createHarness({ label: "Original", category: "Projects" });
     const sessionKey = "agent:main:work";
     await harness.service.open(sessionKey);
@@ -98,80 +267,90 @@ describe("ClickClack discussion service", () => {
       archivedAt: 123,
     });
     await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      archived: true,
-      name: "renamed-session",
-      sidebar_section: "Incidents",
-    });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ channelId: "chn_discussion" });
 
     harness.setSessionEntry({ label: "Renamed Session" });
     await harness.service.reconcile(sessionKey);
     expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
-      archived: false,
+      display_title: "Renamed Session",
+      name: "renamed-session",
       sidebar_section: "Sessions",
     });
 
+    harness.updateChannel.mockClear();
     harness.setSessionEntry(undefined);
     await harness.service.reconcile(sessionKey);
-    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", { archived: true });
-    expect(await harness.service.info(sessionKey)).toEqual({ state: "available" });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(await harness.service.info(sessionKey)).toMatchObject({ state: "open" });
   });
 
-  it("does not return a binding removed while info or open reconciles a deleted session", async () => {
-    const infoHarness = createHarness({ label: "Info deletion" });
-    const infoKey = "agent:main:deleted-info";
-    await infoHarness.service.open(infoKey);
-    infoHarness.setSessionEntry(undefined);
-    expect(await infoHarness.service.info(infoKey)).toEqual({ state: "available" });
+  it("renames a fallback discussion when displayName arrives", async () => {
+    const harness = createHarness({});
+    const sessionKey = "agent:main:generated-title";
+    await harness.service.open(sessionKey);
 
-    const openHarness = createHarness({ label: "Open deletion" });
-    const openKey = "agent:main:deleted-open";
-    await openHarness.service.open(openKey);
-    openHarness.setSessionEntry(undefined);
-    expect(await openHarness.service.open(openKey)).toEqual({ state: "available" });
+    harness.setSessionEntry({ displayName: "Generated Session Title" });
+    await harness.service.reconcile(sessionKey);
+
+    expect(harness.updateChannel).toHaveBeenLastCalledWith("chn_discussion", {
+      display_title: "Generated Session Title",
+      name: "generated-session-title",
+    });
+    expect(harness.store.lookup(sessionKey)).toMatchObject({ label: "Generated Session Title" });
   });
 
-  it("archives and replaces a binding when the session key gets a new incarnation", async () => {
+  it("rotates the session attachment without replacing the durable room", async () => {
     const harness = createHarness({ sessionId: "session-old", label: "Resettable" });
     const sessionKey = "agent:main:resettable";
     await harness.service.open(sessionKey);
-    const oldRef = testExternalRef(sessionKey, "session-old");
+    const externalRef = testExternalRef(sessionKey);
 
     harness.setSessionEntry({ sessionId: "session-new", label: "Resettable" });
     expect((await harness.service.readLatestMessages(sessionKey, 30)).text).toBe(
-      "No discussion is bound to this session.",
+      "The bound discussion has no messages yet.",
     );
 
     expect(await harness.service.open(sessionKey)).toMatchObject({ state: "open" });
-    const newRef = testExternalRef(sessionKey, "session-new");
-    expect(newRef).not.toBe(oldRef);
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", { archived: true });
-    expect(harness.createChannel).toHaveBeenCalledTimes(2);
-    expect(harness.createChannel).toHaveBeenLastCalledWith(
-      "wsp_team",
-      expect.objectContaining({ external_ref: newRef }),
-    );
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
     expect(harness.store.lookup(sessionKey)).toMatchObject({
       sessionId: "session-new",
-      externalRef: newRef,
+      externalRef,
+      channelId: "chn_discussion",
     });
   });
 
-  it("archives an unbound channel when the session resets during open", async () => {
+  it("attaches a channel to the current incarnation when the session resets during open", async () => {
     const harness = createHarness({ sessionId: "session-old", label: "Reset race" });
     const sessionKey = "agent:main:reset-race";
     vi.mocked(harness.runtime.agent.session.getSessionEntry)
       .mockReturnValueOnce({ sessionId: "session-old", label: "Reset race", updatedAt: 1 })
-      .mockReturnValue({ sessionId: "session-new", label: "Reset race", updatedAt: 2 });
+      .mockReturnValue({
+        sessionId: "session-new",
+        label: "Current reset race",
+        category: "Current sessions",
+        updatedAt: 2,
+      });
 
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "OpenClaw session changed while opening",
+    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+    expect(harness.updateChannel).toHaveBeenCalledWith(
+      "chn_discussion",
+      expect.objectContaining({
+        name: "current-reset-race",
+        display_title: "Current reset race",
+        sidebar_section: "Current sessions",
+      }),
     );
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_discussion", { archived: true });
-    expect(harness.store.lookup(sessionKey)).toBeUndefined();
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.store.lookup(sessionKey)).toMatchObject({
+      sessionId: "session-new",
+      label: "Current reset race",
+      section: "Current sessions",
+    });
   });
 
-  it("uses the short session fallback when a label slug already exists", async () => {
+  it("suffixes a desired name when its slug already exists", async () => {
     const harness = createHarness({ label: "Release Planning" });
     vi.mocked(harness.channels).mockResolvedValue([
       {
@@ -184,44 +363,34 @@ describe("ClickClack discussion service", () => {
         created_at: "2026-07-19T00:00:00.000Z",
       },
     ]);
-
     await harness.service.open("agent:main:duplicate-label");
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel("agent:main:duplicate-label") }),
+      expect.objectContaining({ name: "release-planning-2" }),
     );
   });
 
-  it("adds a deterministic suffix when both the label and hash fallback are occupied", async () => {
+  it("falls back after exhausting desired-name suffixes through 20", async () => {
     const harness = createHarness({ label: "Release Planning" });
     const sessionKey = "agent:main:duplicate-label";
-    vi.mocked(harness.channels).mockResolvedValue([
-      {
-        id: "chn_existing_label",
-        route_id: "existing-label-route",
+    vi.mocked(harness.channels).mockResolvedValue(
+      Array.from({ length: 20 }, (_, index) => ({
+        id: `chn_existing_${index}`,
+        route_id: `existing-route-${index}`,
         workspace_id: "wsp_team",
-        name: "release-planning",
+        name: index === 0 ? "release-planning" : `release-planning-${index + 1}`,
         kind: "public",
         ...MANAGED_CONTRACT_FIELDS,
         created_at: "2026-07-19T00:00:00.000Z",
-      },
-      {
-        id: "chn_existing_hash",
-        route_id: "existing-hash-route",
-        workspace_id: "wsp_team",
-        name: fallbackDiscussionLabel(sessionKey),
-        kind: "public",
-        ...MANAGED_CONTRACT_FIELDS,
-        created_at: "2026-07-19T00:00:00.000Z",
-      },
-    ]);
+      })),
+    );
 
     await harness.service.open(sessionKey);
 
     expect(harness.createChannel).toHaveBeenCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: `${fallbackDiscussionLabel(sessionKey)}-2` }),
+      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey, "main") }),
     );
   });
 
@@ -253,7 +422,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
     expect(harness.createChannel).toHaveBeenLastCalledWith(
       "wsp_team",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey) }),
+      expect.objectContaining({ name: "release-planning-2" }),
     );
   });
 
@@ -287,7 +456,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.updateChannel).toHaveBeenCalledTimes(2);
     expect(harness.updateChannel).toHaveBeenLastCalledWith(
       "chn_discussion",
-      expect.objectContaining({ name: fallbackDiscussionLabel(sessionKey) }),
+      expect.objectContaining({ name: "renamed-2" }),
     );
   });
 
@@ -304,9 +473,8 @@ describe("ClickClack discussion service", () => {
         kind: "public",
         external_managed: true,
         external_ref: externalRef,
-        external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Projects",
-        archived: false,
         created_at: "2026-07-19T00:00:00.000Z",
       },
     ]);
@@ -320,7 +488,6 @@ describe("ClickClack discussion service", () => {
       external_ref: patch.external_ref,
       external_url: patch.external_url,
       sidebar_section: patch.sidebar_section,
-      archived: patch.archived,
       created_at: "2026-07-19T00:00:00.000Z",
     }));
 
@@ -331,9 +498,11 @@ describe("ClickClack discussion service", () => {
       "chn_recovered",
       expect.objectContaining({ external_ref: externalRef, external_managed: true }),
     );
+    expect(harness.store.lookup(sessionKey)).not.toHaveProperty("displayTitle");
     expect(opened).toEqual({
       state: "open",
-      embedUrl: "https://clickclack.example/embed/channel/team-route/recovered-route",
+      embedUrl:
+        "https://clickclack.example/embed/channel/team-route/recovered-route?openclawHostTheme=1",
       openUrl: "https://clickclack.example/app/team-route/recovered-route",
     });
   });
@@ -579,7 +748,7 @@ describe("ClickClack discussion service", () => {
     expect(harness.revokedStore.entries()).toHaveLength(1);
   });
 
-  it("archives an ambiguous create after the session incarnation changes", async () => {
+  it("adopts an ambiguous create after the session incarnation changes", async () => {
     const harness = createHarness({ sessionId: "old-session", label: "Ambiguous reset" });
     const sessionKey = "agent:main:ambiguous-reset";
     const general = await harness.channels().then((channels) => channels[0]!);
@@ -605,19 +774,117 @@ describe("ClickClack discussion service", () => {
         created_at: "2026-07-19T00:00:00.000Z",
       },
     ]);
+    vi.mocked(harness.updateChannel).mockImplementationOnce(async (channelId, patch) => ({
+      id: channelId,
+      route_id: "ambiguous-old-route",
+      workspace_id: "wsp_team",
+      name: patch.name ?? "ambiguous-reset",
+      kind: "public",
+      external_managed: patch.external_managed ?? true,
+      external_ref: patch.external_ref ?? externalRef,
+      external_url: patch.external_url,
+      sidebar_section: patch.sidebar_section,
+      archived: false,
+      created_at: "2026-07-19T00:00:00.000Z",
+    }));
 
     await harness.service.open(sessionKey);
 
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_ambiguous_old", { archived: true });
-    expect(harness.createChannel).toHaveBeenCalledTimes(2);
-    expect(harness.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
-    expect(harness.store.lookup(sessionKey)).toMatchObject({ sessionId: "new-session" });
+    expect(harness.updateChannel).toHaveBeenCalledWith(
+      "chn_ambiguous_old",
+      expect.objectContaining({ external_ref: externalRef }),
+    );
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.store.lookup(sessionKey)).toMatchObject({
+      sessionId: "new-session",
+      externalRef,
+      channelId: "chn_ambiguous_old",
+    });
     expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+    expect(harness.revokedStore.entries()).toHaveLength(0);
+  });
+
+  it("reattaches an ambiguous room after the session is archived and restored", async () => {
+    const harness = createHarness({ sessionId: "old-session", label: "Archived during create" });
+    const sessionKey = "agent:main:archived-ambiguous-open";
+    const general = await harness.channels().then((channels) => channels[0]!);
+    vi.mocked(harness.channels)
+      .mockResolvedValueOnce([general])
+      .mockRejectedValueOnce(new Error("relist unavailable"));
+    vi.mocked(harness.createChannel).mockRejectedValueOnce(new Error("connection lost"));
+    await expect(harness.service.open(sessionKey)).rejects.toThrow("connection lost");
+    const externalRef = harness.createChannel.mock.calls[0]?.[1].external_ref;
+    harness.setSessionEntry({
+      sessionId: "new-session",
+      label: "Archived during create",
+      archivedAt: 1,
+    });
+    vi.mocked(harness.channels).mockResolvedValue([
+      {
+        id: "chn_archived_ambiguous",
+        route_id: "archived-ambiguous-route",
+        workspace_id: "wsp_team",
+        name: "archived-during-create",
+        kind: "public",
+        external_managed: true,
+        external_ref: externalRef,
+        external_url: "",
+        sidebar_section: "Sessions",
+        archived: false,
+        created_at: "2026-07-19T00:00:00.000Z",
+      },
+    ]);
+
+    await harness.service.reconcileAll();
+
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
+      generation: expect.any(String),
+    });
+    expect(harness.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
     expect(harness.revokedStore.entries()).toHaveLength(1);
+
+    harness.setSessionEntry({
+      sessionId: "new-session",
+      label: "Archived during create",
+    });
+    vi.mocked(harness.updateChannel).mockImplementationOnce(async (channelId, patch) => ({
+      id: channelId,
+      route_id: "archived-ambiguous-route",
+      workspace_id: "wsp_team",
+      name: patch.name ?? "archived-during-create",
+      kind: "public",
+      external_managed: patch.external_managed ?? true,
+      external_ref: patch.external_ref ?? externalRef,
+      external_url: patch.external_url,
+      sidebar_section: patch.sidebar_section,
+      archived: false,
+      created_at: "2026-07-19T00:00:00.000Z",
+    }));
+
+    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+
+    expect(harness.createChannel).toHaveBeenCalledTimes(1);
+    expect(harness.updateChannel).toHaveBeenCalledWith(
+      "chn_archived_ambiguous",
+      expect.objectContaining({ external_ref: externalRef }),
+    );
+    expect(harness.store.lookup(sessionKey)).toMatchObject({
+      sessionId: "new-session",
+      externalRef,
+      channelId: "chn_archived_ambiguous",
+    });
+    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+    expect(harness.revokedStore.entries()).toHaveLength(0);
   });
 
   it("reconciles an ambiguous create after discussions are disabled", async () => {
-    const harness = createHarness({ label: "Disable during create" });
+    const generations = ["disabled-generation", "replacement-generation"];
+    const harness = createHarness(
+      { label: "Disable during create" },
+      { bindingGenerationFactory: () => generations.shift() ?? "unexpected-generation" },
+    );
     const sessionKey = "agent:main:disable-during-create";
     const general = await harness.channels().then((channels) => channels[0]!);
     vi.mocked(harness.channels)
@@ -645,9 +912,21 @@ describe("ClickClack discussion service", () => {
 
     await harness.service.reconcileAll();
 
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_disabled_pending", { archived: true });
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.generationStore.lookup(sessionKey)).toMatchObject({
+      generation: expect.any(String),
+    });
+    expect(harness.generationStore.lookup(sessionKey)).not.toHaveProperty("pending");
     expect(harness.revokedStore.entries()).toHaveLength(1);
+
+    harness.config.channels!.clickclack!.token = "replacement-token";
+    harness.config.channels!.clickclack!.discussions!.enabled = true;
+
+    await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
+
+    expect(harness.updateChannel).not.toHaveBeenCalled();
+    expect(harness.createChannel).toHaveBeenCalledTimes(2);
+    expect(harness.createChannel.mock.calls[1]?.[1].external_ref).not.toBe(externalRef);
   });
 
   it("does not recurse while replacing the account for an ambiguous open", async () => {
@@ -687,7 +966,7 @@ describe("ClickClack discussion service", () => {
 
     await expect(harness.service.open(sessionKey)).resolves.toMatchObject({ state: "open" });
 
-    expect(harness.updateChannel).toHaveBeenCalledWith("chn_old_account", { archived: true });
+    expect(harness.updateChannel).not.toHaveBeenCalled();
     expect(harness.createChannel).toHaveBeenCalledTimes(2);
     expect(harness.store.lookup(sessionKey)).toMatchObject({
       accountId: "replacement",
@@ -695,7 +974,7 @@ describe("ClickClack discussion service", () => {
     });
   });
 
-  it("rejects adoption when the server ignores the requested lifecycle state", async () => {
+  it("does not create or adopt a room for an archived main session", async () => {
     const harness = createHarness({ label: "Recovered Name", archivedAt: 123 });
     const sessionKey = "agent:main:recover-stale";
     const externalRef = testExternalRef(sessionKey);
@@ -708,7 +987,7 @@ describe("ClickClack discussion service", () => {
         kind: "public",
         external_managed: true,
         external_ref: externalRef,
-        external_url: `https://control.example/control/chat?session=${encodeURIComponent(sessionKey)}`,
+        external_url: "https://control.example/control/chat/main/release-planning-12345678",
         sidebar_section: "Sessions",
         archived: false,
         created_at: "2026-07-19T00:00:00.000Z",
@@ -728,9 +1007,8 @@ describe("ClickClack discussion service", () => {
       created_at: "2026-07-19T00:00:00.000Z",
     }));
 
-    await expect(harness.service.open(sessionKey)).rejects.toThrow(
-      "ClickClack channel update did not apply archived",
-    );
-    expect(harness.generationStore.lookup(sessionKey)).toBeUndefined();
+    await expect(harness.service.open(sessionKey)).resolves.toEqual({ state: "available" });
+    expect(harness.channels).not.toHaveBeenCalled();
+    expect(harness.updateChannel).not.toHaveBeenCalled();
   });
 });

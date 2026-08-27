@@ -90,6 +90,14 @@ The model:
 
 The manual launcher reads only a small allowlist of Podman-related keys from `~/.openclaw/.env` and passes explicit runtime env vars to the container; it does not hand the full env file to Podman.
 
+## Agent sandbox backend
+
+This page covers running the Gateway itself in a Podman container. Agent sandboxing is separate. Set `agents.defaults.sandbox.backend: "podman"` to select the native Podman CLI directly. The default `"docker"` backend remains Docker-only.
+
+Podman reuses the same `agents.defaults.sandbox.docker.*` container settings as Docker but executes them through the native `podman` CLI. Browser sandboxes remain Docker-only for now.
+
+See [Sandboxing](/gateway/sandboxing#podman-backend) for the config example and image-build command.
+
 <a id="podman-and-tailscale"></a>
 
 ## Podman and Tailscale
@@ -182,6 +190,14 @@ podman run --rm -it \
 On SELinux hosts, add `,Z` to both bind mounts if Podman blocks access to the
 mounted state.
 
+After restarting the Gateway with the updated image, run the read-only
+deployment preflight through the container-aware host CLI:
+
+```bash
+export OPENCLAW_CONTAINER=openclaw
+openclaw doctor --json
+```
+
 ## Useful commands
 
 - **Container logs:** `podman logs -f openclaw`
@@ -203,5 +219,6 @@ mounted state.
 ## Related
 
 - [Docker](/install/docker)
+- [Sandboxing](/gateway/sandboxing#podman-backend)
 - [Gateway background process](/gateway/background-process)
 - [Gateway troubleshooting](/gateway/troubleshooting)

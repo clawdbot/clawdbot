@@ -25,10 +25,6 @@ const PACKAGE_NAME = "@proof/openclaw-generation";
 const PLUGIN_ID = "generation-proof";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function makeStateDir(): string {
-  return tempDirs.make("openclaw-doctor-plugin-generation-");
-}
-
 function writeManagedFlat(stateDir: string, version: string): string {
   const npmDir = path.join(stateDir, "npm");
   writeManagedNpmPlugin({ stateDir, packageName: PACKAGE_NAME, pluginId: PLUGIN_ID, version });
@@ -71,7 +67,7 @@ afterEach(() => {
 
 describe("doctor managed npm generation repair", () => {
   it("retires the stale flat install and prunes it after gateway shutdown", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
     const npmDir = path.join(stateDir, "npm");
     const activePackageDir = writeManagedGeneration(stateDir, "2026.7.1");
     const stalePackageDir = writeManagedFlat(stateDir, "2026.6.11");
@@ -111,7 +107,7 @@ describe("doctor managed npm generation repair", () => {
   });
 
   it("persists the recency fallback when no authoritative record exists", async () => {
-    const stateDir = makeStateDir();
+    const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
     const activePackageDir = writeManagedGeneration(stateDir, "1.0.0");
     const stalePackageDir = writeManagedFlat(stateDir, "9.0.0");
     const activeTimestamp = new Date("2026-01-02T00:00:00.000Z");

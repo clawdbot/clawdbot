@@ -7,6 +7,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
+  listMessageActionDiscoveryChannels,
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
@@ -24,7 +25,7 @@ import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
-export { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tool-metadata.js";
+export { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 type ChannelMessageActionDiscoveryParams = {
   cfg?: OpenClawConfig;
@@ -74,7 +75,7 @@ export function listAllChannelSupportedActions(
   params: ChannelMessageActionDiscoveryParams,
 ): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
-  const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
+  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
     const channelActions = resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,

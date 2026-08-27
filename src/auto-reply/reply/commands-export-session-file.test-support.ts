@@ -38,7 +38,7 @@ describe("writeSessionExportFile", () => {
     const result = await writeExport({ workspaceDir, requestedPath: targetPath });
 
     expect(result).toEqual({
-      absolutePath: path.join(workspaceDir, "exports", "session.html"),
+      absolutePath: path.join(await fs.realpath(workspaceDir), "exports", "session.html"),
       displayPath: path.join("exports", "session.html"),
     });
     expect(await fs.readFile(result.absolutePath, "utf-8")).toBe("new export");
@@ -86,7 +86,7 @@ describe("writeSessionExportFile", () => {
       const result = await writeExport({ workspaceDir: workspaceAlias, requestedPath });
 
       expect(result).toEqual({
-        absolutePath: path.join(workspaceDir, "exports", "session.html"),
+        absolutePath: path.join(await fs.realpath(workspaceDir), "exports", "session.html"),
         displayPath: path.join("exports", "session.html"),
       });
       expect(await fs.readFile(result.absolutePath, "utf-8")).toBe("new export");

@@ -7,6 +7,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -15,9 +16,13 @@ import type {
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
+import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 
 const DEFAULT_GOOGLE_TTS_MODEL = "gemini-3.1-flash-tts-preview";
 const DEFAULT_GOOGLE_TTS_VOICE = "Kore";
@@ -192,8 +197,8 @@ function resolveGoogleTtsBaseUrl(params: {
 function resolveGoogleTtsConfigRecord(
   rawConfig: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.google) ?? asObject(rawConfig.google);
+  const providers = asOptionalRecord(rawConfig.providers);
+  return asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google);
 }
 
 function normalizeGoogleTtsProviderConfig(
@@ -297,7 +302,11 @@ function extractGoogleSpeechPcm(payload: GoogleGenerateSpeechResponse): Buffer {
       if (!data) {
         continue;
       }
-      return Buffer.from(data, "base64");
+      const canonicalAudio = canonicalizeGoogleProviderBase64(data);
+      if (!canonicalAudio) {
+        throw new Error("Google TTS response returned malformed base64 audio data");
+      }
+      return Buffer.from(canonicalAudio, "base64");
     }
   }
   throw new Error("Google TTS response missing audio data");
@@ -487,18 +496,11 @@ async function synthesizeGoogleTtsPcm(params: {
   speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await synthesizeGoogleTtsPcmOnce(params);
-    } catch (err) {
-      lastError = err;
-      if (!isGoogleTtsRetryableError(err) || attempt > 0) {
-        throw err;
-      }
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  return await retryAsync(() => synthesizeGoogleTtsPcmOnce(params), {
+    attempts: 2,
+    minDelayMs: 0,
+    shouldRetry: isGoogleTtsRetryableError,
+  });
 }
 
 type GoogleTtsSynthesisRequest = Pick<

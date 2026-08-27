@@ -1,4 +1,5 @@
 import { html } from "lit";
+import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 
 // Single-letter context-menu shortcuts. Items opt in via data-shortcut plus a
 // rendered hint; menu hosts route non-Escape keydowns here so a bare letter
@@ -13,11 +14,8 @@ export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): bo
   if (event.metaKey || event.ctrlKey || event.altKey) {
     return false;
   }
-  const key = event.key.toLowerCase();
-  // Letters and digits only (digits number submenu entries): keeps the
-  // querySelector below safe and leaves navigation keys (arrows, Tab, Enter)
-  // to native menu focus handling.
-  if (!/^[a-z0-9]$/.test(key)) {
+  const key = resolveAsciiShortcutKey(event);
+  if (!key) {
     return false;
   }
   const item = root.querySelector<HTMLElement & { disabled?: boolean }>(`[data-shortcut="${key}"]`);

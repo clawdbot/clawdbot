@@ -695,6 +695,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 host: "z.example.com",
                 port: 443,
                 useTLS: true,
+                contextPath: "/openclaw-gateway",
                 lastConnectedAtMs: nil)
             let gatewayA = GatewaySettingsStore.GatewayRegistryEntry(
                 stableID: "bonjour|alpha",
@@ -716,6 +717,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(registry.connectedStableIDs == [gatewayB.stableID])
             #expect(GatewaySettingsStore.connectedGatewayEntries().map(\.stableID) == [gatewayB.stableID])
             #expect(registry.entries.last?.lastConnectedAtMs == 1234)
+            #expect(registry.entries.last?.contextPath == "/openclaw-gateway")
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
             #expect(KeychainStore.loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
 

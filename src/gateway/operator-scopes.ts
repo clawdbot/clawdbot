@@ -6,6 +6,7 @@ export const WRITE_SCOPE = "operator.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
 export const QUESTIONS_SCOPE = "operator.questions" as const;
 export const PAIRING_SCOPE = "operator.pairing" as const;
+export const TALK_SCOPE = "operator.talk" as const;
 export const TALK_SECRETS_SCOPE = "operator.talk.secrets" as const;
 
 /** Operator privileges advertised by gateway auth and checked by method policy. */
@@ -16,6 +17,7 @@ export type OperatorScope =
   | typeof APPROVALS_SCOPE
   | typeof QUESTIONS_SCOPE
   | typeof PAIRING_SCOPE
+  | typeof TALK_SCOPE
   | typeof TALK_SECRETS_SCOPE;
 
 const KNOWN_OPERATOR_SCOPE_VALUES: readonly OperatorScope[] = [
@@ -25,6 +27,7 @@ const KNOWN_OPERATOR_SCOPE_VALUES: readonly OperatorScope[] = [
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
   PAIRING_SCOPE,
+  TALK_SCOPE,
   TALK_SECRETS_SCOPE,
 ];
 

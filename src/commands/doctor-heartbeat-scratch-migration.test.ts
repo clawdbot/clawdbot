@@ -3,8 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { heartbeatMonitorAgentId } from "../cron/heartbeat-monitor.js";
 import { readCronJobScratchState, writeCronJobScratch } from "../cron/scratch-store.js";
 import {
   loadCronJobsStore,
@@ -63,7 +63,9 @@ async function createFixture() {
 async function loadMonitor(cfg?: OpenClawConfig) {
   const storePath = cfg ? resolveCronJobsStorePathFromConfig(cfg) : resolveCronJobsStorePath();
   const store = await loadCronJobsStore(storePath);
-  const monitor = store.jobs.find((job) => heartbeatMonitorAgentId(job) === "main");
+  const monitor = store.jobs.find(
+    (job) => job.agentId === "main" && job.payload.kind === "heartbeat",
+  );
   if (!monitor) {
     throw new Error("expected migrated heartbeat monitor");
   }
@@ -148,15 +150,18 @@ describe("HEARTBEAT.md cron scratch migration", () => {
 
   it("imports a shared workspace file into every agent monitor before removing it", async () => {
     const fixture = await createFixture();
-    const cfg = {
-      agents: {
-        defaults: { heartbeat: { every: "30m" } },
-        list: [
-          { id: "main", workspace: fixture.workspace },
-          { id: "ops", workspace: fixture.workspace },
-        ],
-      },
-    } as OpenClawConfig;
+    const cfg = retainLegacyDefaultAgentId(
+      {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [
+            { id: "main", workspace: fixture.workspace },
+            { id: "ops", workspace: fixture.workspace },
+          ],
+        },
+      } as OpenClawConfig,
+      "main",
+    );
     await fs.writeFile(fixture.heartbeatPath, "shared checklist\n", "utf8");
 
     const result = await maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
@@ -167,7 +172,9 @@ describe("HEARTBEAT.md cron scratch migration", () => {
     const storePath = resolveCronJobsStorePath();
     const store = await loadCronJobsStore(storePath);
     for (const agentId of ["main", "ops"]) {
-      const monitor = store.jobs.find((job) => heartbeatMonitorAgentId(job) === agentId);
+      const monitor = store.jobs.find(
+        (job) => job.agentId === agentId && job.payload.kind === "heartbeat",
+      );
       expect(monitor, agentId).toBeDefined();
       expect(readCronJobScratchState(storePath, monitor!.id).scratch?.content, agentId).toBe(
         "shared checklist\n",

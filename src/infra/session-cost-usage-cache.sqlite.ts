@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { isPidAlive } from "../shared/pid-alive.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
@@ -10,7 +11,8 @@ import { isTransientSqliteError } from "./unhandled-rejections.js";
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
 const REFRESH_LOCK_KEY = "refresh-lock";
-const ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
+const RETIRED_ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
+const ROLLUP_SCOPE = "session-cost-usage-rollup-v2";
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -177,20 +179,21 @@ export function deleteSessionCostUsageRollupsExcept(params: {
   agentId?: string;
   databasePath?: string;
   liveKeys: ReadonlySet<string>;
+  rows: readonly SessionCostUsageRollupRow[];
 }): void {
-  const existing = readSessionCostUsageRollupRows(params.agentId, params.databasePath)
-    .map((row) => row.key)
-    .filter((key) => !params.liveKeys.has(key));
+  const existing = params.rows.filter((row) => !params.liveKeys.has(row.key));
   runOpenClawAgentWriteTransaction(
     (database) => {
       const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
-      for (const key of existing) {
+      for (const row of existing) {
         executeSqliteQuerySync(
           database.db,
           kysely
             .deleteFrom("cache_entries")
             .where("scope", "=", ROLLUP_SCOPE)
-            .where("key", "=", key),
+            .where("key", "=", row.key)
+            .where("value_json", "=", row.valueJson)
+            .where("updated_at", "=", row.updatedAt),
         );
       }
       executeSqliteQuerySync(
@@ -199,6 +202,12 @@ export function deleteSessionCostUsageRollupsExcept(params: {
           .deleteFrom("cache_entries")
           .where("scope", "=", LEGACY_CACHE_SCOPE)
           .where("key", "=", LEGACY_CACHE_KEY),
+      );
+      // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
+      // Delete by scope so those values are never materialized during cleanup.
+      executeSqliteQuerySync(
+        database.db,
+        kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
       );
     },
     {
@@ -233,19 +242,10 @@ function parseRefreshLock(raw: string | null): SessionCostUsageRefreshLock | nul
   }
 }
 
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
 export function isSessionCostUsageRefreshRunning(agentId?: string, databasePath?: string): boolean {
   const raw = readCacheValue(agentId, LEGACY_CACHE_SCOPE, REFRESH_LOCK_KEY, databasePath);
   const lock = parseRefreshLock(raw);
-  if (lock && isProcessRunning(lock.pid)) {
+  if (lock && isPidAlive(lock.pid)) {
     return true;
   }
   if (raw !== null) {
@@ -268,7 +268,7 @@ export function acquireSessionCostUsageRefreshLock(
   const previousLock = parseRefreshLock(previousRaw);
   // Process liveness is resolved before BEGIN. The transaction only compares
   // the authoritative row and commits the prepared replacement synchronously.
-  const previousOwnerIsRunning = previousLock ? isProcessRunning(previousLock.pid) : false;
+  const previousOwnerIsRunning = previousLock ? isPidAlive(previousLock.pid) : false;
   const lock: SessionCostUsageRefreshLock = {
     pid: process.pid,
     startedAt: Date.now(),

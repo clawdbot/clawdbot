@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { resolveUserPath } from "../utils.js";
+import {
+  inspectBundlePluginArtifact,
+  inspectNativePluginArtifact,
+  type PluginInstallArtifactInspection,
+} from "./install-artifact-inspection.js";
 import {
   scanAndLinkInstalledPackage,
   validatePackagePluginInstallSource,
@@ -19,6 +23,7 @@ import {
   validateOpenClawPackageInstallCompatibility,
   type PreparedInstallTarget,
 } from "./install-shared.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
@@ -34,14 +39,16 @@ const PLUGIN_ARCHIVE_ROOT_MARKERS = [
   ".codex-plugin/plugin.json",
   ".claude-plugin/plugin.json",
   ".cursor-plugin/plugin.json",
+  "plugin.json",
 ];
 
 function pickPackageInstallCommonParams(
   params: InternalPackageInstallCommonParams,
 ): InternalPackageInstallCommonParams {
-  return {
+  return copyPluginInstallTransactionRequest(params, {
     config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,
@@ -54,7 +61,7 @@ function pickPackageInstallCommonParams(
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
     onEffectiveMode: params.onEffectiveMode,
-  };
+  });
 }
 
 function installPolicyRequestForPath(
@@ -156,6 +163,7 @@ async function installBundleFromSourceDir(
     scan: async () =>
       await runtime.scanBundleInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
         config: params.config,
         sourceDir: params.sourceDir,
         pluginId,
@@ -171,22 +179,40 @@ async function installBundleFromSourceDir(
     return scanResult;
   }
 
-  return await installPluginDirectoryIntoExtensions({
-    sourceDir: params.sourceDir,
-    pluginId,
-    manifestName: manifestRes.manifest.name,
-    version: manifestRes.manifest.version,
-    extensions: [],
-    targetDir: targetResult.target.targetPath,
-    extensionsDir: params.extensionsDir,
-    logger,
-    timeoutMs,
-    mode: targetResult.target.effectiveMode,
-    dryRun,
-    copyErrorPrefix: "failed to copy plugin bundle",
-    hasDeps: false,
-    depsLogMessage: "",
-  });
+  const installed = await installPluginDirectoryIntoExtensions(
+    copyPluginInstallTransactionRequest(params, {
+      sourceDir: params.sourceDir,
+      pluginId,
+      manifestName: manifestRes.manifest.name,
+      version: manifestRes.manifest.version,
+      extensions: [],
+      targetDir: targetResult.target.targetPath,
+      extensionsDir: params.extensionsDir,
+      logger,
+      timeoutMs,
+      mode: targetResult.target.effectiveMode,
+      dryRun,
+      copyErrorPrefix: "failed to copy plugin bundle",
+      hasDeps: false,
+      depsLogMessage: "",
+    }),
+  );
+  return installed.ok
+    ? {
+        ...installed,
+        artifactInspection: inspectBundlePluginArtifact({
+          format: manifestRes.manifest.bundleFormat,
+          capabilities: manifestRes.manifest.capabilities,
+        }),
+      }
+    : installed;
+}
+
+function withArtifactInspection(
+  result: InstallPluginResult,
+  artifactInspection: PluginInstallArtifactInspection,
+): InstallPluginResult {
+  return result.ok ? { ...result, artifactInspection } : result;
 }
 
 async function installPluginFromSourceDir(
@@ -194,12 +220,16 @@ async function installPluginFromSourceDir(
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
-  const nativePackageDetected = await detectNativePackageInstallSource(params.sourceDir);
-  if (nativePackageDetected) {
-    return await installPluginFromPackageDir({
-      packageDir: params.sourceDir,
-      ...pickPackageInstallCommonParams(params),
-    });
+  const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
+  if (nativePackageManifest) {
+    return withArtifactInspection(
+      await installPluginFromPackageDir({
+        packageDir: params.sourceDir,
+        packageManifest: nativePackageManifest,
+        ...pickPackageInstallCommonParams(params),
+      }),
+      inspectNativePluginArtifact(),
+    );
   }
   const bundleResult = await installBundleFromSourceDir({
     sourceDir: params.sourceDir,
@@ -208,30 +238,28 @@ async function installPluginFromSourceDir(
   if (bundleResult) {
     return bundleResult;
   }
-  return await installPluginFromPackageDir({
-    packageDir: params.sourceDir,
-    ...pickPackageInstallCommonParams(params),
-  });
+  return withArtifactInspection(
+    await installPluginFromPackageDir({
+      packageDir: params.sourceDir,
+      ...pickPackageInstallCommonParams(params),
+    }),
+    inspectNativePluginArtifact(),
+  );
 }
 
-async function detectNativePackageInstallSource(packageDir: string): Promise<boolean> {
+async function detectNativePackageInstallSource(
+  packageDir: string,
+): Promise<PackageManifest | undefined> {
   const runtime = await loadPluginInstallRuntime();
-  const manifestPath = path.join(packageDir, "package.json");
-  if (!(await runtime.fileExists(manifestPath))) {
-    return false;
-  }
-
-  try {
-    const manifest = await runtime.readJsonFile<PackageManifest>(manifestPath);
-    return ensureOpenClawExtensions({ manifest }).ok;
-  } catch {
-    return false;
-  }
+  const result = await readOptionalPackageManifest({ runtime, packageDir });
+  const manifest = result.ok ? result.manifest : undefined;
+  return manifest && ensureOpenClawExtensions({ manifest }).ok ? manifest : undefined;
 }
 
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;
+    packageManifest?: PackageManifest;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -260,10 +288,12 @@ async function installPluginFromPackageDir(
   const validated = await validatePackagePluginInstallSource({
     runtime,
     packageDir: params.packageDir,
+    manifest: params.packageManifest,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
     installPolicyRequest: params.installPolicyRequest,
@@ -286,42 +316,45 @@ async function installPluginFromPackageDir(
     !hasBundleManifest &&
     params.installPolicyRequest?.kind === "plugin-archive";
 
-  return await installPluginDirectoryIntoExtensions({
-    sourceDir: params.packageDir,
-    pluginId: plugin.pluginId,
-    manifestName: plugin.manifestName,
-    version: plugin.version,
-    extensions: plugin.extensions,
-    targetDir: preparedTarget.targetPath,
-    extensionsDir: params.extensionsDir,
-    logger,
-    timeoutMs,
-    mode: effectiveMode,
-    dryRun,
-    copyErrorPrefix: "failed to copy plugin",
-    hasDeps: shouldInstallRuntimeDeps,
-    sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
-    depsLogMessage: "Installing plugin dependencies…",
-    nameEncoder: encodePluginInstallDirName,
-    afterInstall: async (installedDir) => {
-      return await scanAndLinkInstalledPackage({
-        runtime,
-        installedDir,
-        pluginId: plugin.pluginId,
-        peerDependencies: plugin.peerDependencies,
-        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-        config: params.config,
-        mode: effectiveMode,
-        ...(params.installPolicyRequest?.kind
-          ? { requestKind: params.installPolicyRequest.kind }
-          : {}),
-        requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
-        source: params.installPolicyRequest?.source,
-        logger,
-      });
-    },
-  });
+  return await installPluginDirectoryIntoExtensions(
+    copyPluginInstallTransactionRequest(params, {
+      sourceDir: params.packageDir,
+      pluginId: plugin.pluginId,
+      manifestName: plugin.manifestName,
+      version: plugin.version,
+      extensions: plugin.extensions,
+      setup: plugin.setup,
+      targetDir: preparedTarget.targetPath,
+      extensionsDir: params.extensionsDir,
+      logger,
+      timeoutMs,
+      mode: effectiveMode,
+      dryRun,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: shouldInstallRuntimeDeps,
+      sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
+      depsLogMessage: "Installing plugin dependencies…",
+      nameEncoder: encodePluginInstallDirName,
+      afterInstall: async (installedDir) => {
+        return await scanAndLinkInstalledPackage({
+          runtime,
+          installedDir,
+          pluginId: plugin.pluginId,
+          peerDependencies: plugin.peerDependencies,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+          config: params.config,
+          mode: effectiveMode,
+          ...(params.installPolicyRequest?.kind
+            ? { requestKind: params.installPolicyRequest.kind }
+            : {}),
+          requestedSpecifier: params.installPolicyRequest?.requestedSpecifier,
+          source: params.installPolicyRequest?.source,
+          logger,
+        });
+      },
+    }),
+  );
 }
 
 export async function installPluginFromArchive(
@@ -354,22 +387,25 @@ export async function installPluginFromArchive(
     onExtracted: async (sourceDir) =>
       await installPluginFromSourceDir({
         sourceDir,
-        ...pickPackageInstallCommonParams({
-          dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-          extensionsDir: params.extensionsDir,
-          timeoutMs,
-          logger,
-          mode,
-          dryRun: params.dryRun,
-          config: params.config,
-          expectedPluginId: params.expectedPluginId,
-          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-          requirePluginManifest: true,
-          installPolicyRequest,
-          onEffectiveMode: (resolvedMode) => {
-            effectiveMode = resolvedMode;
-          },
-        }),
+        ...pickPackageInstallCommonParams(
+          copyPluginInstallTransactionRequest(params, {
+            dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+            onInstallPolicyWarning: params.onInstallPolicyWarning,
+            extensionsDir: params.extensionsDir,
+            timeoutMs,
+            logger,
+            mode,
+            dryRun: params.dryRun,
+            config: params.config,
+            expectedPluginId: params.expectedPluginId,
+            trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+            requirePluginManifest: true,
+            installPolicyRequest,
+            onEffectiveMode: (resolvedMode) => {
+              effectiveMode = resolvedMode;
+            },
+          }),
+        ),
       }),
   });
   emitSuccessfulPluginInstallSecurityEvent(result, {

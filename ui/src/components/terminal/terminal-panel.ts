@@ -1,24 +1,29 @@
 // Dockable operator terminal panel for the Control UI shell.
 //
-// Renders a VS Code-style shell dock (bottom by default, or right) with session
+// Renders a VS Code-style shell dock (bottom by default, right, or main) with session
 // tabs. Each tab hosts one libterminal Ghostty controller wired to a gateway PTY
 // session. The browser runtime is dynamically imported on first open so it
 // never weighs down the initial Control UI bundle.
+import { initialState, Task, TaskStatus } from "@lit/task";
+import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
+import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
-import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import { scrollbarShadowStyles } from "../../lit/scrollbar-styles.ts";
+import { DockLayoutController, dockPanelStyles } from "../dock-layout-controller.ts";
+import { createDockPanelLayout, type DockPanelPlacement } from "../dock-panel-layout.ts";
 import { panelTabStripStyles } from "../panel-tab-strip.ts";
 import {
   isTerminalPanelShortcut,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type TerminalPanelToggleDetail,
 } from "../panel-toggle-contract.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 import {
   renderTerminalPanelHeader,
-  renderTerminalPanelResizer,
   renderTerminalPanelToolbar,
   renderTerminalPanelViewport,
 } from "./terminal-panel-chrome.ts";
@@ -37,14 +42,14 @@ import { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { renderTerminalSessionPicker } from "./terminal-session-picker.ts";
 
-type TerminalDock = Exclude<DockPanelSide, "left">;
+type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
 const panelLayout = createDockPanelLayout({
   storageKey: "openclaw.terminal.panel.v1",
   minHeight: 140,
   minWidth: 320,
   defaultDock: "bottom",
-  supportedDocks: ["bottom", "right"],
+  supportedDocks: ["bottom", "right", "main"],
   defaultHeight: 320,
   defaultWidth: 520,
 });
@@ -56,27 +61,39 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: TerminalGatewayClient | null = null;
   /** Agent whose workspace and sandbox policy own newly opened sessions. */
   @property({ attribute: false }) agentId: string | null = null;
+  /** Conversation that owns newly opened session-scoped terminals. */
+  @property({ attribute: false }) sessionKey: string | null = null;
   /** Whether the connected gateway advertises the terminal surface. */
   @property({ type: Boolean }) available = false;
+  /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
+  @property({ type: Boolean }) suppressed = false;
   /** Active Control UI color mode, mirrored into the terminal theme. */
   @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
+  /** Configured Control UI mount prefix used by document links. */
+  @property({ attribute: false }) basePath = "";
   /**
-   * Terminal-only document mode (`?view=terminal`), used by the mobile apps'
-   * WebViews: fills the viewport, always open while available, no dock chrome.
+   * Focused terminal document mode (`/focus/terminal`): fills the
+   * viewport, stays open while available, and omits dock chrome.
    */
   @property({ type: Boolean }) fullscreen = false;
+  /** Hosted by the chat side panel, which owns visibility and geometry. */
+  @property({ type: Boolean }) embedded = false;
 
-  @state() private open = false;
-  @state() private dock: TerminalDock = "bottom";
-  @state() private height = panelLayout.defaults.height;
-  @state() private width = panelLayout.defaults.width;
   @state() terminalPanelErrorText: string | null = null;
   @state() private sessionPickerOpen = false;
-  @state() private sessionPickerLoading = false;
   @state() private pickerSessions: TerminalSessionInfo[] = [];
 
-  private sessionPickerRefreshGeneration = 0;
-  private resizeCleanup: (() => void) | null = null;
+  private readonly sessionPickerTask = new Task(this, {
+    autoRun: false,
+    // The controller reads the host client; carrying its identity retires stale picker loads.
+    args: () => [this.available ? this.client : null] as const,
+    task: ([client]) => (client ? this.terminalSessions.listSessions() : initialState),
+    onComplete: (sessions) => {
+      if (sessions !== null) {
+        this.pickerSessions = sessions;
+      }
+    },
+  });
   readonly terminalPanelUploadController = new TerminalPanelUploadController({
     activeTab: () =>
       this.terminalSessions.tabs.find(
@@ -95,41 +112,49 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   createTerminalController = createIsolatedGhosttyTerminal;
   catalogReadyTimeoutMs = CATALOG_TERMINAL_READY_TIMEOUT_MS;
   private readonly terminalSessions = new TerminalPanelSessionController(this);
+  private readonly dockLayout = new DockLayoutController(this, {
+    layout: panelLayout,
+    reservationPrefix: "terminal",
+    isAvailable: () => this.isDockLayoutAvailable(),
+    isFullscreen: () => this.fullscreen,
+    onResize: () =>
+      fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId),
+  });
   private readonly onGlobalKeyDown = (event: KeyboardEvent) => this.handleGlobalKey(event);
   private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
-  // Re-clamp a dock sized on a larger window so the header/resizer never end
-  // up off-screen after the viewport shrinks (e.g. rotate, window resize).
-  private readonly onViewportResize = () => {
-    const height = Math.min(this.height, panelLayout.maxHeight());
-    const width = Math.min(this.width, panelLayout.maxWidth());
-    if (height === this.height && width === this.width) {
-      return;
-    }
-    this.height = height;
-    this.width = width;
-    this.syncLayoutReservation();
-    fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId);
-  };
+  private readonly onDockBottomRequest = (event: Event) => this.handleToggleRequest(event);
+  private readonly onDocumentPointerDown = (event: PointerEvent) =>
+    this.handleDocumentPointerDown(event);
+  private themeObserver: MutationObserver | null = null;
+
+  private get sessionBottomOnly(): boolean {
+    return !this.embedded && this.sessionKey !== null;
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
     this.terminalSessions.connectHost();
-    if (!this.fullscreen) {
-      const layout = panelLayout.load();
-      this.dock = layout.dock;
-      this.height = layout.height;
-      this.width = layout.width;
-      // Only restore the open state when the surface is actually available.
-      this.open = layout.open && this.available;
+    // A settings takeover can already own the viewport when the panel mounts.
+    // Suppress before the restored open state boots a session nobody can see.
+    this.dockLayout.setSuppressed(this.suppressed);
+    if (!this.fullscreen && !this.embedded && !this.sessionBottomOnly) {
       window.addEventListener("keydown", this.onGlobalKeyDown);
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-      window.addEventListener("resize", this.onViewportResize);
-    } else {
-      // Fullscreen documents have no toggle/dock chrome; the panel is simply
-      // open whenever the terminal surface is available.
-      this.open = this.available;
     }
-    if (this.open) {
+    if (!this.fullscreen && !this.embedded) {
+      window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
+    }
+    document.addEventListener("pointerdown", this.onDocumentPointerDown, true);
+    if (typeof MutationObserver !== "undefined") {
+      this.themeObserver = new MutationObserver(() =>
+        updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode),
+      );
+      this.themeObserver.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-theme", "data-theme-mode", "style"],
+      });
+    }
+    if (this.dockLayout.open) {
       void this.terminalSessions.restoreSessions();
     }
   }
@@ -138,47 +163,50 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
-    window.removeEventListener("resize", this.onViewportResize);
-    // Release the content-area reservation so the shell reflows to full size.
-    document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "0px");
-    document.documentElement.style.setProperty("--oc-terminal-reserve-right", "0px");
+    window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
+    document.removeEventListener("pointerdown", this.onDocumentPointerDown, true);
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
     this.terminalSessions.disconnectHost();
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if ((changed.has("embedded") || changed.has("sessionKey")) && !this.fullscreen) {
+      if (this.embedded || this.sessionBottomOnly) {
+        window.removeEventListener("keydown", this.onGlobalKeyDown);
+        window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      } else {
+        window.addEventListener("keydown", this.onGlobalKeyDown);
+        window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      }
+      if (this.embedded) {
+        window.removeEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
+      } else {
+        window.addEventListener(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, this.onDockBottomRequest);
+      }
+    }
+    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
+      // Restoring after a takeover: a reconnect during settings disposed the tabs
+      // without restoring them, so re-run the normal open path.
+      void this.terminalSessions.restoreSessions();
+    }
     if (changed.has("client") || changed.has("available")) {
       this.terminalSessions.scheduleLifecycleSync();
     }
     if (changed.has("themeMode")) {
       updateTerminalSessionTheme(this.terminalSessions.tabs, this.themeMode);
     }
-    if (this.open) {
+    if (changed.has("embedded") && this.embedded) {
+      void this.terminalSessions.restoreSessions();
+    }
+    if (this.embedded || this.dockLayout.open) {
       reattachTerminalSessionHosts(
         this.terminalSessions.tabs,
         this.terminalSessions.activeId,
         this.findTerminalPanelViewport(),
       );
     }
-    this.syncLayoutReservation();
-  }
-
-  /**
-   * Publishes the dock's footprint as CSS variables on the document root so the
-   * Control UI shell reserves space for it (via `.content` margins) instead of
-   * letting the terminal overlay the chat. The panel itself stays fixed; the
-   * content simply shrinks to make room, so this reads as a real dock.
-   */
-  private syncLayoutReservation(): void {
-    if (this.fullscreen) {
-      // No shell content to reserve space for in a terminal-only document.
-      return;
-    }
-    const root = document.documentElement.style;
-    const bottom =
-      this.available && this.open && this.dock === "bottom" ? `${this.height}px` : "0px";
-    const right = this.available && this.open && this.dock === "right" ? `${this.width}px` : "0px";
-    root.setProperty("--oc-terminal-reserve-bottom", bottom);
-    root.setProperty("--oc-terminal-reserve-right", right);
+    this.dockLayout.syncReservation();
   }
 
   /** Opens the panel if closed, closes it if open. */
@@ -186,12 +214,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     if (!this.available) {
       return;
     }
-    if (this.open) {
+    if (this.dockLayout.open) {
       this.closeTerminalPanel();
     } else {
-      this.open = true;
-      this.syncLayoutReservation();
-      this.persistLayout();
+      this.dockLayout.setOpen(true);
       void this.terminalSessions.restoreSessions();
     }
   }
@@ -202,8 +228,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         ? (event.detail as TerminalPanelToggleDetail)
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
+    if (detail?.agentId !== undefined) {
+      this.agentId = detail.agentId;
+    }
     if (dock) {
-      this.dock = dock;
+      this.dockLayout.setDock(dock, false);
     }
     if (detail?.open === false) {
       this.closeTerminalPanel();
@@ -213,9 +242,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       if (!this.available) {
         return;
       }
-      this.open = true;
-      this.syncLayoutReservation();
-      this.persistLayout();
+      if (detail.catalog) {
+        this.dockLayout.setDock("main");
+      }
+      this.dockLayout.setOpen(true);
       void (detail.terminalSessionId
         ? this.terminalSessions.openRequestedSession(detail.terminalSessionId)
         : detail.catalog
@@ -227,13 +257,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   closeTerminalPanel(): void {
-    this.open = false;
-    this.syncLayoutReservation();
-    this.persistLayout();
+    this.closeSessionPicker(false);
+    this.terminalSessions.cancelPendingActions();
+    this.dockLayout.setOpen(false);
   }
 
   get terminalPanelOpen(): boolean {
-    return this.open;
+    return this.dockLayout.open;
   }
 
   hideTerminalPanelForUnavailableSurface(): void {
@@ -241,17 +271,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     // WITHOUT persisting: a disconnect must not overwrite the user's open
     // preference, or the reconnect path would never auto-reopen. Server
     // sessions survive for the detach grace period and reattach afterwards.
-    this.open = false;
+    this.dockLayout.hideWithoutPersisting();
   }
 
   restoreTerminalPanelOpenState(): boolean {
-    if (this.open || (!this.fullscreen && !panelLayout.load().open)) {
-      return false;
-    }
-    // Hello arrived after mount (or a reconnect); fullscreen documents are
-    // always open while available, while docked panels restore user state.
-    this.open = true;
-    return true;
+    return this.dockLayout.restoreOpenState();
   }
 
   private handleGlobalKey(event: KeyboardEvent): void {
@@ -262,22 +286,70 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
+  private isDockLayoutAvailable(): boolean {
+    return this.available && (!this.sessionBottomOnly || this.dockLayout.dock === "bottom");
+  }
+
   private toggleSessionPicker(): void {
-    this.sessionPickerOpen = !this.sessionPickerOpen;
     if (this.sessionPickerOpen) {
-      void this.refreshSessionPicker();
+      this.closeSessionPicker(true);
+      return;
+    }
+    this.sessionPickerOpen = true;
+    void this.refreshSessionPicker();
+    void this.updateComplete.then(() => {
+      if (this.sessionPickerOpen) {
+        this.renderRoot.querySelector<HTMLButtonElement>(".tp-session-refresh")?.focus();
+      }
+    });
+  }
+
+  private closeSessionPicker(restoreFocus: boolean): void {
+    if (!this.sessionPickerOpen) {
+      return;
+    }
+    this.sessionPickerOpen = false;
+    if (restoreFocus) {
+      void this.updateComplete.then(() => {
+        this.renderRoot
+          .querySelector<HTMLButtonElement>('[aria-controls="terminal-session-picker-dialog"]')
+          ?.focus();
+      });
     }
   }
 
-  private async refreshSessionPicker(): Promise<void> {
-    const refreshGeneration = ++this.sessionPickerRefreshGeneration;
-    this.sessionPickerLoading = true;
-    const sessions = await this.terminalSessions.listSessions();
-    if (refreshGeneration !== this.sessionPickerRefreshGeneration || sessions === null) {
+  private handleDocumentPointerDown(event: PointerEvent): void {
+    if (!this.sessionPickerOpen) {
       return;
     }
-    this.pickerSessions = sessions;
-    this.sessionPickerLoading = false;
+    const picker = this.renderRoot.querySelector(".tp-session-picker");
+    // Document capture sees retargeted shadow-DOM events. The composed path
+    // preserves the picker wrapper so its trigger and actions stay clickable.
+    const path = event.composedPath();
+    if (picker && !path.includes(picker)) {
+      this.closeSessionPicker(false);
+    }
+  }
+
+  private handleSessionPickerFocusOut(event: FocusEvent): void {
+    const picker = event.currentTarget;
+    const next = event.relatedTarget;
+    if (picker instanceof HTMLElement && next instanceof Node && picker.contains(next)) {
+      return;
+    }
+    queueMicrotask(() => {
+      if (
+        picker instanceof HTMLElement &&
+        !picker.contains(this.shadowRoot?.activeElement ?? null) &&
+        this.sessionPickerOpen
+      ) {
+        this.closeSessionPicker(false);
+      }
+    });
+  }
+
+  private refreshSessionPicker(): Promise<void> {
+    return this.sessionPickerTask.run();
   }
 
   private async attachPickedSession(
@@ -289,72 +361,31 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   private setDock(dock: TerminalDock): void {
-    this.dock = dock;
-    this.syncLayoutReservation();
-    this.persistLayout();
+    // Embedded chrome cannot dock itself: it asks the host to take the panel
+    // out to the bottom slot. Every other target stays with the dock layout,
+    // where "main" toggles instead of pinning.
+    if (this.embedded && dock === "bottom") {
+      window.dispatchEvent(
+        new CustomEvent<TerminalPanelToggleDetail>(TERMINAL_PANEL_DOCK_BOTTOM_EVENT, {
+          detail: { agentId: this.agentId, dock: "bottom", open: true },
+        }),
+      );
+      return;
+    }
+    this.dockLayout.setDock(dock);
     void this.updateComplete.then(() => fitAllTerminalSessions(this.terminalSessions.tabs));
   }
 
-  private persistLayout(): void {
-    panelLayout.save({
-      open: this.open,
-      dock: this.dock,
-      height: this.height,
-      width: this.width,
-    });
-  }
-
-  private startResize(event: PointerEvent): void {
-    event.preventDefault();
-    this.clearTerminalPanelResizeListeners();
-    const startX = event.clientX;
-    const startY = event.clientY;
-    const startHeight = this.height;
-    const startWidth = this.width;
-    const onMove = (move: PointerEvent) => {
-      if (this.dock === "bottom") {
-        const next = Math.max(panelLayout.minHeight, startHeight + (startY - move.clientY));
-        this.height = Math.min(next, panelLayout.maxHeight());
-      } else {
-        const next = Math.max(panelLayout.minWidth, startWidth + (startX - move.clientX));
-        this.width = Math.min(next, panelLayout.maxWidth());
-      }
-      // Reflow the content reservation live so the shell tracks the drag.
-      this.syncLayoutReservation();
-      fitActiveTerminalSession(this.terminalSessions.tabs, this.terminalSessions.activeId);
-    };
-    const cleanup = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      window.removeEventListener("pointercancel", onUp);
-      window.removeEventListener("blur", onUp);
-      if (this.resizeCleanup === cleanup) {
-        this.resizeCleanup = null;
-      }
-    };
-    const onUp = () => {
-      cleanup();
-      if (!this.isConnected) {
-        return;
-      }
-      this.persistLayout();
-    };
-    this.resizeCleanup = cleanup;
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-    window.addEventListener("pointercancel", onUp);
-    window.addEventListener("blur", onUp);
-  }
-
-  clearTerminalPanelResizeListeners(): void {
-    this.resizeCleanup?.();
-    this.resizeCleanup = null;
+  private openFullscreen(): void {
+    const focusPath = buildControlUiFocusPath({ kind: "terminal" }, this.basePath);
+    if (focusPath) {
+      openExternalUrlSafe(focusPath);
+    }
   }
 
   resetTerminalSessionPicker(): void {
-    this.sessionPickerOpen = false;
-    this.sessionPickerLoading = false;
-    this.sessionPickerRefreshGeneration += 1;
+    this.closeSessionPicker(false);
+    void this.sessionPickerTask.run([null]);
     this.pickerSessions = [];
   }
 
@@ -362,25 +393,44 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     return this.renderRoot.querySelector(".tp-viewport");
   }
 
+  private retryTerminalOpen(): void {
+    this.terminalPanelErrorText = null;
+    this.terminalSessions.openRetry.run();
+  }
+
   override render() {
-    if (!this.available || !this.open) {
+    if (
+      !this.available ||
+      (!this.embedded && !this.dockLayout.open) ||
+      (this.sessionBottomOnly && this.dockLayout.dock !== "bottom")
+    ) {
       return nothing;
     }
-    const mode = this.fullscreen ? "fullscreen" : this.dock;
-    const style = this.fullscreen
-      ? nothing
-      : this.dock === "bottom"
-        ? `height:${this.height}px;--tp-panel-height:${this.height}px`
-        : `width:${this.width}px`;
+    const mode = this.embedded ? "embedded" : this.fullscreen ? "fullscreen" : this.dockLayout.dock;
+    const style =
+      this.embedded || this.fullscreen || this.dockLayout.dock === "main"
+        ? nothing
+        : this.dockLayout.dock === "bottom"
+          ? `height:${this.dockLayout.height}px;--tp-panel-height:${this.dockLayout.height}px`
+          : `width:${this.dockLayout.width}px`;
     const activeTab = this.terminalSessions.tabs.find(
       (tab) => tab.id === this.terminalSessions.activeId,
     );
     const connecting =
+      this.terminalSessions.waitingForRefresh ||
       (this.terminalSessions.booting && this.terminalSessions.tabs.length === 0) ||
       activeTab?.status === "connecting";
+    const terminalError = this.terminalPanelErrorText
+      ? {
+          text: this.terminalPanelErrorText,
+          retry: this.terminalSessions.openRetry.available
+            ? () => this.retryTerminalOpen()
+            : undefined,
+        }
+      : null;
     const sessionPicker = renderTerminalSessionPicker({
       open: this.sessionPickerOpen,
-      loading: this.sessionPickerLoading,
+      loading: this.sessionPickerTask.status === TaskStatus.PENDING,
       sessions: this.pickerSessions,
       currentSessionIds: new Set(
         this.terminalSessions.tabs
@@ -391,37 +441,42 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
           ),
       ),
       onToggle: () => this.toggleSessionPicker(),
+      onDismiss: (restoreFocus) => this.closeSessionPicker(restoreFocus),
+      onFocusOut: (event) => this.handleSessionPickerFocusOut(event),
       onRefresh: () => void this.refreshSessionPicker(),
       onAttach: (sessionId, owner) => void this.attachPickedSession(sessionId, owner),
     });
     const toolbar = renderTerminalPanelToolbar(
       this.fullscreen,
-      this.dock,
+      this.embedded,
+      this.dockLayout.dock,
       this.terminalPanelUploadController,
       sessionPicker,
       (dock) => this.setDock(dock),
+      () => this.openFullscreen(),
       () => this.closeTerminalPanel(),
     );
     return html`
       <section class="tp tp--${mode}" style=${style} aria-label=${t("terminal.title")}>
-        ${renderTerminalPanelResizer(this.fullscreen, this.dock, (event) =>
-          this.startResize(event),
-        )}
+        ${this.embedded ? nothing : this.dockLayout.renderResizer("tp", t("terminal.resize"))}
         ${renderTerminalPanelHeader(
           this.terminalSessions.tabs,
           this.terminalSessions.activeId,
           this.terminalSessions.booting,
           toolbar,
           (id) => this.terminalSessions.switchTo(id),
-          (id) => this.terminalSessions.closeTab(id),
+          (id) => {
+            this.terminalSessions.closeTab(id);
+            return this.updateComplete.then(() => undefined);
+          },
           () => void this.terminalSessions.openSession(),
         )}
-        ${renderTerminalPanelViewport(
-          this.terminalSessions.activeId,
+        ${renderTerminalPanelViewport({
+          activeId: this.terminalSessions.activeId,
           connecting,
-          this.terminalPanelErrorText,
-          this.terminalPanelUploadController,
-        )}
+          error: terminalError,
+          uploadController: this.terminalPanelUploadController,
+        })}
       </section>
     `;
   }
@@ -433,7 +488,13 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     );
   }
 
-  static override styles = [panelTabStripStyles, terminalPanelStyles, terminalPanelUploadStyles];
+  static override styles = [
+    panelTabStripStyles,
+    dockPanelStyles,
+    terminalPanelStyles,
+    terminalPanelUploadStyles,
+    scrollbarShadowStyles,
+  ];
 }
 
 declare global {

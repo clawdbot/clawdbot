@@ -14,11 +14,12 @@ export function meetStatusScript(params: {
 }) {
   return `async () => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
+  const manualActionFor = (reason, message) => ({ reason, message });
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const captionSessionId = ${JSON.stringify(params.captionSessionId)};
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
   const readOnly = ${JSON.stringify(Boolean(params.readOnly))};
-  const buttons = [...document.querySelectorAll('button')];
+  const buttons = () => [...document.querySelectorAll('button')];
   const buttonLabel = (button) =>
     [
       button.getAttribute("aria-label"),
@@ -27,21 +28,40 @@ export function meetStatusScript(params: {
     ]
       .filter(Boolean)
       .join(" ");
-  const buttonLabels = buttons.map(buttonLabel).filter(Boolean);
+  const buttonLabels = buttons().map(buttonLabel).filter(Boolean);
   const notes = [];
+  let audioInputRouted;
+  let audioInputDeviceLabel;
+  let audioInputRouteError;
   let audioOutputRouted;
   let audioOutputDeviceLabel;
   let audioOutputRouteError;
   const findButton = (pattern) =>
-    buttons.find((button) => {
+    buttons().find((button) => {
       const label = buttonLabel(button);
       return pattern.test(label) && !button.disabled;
     });
   const findCallControlButton = (pattern) =>
-    buttons.find((button) => {
+    buttons().find((button) => {
       const label = buttonLabel(button);
       return pattern.test(label) && !/remotely mute|someone else/i.test(label) && !button.disabled;
     });
+  const audioDeviceFamily = (value) => {
+    const label = String(value || '');
+    if (/\\bOpenClaw Meeting Audio\\b/i.test(label)) return 'openclaw-meeting-audio';
+    if (/\\bBlackHole\\s+2ch\\b/i.test(label)) return 'blackhole-2ch';
+    return undefined;
+  };
+  const isMeetingAudioDevice = (value) => Boolean(audioDeviceFamily(value));
+  const deviceNodeLabel = (node) => [
+    node?.getAttribute?.('aria-label'),
+    node?.getAttribute?.('data-tooltip'),
+    node?.getAttribute?.('title'),
+    node?.label,
+    node?.textContent,
+    node?.innerText,
+  ].filter(Boolean).join(' ').trim();
+  const waitForUi = () => new Promise((resolve) => setTimeout(resolve, 100));
   const input = [...document.querySelectorAll('input')].find((el) =>
     /your name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
   );
@@ -63,29 +83,181 @@ export function meetStatusScript(params: {
       /^\\s*turn (?:off|on) microphone\\b/i.test(buttonLabel(button))
     );
   }
-  if (!readOnly && allowMicrophone && mic && /turn on microphone/i.test(buttonLabel(mic))) {
-    mic.click();
-    notes.push("Attempted to turn on the Meet microphone for talk-back mode.");
-  }
-  if (!readOnly && !allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
-    mic.click();
-    notes.push("Muted Meet microphone for observe-only mode.");
-  }
   const joinElsewhere = findButton(/join here too/i);
-  const join = !readOnly && ${JSON.stringify(params.autoJoin)}
-    ? findButton(/join now|ask to join/i)
-    : null;
-  if (join) join.click();
   const microphoneChoice = findButton(/\\buse microphone\\b/i);
   const noMicrophoneChoice = findButton(/\\b(continue|join|use) without (microphone|mic)\\b|\\bnot now\\b/i);
   if (!readOnly && allowMicrophone && microphoneChoice) {
     microphoneChoice.click();
     notes.push("Accepted Meet microphone prompt with browser automation.");
+    await waitForUi();
   } else if (!readOnly && !allowMicrophone && noMicrophoneChoice) {
     noMicrophoneChoice.click();
     notes.push("Skipped Meet microphone prompt for observe-only mode.");
+    await waitForUi();
   }
-  const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  const findMicrophoneDeviceControl = () => {
+    const selectors = [
+      'select[aria-label*="microphone" i]',
+      'select[name*="microphone" i]',
+      '[role="combobox"][aria-label*="microphone" i]',
+      '[role="listbox"][aria-label*="microphone" i]',
+      '[aria-haspopup="listbox"][aria-label*="microphone" i]',
+    ];
+    for (const selector of selectors) {
+      const control = document.querySelector(selector);
+      if (control) return control;
+    }
+    return undefined;
+  };
+  const selectedMicrophoneLabel = () => {
+    const control = findMicrophoneDeviceControl();
+    const nativeSelected = control?.selectedOptions?.[0];
+    if (nativeSelected && isMeetingAudioDevice(deviceNodeLabel(nativeSelected))) {
+      return deviceNodeLabel(nativeSelected);
+    }
+    const controlledId = control?.getAttribute?.('aria-controls');
+    const optionsRoot = controlledId ? document.getElementById?.(controlledId) : control;
+    const selected = [...(optionsRoot?.querySelectorAll?.(
+      '[role="option"][aria-selected="true"], [role="menuitemradio"][aria-checked="true"], [role="radio"][aria-checked="true"]'
+    ) || [])].find((node) => isMeetingAudioDevice(deviceNodeLabel(node)));
+    if (selected) return deviceNodeLabel(selected);
+    const role = control?.getAttribute?.('role');
+    if (
+      !control?.options &&
+      role !== 'listbox' &&
+      control &&
+      isMeetingAudioDevice(deviceNodeLabel(control))
+    ) {
+      return deviceNodeLabel(control);
+    }
+    return undefined;
+  };
+  const openMicrophoneDeviceSettings = async () => {
+    if (findMicrophoneDeviceControl()) return;
+    const candidates = () => [
+      ...document.querySelectorAll('button, [role="menuitem"], [role="tab"]'),
+    ];
+    const direct = candidates().find((node) =>
+      /\\b(?:audio|microphone|device) settings\\b/i.test(deviceNodeLabel(node)) && !node.disabled
+    );
+    let settings = direct || candidates().find((node) =>
+      /^\\s*settings\\s*$/i.test(deviceNodeLabel(node)) && !node.disabled
+    );
+    if (!settings && !readOnly) {
+      const moreOptions = candidates().find((node) =>
+        /^\\s*more options\\s*$/i.test(deviceNodeLabel(node)) && !node.disabled
+      );
+      if (moreOptions) {
+        moreOptions.click();
+        await waitForUi();
+        settings = candidates().find((node) =>
+          /^\\s*settings\\s*$/i.test(deviceNodeLabel(node)) && !node.disabled
+        );
+      }
+    }
+    if (!settings || readOnly) return;
+    settings.click();
+    await waitForUi();
+    const audioTab = [...document.querySelectorAll('button, [role="tab"]')].find((node) =>
+      /^\\s*audio\\s*$/i.test(deviceNodeLabel(node)) && !node.disabled
+    );
+    if (audioTab) {
+      audioTab.click();
+      await waitForUi();
+    }
+  };
+  const routeMeetAudioInput = async () => {
+    if (
+      !allowMicrophone ||
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.enumerateDevices
+    ) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const input = devices.find((device) =>
+        device.kind === 'audioinput' && isMeetingAudioDevice(device.label)
+      );
+      if (!input?.deviceId) {
+        audioInputRouted = false;
+        audioInputRouteError = 'A supported virtual microphone was not visible to Meet.';
+        return;
+      }
+      audioInputDeviceLabel = input.label || 'OpenClaw meeting audio';
+      const inputFamily = audioDeviceFamily(audioInputDeviceLabel);
+      if (audioDeviceFamily(selectedMicrophoneLabel()) === inputFamily) {
+        audioInputRouted = true;
+        return;
+      }
+      if (readOnly) {
+        audioInputRouted = false;
+        return;
+      }
+      await openMicrophoneDeviceSettings();
+      const control = findMicrophoneDeviceControl();
+      if (!control) {
+        audioInputRouted = false;
+        audioInputRouteError = 'Meet microphone device selector was not available.';
+        return;
+      }
+      const nativeOptions = [...(control.options || [])];
+      const nativeOption = nativeOptions.find(
+        (option) => audioDeviceFamily(deviceNodeLabel(option)) === inputFamily
+      );
+      if (nativeOption) {
+        control.value = nativeOption.value;
+        nativeOption.selected = true;
+        control.dispatchEvent(new Event('input', { bubbles: true }));
+        control.dispatchEvent(new Event('change', { bubbles: true }));
+      } else {
+        control.click?.();
+        await waitForUi();
+        const choices = [...document.querySelectorAll(
+          '[role="option"], [role="menuitemradio"], [role="radio"]'
+        )];
+        const choice = choices.find(
+          (node) => audioDeviceFamily(deviceNodeLabel(node)) === inputFamily && !node.disabled
+        );
+        choice?.click?.();
+      }
+      await waitForUi();
+      audioInputRouted = audioDeviceFamily(selectedMicrophoneLabel()) === inputFamily;
+      if (audioInputRouted) {
+        notes.push(\`Selected \${audioInputDeviceLabel} as the Meet microphone.\`);
+      } else {
+        audioInputRouteError = \`Meet did not confirm \${audioInputDeviceLabel} as its microphone.\`;
+      }
+    } catch (error) {
+      audioInputRouted = false;
+      audioInputRouteError = error?.message || String(error);
+      notes.push(\`Could not select the Meet virtual microphone: \${audioInputRouteError}\`);
+    }
+  };
+  await routeMeetAudioInput();
+  mic = findCallControlButton(/^\\s*turn (?:off|on) microphone\\b/i) || mic;
+  if (
+    !readOnly &&
+    allowMicrophone &&
+    audioInputRouted !== true &&
+    mic &&
+    /turn off microphone/i.test(buttonLabel(mic))
+  ) {
+    mic.click();
+    notes.push("Muted the Meet microphone because the virtual audio input was not verified.");
+    mic = findCallControlButton(/^\\s*turn (?:off|on) microphone\\b/i) || mic;
+  }
+  if (!readOnly && allowMicrophone && audioInputRouted === true && mic && /turn on microphone/i.test(buttonLabel(mic))) {
+    mic.click();
+    notes.push("Turned on the Meet microphone after verifying the virtual audio input.");
+  }
+  if (!readOnly && !allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
+    mic.click();
+    notes.push("Muted Meet microphone for observe-only mode.");
+  }
+  const join = !readOnly && ${JSON.stringify(params.autoJoin)}
+    ? findButton(/join now|ask to join/i)
+    : null;
+  if (join) join.click();
+  const inCall = buttons().some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
   const routeMeetAudioOutput = async () => {
     if (
       !allowMicrophone ||
@@ -97,14 +269,18 @@ export function meetStatusScript(params: {
     if (mediaElements.length === 0) return;
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputFamily = audioDeviceFamily(audioInputDeviceLabel);
       const output = devices.find((device) =>
-        device.kind === 'audiooutput' && /\\bBlackHole\\s+2ch\\b/i.test(device.label || '')
+        device.kind === 'audiooutput' &&
+        inputFamily &&
+        audioDeviceFamily(device.label) === inputFamily
       ) || devices.find((device) =>
-        device.kind === 'audiooutput' && /\\bBlackHole\\b/i.test(device.label || '')
+        device.kind === 'audiooutput' && isMeetingAudioDevice(device.label)
       );
       if (!output?.deviceId) {
+        audioOutputRouted = false;
         if (devices.some((device) => device.kind === 'audiooutput')) {
-          notes.push("BlackHole 2ch speaker output was not visible to Meet.");
+          notes.push("A supported virtual speaker output was not visible to Meet.");
         }
         return;
       }
@@ -119,7 +295,7 @@ export function meetStatusScript(params: {
         }
       }
       audioOutputRouted = mediaElements.some((element) => element.sinkId === output.deviceId);
-      audioOutputDeviceLabel = output.label || "BlackHole 2ch";
+      audioOutputDeviceLabel = output.label || "OpenClaw meeting audio";
       if (!readOnly && audioOutputRouted) {
         notes.push(
           routed > 0
@@ -128,8 +304,9 @@ export function meetStatusScript(params: {
         );
       }
     } catch (error) {
+      audioOutputRouted = false;
       audioOutputRouteError = error?.message || String(error);
-      notes.push(\`Could not route Meet speaker output to BlackHole 2ch: \${audioOutputRouteError}\`);
+      notes.push(\`Could not route Meet speaker output to the virtual audio device: \${audioOutputRouteError}\`);
     }
   };
   if (inCall) {
@@ -312,27 +489,22 @@ export function meetStatusScript(params: {
   const leaveReason = !inCall && /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
     ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
     : undefined;
-  let manualActionReason;
-  let manualActionMessage;
+  let manualAction;
   if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
-    manualActionReason = "google-login-required";
-    manualActionMessage = "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.";
+    manualAction = manualActionFor("google-login-required", "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.");
   } else if (!inCall && joinElsewhere) {
-    manualActionReason = "meet-session-conflict";
-    manualActionMessage = "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.";
+    manualAction = manualActionFor("meet-session-conflict", "Meet is already active in another tab or device. Leave that session or reuse an English-pinned tab before retrying.");
   } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
-    manualActionReason = "meet-admission-required";
-    manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
+    manualAction = manualActionFor("meet-admission-required", "Admit the OpenClaw browser participant in Google Meet, then retry speech.");
   } else if (permissionNeeded) {
-    manualActionReason = "meet-permission-required";
-    manualActionMessage = allowMicrophone
-      ? "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry."
-      : "Join without microphone/camera permissions in the OpenClaw browser profile, then retry.";
+    manualAction = manualActionFor("meet-permission-required", allowMicrophone ? "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry." : "Join without microphone/camera permissions in the OpenClaw browser profile, then retry.");
+  } else if (inCall && allowMicrophone && (audioInputRouted !== true || audioOutputRouted !== true)) {
+    manualAction = manualActionFor(
+      "meet-audio-choice-required",
+      "Select BlackHole 2ch or OpenClaw Meeting Audio as both the Meet microphone and speaker, then retry."
+    );
   } else if (!inCall && (allowMicrophone ? !microphoneChoice : !noMicrophoneChoice) && /do you want people to hear you in the meeting/i.test(pageText)) {
-    manualActionReason = "meet-audio-choice-required";
-    manualActionMessage = allowMicrophone
-      ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry."
-      : "Meet is showing the microphone choice. Choose the no-microphone option in the OpenClaw browser profile, then retry.";
+    manualAction = manualActionFor("meet-audio-choice-required", allowMicrophone ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry." : "Meet is showing the microphone choice. Choose the no-microphone option in the OpenClaw browser profile, then retry.");
   }
   return JSON.stringify({
     clickedJoin: Boolean(join),
@@ -348,12 +520,13 @@ export function meetStatusScript(params: {
     lastCaptionSpeaker,
     lastCaptionText,
     recentTranscript,
+    audioInputRouted,
+    audioInputDeviceLabel,
+    audioInputRouteError,
     audioOutputRouted,
     audioOutputDeviceLabel,
     audioOutputRouteError,
-    manualActionRequired: Boolean(manualActionReason),
-    manualActionReason,
-    manualActionMessage,
+    manualAction,
     title: document.title,
     url: pageUrl,
     notes

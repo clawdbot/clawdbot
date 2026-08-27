@@ -3,27 +3,32 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
+const OUTPUT_ROOT_HELP_EXPORT_RE =
+  /\bexport\s+(?:(?:async\s+)?function|class|const|let|var)\s+outputRootHelp\b|\bexport\s*\{[^}]*\boutputRootHelp\s*(?=[,}])/u;
+
 export function resolveCliStartupRootHelpBundleIdentity(
   distDir: string,
 ): { bundleName: string; signature: string } | null {
-  const bundleName = readdirSync(distDir).find(
-    (entry) =>
-      entry.startsWith("root-help-") &&
-      !entry.startsWith("root-help-metadata-") &&
-      entry.endsWith(".js"),
-  );
-  if (!bundleName) {
-    return null;
+  for (const bundleName of readdirSync(distDir).toSorted()) {
+    if (!bundleName.startsWith("root-help-") || !bundleName.endsWith(".js")) {
+      continue;
+    }
+    const bundleContents = readFileSync(path.join(distDir, bundleName), "utf8");
+    // The build emits multiple root-help chunks; only the renderer owns this cache identity.
+    // Selecting a helper chunk forces metadata generation onto its expensive source fallback.
+    if (!OUTPUT_ROOT_HELP_EXPORT_RE.test(bundleContents)) {
+      continue;
+    }
+    const buildInfo = readBuildIdentity(distDir);
+    return {
+      bundleName,
+      signature: createHash("sha1")
+        .update(bundleContents)
+        .update(JSON.stringify(buildInfo))
+        .digest("hex"),
+    };
   }
-  const bundleContents = readFileSync(path.join(distDir, bundleName), "utf8");
-  const buildInfo = readBuildIdentity(distDir);
-  return {
-    bundleName,
-    signature: createHash("sha1")
-      .update(bundleContents)
-      .update(JSON.stringify(buildInfo))
-      .digest("hex"),
-  };
+  return null;
 }
 
 function readBuildIdentity(distDir: string): { version: string | null; commit: string | null } {

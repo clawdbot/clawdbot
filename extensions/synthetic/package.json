@@ -1,8 +1,11 @@
 {
   "name": "@openclaw/synthetic-provider",
-  "version": "2026.7.2",
-  "private": true,
-  "description": "OpenClaw Synthetic provider plugin",
+  "version": "2026.8.1",
+  "description": "OpenClaw Synthetic provider plugin.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -10,6 +13,23 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/synthetic-provider",
+      "npmSpec": "@openclaw/synthetic-provider",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.7.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.8.1"
+    },
+    "build": {
+      "openclawVersion": "2026.8.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

@@ -1,0 +1,29 @@
+title: Media reference intake
+
+scenario:
+  id: media-reference-intake
+  surface: media
+  category: media.media-intake-and-access
+  coverage:
+    primary:
+      - media.local-and-remote-media-references
+      - media.mime-and-type-detection
+  objective: Prove the raw media loader resolves local, remote, and media-store references while deriving MIME family from bytes.
+  successCriteria:
+    - Plain paths and file URLs read the same real local PNG bytes through allowed-root policy.
+    - A real loopback HTTP response crosses guarded remote fetch and returns the served bytes.
+    - A media-store URI resolves an isolated real inbound artifact.
+    - PNG bytes produce image/png and image kind despite misleading text extensions and HTTP headers.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/media/web-media.ts
+    - src/media/fetch.ts
+    - src/media/store.ts
+    - packages/media-core/src/mime.ts
+    - test/e2e/qa-lab/media/media-reference-intake.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/media/media-reference-intake.e2e.test.ts
+    summary: Load plain-path, file URL, guarded loopback HTTP, and media-store references and verify byte-sniffed MIME and kind.

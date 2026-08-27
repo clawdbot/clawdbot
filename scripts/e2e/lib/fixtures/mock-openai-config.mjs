@@ -61,7 +61,10 @@ export function applyMockOpenAiModelConfig(cfg, params) {
       ...(params.includeImageDefaults
         ? {
             imageModel: { primary: modelRef, timeoutMs: 30_000 },
-            imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            mediaModels: {
+              ...cfg.agents?.defaults?.mediaModels,
+              image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
+            },
           }
         : {}),
       models: {
@@ -72,24 +75,32 @@ export function applyMockOpenAiModelConfig(cfg, params) {
         },
       },
     },
-    ...(Array.isArray(cfg.agents?.list)
+    ...(cfg.agents?.entries
       ? {
-          list: cfg.agents.list.map((agent) => ({
-            ...agent,
-            model: { ...agent.model, primary: modelRef },
-            models: {
-              ...agent.models,
-              [modelRef]: {
-                ...agent.models?.[modelRef],
-                agentRuntime: { id: "openclaw" },
-                params: {
-                  ...agent.models?.[modelRef]?.params,
-                  transport: "sse",
-                  openaiWsWarmup: false,
+          entries: Object.fromEntries(
+            Object.entries(cfg.agents.entries).map(([agentId, agent]) => [
+              agentId,
+              {
+                ...agent,
+                model: {
+                  ...(typeof agent.model === "object" && agent.model !== null ? agent.model : {}),
+                  primary: modelRef,
+                },
+                models: {
+                  ...agent.models,
+                  [modelRef]: {
+                    ...agent.models?.[modelRef],
+                    agentRuntime: { id: "openclaw" },
+                    params: {
+                      ...agent.models?.[modelRef]?.params,
+                      transport: "sse",
+                      openaiWsWarmup: false,
+                    },
+                  },
                 },
               },
-            },
-          })),
+            ]),
+          ),
         }
       : {}),
   };

@@ -8,6 +8,11 @@ import type { GatewayClient } from "../gateway/client.js";
 import { saveExecApprovals, type ExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type {
+  OpenClawPluginNodeHostCommand,
+  OpenClawPluginNodeHostCommandContext,
+} from "../plugins/types.node-host.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
@@ -193,6 +198,173 @@ describe("node host invoke", () => {
     });
   });
 
+  it("binds managed workspace claims to the exact live plugin invocation session", async () => {
+    const release = vi.fn();
+    const acquireManagedWorkspace = vi.fn(() => ({ workspaceDir: "/managed", release }));
+    const workspaceRequest = {
+      workspaceDir: "/managed",
+      environmentId: "environment-1",
+      sessionId: "session-1",
+      ownerEpoch: 1,
+      sessionKey: "agent:main:managed",
+    };
+    let retainedAcquire:
+      | NonNullable<OpenClawPluginNodeHostCommandContext["acquireManagedWorkspace"]>
+      | undefined;
+    const handle = vi.fn<OpenClawPluginNodeHostCommand["handle"]>(
+      async (paramsJSON, _io, context) => {
+        expect(JSON.parse(paramsJSON ?? "{}")).toEqual({ sessionKey: "agent:main:other" });
+        expect(context?.sessionKey).toBe(workspaceRequest.sessionKey);
+        const acquire = context?.acquireManagedWorkspace;
+        if (!acquire) {
+          throw new Error("managed workspace authority missing");
+        }
+        retainedAcquire = acquire;
+        expect(() => acquire({ ...workspaceRequest, sessionKey: "agent:main:other" })).toThrow(
+          "workspace invocation authority is closed",
+        );
+        expect(acquire(workspaceRequest)).toEqual({
+          workspaceDir: "/managed",
+          release,
+        });
+        return '{"ok":true}';
+      },
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "workspace-plugin",
+        pluginName: "Workspace Plugin",
+        command: { command: "workspace.claim", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    await handleInvoke(
+      {
+        id: "invoke-workspace",
+        nodeId: "node-1",
+        command: "workspace.claim",
+        paramsJSON: JSON.stringify({ sessionKey: "agent:main:other" }),
+        sessionKey: workspaceRequest.sessionKey,
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      undefined,
+      { pluginCommandContext: { sendNodeEvent: vi.fn(), acquireManagedWorkspace } },
+    );
+
+    expect(acquireManagedWorkspace).toHaveBeenCalledOnce();
+    expect(() => retainedAcquire?.(workspaceRequest)).toThrow(
+      "workspace invocation authority is closed",
+    );
+  });
+
+  it("does not publish a canceled non-duplex plugin result", async () => {
+    const controller = new AbortController();
+    let resolvePlugin: ((result: string) => void) | undefined;
+    const handle = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePlugin = resolve;
+        }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        command: { command: "canvas.present", cap: "canvas", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+
+    const invoking = handleInvoke(
+      {
+        id: "invoke-canvas-canceled",
+        nodeId: "node-1",
+        command: "canvas.present",
+        paramsJSON: "{}",
+      },
+      { request } as unknown as GatewayClient,
+      { current: async () => [] },
+      undefined,
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
+
+    controller.abort();
+    resolvePlugin?.('{"stale":true}');
+    await invoking;
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("publishes only the replacement result for a redelivered plugin invocation", async () => {
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const resolvePlugins: Array<(result: string) => void> = [];
+    const handle = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePlugins.push(resolve);
+        }),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "canvas",
+        pluginName: "Canvas",
+        command: { command: "canvas.present", cap: "canvas", handle },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const client = { request } as unknown as GatewayClient;
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+    const frame = {
+      id: "invoke-canvas-redelivered",
+      nodeId: "node-1",
+      command: "canvas.present",
+      paramsJSON: "{}",
+    };
+
+    const first = handleInvoke(frame, client, skillBins, undefined, {
+      signal: firstController.signal,
+    });
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledOnce());
+    firstController.abort();
+
+    const replacement = handleInvoke(frame, client, skillBins, undefined, {
+      signal: secondController.signal,
+    });
+    await vi.waitFor(() => expect(handle).toHaveBeenCalledTimes(2));
+
+    resolvePlugins[0]?.('{"stale":true}');
+    await first;
+    expect(request).not.toHaveBeenCalled();
+
+    resolvePlugins[1]?.('{"replacement":true}');
+    await replacement;
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        id: frame.id,
+        nodeId: frame.nodeId,
+        ok: true,
+        payloadJSON: '{"replacement":true}',
+      }),
+    );
+    expect(secondController.signal.aborted).toBe(false);
+  });
+
   it("lists node-host directories for the folder browser", async () => {
     const root = fs.realpathSync(tempDirs.make("openclaw-node-fs-listdir-"));
     fs.mkdirSync(path.join(root, "Projects"));
@@ -240,10 +412,27 @@ describe("node host invoke", () => {
     fs.rmSync(path.dirname(payload.path), { recursive: true, force: true });
   });
 
-  it("returns a redacted exec approvals snapshot", async () => {
+  it.each([
+    { label: "when params are omitted", params: undefined, resolvedDefaults: undefined },
+    {
+      label: "when resolved defaults are not requested",
+      params: { includeResolvedDefaults: false },
+      resolvedDefaults: undefined,
+    },
+    {
+      label: "with resolved defaults when requested",
+      params: { includeResolvedDefaults: true },
+      resolvedDefaults: {
+        security: "full",
+        ask: "off",
+        askFallback: "deny",
+        autoAllowSkills: false,
+      },
+    },
+  ])("returns a redacted exec approvals snapshot $label", async ({ params, resolvedDefaults }) => {
     execApprovalsStoreMock.hasEnsureResult = true;
     execApprovalsStoreMock.ensureResult = createExecApprovalsSnapshot();
-    const result = await invokeExecApprovals("system.execApprovals.get");
+    const result = await invokeExecApprovals("system.execApprovals.get", params);
     const payload = JSON.parse(result.payloadJSON ?? "{}") as ExecApprovalsSnapshot;
     expect(payload).toEqual({
       path: "/tmp/exec-approvals.json",
@@ -253,6 +442,7 @@ describe("node host invoke", () => {
         version: 1,
         socket: { path: "/tmp/exec-approvals.sock" },
       },
+      ...(resolvedDefaults ? { resolvedDefaults } : {}),
     });
   });
 
@@ -529,7 +719,7 @@ describe("node host invoke", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "keeps prepared allow-always coverage incomplete when any planned command is prompt-only",
+    "fails closed when a prepared command contains an unsafe shell pipeline",
     async () => {
       const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
       const skillBins: SkillBinsProvider = { current: async () => [] };
@@ -548,15 +738,19 @@ describe("node host invoke", () => {
         skillBins,
       );
 
-      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
-      const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
-        allowAlwaysCoverage?: {
-          complete?: boolean;
-          patterns?: Array<{ pattern?: string }>;
-        };
-      };
-      expect(payload.allowAlwaysCoverage?.complete).toBe(false);
-      expect(payload.allowAlwaysCoverage?.patterns?.length).toBeGreaterThan(0);
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.result",
+        expect.objectContaining({
+          id: "invoke-prepare-partial",
+          nodeId: "node-1",
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message:
+              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          },
+        }),
+      );
     },
   );
 
@@ -674,8 +868,9 @@ describe("node host invoke", () => {
 
   it("forwards suppressNotifyOnExit on completed system.run events", async () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-node-event-suppress-"));
+    const stateDir = path.join(tempHome, ".openclaw");
     try {
-      await withEnvAsync({ OPENCLAW_HOME: tempHome }, async () => {
+      await withEnvAsync({ OPENCLAW_HOME: tempHome, OPENCLAW_STATE_DIR: stateDir }, async () => {
         saveExecApprovals({
           version: 1,
           defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
@@ -736,6 +931,7 @@ describe("node host invoke", () => {
         });
       });
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(tempHome, { recursive: true, force: true });
     }
   });

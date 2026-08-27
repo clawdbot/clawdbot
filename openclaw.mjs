@@ -7,55 +7,32 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isSupportedOpenClawNodeVersion } from "./node-version.mjs";
 
-const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
-const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
-const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
-const RECOMMENDED_NODE_MAJOR = 24;
+const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
-const parseNodeVersion = (rawVersion) => {
-  const [majorRaw = "0", minorRaw = "0", patchRaw = "0"] = rawVersion.split(".");
-  return {
-    major: Number(majorRaw),
-    minor: Number(minorRaw),
-    patch: Number(patchRaw),
-  };
-};
-
-const isAtLeastNodeVersion = (version, minimum) => {
-  if (version.major !== minimum.major) {
-    return version.major > minimum.major;
-  }
-  if (version.minor !== minimum.minor) {
-    return version.minor > minimum.minor;
-  }
-  return version.patch >= minimum.patch;
-};
-
-const isSupportedNodeVersion = (version) => {
-  if (version.major === MIN_NODE_22.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_22);
-  }
-  if (version.major === MIN_NODE_24.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_24);
-  }
-  if (version.major === MIN_NODE_25.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_25);
-  }
-  return version.major > MIN_NODE_25.major;
-};
-
 const ensureSupportedRuntimeVersion = () => {
   if (process.versions.bun) {
+    // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
+    // rejecting Bun outright so capable Bun builds can run OpenClaw.
+    let hasNodeSqlite;
+    try {
+      hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
+    } catch {
+      hasNodeSqlite = false;
+    }
+    if (hasNodeSqlite) {
+      return;
+    }
     process.stderr.write(
-      "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite.\n" +
+      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
     process.exit(1);
   }
-  if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
+  if (isSupportedOpenClawNodeVersion(process.versions.node)) {
     return;
   }
 
@@ -321,7 +298,9 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     message.includes(`Cannot find module "${specifier}"`);
   const launcherPath = fileURLToPath(import.meta.url);
   const bunLauncherImporterMiss =
-    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
+    message.includes(` from '${launcherPath}'`) ||
+    message.includes(` from "${launcherPath}"`) ||
+    message.includes(` imported from ${launcherPath}`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
   const expectedPath = fileURLToPath(expectedUrl);
@@ -408,6 +387,7 @@ const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
   nodes: { command: "nodes", metadataKey: "nodesHelpText" },
 };
 const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "config",
   "doctor",
   "gateway",
   "models",
@@ -452,8 +432,7 @@ const hasLauncherContainerTarget = (argv) => {
     return true;
   }
   const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (const arg of args) {
     if (!arg || arg === "--") {
       return false;
     }
@@ -530,7 +509,7 @@ const resolveLauncherHomeDir = () => {
   const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
   const rawHome =
     explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
-      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      ? explicit.replace(/^~(?=$|[\\/])/, () => resolveLauncherOsHomeDir())
       : (explicit ?? resolveLauncherOsHomeDir());
   return path.resolve(rawHome);
 };
@@ -647,8 +626,8 @@ function resolveLauncherCommit() {
     return envCommit;
   }
   return (
-    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
     formatLauncherCommit(readLauncherJson("./package.json")?.githead)
   );
@@ -746,7 +725,7 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
-  if (shouldDeferRootHelpToRuntimeEntry()) {
+  if (hasLauncherContainerTarget(process.argv) || shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
   const precomputed = loadPrecomputedHelpText("rootHelpText");

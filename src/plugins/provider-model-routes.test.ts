@@ -119,6 +119,25 @@ describe("provider model route adapter", () => {
     ).toBeNull();
   });
 
+  it("does not treat namespaced custom providers as bundled route artifacts", () => {
+    const provider = "my-ngc:nvidia";
+    const modelId = "nvidia/nemotron-3-ultra-550b-a55b";
+    const config = {
+      models: {
+        providers: {
+          [provider]: {
+            api: "openai-completions",
+            baseUrl: "https://provider.example.test/v1",
+            models: [{ id: modelId }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveProviderModelCatalogId({ provider, modelId })).toBeNull();
+    expect(resolveProviderModelRoutes({ provider, modelId, config, env: {} })).toBeNull();
+  });
+
   it("preserves provider-scoped nested ids through route resolution", () => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,

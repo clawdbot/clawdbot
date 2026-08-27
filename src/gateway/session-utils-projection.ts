@@ -1,14 +1,17 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveContextTokensForModel } from "../agents/context.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
-import { buildSubagentRunReadIndex } from "../agents/subagent-registry-read.js";
-import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
+import { buildSubagentSessionListReadIndex } from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
+import { resolveConcreteSessionStorePath } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { resolveSessionStoreAgentId } from "./session-store-key.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-readers.js";
-import type { SessionListRowContext } from "./session-utils-contracts.js";
+import type {
+  SessionActorProfileIdentity,
+  SessionListRowContext,
+} from "./session-utils-contracts.js";
 import {
   buildStoreChildSessionIndex,
   getSingleRowChildSessionCandidates,
@@ -17,22 +20,24 @@ import {
   resolveRuntimeChildSessionKeys,
   resolveStoreChildSessionKeysFromCandidates,
 } from "./session-utils-core.js";
-import { resolveConcreteSessionStorePath } from "./session-utils-store.js";
 
 export function buildSessionListRowContext(params: {
   store: Record<string, SessionEntry>;
   now: number;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
-  const subagentRuns = buildSubagentRunReadIndex(params.now);
+  const subagentRuns = buildSubagentSessionListReadIndex(params.now);
   return buildSessionListRowContextFromParts({
     subagentRuns,
     storeChildSessionsByKey: buildStoreChildSessionIndex(params.store, params.now, subagentRuns),
+    userProfileIdentityById: params.userProfileIdentityById,
   });
 }
 
 function buildSessionListRowContextFromParts(params: {
-  subagentRuns: ReturnType<typeof buildSubagentRunReadIndex>;
+  subagentRuns: SessionListRowContext["subagentRuns"];
   storeChildSessionsByKey: Map<string, string[]>;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   return {
     subagentRuns: params.subagentRuns,
@@ -41,14 +46,19 @@ function buildSessionListRowContextFromParts(params: {
     thinkingMetadataByModelRef: new Map(),
     displayModelIdentityByKey: new Map(),
     modelCostConfigByModelRef: new Map(),
-    userProfileLabelById: new Map(),
+    userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
+    acpSessionMetaByEntry: new Map(),
   };
 }
 
-export function buildSessionListRowMetadataContext(params: { now: number }): SessionListRowContext {
+export function buildSessionListRowMetadataContext(params: {
+  now: number;
+  userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
+}): SessionListRowContext {
   return buildSessionListRowContextFromParts({
-    subagentRuns: buildSubagentRunReadIndex(params.now),
+    subagentRuns: buildSubagentSessionListReadIndex(params.now),
     storeChildSessionsByKey: new Map(),
+    userProfileIdentityById: params.userProfileIdentityById,
   });
 }
 
@@ -76,14 +86,11 @@ export function resolveSessionSelectedModelRef(params: {
   agentId: string;
   rowContext?: SessionListRowContext;
   allowPluginNormalization?: boolean;
-}): ReturnType<typeof resolveSessionModelRef> | null {
+}): ReturnType<typeof resolveSessionModelRef> {
   const override = normalizeStoredOverrideModel({
     providerOverride: params.entry?.providerOverride,
     modelOverride: params.entry?.modelOverride,
   });
-  if (!override.modelOverride) {
-    return null;
-  }
   if (!params.rowContext) {
     return resolveSessionModelRef(params.cfg, params.entry, params.agentId, {
       allowPluginNormalization: params.allowPluginNormalization,
@@ -92,7 +99,7 @@ export function resolveSessionSelectedModelRef(params: {
   const key = [
     normalizeAgentId(params.agentId),
     override.providerOverride ?? "",
-    override.modelOverride,
+    override.modelOverride ?? "",
   ].join("\0");
   const cached = params.rowContext.selectedModelByOverrideRef.get(key);
   if (cached) {
@@ -149,7 +156,6 @@ export function resolveTranscriptUsageFallback(params: {
   estimatedCostUsd?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
-  contextTokens?: number;
   modelProvider?: string;
   model?: string;
 } | null {
@@ -160,10 +166,10 @@ export function resolveTranscriptUsageFallback(params: {
   const parsed = parseAgentSessionKey(params.key);
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
-    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
+    : normalizeAgentId(params.agentId ?? resolveSessionStoreAgentId(params.cfg, params.key));
   const storePath =
     resolveConcreteSessionStorePath(params.storePath) ??
-    resolveStorePath(params.cfg.session?.store, { agentId });
+    resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
   let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript>;
   try {
     snapshot = readScopedRecentSessionUsageFromTranscript(
@@ -184,13 +190,6 @@ export function resolveTranscriptUsageFallback(params: {
   }
   const modelProvider = snapshot.modelProvider ?? params.fallbackProvider;
   const model = snapshot.model ?? params.fallbackModel;
-  const contextTokens = resolveContextTokensForModel({
-    cfg: params.cfg,
-    provider: modelProvider,
-    model,
-    // Gateway/session listing is read-only; don't start async model discovery.
-    allowAsyncLoad: false,
-  });
   const estimatedCostUsd = resolveEstimatedSessionCostUsd({
     cfg: params.cfg,
     provider: modelProvider,
@@ -209,7 +208,6 @@ export function resolveTranscriptUsageFallback(params: {
     model,
     totalTokens: resolvePositiveNumber(snapshot.totalTokens),
     totalTokensFresh: snapshot.totalTokensFresh === true,
-    contextTokens: resolvePositiveNumber(contextTokens),
     estimatedCostUsd,
   };
 }

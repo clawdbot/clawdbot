@@ -5,6 +5,53 @@ import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 
 describe("printModelTable", () => {
+  it("prints an empty model list as valid structured JSON", () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    printModelTable([], runtime as never, { json: true });
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(runtime.log.mock.calls[0]![0] as string)).toEqual({
+      count: 0,
+      models: [],
+    });
+  });
+
+  it("keeps an empty plain model list silent", () => {
+    const runtime = { log: vi.fn(), error: vi.fn() };
+
+    printModelTable([], runtime as never, { plain: true });
+
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("writes populated plain model rows directly to stdout", () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+    };
+    const rows: ModelRow[] = [
+      {
+        key: "anthropic/claude-sonnet-4-6",
+        name: "Claude Sonnet",
+        input: "text",
+        contextWindow: 200_000,
+        local: false,
+        available: true,
+        tags: [],
+        missing: false,
+      },
+    ];
+
+    printModelTable(rows, runtime, { plain: true });
+
+    expect(runtime.writeStdout).toHaveBeenCalledExactlyOnceWith("anthropic/claude-sonnet-4-6");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("prints effective and native context values when a runtime cap differs", () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
     const rows: ModelRow[] = [

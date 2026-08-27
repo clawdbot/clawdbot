@@ -1,5 +1,6 @@
 // Application-owned approval parsing and queue state.
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -47,19 +48,13 @@ export type ExecApprovalPromptState = {
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalBusy: boolean;
   execApprovalErrors: Map<string, string>;
-  execApprovalNowMs?: number;
   execApprovalRefreshes?: Set<{ removedIds: Set<string> }>;
   execApprovalExpiryTimers?: Map<string, ReturnType<typeof globalThis.setTimeout>>;
-  execApprovalCountdownTimer?: ReturnType<typeof globalThis.setTimeout>;
   execApprovalChanged?: () => void;
 };
 
 const APPROVAL_ALREADY_RESOLVED = "APPROVAL_ALREADY_RESOLVED";
 const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
 
 function parseCommandSpans(
   value: unknown,
@@ -148,8 +143,16 @@ function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | nul
   };
 }
 
-export function parseExecApprovalResolved(payload: unknown): ExecApprovalResolved | null {
-  if (!isRecord(payload)) {
+export function parseApprovalResolvedEvent(
+  event: string,
+  payload: unknown,
+): ExecApprovalResolved | null {
+  if (
+    (event !== "exec.approval.resolved" &&
+      event !== "plugin.approval.resolved" &&
+      event !== "openclaw.approval.resolved") ||
+    !isRecord(payload)
+  ) {
     return null;
   }
   const id = normalizeOptionalString(payload.id) ?? "";
@@ -365,31 +368,6 @@ function mergeRefreshedApprovalQueue(
   return sortApprovalsOldestFirst([...currentRefreshed, ...arrivedDuringRefresh]);
 }
 
-function clearApprovalCountdownTimer(state: ExecApprovalPromptState): void {
-  if (state.execApprovalCountdownTimer === undefined) {
-    return;
-  }
-  globalThis.clearTimeout(state.execApprovalCountdownTimer);
-  state.execApprovalCountdownTimer = undefined;
-}
-
-function synchronizeApprovalCountdownTimer(state: ExecApprovalPromptState): void {
-  if (state.execApprovalQueue.length === 0) {
-    clearApprovalCountdownTimer(state);
-    return;
-  }
-  state.execApprovalNowMs = Date.now();
-  if (state.execApprovalCountdownTimer !== undefined) {
-    return;
-  }
-  state.execApprovalCountdownTimer = globalThis.setTimeout(() => {
-    state.execApprovalCountdownTimer = undefined;
-    state.execApprovalNowMs = Date.now();
-    state.execApprovalChanged?.();
-    synchronizeApprovalCountdownTimer(state);
-  }, 1_000);
-}
-
 function clearApprovalExpiryTimer(state: ExecApprovalPromptState, id: string): void {
   const timer = state.execApprovalExpiryTimers?.get(id);
   if (timer === undefined) {
@@ -426,7 +404,6 @@ function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string)
   clearApprovalExpiryTimer(state, id);
   state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
   state.execApprovalErrors.delete(id);
-  synchronizeApprovalCountdownTimer(state);
 }
 
 function pruneExecApprovalErrors(state: ExecApprovalPromptState): void {
@@ -443,7 +420,6 @@ export function clearExecApprovalTimers(state: ExecApprovalPromptState): void {
     globalThis.clearTimeout(timer);
   }
   state.execApprovalExpiryTimers?.clear();
-  clearApprovalCountdownTimer(state);
 }
 
 export function enqueueExecApprovalPrompt(
@@ -452,7 +428,6 @@ export function enqueueExecApprovalPrompt(
 ): void {
   state.execApprovalQueue = addExecApproval(state.execApprovalQueue, entry);
   scheduleApprovalExpiryPrune(state, entry);
-  synchronizeApprovalCountdownTimer(state);
 }
 
 export async function refreshPendingApprovalQueue(
@@ -510,7 +485,6 @@ export async function refreshPendingApprovalQueue(
     for (const entry of refreshed) {
       scheduleApprovalExpiryPrune(state, entry);
     }
-    synchronizeApprovalCountdownTimer(state);
     return true;
   } finally {
     refreshes.delete(refresh);

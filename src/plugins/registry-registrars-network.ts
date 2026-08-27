@@ -1,17 +1,22 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { GatewayMethodProfileAccess } from "../gateway/methods/descriptor.js";
 import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
-import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
 } from "./registry-state.js";
-import type { PluginHttpRouteRegistration, PluginRecord } from "./registry-types.js";
+import type {
+  PluginChannelRegistration,
+  PluginHttpRouteRegistration,
+  PluginRecord,
+} from "./registry-types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginChannelRegistration,
@@ -40,12 +45,13 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 export function createNetworkRegistrars(state: PluginRegistryState) {
   const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
     state;
+  let reportedLegacyCatalogSkip = false;
 
   const registerGatewayMethod = (
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -77,6 +83,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         name: trimmed,
         handler: wrappedHandler,
         scope: normalizedScope.scope,
+        ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
       }),
     );
   };
@@ -91,6 +98,19 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: "session catalog requires non-empty id and label",
       });
+      return;
+    }
+    if (!state.allowProcessHomeSessionCatalogs && provider.supportsProcessHomeIsolation !== true) {
+      if (!reportedLegacyCatalogSkip) {
+        reportedLegacyCatalogSkip = true;
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            "external session catalog skipped in isolated state: provider must declare supportsProcessHomeIsolation",
+        });
+      }
       return;
     }
     const existing = registry.sessionCatalogs.find((entry) => entry.provider.id === id);
@@ -142,25 +162,29 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       return;
     }
     const match = params.match ?? "exact";
-    const overlappingRoute = findOverlappingPluginHttpRoute(registry.httpRoutes, {
-      path: normalizedPath,
-      match,
-    });
-    if (overlappingRoute && overlappingRoute.auth !== params.auth) {
+    const { authOverlap, canonicalMatches } = findPluginHttpRouteRegistrationConflicts(
+      registry.httpRoutes,
+      {
+        path: normalizedPath,
+        match,
+        auth: params.auth,
+      },
+    );
+    if (authOverlap) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
         message:
           `http route overlap rejected: ${normalizedPath} (${match}, ${params.auth}) ` +
-          `overlaps ${overlappingRoute.path} (${overlappingRoute.match}, ${overlappingRoute.auth}) ` +
-          `owned by ${describeHttpRouteOwner(overlappingRoute)}`,
+          `overlaps ${authOverlap.path} (${authOverlap.match}, ${authOverlap.auth}) ` +
+          `owned by ${describeHttpRouteOwner(authOverlap)}`,
       });
       return;
     }
-    const existingIndex = registry.httpRoutes.findIndex(
-      (entry) => entry.path === normalizedPath && entry.match === match,
-    );
+    const existingIndex = canonicalMatches[0]
+      ? registry.httpRoutes.indexOf(canonicalMatches[0])
+      : -1;
     const registration = {
       pluginId: record.id,
       path: normalizedPath,
@@ -182,25 +206,25 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (!existing) {
         return;
       }
-      if (!params.replaceExisting && existing.pluginId !== record.id) {
+      const foreignOwner = canonicalMatches.find((route) => route.pluginId !== record.id);
+      if (foreignOwner) {
         pushDiagnostic({
           level: "error",
           pluginId: record.id,
           source: record.source,
-          message: `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(existing)}`,
-        });
-        return;
-      }
-      if (existing.pluginId && existing.pluginId !== record.id) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(existing)}`,
+          message: params.replaceExisting
+            ? `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(foreignOwner)}`
+            : `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(foreignOwner)}`,
         });
         return;
       }
       registry.httpRoutes[existingIndex] = registration;
+      for (const route of canonicalMatches.toReversed()) {
+        const index = registry.httpRoutes.indexOf(route);
+        if (index >= 0 && index !== existingIndex) {
+          registry.httpRoutes.splice(index, 1);
+        }
+      }
       return;
     }
     record.httpRoutes += 1;
@@ -280,6 +304,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
+    resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
     if (record.origin === "workspace" && !record.enabled) {
       pushDiagnostic({
@@ -310,6 +335,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
+        existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
         existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
@@ -372,6 +398,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      resolveChannelRuntime,
       origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,

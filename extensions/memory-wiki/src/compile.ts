@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import {
   assessClaimFreshness,
   assessPageFreshness,
@@ -57,7 +58,7 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
-import { initializeMemoryWikiVault } from "./vault.js";
+import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 
 const COMPILE_PAGE_GROUPS: Array<{ kind: WikiPageKind; dir: string; heading: string }> = [
   { kind: "source", dir: "sources", heading: "Sources" },
@@ -375,16 +376,10 @@ export type RefreshMemoryWikiIndexesResult = {
 };
 
 async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promise<string[]> {
-  const dirPath = path.join(rootDir, relativeDir);
-  const entries = await fs
-    .readdir(dirPath, { withFileTypes: true, recursive: true })
-    .catch(() => []);
+  const entries = await walkMemoryWikiDirectory(rootDir, relativeDir);
   return entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
-    .map((entry) => {
-      const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
-      return path.relative(rootDir, absPath).split(path.sep).join("/");
-    })
+    .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
+    .map((entry) => entry.relativePath.split(path.sep).join("/"))
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -1228,8 +1223,13 @@ function buildCompiledCacheSnapshot(
 
 async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
+  options?: { sourcePageWrites?: "update" | "preserve" },
 ): Promise<CompileMemoryWikiResult> {
-  await initializeMemoryWikiVault(config);
+  if (options?.sourcePageWrites === "preserve") {
+    await activateExistingMemoryWikiVault(config);
+  } else {
+    await initializeMemoryWikiVault(config);
+  }
   const rootDir = config.vault.path;
   const compiledInputIdentity = await loadMemoryWikiVaultIdentity(rootDir);
   if (!compiledInputIdentity.vaultGeneration) {
@@ -1258,7 +1258,10 @@ async function compileMemoryWikiVaultUnlocked(
   );
   let scan = await readPageSummaries(rootDir);
   let pages = scan.pages;
-  const updatedFiles = await refreshPageRelatedBlocks({ config, pages });
+  const updatedFiles =
+    options?.sourcePageWrites === "preserve"
+      ? []
+      : await refreshPageRelatedBlocks({ config, pages });
   if (updatedFiles.length > 0) {
     scan = await readPageSummaries(rootDir);
     pages = scan.pages;
@@ -1390,9 +1393,10 @@ async function compileMemoryWikiVaultUnlocked(
 
 export async function compileMemoryWikiVault(
   config: ResolvedMemoryWikiConfig,
+  options?: { sourcePageWrites?: "update" | "preserve" },
 ): Promise<CompileMemoryWikiResult> {
   return await withMemoryWikiVaultMutation(config.vault.path, () =>
-    compileMemoryWikiVaultUnlocked(config),
+    compileMemoryWikiVaultUnlocked(config, options),
   );
 }
 

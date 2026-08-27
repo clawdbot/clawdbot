@@ -2,7 +2,7 @@
 import type { AssistantMessage, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { extractAssistantText } from "./embedded-agent-utils.js";
+import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import {
   buildAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -80,7 +80,7 @@ async function runToolOnlyTurn(params: ToolOnlyTurnParams) {
   let response = await completeToolOnlyTurn(params, prompt, "openai mcp-style tool-only turn");
 
   let toolCall = extractFirstToolCall(response);
-  let text = extractAssistantText(response);
+  let text = extractEmbeddedAssistantText(response);
   for (let attempt = 0; attempt < 2 && (!toolCall || text.length > 0); attempt += 1) {
     prompt = `Return only a tool call for \`${MCP_TOOL.name}\` with {}. No text.`;
     response = await completeToolOnlyTurn(
@@ -89,7 +89,7 @@ async function runToolOnlyTurn(params: ToolOnlyTurnParams) {
       `openai mcp-style tool-only retry ${attempt + 1}`,
     );
     toolCall = extractFirstToolCall(response);
-    text = extractAssistantText(response);
+    text = extractEmbeddedAssistantText(response);
   }
 
   expect(text.length).toBe(0);
@@ -145,7 +145,7 @@ async function runOpenAiMcpStyleCacheProbe(params: {
     `openai mcp-style cache probe ${params.suffix}`,
     OPENAI_TIMEOUT_MS,
   );
-  const text = extractAssistantText(response);
+  const text = extractEmbeddedAssistantText(response);
   expect(text.toLowerCase()).toContain(params.suffix.toLowerCase());
   return {
     suffix: params.suffix,

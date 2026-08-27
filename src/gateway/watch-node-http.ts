@@ -2,6 +2,7 @@
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -16,22 +17,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getBoundDeviceBootstrapProfile,
   redeemDeviceBootstrapTokenProfile,
-  restoreDeviceBootstrapToken,
-  revokeDeviceBootstrapToken,
+  restoreGenericDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../infra/device-bootstrap.js";
 import {
   deriveDeviceIdFromPublicKey,
   normalizeDevicePublicKeyBase64Url,
 } from "../infra/device-identity.js";
-import {
-  approveBootstrapDevicePairing,
-  ensureDeviceToken,
-  getPairedDevice,
-  requestDevicePairing,
-  verifyDeviceToken,
-} from "../infra/device-pairing.js";
-import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
+import { approveBootstrapDevicePairing } from "../infra/device-pairing-approval.js";
+import { captureAuthenticatedNodePairingState } from "../infra/device-pairing-node-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -39,8 +33,16 @@ import {
   releaseNodePairingCleanupClaim,
   requestNodePairing,
   recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
   type RequestNodePairingResult,
-} from "../infra/node-pairing.js";
+} from "../infra/device-pairing-node.js";
+import { ensureDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
+import {
+  getPairedDevice,
+  requestDevicePairing,
+  resolveNodePairingState,
+} from "../infra/device-pairing.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isNodePairingSetupBootstrapProfile } from "../shared/device-bootstrap-profile.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
@@ -48,7 +50,13 @@ import {
   buildRateLimitIdentityKey,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
-import { hasForwardedRequestHeaders } from "./auth.js";
+import {
+  broadcastSetupHandoffDeliveryUncertain,
+  broadcastSetupHandoffCompletion,
+  confirmSetupHandoffDelivery,
+  consumeSetupHandoff,
+  type SetupHandoff,
+} from "./device-pair-setup-completion.js";
 import {
   readJsonBodyOrError,
   sendInvalidRequest,
@@ -57,8 +65,10 @@ import {
   sendRateLimited,
   sendUnauthorized,
 } from "./http-common.js";
+import { readPreparedGatewayIngressAttribution } from "./ingress-attribution.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { isLoopbackAddress, resolveRequestClientIp } from "./net.js";
+import { hasForwardedRequestHeaders, isLoopbackAddress, resolveRequestClientIp } from "./net.js";
+import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
 import type { NodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import type {
@@ -155,6 +165,13 @@ function resolveWatchClientAddress(
   req: IncomingMessage,
   config: OpenClawConfig,
 ): { clientIp?: string; rateLimitKey: string } {
+  const attribution = readPreparedGatewayIngressAttribution(req);
+  if (attribution && attribution.kind !== "unattributable-proxy") {
+    return {
+      clientIp: attribution.clientIp,
+      rateLimitKey: attribution.rateLimit.subject.key,
+    };
+  }
   const trustedProxies = config.gateway?.trustedProxies ?? [];
   const clientIp = resolveRequestClientIp(
     req,
@@ -171,10 +188,6 @@ function resolveWatchClientAddress(
     ...(clientIp ? { clientIp } : {}),
     rateLimitKey: clientIp ?? buildRateLimitIdentityKey("watch-client", "unknown"),
   };
-}
-
-function isStringRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
@@ -254,17 +267,11 @@ function createChallengeStore() {
           challenges.delete(oldest[0]);
         }
       }
-      while (challenges.size >= MAX_PENDING_CHALLENGES) {
-        const oldest = challenges.keys().next().value;
-        if (typeof oldest !== "string") {
-          break;
-        }
-        challenges.delete(oldest);
-      }
+      pruneMapToMaxSize(challenges, MAX_PENDING_CHALLENGES - 1);
       const nonce = randomBytes(24).toString("base64url");
       const expiresAtMs = current + CHALLENGE_TTL_MS;
       challenges.set(nonce, { clientKey, expiresAtMs });
-      return { nonce, expiresAtMs };
+      return { nonce, ts: current, expiresAtMs };
     },
     consume: (nonce: string, clientKey: string, current: number) => {
       const challenge = challenges.get(nonce);
@@ -328,13 +335,40 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
       }
       session.waiter = undefined;
     }
+    const nodeSession = options.nodeRegistry.get(session.nodeId);
+    const disconnectHistory =
+      nodeSession?.connId === session.connId && nodeSession.pairingGeneration
+        ? {
+            nodeId: nodeSession.nodeId,
+            connectedAtMs: nodeSession.connectedAtMs,
+            pairingGeneration: nodeSession.pairingGeneration,
+          }
+        : undefined;
     const disconnectedNodeId = options.nodeRegistry.unregister(session.connId);
     if (disconnectedNodeId) {
-      try {
-        options.onNodeDisconnected?.(disconnectedNodeId, reason);
-      } catch (error) {
-        options.onError?.("watch node disconnect cleanup failed", error);
-      }
+      void (async () => {
+        try {
+          if (disconnectHistory && disconnectHistory.nodeId === disconnectedNodeId) {
+            await recordPairedNodeDisconnection({
+              nodeId: disconnectHistory.nodeId,
+              connectedAtMs: disconnectHistory.connectedAtMs,
+              disconnectedAtMs: now(),
+              expectedPairingGeneration: {
+                nodeId: disconnectHistory.nodeId,
+                key: disconnectHistory.pairingGeneration,
+              },
+              baseDir: options.pairingBaseDir,
+            });
+          }
+        } catch (error) {
+          options.onError?.("watch node disconnect persistence failed", error);
+        }
+        try {
+          options.onNodeDisconnected?.(disconnectedNodeId, reason);
+        } catch (error) {
+          options.onError?.("watch node disconnect cleanup failed", error);
+        }
+      })();
     }
   };
 
@@ -353,7 +387,8 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   };
 
   const sendQueuedEvent = (res: ServerResponse, queued: QueuedNodeEvent): boolean => {
-    if (res.writableEnded) {
+    // The socket can be destroyed before its response receives the close event.
+    if (res.destroyed || res.socket?.destroyed || res.writableEnded) {
       return false;
     }
     try {
@@ -559,7 +594,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         authOk: false,
         authMethod: "token",
         sharedAuthOk: false,
-        sharedAuthProvided: false,
+        pendingSharedAuthFailure: false,
         ...(bootstrapToken ? { bootstrapTokenCandidate: bootstrapToken } : {}),
         ...(deviceToken
           ? {
@@ -757,9 +792,6 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         });
       }
 
-      let revokedBootstrapTokenRecord:
-        | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
-        | undefined;
       if (closed || responseLifecycle.isAborted()) {
         return;
       }
@@ -774,38 +806,18 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           sendUnauthorized(res);
           return;
         }
-        const revoked = await revokeDeviceBootstrapToken({
-          token: bootstrapToken,
-          baseDir: options.pairingBaseDir,
-        });
-        if (!revoked.removed || !revoked.record) {
-          sendUnauthorized(res);
-          return;
-        }
-        revokedBootstrapTokenRecord = revoked.record;
       }
 
       // Device lifecycle mutations run asynchronously after marking current sessions.
       // Reverify after every pairing await, then publish without another yield so a
       // concurrent revoke either fails admission or sees this registered transport.
-      let finalTokenVerification: Awaited<ReturnType<typeof verifyDeviceToken>>;
-      try {
-        finalTokenVerification = await verifyDeviceToken({
-          deviceId: derivedDeviceId,
-          token: issuedDeviceToken,
-          role: "node",
-          scopes: [],
-          baseDir: options.pairingBaseDir,
-        });
-      } catch (error) {
-        if (revokedBootstrapTokenRecord) {
-          await restoreDeviceBootstrapToken({
-            record: revokedBootstrapTokenRecord,
-            baseDir: options.pairingBaseDir,
-          });
-        }
-        throw error;
-      }
+      const finalTokenVerification = await verifyDeviceToken({
+        deviceId: derivedDeviceId,
+        token: issuedDeviceToken,
+        role: "node",
+        scopes: [],
+        baseDir: options.pairingBaseDir,
+      });
       if (!finalTokenVerification.ok) {
         sendUnauthorized(res);
         return;
@@ -821,26 +833,62 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         sendUnauthorized(res);
         return;
       }
-      if (closed || responseLifecycle.isAborted()) {
-        if (revokedBootstrapTokenRecord) {
-          await restoreDeviceBootstrapToken({
-            record: revokedBootstrapTokenRecord,
+      let bootstrapHandoff: SetupHandoff | undefined;
+      let handoffResponseCompleted = false;
+      const restoreUndeliveredGenericHandoff = async () => {
+        if (!bootstrapHandoff || bootstrapHandoff.completion || handoffResponseCompleted) {
+          return;
+        }
+        try {
+          await restoreGenericDeviceBootstrapToken({
+            record: bootstrapHandoff.record,
             baseDir: options.pairingBaseDir,
           });
+        } catch (error) {
+          options.onError?.("watch node generic bootstrap restore failed", error);
         }
+      };
+      if (bootstrapToken) {
+        const consumed = await consumeSetupHandoff({
+          token: bootstrapToken,
+          deviceId: derivedDeviceId,
+          pairedDeviceMatches: (device) => {
+            const currentNodePairing = resolveNodePairingState(device);
+            return (
+              currentNodePairing?.identity.key === nodePairingState.identity.key &&
+              currentNodePairing.generation?.key === nodePairingGeneration.key
+            );
+          },
+          baseDir: options.pairingBaseDir,
+          ts: now(),
+        });
+        if (!consumed) {
+          sendUnauthorized(res);
+          return;
+        }
+        bootstrapHandoff = consumed;
+      }
+      if (closed || responseLifecycle.isAborted()) {
+        await restoreUndeliveredGenericHandoff();
         return;
       }
 
       const registeredConnect = connect as ConnectParams & {
         declaredCaps?: string[];
         declaredCommands?: string[];
+        declaredComputerUse?: unknown;
         declaredPermissions?: Record<string, boolean>;
       };
       registeredConnect.declaredCaps = reconciliation.declaredCaps;
       registeredConnect.declaredCommands = reconciliation.declaredCommands;
+      registeredConnect.declaredComputerUse = reconciliation.declaredComputerUse;
       registeredConnect.declaredPermissions = reconciliation.declaredPermissions;
       registeredConnect.caps = reconciliation.effectiveCaps;
       registeredConnect.commands = reconciliation.effectiveCommands;
+      registeredConnect.computerUse = resolveEffectiveComputerUseDescriptor({
+        commands: reconciliation.effectiveCommands,
+        declared: reconciliation.declaredComputerUse,
+      });
       registeredConnect.permissions = reconciliation.effectivePermissions;
 
       let session: WatchNodeSession | undefined;
@@ -890,16 +938,53 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
           protocol: PROTOCOL_VERSION,
           pollTimeoutMs: POLL_TIMEOUT_MS,
         });
-        const responseCompleted = await responseLifecycle.completed;
-        if (!responseCompleted) {
+        handoffResponseCompleted = await responseLifecycle.completed;
+        if (!handoffResponseCompleted) {
+          if (bootstrapHandoff) {
+            if (bootstrapHandoff.completion) {
+              try {
+                broadcastSetupHandoffDeliveryUncertain({
+                  handoff: bootstrapHandoff,
+                  broadcast: options.broadcast,
+                });
+              } catch (error) {
+                options.onError?.("watch node setup delivery-uncertain broadcast failed", error);
+              }
+            } else {
+              await restoreUndeliveredGenericHandoff();
+            }
+          }
           closeSession(session, "connect response aborted");
-          if (revokedBootstrapTokenRecord) {
-            await restoreDeviceBootstrapToken({
-              record: revokedBootstrapTokenRecord,
+          return;
+        }
+        if (bootstrapHandoff) {
+          try {
+            const confirmedHandoff = await confirmSetupHandoffDelivery({
+              handoff: bootstrapHandoff,
               baseDir: options.pairingBaseDir,
             });
+            if (confirmedHandoff) {
+              broadcastSetupHandoffCompletion({
+                handoff: confirmedHandoff,
+                broadcast: options.broadcast,
+              });
+            } else {
+              broadcastSetupHandoffDeliveryUncertain({
+                handoff: bootstrapHandoff,
+                broadcast: options.broadcast,
+              });
+            }
+          } catch (error) {
+            options.onError?.("watch node setup completion confirmation failed", error);
+            try {
+              broadcastSetupHandoffDeliveryUncertain({
+                handoff: bootstrapHandoff,
+                broadcast: options.broadcast,
+              });
+            } catch {
+              // The durable uncertain row remains the status-reconciliation path.
+            }
           }
-          return;
         }
         options.rateLimiter?.reset(clientKey, AUTH_RATE_LIMIT_SCOPE_WATCH_CHALLENGE);
         if (reconciliation.shouldClearPendingPairings && cleanupClaim) {
@@ -938,12 +1023,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         if (session) {
           closeSession(session, "connect failed");
         }
-        if (revokedBootstrapTokenRecord) {
-          await restoreDeviceBootstrapToken({
-            record: revokedBootstrapTokenRecord,
-            baseDir: options.pairingBaseDir,
-          });
-        }
+        await restoreUndeliveredGenericHandoff();
         throw error;
       }
     } finally {
@@ -1020,11 +1100,11 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
     if (body === undefined) {
       return;
     }
-    if (!isStringRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
+    if (!isRecord(body) || typeof body.id !== "string" || typeof body.ok !== "boolean") {
       sendInvalidRequest(res, "invalid node invoke result");
       return;
     }
-    const error = isStringRecord(body.error)
+    const error = isRecord(body.error)
       ? {
           ...(typeof body.error.code === "string" ? { code: body.error.code } : {}),
           ...(typeof body.error.message === "string" ? { message: body.error.message } : {}),

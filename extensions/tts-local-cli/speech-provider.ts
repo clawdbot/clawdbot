@@ -14,6 +14,7 @@ import type {
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
+import { asOptionalRecord, filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -22,6 +23,7 @@ const log = createSubsystemLogger("tts-local-cli");
 const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
 const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".opus", ".ogg", ".m4a"]);
 type OutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
+type SourceFormat = OutputFormat | "ogg" | "m4a";
 
 type CliConfig = {
   command: string;
@@ -36,28 +38,8 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_CLI_STDERR_BYTES = 1024 * 1024;
 
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function asStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, string> | undefined {
-  const obj = asObject(value);
-  if (!obj) {
-    return undefined;
-  }
-  const result: Record<string, string> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (typeof v === "string") {
-      result[k] = v;
-    }
-  }
-  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function normalizeOutputFormat(value: unknown): OutputFormat {
@@ -72,8 +54,8 @@ function normalizeOutputFormat(value: unknown): OutputFormat {
 }
 
 function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.["tts-local-cli"]) ?? asObject(providers?.cli) ?? {};
+  const providers = asOptionalRecord(rawConfig.providers);
+  return asOptionalRecord(providers?.["tts-local-cli"]) ?? asOptionalRecord(providers?.cli) ?? {};
 }
 
 function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
@@ -87,7 +69,7 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
-    env: asRecord(cfg.env),
+    env: filterStringRecord(cfg.env),
   };
 }
 
@@ -153,23 +135,72 @@ function findAudioFile(dir: string, baseName: string): string | null {
   return null;
 }
 
-function detectFormat(filePath: string): "mp3" | "opus" | "wav" | null {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === ".opus" || ext === ".ogg") {
-    return "opus";
-  }
-  if (ext === ".wav") {
-    return "wav";
-  }
-  if (ext === ".mp3" || ext === ".m4a") {
-    return "mp3";
-  }
-  return null;
+function detectFormatFromExtension(filePath: string): SourceFormat | null {
+  return path.extname(filePath).toLowerCase() === ".m4a" ? "m4a" : null;
 }
 
-function getFileExt(format: string): string {
+function hasMpegFrameHeader(buffer: Buffer, offset: number): boolean {
+  const mpegHeader = buffer[offset + 1] ?? 0;
+  const mpegFormat = buffer[offset + 2] ?? 0;
+  return (
+    buffer.length >= offset + 4 &&
+    buffer[offset] === 0xff &&
+    (mpegHeader & 0xe0) === 0xe0 &&
+    (mpegHeader & 0x18) !== 0x08 &&
+    (mpegHeader & 0x06) !== 0 &&
+    // Bitrate index zero is valid MPEG free format; only 0xf is forbidden.
+    (mpegFormat & 0xf0) !== 0xf0 &&
+    (mpegFormat & 0x0c) !== 0x0c
+  );
+}
+
+function hasId3v2MpegFrame(buffer: Buffer): boolean {
+  if (buffer.length < 10) {
+    return false;
+  }
+  const majorVersion = buffer[3] ?? 0;
+  const revision = buffer[4] ?? 0;
+  const flags = buffer[5] ?? 0;
+  if (majorVersion < 2 || majorVersion > 4 || revision === 0xff) {
+    return false;
+  }
+  const allowedFlags = majorVersion === 2 ? 0xc0 : majorVersion === 3 ? 0xe0 : 0xf0;
+  if ((flags & (0xff ^ allowedFlags)) !== 0) {
+    return false;
+  }
+  const size0 = buffer[6] ?? 0;
+  const size1 = buffer[7] ?? 0;
+  const size2 = buffer[8] ?? 0;
+  const size3 = buffer[9] ?? 0;
+  if ((size0 | size1 | size2 | size3) & 0x80) {
+    return false;
+  }
+  const tagSize = (size0 << 21) | (size1 << 14) | (size2 << 7) | size3;
+  const footerSize = majorVersion === 4 && (flags & 0x10) !== 0 ? 10 : 0;
+  const audioOffset = 10 + tagSize + footerSize;
+  return audioOffset < buffer.length && hasMpegFrameHeader(buffer, audioOffset);
+}
+
+function detectAudioFormat(buffer: Buffer): SourceFormat | null {
+  const prefix = buffer.toString("ascii", 0, 12);
+  if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WAVE") {
+    return "wav";
+  }
+  if (hasMpegFrameHeader(buffer, 0) || (prefix.startsWith("ID3") && hasId3v2MpegFrame(buffer))) {
+    return "mp3";
+  }
+  return prefix.startsWith("OggS") ? "ogg" : null;
+}
+
+function getFileExt(format: SourceFormat): string {
   if (format === "opus") {
     return ".opus";
+  }
+  if (format === "ogg") {
+    return ".ogg";
+  }
+  if (format === "m4a") {
+    return ".m4a";
   }
   if (format === "wav") {
     return ".wav";
@@ -191,7 +222,7 @@ async function runCli(params: {
   outputDir: string;
   filePrefix: string;
   outputFormat?: OutputFormat;
-}): Promise<{ buffer: Buffer; actualFormat: "mp3" | "opus" | "wav"; audioPath?: string }> {
+}): Promise<{ buffer: Buffer; actualFormat: SourceFormat; audioPath?: string }> {
   const cleanText = stripEmojis(params.text);
   if (!cleanText) {
     throw new Error("CLI TTS: text is empty after removing emojis");
@@ -243,12 +274,13 @@ async function runCli(params: {
 
   const audioFile = findAudioFile(params.outputDir, params.filePrefix);
   if (audioFile) {
-    const format = detectFormat(audioFile);
+    const buffer = readAudioFile(audioFile);
+    const format = detectAudioFormat(buffer) ?? detectFormatFromExtension(audioFile);
     if (!format) {
       throw new Error(`CLI TTS: unknown format for ${audioFile}`);
     }
     return {
-      buffer: readAudioFile(audioFile),
+      buffer,
       actualFormat: format,
       audioPath: audioFile,
     };
@@ -259,8 +291,13 @@ async function runCli(params: {
 
   const stdout = result.stdout;
   if (stdout.length > 0) {
-    // Assume WAV for stdout output; could be MP3 but caller should convert if needed
-    return { buffer: stdout, actualFormat: "wav" };
+    const actualFormat = detectAudioFormat(stdout);
+    if (!actualFormat) {
+      throw new Error(
+        "CLI TTS stdout audio format is not recognized; emit WAV, MP3, or Ogg Opus bytes, or write a supported audio file",
+      );
+    }
+    return { buffer: stdout, actualFormat };
   }
   if (result.termination === "error") {
     throw new Error(`CLI TTS failed: ${result.error?.message ?? result.termination}`);
@@ -364,36 +401,16 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
 
         log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
 
-        let buffer: Buffer;
-        let format: OutputFormat;
-
-        if (req.target === "voice-note") {
-          if (result.actualFormat !== "opus") {
-            const inputFile =
-              result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
-            if (!result.audioPath) {
-              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
-            }
-            buffer = await convertAudio(inputFile, tempDir, "opus");
-            format = "opus";
-          } else {
-            buffer = result.buffer;
-            format = "opus";
+        const format: OutputFormat =
+          req.target === "voice-note" ? "opus" : (config.outputFormat ?? "mp3");
+        let buffer = result.buffer;
+        if (result.actualFormat !== format) {
+          const inputName = `input${getFileExt(result.actualFormat)}`;
+          const inputFile = result.audioPath ?? path.join(tempDir, inputName);
+          if (!result.audioPath) {
+            await temp.write(inputName, result.buffer);
           }
-        } else {
-          const desired = config.outputFormat ?? "mp3";
-          if (result.actualFormat !== desired) {
-            const inputFile =
-              result.audioPath ?? path.join(tempDir, `input${getFileExt(result.actualFormat)}`);
-            if (!result.audioPath) {
-              await temp.write(`input${getFileExt(result.actualFormat)}`, result.buffer);
-            }
-            buffer = await convertAudio(inputFile, tempDir, desired);
-            format = desired;
-          } else {
-            buffer = result.buffer;
-            format = result.actualFormat;
-          }
+          buffer = await convertAudio(inputFile, tempDir, format);
         }
 
         const fileExtension = format === "opus" ? ".ogg" : `.${format}`;

@@ -32,7 +32,7 @@ export function ensureMigrationDir(dir: string) {
 }
 
 /** Returns whether a path exists and resolves to a regular file. */
-export function fileExists(p: string): boolean {
+export function migrationFileExists(p: string): boolean {
   try {
     return fs.existsSync(p) && fs.statSync(p).isFile();
   } catch {

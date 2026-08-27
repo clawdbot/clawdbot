@@ -1,10 +1,11 @@
 // SQLite import and receipt semantics for retired workspace state.
 import { createHash } from "node:crypto";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "../agents/workspace-legacy-state.js";
 import {
-  WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
   WORKSPACE_SETUP_STATE_VERSION,
+  isSafeWorkspaceAttestationFilename,
   registerWorkspaceStateAliasesInTransaction,
 } from "../agents/workspace-state-store.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -18,6 +19,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import {
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+} from "./state-migrations.receipts.js";
 import { resolveWorkspaceMigrationSourceKey } from "./state-migrations.workspace-setup-receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
@@ -29,7 +34,6 @@ type WorkspaceMigrationDatabase = Pick<
   | "workspace_path_aliases"
   | "workspace_attestations"
   | "workspace_generated_bootstrap_hashes"
-  | "migration_runs"
   | "migration_sources"
 >;
 
@@ -129,7 +133,7 @@ function parseAttestation(snapshot: SourceSnapshot): ParsedSource {
   const generatedHashes = new Map<string, string>();
   for (const line of lines.slice(2)) {
     const match = /^generated:([^:]+):([a-f0-9]{64})$/.exec(line);
-    if (!match?.[1] || !match[2] || !WORKSPACE_ATTESTED_BOOTSTRAP_FILENAMES.has(match[1])) {
+    if (!match?.[1] || !match[2] || !isSafeWorkspaceAttestationFilename(match[1])) {
       throw new Error("legacy workspace attestation has an invalid generated hash");
     }
     if (generatedHashes.has(match[1])) {
@@ -196,6 +200,14 @@ function attestationFingerprint(params: {
       left.localeCompare(right),
     ),
   });
+}
+
+function receiptPreservesAuthority(
+  receipt: { reportJson: string } | null,
+  expectedFingerprint: string,
+): boolean {
+  const report = receipt ? safeParseJsonRecord(receipt.reportJson) : undefined;
+  return report?.authoritative === true && report.canonicalFingerprint === expectedFingerprint;
 }
 
 function findMigrationAuthority(params: {
@@ -329,6 +341,7 @@ export function importAndRecordReceipt(params: {
   snapshot: SourceSnapshot;
   parsed: ParsedSource;
   env: NodeJS.ProcessEnv;
+  replaceRemovedReceipt?: boolean;
 }): { sourceKey: string; imported: boolean } {
   const key = resolveWorkspaceMigrationSourceKey(params.source);
   const runId = `${key}:${params.snapshot.sha256.slice(0, 16)}`;
@@ -337,11 +350,9 @@ export function importAndRecordReceipt(params: {
     (database) => {
       const { db } = database;
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
-      const existingReceipt = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely.selectFrom("migration_sources").select("source_key").where("source_key", "=", key),
-      );
-      if (existingReceipt) {
+      const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
+      // Only a receipt whose source was fully removed can be replaced by a later generation.
+      if (existingReceipt && (!params.replaceRemovedReceipt || !existingReceipt.removedSource)) {
         throw new Error("workspace migration receipt appeared concurrently; retry Doctor");
       }
 
@@ -654,37 +665,26 @@ export function importAndRecordReceipt(params: {
         // Only a whole-source insert or precedence replacement can establish
         // authority. Verification and complementary merges may cover cleanup,
         // but must not let a legacy source overwrite unrelated canonical data.
-        authoritative: resolution === "inserted" || resolution === "replaced",
+        authoritative:
+          resolution === "inserted" ||
+          resolution === "replaced" ||
+          receiptPreservesAuthority(existingReceipt, verifiedFingerprint),
         resolution,
         imported,
       });
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("migration_runs").values({
-          id: runId,
-          started_at: now,
-          finished_at: now,
-          status: "completed",
-          report_json: reportJson,
-        }),
-      );
-      executeSqliteQuerySync(
-        db,
-        kysely.insertInto("migration_sources").values({
-          source_key: key,
-          migration_kind: MIGRATION_KIND,
-          source_path: params.source.sourcePath,
-          target_table: targetTable,
-          source_sha256: params.snapshot.sha256,
-          source_size_bytes: params.snapshot.size,
-          source_record_count: params.parsed.recordCount,
-          last_run_id: runId,
-          status: "completed",
-          imported_at: now,
-          removed_source: 0,
-          report_json: reportJson,
-        }),
-      );
+      recordLegacyMigrationReceipt(db, {
+        sourceKey: key,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.source.sourcePath,
+        targetTable,
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: params.parsed.recordCount,
+        runId,
+        now,
+        reportJson,
+        upsert: existingReceipt !== null,
+      });
       return { sourceKey: key, imported };
     },
     { env: params.env },

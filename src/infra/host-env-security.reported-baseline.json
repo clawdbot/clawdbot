@@ -23,6 +23,7 @@
     "CORECLR_PROFILER",
     "CPP",
     "CXX",
+    "CXXCPP",
     "DOTNET_ADDITIONAL_DEPS",
     "DOTNET_STARTUP_HOOKS",
     "ELIXIR_ERL_OPTIONS",
@@ -270,5 +271,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 265
+  "expectedTotalReportedEntries": 266
 }

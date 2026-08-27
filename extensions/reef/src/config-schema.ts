@@ -13,6 +13,7 @@ const RelayUrlSchema = z
 export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
+    configWrites: z.boolean().optional(),
     relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),

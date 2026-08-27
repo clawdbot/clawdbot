@@ -6,9 +6,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import {
   formatToolExecutionErrorMessage,
+  protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
+import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,
@@ -97,7 +99,17 @@ export async function handleMcpJsonRpc(params: {
     case "tools/list":
       return jsonRpcResult(id, { tools: params.toolSchema });
     case "tools/call": {
-      const toolName = typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      const requestedToolName =
+        typeof methodParams?.name === "string" ? methodParams.name.trim() : "";
+      // "cron" is a permanently accepted inbound alias for the scheduler tool
+      // (owner decision, RFC 0026; same contract as bash -> exec). Resolve it to
+      // the published canonical tool without re-advertising it in tools/list.
+      const toolName =
+        !params.toolSchema.some((tool) => tool.name === requestedToolName) &&
+        isAutomationsToolName(requestedToolName)
+          ? (params.toolSchema.find((tool) => isAutomationsToolName(tool.name))?.name ??
+            requestedToolName)
+          : requestedToolName;
       const rawToolArgs = methodParams?.arguments;
       if (rawToolArgs !== undefined && !isRecord(rawToolArgs)) {
         return jsonRpcError(id, -32602, "Invalid params: tools/call arguments must be an object");
@@ -187,7 +199,14 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
-        const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        let result: Awaited<ReturnType<typeof tool.execute>>;
+        try {
+          result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        } catch (error) {
+          throw tool.resultContentSource === "network"
+            ? protectNetworkToolExecutionError(error, "tool execution failed", params.signal)
+            : error;
+        }
         const failureKind = resolveToolResultFailureKind(result);
         reportToolCallResult(
           failureKind === "blocked"

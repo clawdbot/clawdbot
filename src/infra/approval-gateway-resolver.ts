@@ -1,29 +1,42 @@
 // Resolves exec and plugin approvals through the gateway client.
 import type {
+  ApprovalChannelReviewer,
   ApprovalDecision,
-  ApprovalKind,
   ApprovalResolveParams,
   ApprovalResolveResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import { findChatChannelLabel } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 import { isApprovalNotFoundError } from "./approval-errors.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalMethod } from "./approval-gateway-runtime-methods.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 
 type ResolveApprovalOverGatewayBaseParams = {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ApprovalDecision;
+  channel?: string;
+  accountId?: string | null;
   senderId?: string | null;
   gatewayUrl?: string;
   clientDisplayName?: string;
 };
 
+type ApprovalGatewayRuntime = {
+  request: (
+    method: "approval.resolve",
+    params: ApprovalResolveParams,
+    options?: { clientDisplayName?: string },
+  ) => Promise<ApprovalResolveResult>;
+};
+
 type CanonicalResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBaseParams & {
   /** Explicit owner required by the canonical approval resolver. */
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
+  gatewayRuntime?: ApprovalGatewayRuntime;
   allowPluginFallback?: never;
   resolveMethod?: never;
 };
@@ -43,7 +56,7 @@ type LegacyResolveApprovalOverGatewayParams = ResolveApprovalOverGatewayBasePara
    * Explicit legacy owner. Omission retains the shipped id-based routing contract.
    * @deprecated Pass approvalKind so resolution uses the canonical approval service.
    */
-  resolveMethod?: "exec" | "plugin";
+  resolveMethod?: ChannelApprovalKind;
 };
 
 type ResolveApprovalOverGatewayParams =
@@ -72,13 +85,15 @@ export async function resolveApprovalOverGateway(
   const hasCanonicalKind = canonicalKind !== null;
   const hasLegacyMethod = legacyMethod !== null;
   const allowPluginFallback = (params as { allowPluginFallback?: unknown }).allowPluginFallback;
+  const gatewayRuntime = (params as { gatewayRuntime?: unknown }).gatewayRuntime;
   if (approvalKind !== undefined) {
     if (!hasCanonicalKind || resolveMethod !== undefined || allowPluginFallback !== undefined) {
       throw new Error("canonical approval resolution requires exactly one valid owner kind");
     }
   } else if (
     (resolveMethod !== undefined && !hasLegacyMethod) ||
-    (allowPluginFallback !== undefined && typeof allowPluginFallback !== "boolean")
+    (allowPluginFallback !== undefined && typeof allowPluginFallback !== "boolean") ||
+    gatewayRuntime !== undefined
   ) {
     throw new Error("legacy approval resolution requires valid routing options");
   }
@@ -93,8 +108,38 @@ export async function resolveApprovalOverGateway(
   if (typeof approvalId !== "string" || !isWellFormedApprovalId(approvalId)) {
     throw new Error("approval resolution requires an approval id");
   }
+  const senderId = params.senderId?.trim();
+  const channel = params.channel?.trim();
+  const accountId = params.accountId?.trim();
+  const hasReviewerIdentity = Boolean(channel || accountId || senderId);
+  if (hasReviewerIdentity && (!channel || !accountId || !senderId)) {
+    throw new Error("channel approval resolution requires channel, account, and sender identity");
+  }
+  const reviewer: ApprovalChannelReviewer | undefined =
+    channel && accountId && senderId ? { channel, accountId, senderId } : undefined;
+  // Channel manifests own operator-facing labels; using their generated metadata
+  // keeps approval clients aligned without importing plugin runtime or hardcoding ids.
+  const channelLabel = channel ? (findChatChannelLabel(channel) ?? channel) : undefined;
   const clientDisplayName =
-    params.clientDisplayName ?? `Approval (${params.senderId?.trim() || "unknown"})`;
+    params.clientDisplayName ??
+    (channelLabel
+      ? `${channelLabel} approval (${senderId ?? "unknown"})`
+      : `Approval (${senderId ?? "unknown"})`);
+
+  const canonicalGatewayRuntime = (params as CanonicalResolveApprovalOverGatewayParams)
+    .gatewayRuntime;
+  if (canonicalGatewayRuntime && canonicalKind) {
+    return await canonicalGatewayRuntime.request(
+      "approval.resolve",
+      {
+        id: approvalId,
+        kind: canonicalKind,
+        decision: params.decision,
+        ...(reviewer ? { reviewer } : {}),
+      },
+      { clientDisplayName },
+    );
+  }
 
   const requestWithClient = async (gatewayClient: {
     request: <T = unknown>(
@@ -107,6 +152,7 @@ export async function resolveApprovalOverGateway(
         id: approvalId,
         kind: canonicalKind,
         decision: params.decision,
+        ...(reviewer ? { reviewer } : {}),
       };
       return await gatewayClient.request<ApprovalResolveResult>("approval.resolve", resolveParams);
     }
@@ -117,6 +163,7 @@ export async function resolveApprovalOverGateway(
       await gatewayClient.request(method, {
         id: approvalId,
         decision: params.decision,
+        ...(reviewer ? { reviewer } : {}),
       });
     };
     if (legacyMethod === "plugin" || (!legacyMethod && approvalId.startsWith("plugin:"))) {
@@ -134,13 +181,13 @@ export async function resolveApprovalOverGateway(
     return undefined;
   };
 
-  const gatewayRuntime = getGatewayNativeApprovalRuntime();
-  const result = gatewayRuntime
+  const scopedGatewayRuntime = getGatewayNativeApprovalRuntime();
+  const result = scopedGatewayRuntime
     ? await requestWithClient({
         request: async <T>(
           method: GatewayNativeApprovalMethod,
           requestParams: Record<string, unknown>,
-        ) => await gatewayRuntime.request<T>(method, requestParams, { clientDisplayName }),
+        ) => await scopedGatewayRuntime.request<T>(method, requestParams, { clientDisplayName }),
       })
     : await withOperatorApprovalsGatewayClient(
         {

@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
-import type { BoardViewWidget } from "../../lib/board/view-types.ts";
-import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
 // Side-effect import: registers the custom elements mount() depends on
 // without relying on transitive fixture imports.
 import "./board-view.ts";
@@ -22,6 +20,7 @@ afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -42,48 +41,7 @@ describe("openclaw-board-view", () => {
     }
   });
 
-  it("renders the native swarm card without a frame or persisted widget controls", async () => {
-    const swarm: BoardViewWidget = {
-      name: "builtin:swarm",
-      tabId: "builtin-swarm",
-      title: "Swarm progress",
-      contentKind: "builtin",
-      builtin: "swarm",
-      readOnly: true,
-      sizeW: 12,
-      sizeH: 4,
-      position: 0,
-      grantState: "granted",
-      revision: 1,
-    };
-    const source = snapshot({
-      sessionKey: "agent:main:parent",
-      tabs: [{ tabId: "builtin-swarm", title: "Swarm progress", position: 0, chatDock: "right" }],
-      widgets: [swarm],
-    });
-    const view = await mount({
-      snapshot: source,
-      activeTabId: "builtin-swarm",
-      sessions: [
-        {
-          key: "agent:main:child",
-          kind: "direct",
-          updatedAt: 1,
-          parentSessionKey: "agent:main:parent",
-          swarmGroupId: "swarm:agent:main:parent:turn-42",
-          label: "Worker A",
-          status: "running",
-        },
-      ],
-    });
-
-    expect(view.querySelector("[data-test-id=swarm-widget]")).not.toBeNull();
-    expect(view.querySelector("iframe")).toBeNull();
-    expect(view.querySelector(".board-widget__menu")).toBeNull();
-    expect(view.querySelector(".board-widget__resize-handle")).toBeNull();
-  });
-
-  it("renders the shared sandbox for an empty same-origin gateway URL", async () => {
+  it("renders an ungranted widget in the shared sandbox without popup authority", async () => {
     const view = await mount({
       context: gatewayContext(null),
       snapshot: snapshot({
@@ -100,6 +58,8 @@ describe("openclaw-board-view", () => {
 
     const frame = view.querySelector("iframe");
     expect(frame?.getAttribute("src")).toContain(":18790/mcp-app-sandbox");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin allow-forms");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-popups");
     expect(frame?.getAttribute("loading")).toBe("eager");
     expect(view.querySelector('[data-test-id="board-widget-error"]')).toBeNull();
   });
@@ -136,7 +96,7 @@ describe("openclaw-board-view", () => {
     const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
     vi.stubGlobal("fetch", fetchMock);
     const view = await mount({
-      context: gatewayContext({ request: firstRequest }),
+      context: gatewayContext({ request: firstRequest }, "/control"),
       snapshot: snapshot({
         widgets: [
           boardWidget({
@@ -167,7 +127,7 @@ describe("openclaw-board-view", () => {
     });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     const bridgeChannel = new MessageChannel();
-    const initialized = new Promise<void>((resolve) => {
+    const initialized = new Promise<{ controlUiBaseUrl?: string }>((resolve) => {
       bridgeChannel.port2.addEventListener("message", (event) => {
         if (event.data?.type !== "openclaw:widget-host-init") {
           return;
@@ -179,12 +139,13 @@ describe("openclaw-board-view", () => {
           },
           [],
         );
-        resolve();
+        resolve(event.data as { controlUiBaseUrl?: string });
       });
     });
     bridgeChannel.port2.start();
     send({ type: "openclaw:widget-bridge-port-offer" }, [bridgeChannel.port1]);
-    await initialized;
+    const hostInit = await initialized;
+    expect(hostInit.controlUiBaseUrl).toBe(`${window.location.origin}/control`);
     bridgeChannel.port2.postMessage(
       {
         type: "openclaw:widget-bridge-request",
@@ -203,7 +164,7 @@ describe("openclaw-board-view", () => {
     );
 
     const provider = view.parentElement as ReturnType<typeof createApplicationContextProvider>;
-    provider.setContext(gatewayContext({ request: secondRequest }));
+    provider.setContext(gatewayContext({ request: secondRequest }, "/control"));
     await cell.updateComplete;
     bridgeChannel.port2.postMessage(
       {
@@ -294,32 +255,15 @@ describe("openclaw-board-view", () => {
       }),
     });
 
-    await vi.advanceTimersByTimeAsync(4_999);
+    // The refresh is armed during a render cycle, so its exact start is not guaranteed to
+    // the millisecond under load. Assert the band that carries the meaning: still silent at
+    // 2s rules out the 1s floor, and having fired by 8s rules out the 15s a full-TTL
+    // calculation would produce. Call count is left open because the unreplaced ticket
+    // keeps retrying, which is a different behavior with its own test.
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(frameLoadFailed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(frameLoadFailed).toHaveBeenCalledOnce();
-  });
-
-  it("schedules proactive refresh from a delayed mount's remaining ticket lifetime", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2099-01-01T00:00:00Z"));
-    const frameLoadFailed = vi.fn(async () => undefined);
-    const delayedWidget = boardWidget({
-      viewTicket: "ticket",
-      viewTicketTtlMs: 30_000,
-    });
-    recordBoardWidgetTicketReceipt(delayedWidget);
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    await mount({
-      callbacks: callbacks({ frameLoadFailed }),
-      snapshot: snapshot({ widgets: [delayedWidget] }),
-    });
-
-    await vi.advanceTimersByTimeAsync(4_999);
-    expect(frameLoadFailed).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(frameLoadFailed).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(frameLoadFailed).toHaveBeenCalled();
   });
 
   it("keeps retrying proactive ticket refresh after the initial outage", async () => {
@@ -831,20 +775,34 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(allow?.disabled).toBe(false));
   });
 
-  it("keeps approval controls after a failed decision and clears the error on refresh", async () => {
-    const grant = vi.fn(async () => {
-      throw new Error("approval service unavailable");
+  it("toasts failed rejection while keeping controls and leaves successful decisions quiet", async () => {
+    const toastHost = document.createElement("openclaw-toast-host");
+    document.body.append(toastHost);
+    const grant = vi.fn(async (_name: string, decision: "granted" | "rejected") => {
+      if (decision === "rejected") {
+        throw new Error("approval service unavailable");
+      }
     });
     const source = snapshot({ widgets: [boardWidget({ grantState: "pending" })] });
     const view = await mount({ snapshot: source, callbacks: callbacks({ grant }) });
-    view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.click();
+    const allow = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]');
+    const reject = view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]');
+    allow?.click();
+    await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "granted"));
+    await vi.waitFor(() => expect(reject?.disabled).toBe(false));
+    expect(toastHost.querySelector(".app-toast")).toBeNull();
+
+    reject?.click();
     await vi.waitFor(() => {
       expect(
         view.querySelector('[data-test-id="board-widget-action-error"]')?.textContent,
       ).toContain("approval service unavailable");
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(
+        "Could not reject widget access. Try again.",
+      );
     });
-    expect(view.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull();
-    expect(view.querySelector('[data-test-id="board-grant-reject"]')).not.toBeNull();
+    expect(allow?.disabled).toBe(false);
+    expect(reject?.disabled).toBe(false);
 
     view.snapshot = structuredClone({ ...source, revision: source.revision + 1 });
     await settleCells(view);
@@ -995,6 +953,32 @@ describe("openclaw-board-view", () => {
     );
     await Promise.resolve();
     expect(document.activeElement).toBe(menuButton);
+    expect(applyOps).not.toHaveBeenCalled();
+  });
+
+  it("cancels an in-progress gesture when the board becomes inactive", async () => {
+    const applyOps = vi.fn(async () => undefined);
+    const view = await mount({ callbacks: callbacks({ applyOps }) });
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
+    const pointerDown = new MouseEvent("pointerdown", {
+      bubbles: true,
+      button: 0,
+      cancelable: true,
+      clientX: 100,
+      clientY: 100,
+    });
+    Object.defineProperty(pointerDown, "pointerId", { value: 7 });
+    handle?.dispatchEvent(pointerDown);
+    await view.updateComplete;
+    expect(view.querySelector(".board-widget--dragging")).not.toBeNull();
+
+    view.active = false;
+    await settleCells(view);
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+
+    const pointerUp = new MouseEvent("pointerup", { bubbles: true, clientX: 200, clientY: 200 });
+    Object.defineProperty(pointerUp, "pointerId", { value: 7 });
+    window.dispatchEvent(pointerUp);
     expect(applyOps).not.toHaveBeenCalled();
   });
 

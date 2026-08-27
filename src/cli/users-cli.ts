@@ -16,16 +16,20 @@ function addUsersGatewayOptions(command: Command) {
     .option("--json", "Output JSON", false);
 }
 
-type UsersListResult = {
-  profiles?: Array<{ id?: string; displayName?: string | null; emails?: string[] }>;
-};
+type UserProfile = { id?: string; displayName?: string | null; emails?: string[] };
+type UsersListResult = { profiles?: UserProfile[]; profile?: UserProfile };
 
 function writeUsersList(result: unknown, json: boolean): void {
   if (json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     return;
   }
-  const profiles = (result as UsersListResult).profiles ?? [];
+  const response = result as UsersListResult;
+  const profiles = response.profiles ?? (response.profile ? [response.profile] : []);
+  if (profiles.length === 0) {
+    process.stdout.write("No user profiles found.\n");
+    return;
+  }
   for (const profile of profiles) {
     process.stdout.write(
       `${sanitizeTerminalText(profile.id ?? "")}\t${sanitizeTerminalText(profile.displayName ?? "")}\t${sanitizeTerminalText((profile.emails ?? []).join(","))}\n`,
@@ -65,13 +69,9 @@ export function registerUsersCli(program: Command) {
           { email, targetProfileId: opts.to },
           { scopes: ["operator.admin"] },
         );
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-        }
+        writeUsersList(result, opts.json === true);
       }),
   );
 
   applyParentDefaultHelpAction(users);
 }
-
-export const testApi = { writeUsersList };

@@ -15,6 +15,7 @@ import {
   realPathMaybe,
   stateDir,
 } from "../codex-install-utils.mjs";
+import { assertCodexReleasePackageContract } from "../codex-release-package-assertions.mjs";
 
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
@@ -447,7 +448,7 @@ function findCodexPackageJson(packageName) {
   return findPackageJson(packageName, [projectRoot, codexInstallPath(), managedNpmRoot()]);
 }
 
-function assertNpmDeps() {
+function assertNpmDeps(options = {}) {
   const npmRoot = managedNpmRoot();
   const installPath = codexInstallPath();
   const pluginPackageJson = path.join(installPath, "package.json");
@@ -468,11 +469,13 @@ function assertNpmDeps() {
   }
   assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
 
-  const bin = resolveCodexBin();
-  if (!fs.existsSync(bin)) {
-    throw new Error(`missing managed Codex binary: ${bin}`);
-  }
-  assertPathInside(npmRoot, bin, "managed Codex binary");
+  assertCodexReleasePackageContract({
+    pluginPackageJson,
+    codexPackageJson: openAiCodexPackageJson,
+    packageRoots: [codexNpmProjectRoot(), installPath, npmRoot],
+    managedRoot: npmRoot,
+    recordEvidence: options.recordEvidence,
+  });
 }
 
 function resolveCodexBin() {
@@ -505,7 +508,7 @@ function resolveCodexBin() {
 }
 
 function printCodexBin() {
-  assertNpmDeps();
+  assertNpmDeps({ recordEvidence: false });
   process.stdout.write(`${resolveCodexBin()}\n`);
 }
 
@@ -654,21 +657,22 @@ function assertFollowthroughTranscript({ transcriptEvents, progressMarker, compl
     );
     return text === progressMarker || text === completeMarker ? [{ ...entry, args, text }] : [];
   });
-  const expected = [
-    { text: progressMarker, final: undefined },
-    { text: completeMarker, final: true },
-  ];
+  const expected = [progressMarker, completeMarker];
   if (
     markerCalls.length !== expected.length ||
     markerCalls.some(
       (call, index) =>
-        call.text !== expected[index].text ||
+        call.text !== expected[index] ||
         call.args.action !== "send" ||
-        call.args.final !== expected[index].final,
+        // Extended-stable candidates can predate this optional Codex control.
+        // Current progress sends use `false`; completion may omit it or use `true`.
+        (index === 0
+          ? call.args.final !== undefined && call.args.final !== false
+          : call.args.final !== undefined && call.args.final !== true),
     )
   ) {
     throw new Error(
-      `expected exact message final controls ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
+      `expected ordered message sends with an optional final completion marker ${JSON.stringify(expected)}, got ${JSON.stringify(markerCalls.map((call) => ({ text: call.text, action: call.args.action, final: call.args.final })))}`,
     );
   }
   const [progressCall, completeCall] = markerCalls;
@@ -904,10 +908,12 @@ function assertAgentError() {
       )
     : "";
   const combined = `${stdout}\n${stderr}`;
-  if (
-    !combined.includes('Requested agent harness "codex" is not registered') &&
-    !combined.includes("Unknown model: codex/")
-  ) {
+  const expectedErrors = [
+    'Requested agent harness "codex" is not registered',
+    "Unknown model: codex/",
+    'Agent harness runtime "codex" is not present in the prepared registry.',
+  ];
+  if (!expectedErrors.some((message) => combined.includes(message))) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);
   }
 }

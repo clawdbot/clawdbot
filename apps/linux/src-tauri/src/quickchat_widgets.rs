@@ -1,5 +1,5 @@
 use crate::gateway_ws::GatewayClient;
-use crate::quickchat::{QuickChatState, QUICKCHAT_LABEL};
+use crate::quickchat::{position_quickchat, QuickChatState, QUICKCHAT_LABEL};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -60,7 +60,9 @@ fn quickchat_window_height(has_widgets: bool, expanded: bool) -> f64 {
     }
 }
 
-fn resize_window_if_needed(window: &Window, height: f64) -> Result<(), String> {
+/// Returns whether the window was actually resized, so the caller can re-anchor
+/// it only when its height really changed.
+fn resize_window_if_needed(window: &Window, height: f64) -> Result<bool, String> {
     let scale = window
         .scale_factor()
         .map_err(|error| format!("Could not read Quick Chat scale: {error}"))?;
@@ -69,11 +71,12 @@ fn resize_window_if_needed(window: &Window, height: f64) -> Result<(), String> {
         .map_err(|error| format!("Could not read Quick Chat size: {error}"))?;
     let current_height = f64::from(current.height) / scale;
     if (current_height - height).abs() <= 0.5 {
-        return Ok(());
+        return Ok(false);
     }
     window
         .set_size(LogicalSize::new(QUICKCHAT_WIDTH, height))
-        .map_err(|error| format!("Could not resize Quick Chat for widgets: {error}"))
+        .map_err(|error| format!("Could not resize Quick Chat for widgets: {error}"))?;
+    Ok(true)
 }
 
 impl QuickChatWidgetState {
@@ -488,11 +491,21 @@ impl QuickChatWidgetState {
                 ));
             }
         }
-        if let Err(error) =
-            resize_window_if_needed(&window, quickchat_window_height(has_widgets, expanded))
-        {
-            cleanup_created(&created);
-            return Err(error);
+        match resize_window_if_needed(&window, quickchat_window_height(has_widgets, expanded)) {
+            // Growing for widgets has to re-anchor the window the same way the
+            // expand path does. Resizing alone keeps the old top edge, so a
+            // taller window can hang off the bottom of the work area.
+            Ok(true) => {
+                if let Err(error) = position_quickchat(window.app_handle(), &window) {
+                    cleanup_created(&created);
+                    return Err(error);
+                }
+            }
+            Ok(false) => {}
+            Err(error) => {
+                cleanup_created(&created);
+                return Err(error);
+            }
         }
 
         *self.views.lock().map_err(|_| {

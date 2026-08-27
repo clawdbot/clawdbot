@@ -6,11 +6,15 @@ scenario:
   coverage:
     primary:
       - cli.update-status-and-rpc
+      - gateway.update-and-setup-apis
     secondary:
       - cli.managed-gateway-restart
-  objective: Verify an installed OpenClaw 2026.4.26 package upgrades to the resolved latest package through the authenticated Gateway update.run RPC and returns healthy after restart.
+  objective: Verify authenticated setup RPC compatibility before and after an installed OpenClaw 2026.4.26 package upgrades to the resolved latest package through update.run and returns healthy after restart.
   successCriteria:
-    - The package-backed Docker lane installs and verifies openclaw@2026.4.26 before invoking the authenticated Gateway update.run RPC directly.
+    - The package-backed Docker lane builds an isolated production install of openclaw@2026.4.26, overlays its exact-tag private dist, preflight-imports the linked historical QA channel, and separately installs the published source Gateway before invoking update.run.
+    - Authenticated wizard.start and wizard.status return valid sanitized projections, the running historical session remains usable by wizard.next, and wizard.cancel terminates the setup flow.
+    - A second wizard.start is rejected while setup is active, and cancellation purges the session so a replacement setup can start and cancel cleanly.
+    - After restart, one target-package wizard session proves repeated wizard.status retains the running session before explicit cancellation and settlement-polled purge, while its replacement proves wizard.next, duplicate-start rejection, cancellation, settlement-polled purge, and another replacement setup.
     - The lane resolves openclaw@latest before the RPC and rejects a no-op or any installed version that differs from the resolved target.
     - The update RPC succeeds with source and target versions and writes the exact requested restart note into the update sentinel.
     - The restarted Gateway reports the resolved target version, passes health, readiness, and RPC status probes, and reports the QA channel account running.
@@ -22,6 +26,7 @@ scenario:
     - docs/help/testing-updates-plugins.md
   codeRefs:
     - src/gateway/server-methods/update.ts
+    - src/gateway/server-methods/wizard.ts
     - src/infra/restart.ts
     - scripts/e2e/update-run-package-self-upgrade-docker.sh
     - scripts/e2e/lib/upgrade-survivor/update-run-package-self-upgrade.sh
@@ -29,7 +34,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/update-run-package-self-upgrade.ts
-    summary: Runs the opt-in package-backed Docker lane for authenticated Gateway update.run self-upgrade and emits source/target, restart sentinel, Gateway health, and QA channel evidence.
+    summary: Runs the opt-in installed-package Docker lane for authenticated historical and current wizard lifecycles plus update RPCs, then emits sanitized setup, source/target, restart sentinel, Gateway health, and QA channel evidence.
     allowBlockedEvidence: true
     timeoutMs: 3600000
     args:

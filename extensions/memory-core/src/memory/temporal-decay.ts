@@ -13,7 +13,7 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 
 function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
@@ -71,7 +71,7 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
 
 function isEvergreenMemoryPath(filePath: string): boolean {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
-  if (normalized === "MEMORY.md") {
+  if (normalized === "MEMORY.md" || normalized === "USER.md") {
     return true;
   }
   if (!normalized.startsWith("memory/")) {

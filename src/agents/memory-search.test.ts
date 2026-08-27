@@ -9,10 +9,7 @@ import {
   restoreRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
-import {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import {
   SecretSurfaceUnavailableError,
   setActiveDegradedSecretOwners,
@@ -29,23 +26,27 @@ const asConfig = (cfg: OpenClawConfig): OpenClawConfig => ({
 });
 let registeredEmbeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
 
+function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
+  registerEmbeddingProvider(adapter);
+}
+
 function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolean }): void {
   // Register provider contracts locally so config tests do not depend on the
   // plugin loader or live embedding backends.
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "openai",
     defaultModel: "text-embedding-3-small",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "local",
     defaultModel: "local-default",
     transport: "local",
     create: async () => ({ provider: null }),
   });
   if (options?.includeGemini !== false) {
-    registerMemoryEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "gemini",
       defaultModel: "gemini-embedding-001",
       transport: "remote",
@@ -57,25 +58,25 @@ function registerBaseMemoryEmbeddingProviders(options?: { includeGemini?: boolea
       create: async () => ({ provider: null }),
     });
   }
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "voyage",
     defaultModel: "voyage-4-large",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "mistral",
     defaultModel: "mistral-embed",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "lmstudio",
     defaultModel: "text-embedding-nomic-embed-text-v1.5",
     transport: "remote",
     create: async () => ({ provider: null }),
   });
-  registerMemoryEmbeddingProvider({
+  registerTestMemoryAdapter({
     id: "ollama",
     defaultModel: "nomic-embed-text",
     transport: "remote",
@@ -87,13 +88,11 @@ describe("memory search config", () => {
   beforeEach(() => {
     registeredEmbeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
     clearEmbeddingProviders();
-    clearMemoryEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders();
   });
 
   afterEach(() => {
     setActiveDegradedSecretOwners([]);
-    clearMemoryEmbeddingProviders();
     restoreRegisteredEmbeddingProviders(registeredEmbeddingProvidersSnapshot);
   });
 
@@ -490,7 +489,7 @@ describe("memory search config", () => {
   });
 
   it("resolves fixed sync defaults without consulting embedding providers", () => {
-    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
     const cfg = asConfig({
       memory: {
         search: {
@@ -571,6 +570,7 @@ describe("memory search config", () => {
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.query.maxResults).toBe(8);
     expect(resolved?.query.minScore).toBe(0.2);
+    expect(resolved?.query.hybrid.mmr).toEqual({ enabled: true, lambda: 0.7 });
     expect(resolved?.store.vector.enabled).toBe(true);
     expect(resolved?.store.vector.extensionPath).toBe("/opt/sqlite-vec.dylib");
   });
@@ -579,7 +579,11 @@ describe("memory search config", () => {
     const cfg = asConfig({
       memory: {
         search: {
-          extraPaths: ["/shared/notes", " docs "],
+          extraPaths: [
+            "/shared/notes",
+            " docs ",
+            { path: "../team-notes", pattern: "runbooks/**/*.md" },
+          ],
         },
       },
 
@@ -591,7 +595,11 @@ describe("memory search config", () => {
             default: true,
             memory: {
               search: {
-                extraPaths: ["/shared/notes", "../team-notes"],
+                extraPaths: [
+                  "/shared/notes",
+                  { path: "../team-notes", pattern: "runbooks/**/*.md" },
+                  { path: "../team-notes", pattern: "decisions/**/*.md" },
+                ],
               },
             },
           },
@@ -599,7 +607,12 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.extraPaths).toEqual(["/shared/notes", "docs", "../team-notes"]);
+    expect(resolved?.extraPaths).toEqual([
+      "/shared/notes",
+      "docs",
+      { path: "../team-notes", pattern: "runbooks/**/*.md" },
+      { path: "../team-notes", pattern: "decisions/**/*.md" },
+    ]);
   });
 
   it("normalizes multimodal settings", () => {
@@ -739,7 +752,7 @@ describe("memory search config", () => {
   });
 
   it("accepts Gemini multimodal memory even when the runtime registry has not registered Gemini yet", () => {
-    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
     registerBaseMemoryEmbeddingProviders({ includeGemini: false });
     const cfg = asConfig({
       memory: {

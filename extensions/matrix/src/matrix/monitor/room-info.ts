@@ -1,6 +1,7 @@
 // Matrix plugin module implements room info behavior.
 import { isMatrixNotFoundError } from "../errors.js";
 import type { MatrixClient } from "../sdk.js";
+import { setBoundedMap } from "./bounded-cache.js";
 
 export type MatrixRoomInfo = {
   name?: string;
@@ -10,18 +11,8 @@ export type MatrixRoomInfo = {
   aliasesResolved: boolean;
 };
 
-const MAX_TRACKED_ROOM_INFO = 1024;
-const MAX_TRACKED_MEMBER_DISPLAY_NAMES = 4096;
-
-function rememberBounded<T>(map: Map<string, T>, key: string, value: T, maxEntries: number): void {
-  map.set(key, value);
-  if (map.size > maxEntries) {
-    const oldest = map.keys().next().value;
-    if (typeof oldest === "string") {
-      map.delete(oldest);
-    }
-  }
-}
+const MAX_ROOM_INFO = 1024;
+const MAX_MEMBER_DISPLAY_NAMES = 4096;
 
 export function createMatrixRoomInfoResolver(client: MatrixClient) {
   const roomNameCache = new Map<string, Pick<MatrixRoomInfo, "name" | "nameResolved">>();
@@ -52,7 +43,7 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
     }
     const info = { name, nameResolved };
     if (nameResolved) {
-      rememberBounded(roomNameCache, roomId, info, MAX_TRACKED_ROOM_INFO);
+      setBoundedMap(roomNameCache, roomId, info, MAX_ROOM_INFO);
     }
     return info;
   };
@@ -84,7 +75,7 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
     }
     const info = { canonicalAlias, altAliases, aliasesResolved };
     if (aliasesResolved) {
-      rememberBounded(roomAliasCache, roomId, info, MAX_TRACKED_ROOM_INFO);
+      setBoundedMap(roomAliasCache, roomId, info, MAX_ROOM_INFO);
     }
     return info;
   };
@@ -106,23 +97,28 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
     if (memberDisplayNameCache.has(cacheKey)) {
       return memberDisplayNameCache.get(cacheKey) ?? userId;
     }
-    const memberState = await client
-      .getRoomStateEvent(roomId, "m.room.member", userId)
-      .catch(() => null);
+    let memberState: Record<string, unknown>;
+    try {
+      memberState = await client.getRoomStateEvent(roomId, "m.room.member", userId);
+    } catch {
+      // A transient homeserver failure is not authoritative room state; retry
+      // the next lookup instead of pinning the fallback user ID for the session.
+      return userId;
+    }
     const displayName =
       memberState && typeof memberState.displayname === "string" ? memberState.displayname : userId;
-    rememberBounded(
-      memberDisplayNameCache,
-      cacheKey,
-      displayName,
-      MAX_TRACKED_MEMBER_DISPLAY_NAMES,
-    );
+    setBoundedMap(memberDisplayNameCache, cacheKey, displayName, MAX_MEMBER_DISPLAY_NAMES);
     return displayName;
+  };
+
+  const invalidateMemberDisplayName = (roomId: string, userId: string): void => {
+    memberDisplayNameCache.delete(`${roomId}:${userId}`);
   };
 
   return {
     getRoomAliases,
     getRoomInfo,
     getMemberDisplayName,
+    invalidateMemberDisplayName,
   };
 }

@@ -58,6 +58,7 @@ describe("buildAttemptSystemPrompt", () => {
         tools: [],
         modelAliasLines: [],
         userTimezone: "UTC",
+        userDate: "2026-01-05",
         contextFiles: [
           { path: "/tmp/openclaw/SOUL.md", content: "SOUL_CONTEXT_MARKER" },
           { path: "/tmp/openclaw/IDENTITY.md", content: "IDENTITY_CONTEXT_MARKER" },
@@ -74,6 +75,45 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).toContain("IDENTITY_CONTEXT_MARKER");
     expect(result.systemPrompt).toContain("## /tmp/openclaw/USER.md");
     expect(result.systemPrompt).toContain("USER_CONTEXT_MARKER");
+  });
+
+  it("filters first-turn curated context to global and active-project entries", () => {
+    const result = buildAttemptSystemPrompt({
+      isRawModelRun: false,
+      transformProviderSystemPrompt,
+      embeddedSystemPrompt: {
+        workspaceDir: "/tmp/openclaw",
+        reasoningTagHint: false,
+        runtimeInfo: {
+          host: "test-host",
+          os: "Darwin",
+          arch: "arm64",
+          node: "v22.0.0",
+          model: "openai/gpt-5.5",
+        },
+        tools: [],
+        modelAliasLines: [],
+        userTimezone: "UTC",
+        userDate: "2026-01-05",
+        activeProjectKeys: ["github.com/acme/Alpha"],
+        contextFiles: [
+          {
+            path: "/tmp/openclaw/MEMORY.md",
+            content: [
+              "# Durable memory",
+              "- Alpha fact. <!-- project: github.com/acme/Alpha -->",
+              "- Beta fact. <!-- project: github.com/acme/Beta -->",
+              "- Global fact.",
+            ].join("\n"),
+          },
+        ],
+      },
+      providerTransform: baseProviderTransform,
+    });
+
+    expect(result.systemPrompt).toContain("Alpha fact");
+    expect(result.systemPrompt).toContain("Global fact");
+    expect(result.systemPrompt).not.toContain("Beta fact");
   });
 
   it("preserves bootstrap Project Context", () => {
@@ -93,6 +133,7 @@ describe("buildAttemptSystemPrompt", () => {
         tools: [],
         modelAliasLines: [],
         userTimezone: "UTC",
+        userDate: "2026-01-05",
         bootstrapMode: "full",
         bootstrapTruncationNotice: "Bootstrap context was truncated.",
         contextFiles: [
@@ -150,6 +191,7 @@ describe("buildAttemptSystemPrompt", () => {
         tools: [],
         modelAliasLines: [],
         userTimezone: "UTC",
+        userDate: "2026-01-05",
         promptMode: "minimal",
         extraSystemPrompt:
           "# Subagent Context\n\n## Your Role\n- You were created to handle: RUN_MODE_TASK_77950",
@@ -183,6 +225,7 @@ describe("buildAttemptSystemPrompt", () => {
         tools: [],
         modelAliasLines: [],
         userTimezone: "UTC",
+        userDate: "2026-01-05",
         bootstrapMode: "full",
         contextFiles: [
           {

@@ -1,4 +1,5 @@
 // Route-first argv parsers for commands that can skip full Commander startup.
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isValueToken } from "../../infra/cli-root-options.js";
 import {
   getCommandPositionalsWithRootOptions,
@@ -7,7 +8,8 @@ import {
   getVerboseFlag,
   hasFlag,
 } from "../argv.js";
-import { parseStrictPositiveIntOrUndefined } from "./helpers.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
+import { MODELS_PARENT_BOOLEAN_FLAGS, MODELS_PARENT_VALUE_FLAGS } from "../parent-command-path.js";
 
 type OptionalFlagParse = {
   ok: boolean;
@@ -107,7 +109,7 @@ export function parseStatusRouteArgs(argv: string[]) {
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["status"],
     booleanFlags: ["--json", "--deep", "--all", "--usage", "--verbose", "--debug"],
-    valueFlags: ["--timeout"],
+    valueFlags: ["--timeout", "--agent"],
   });
   if (!positionals || positionals.length !== 0) {
     return null;
@@ -116,11 +118,16 @@ export function parseStatusRouteArgs(argv: string[]) {
   if (timeoutMs === null) {
     return null;
   }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
   return {
     json: hasFlag(argv, "--json"),
     deep: hasFlag(argv, "--deep"),
     all: hasFlag(argv, "--all"),
     usage: hasFlag(argv, "--usage"),
+    ...(agent.value !== undefined ? { agent: agent.value } : {}),
     verbose: getVerboseFlag(argv, { includeDebug: true }),
     timeoutMs,
   };
@@ -178,6 +185,57 @@ export function parseGatewayStatusRouteArgs(argv: string[]) {
   };
 }
 
+/** Parse machine-readable `openclaw gateway health` calls for route-first execution. */
+export function parseGatewayHealthRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getRoutedCommandPositionals(argv, {
+    commandPath: ["gateway", "health"],
+    booleanFlags: ["--expect-final", "--json"],
+    valueFlags: ["--url", "--token", "--password", "--timeout", "--port"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const url = parseOptionalFlagValue(argv, "--url");
+  const token = parseOptionalFlagValue(argv, "--token");
+  const password = parseOptionalFlagValue(argv, "--password");
+  const timeout = parseOptionalFlagValue(argv, "--timeout");
+  const port = parseOptionalFlagValue(argv, "--port");
+  if (!url.ok || !token.ok || !password.ok || !timeout.ok || !port.ok) {
+    return null;
+  }
+  if (timeout.value !== undefined && parseStrictPositiveInteger(timeout.value) === undefined) {
+    return null;
+  }
+  let localPortOverride: number | undefined;
+  if (port.value !== undefined) {
+    try {
+      localPortOverride = parseGatewayPortOption(port.value);
+    } catch {
+      return null;
+    }
+    if (localPortOverride === undefined) {
+      return null;
+    }
+  }
+  if (url.value && localPortOverride !== undefined) {
+    return null;
+  }
+  return {
+    rpc: {
+      url: url.value,
+      token: token.value,
+      password: password.value,
+      timeout: timeout.value ?? "10000",
+      expectFinal: hasFlag(argv, "--expect-final"),
+      json: true as const,
+    },
+    localPortOverride,
+  };
+}
+
 /** Parse `openclaw sessions` filters for JSON/list route execution. */
 export function parseSessionsRouteArgs(argv: string[]) {
   const positionals = getRoutedCommandPositionals(argv, {
@@ -218,20 +276,25 @@ export function parseSessionsRouteArgs(argv: string[]) {
 export function parseAgentsListRouteArgs(argv: string[]) {
   const listPositionals = getRoutedCommandPositionals(argv, {
     commandPath: ["agents", "list"],
-    booleanFlags: ["--json", "--bindings"],
+    booleanFlags: ["--json", "--bindings", "--tree"],
   });
   if (listPositionals && listPositionals.length === 0) {
     return {
       json: hasFlag(argv, "--json"),
       bindings: hasFlag(argv, "--bindings"),
+      tree: hasFlag(argv, "--tree"),
     };
   }
   const aliasPositionals = getRoutedCommandPositionals(argv, {
     commandPath: ["agents"],
-    booleanFlags: ["--json", "--bindings"],
+    booleanFlags: ["--json", "--bindings", "--tree"],
   });
   return aliasPositionals?.length === 0
-    ? { json: hasFlag(argv, "--json"), bindings: hasFlag(argv, "--bindings") }
+    ? {
+        json: hasFlag(argv, "--json"),
+        bindings: hasFlag(argv, "--bindings"),
+        tree: hasFlag(argv, "--tree"),
+      }
     : null;
 }
 
@@ -292,8 +355,32 @@ export function parseModelsListRouteArgs(argv: string[]) {
   };
 }
 
-/** Parse `openclaw models status` probe controls for the route-first status path. */
+function parseModelsRootStatusRouteArgs(argv: string[]) {
+  const positionals = getRoutedCommandPositionals(argv, {
+    commandPath: ["models"],
+    booleanFlags: MODELS_PARENT_BOOLEAN_FLAGS,
+    valueFlags: MODELS_PARENT_VALUE_FLAGS,
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
+  return {
+    agent: agent.value,
+    json: hasFlag(argv, "--json") || hasFlag(argv, "--status-json"),
+    plain: hasFlag(argv, "--status-plain"),
+  };
+}
+
+/** Parse both parent aliases and `openclaw models status` through one status owner. */
 export function parseModelsStatusRouteArgs(argv: string[]) {
+  const rootArgs = parseModelsRootStatusRouteArgs(argv);
+  if (rootArgs) {
+    return rootArgs;
+  }
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["models", "status"],
     booleanFlags: ["--json", "--plain", "--check", "--probe"],
@@ -394,11 +481,8 @@ export function parseChannelsStatusRouteArgs(argv: string[]) {
   };
 }
 
-/** Parse JSON-only `openclaw plugins list` flags for plugin inventory output. */
+/** Parse `openclaw plugins list` flags for the metadata-only inventory path. */
 export function parsePluginsListRouteArgs(argv: string[]) {
-  if (!hasFlag(argv, "--json")) {
-    return null;
-  }
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["plugins", "list"],
     booleanFlags: ["--json", "--enabled", "--verbose"],
@@ -407,7 +491,7 @@ export function parsePluginsListRouteArgs(argv: string[]) {
     return null;
   }
   return {
-    json: true as const,
+    json: hasFlag(argv, "--json"),
     enabled: hasFlag(argv, "--enabled"),
     verbose: hasFlag(argv, "--verbose"),
   };
@@ -473,7 +557,7 @@ export function parseTasksAuditRouteArgs(argv: string[]) {
   if (rawLimit === null) {
     return null;
   }
-  const limit = rawLimit === undefined ? undefined : parseStrictPositiveIntOrUndefined(rawLimit);
+  const limit = rawLimit === undefined ? undefined : parseStrictPositiveInteger(rawLimit);
   if (rawLimit !== undefined && limit === undefined) {
     return null;
   }

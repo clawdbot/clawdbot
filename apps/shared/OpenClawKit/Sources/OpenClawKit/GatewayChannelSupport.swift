@@ -44,6 +44,7 @@ final class GatewayRequestCancellationGate: @unchecked Sendable {
 
 extension GatewayChannelActor {
     enum ConnectChallengeError: Error {
+        case invalid
         case timeout
     }
 

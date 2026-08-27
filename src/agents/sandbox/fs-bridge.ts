@@ -5,12 +5,15 @@
  */
 import fs from "node:fs";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
 import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import {
+  buildPinnedCreatePlan,
+  SANDBOX_CREATE_EXISTS_EXIT_CODE,
   buildPinnedCopyPlan,
   buildPinnedMkdirpPlan,
   buildPinnedRemovePlan,
@@ -76,9 +79,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     filePath: string;
     cwd?: string;
     signal?: AbortSignal;
+    maxBytes?: number;
   }): Promise<Buffer> {
     const target = this.resolveResolvedPath(params);
-    return this.readPinnedFile(target);
+    return this.readPinnedFile(target, params.maxBytes);
   }
 
   async copyFile(params: {
@@ -145,6 +149,49 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       stdin: buffer,
       signal: params.signal,
     });
+  }
+
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveResolvedPath(params);
+    this.ensureWriteAccess(target, "create files");
+    const createCheck = {
+      target,
+      options: { action: "create files", requireWritable: true } as const,
+    };
+    await this.pathGuard.assertPathSafety(target, createCheck.options);
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const pinnedCreateTarget = await this.pathGuard.resolveAnchoredPinnedEntry(
+      target,
+      "create files",
+    );
+    const result = await this.runCheckedCommand({
+      ...buildPinnedCreatePlan({
+        check: createCheck,
+        pinned: pinnedCreateTarget,
+        mkdir: params.mkdir !== false,
+      }),
+      allowFailure: true,
+      stdin: buffer,
+      signal: params.signal,
+    });
+    if (result.code === SANDBOX_CREATE_EXISTS_EXIT_CODE) {
+      return "exists";
+    }
+    if (result.code !== 0) {
+      throw new Error(
+        `sandbox create failed for ${target.containerPath}: ${result.stderr.toString("utf8").trim()}`,
+      );
+    }
+    return "created";
   }
 
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
@@ -281,10 +328,30 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     });
   }
 
-  private async readPinnedFile(target: SandboxResolvedFsPath): Promise<Buffer> {
+  private async readPinnedFile(target: SandboxResolvedFsPath, maxBytes?: number): Promise<Buffer> {
     const opened = await this.pathGuard.openReadableFile(target);
     try {
-      return fs.readFileSync(opened.fd);
+      if (maxBytes === undefined) {
+        return fs.readFileSync(opened.fd);
+      }
+      if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+        throw new RangeError("maxBytes must be a non-negative safe integer");
+      }
+      const initialStat = fs.fstatSync(opened.fd);
+      if (!initialStat.isFile()) {
+        throw new Error(`Sandbox read requires a regular file: ${target.containerPath}`);
+      }
+      if (initialStat.size > maxBytes) {
+        throw new RangeError(`File exceeds ${maxBytes} bytes`);
+      }
+      // Read and recheck the same guarded descriptor so path swaps and file
+      // growth cannot bypass the byte limit or allocate an unbounded buffer.
+      const data = readFileDescriptorBoundedSync(opened.fd, maxBytes);
+      const finalStat = fs.fstatSync(opened.fd);
+      if (!finalStat.isFile() || finalStat.size > maxBytes) {
+        throw new RangeError(`File exceeds ${maxBytes} bytes`);
+      }
+      return data;
     } finally {
       fs.closeSync(opened.fd);
     }

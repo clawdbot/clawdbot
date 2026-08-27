@@ -1,0 +1,26 @@
+title: Bundled channel id discovery
+
+scenario:
+  id: bundled-channel-id-discovery
+  surface: plugins
+  category: plugins.bundled-plugins
+  coverage:
+    primary:
+      - plugins.bundled-channel-ids
+  objective: Verify bundled channel ids come from package channel metadata instead of plugin identities.
+  successCriteria:
+    - Bundled package channel metadata produces a nonempty channel id list.
+    - Bundled channel ids are returned in deterministic sorted order.
+    - Plugin ids that differ from channel ids are not substituted into the channel id list.
+  docsRefs:
+    - docs/cli/plugins.md
+    - docs/plugins/plugin-inventory.md
+    - docs/plugins/architecture-internals.md
+  codeRefs:
+    - src/channels/plugins/bundled-ids.ts
+    - src/plugins/channel-catalog-registry.ts
+    - src/channels/bundled-channel-catalog-read.test.ts
+  execution:
+    kind: vitest
+    path: src/channels/bundled-channel-catalog-read.test.ts
+    summary: Run bundled package catalog loading through the sorted channel id projection.

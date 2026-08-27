@@ -1,5 +1,10 @@
-import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
   mergeConcurrentReplySessionMetadata,
@@ -7,11 +12,15 @@ import {
   resolveInitializedReplySessionEntry,
 } from "./session-accessor.entry-mutation.js";
 import {
-  listSessionEntries,
+  listSessionEntriesCore,
   listSessionEntriesReadOnly,
+  loadSessionEntry,
   resolveSessionEntryFromStore,
 } from "./session-accessor.entry.js";
-import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  type SessionEntryLifecycleUpsert,
+} from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import type {
   SessionLifecycleTranscriptInfo,
@@ -30,6 +39,28 @@ type SessionEntryRetirement = {
   entry: SessionEntry;
   key: string;
 };
+
+export class SessionInitializationAgentScopeMismatchError extends Error {
+  readonly code = "SESSION_INITIALIZATION_AGENT_SCOPE_MISMATCH";
+
+  constructor(
+    readonly agentId: string,
+    readonly sessionKeyAgentId: string,
+  ) {
+    super(
+      `Session initialization agent scope mismatch: explicit agent "${agentId}" does not match session key agent "${sessionKeyAgentId}".`,
+    );
+    this.name = "SessionInitializationAgentScopeMismatchError";
+  }
+}
+
+function assertSessionInitializationAgentScope(agentId: string, sessionKey: string): void {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  if (sessionKeyAgentId && normalizeAgentId(sessionKeyAgentId) !== normalizedAgentId) {
+    throw new SessionInitializationAgentScopeMismatchError(normalizedAgentId, sessionKeyAgentId);
+  }
+}
 
 const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
@@ -66,16 +97,16 @@ export async function persistSessionResetLifecycle(params: {
 
 /** Loads the reply-session initialization rows without exposing a mutable store. */
 export function loadReplySessionInitializationSnapshot(params: {
+  agentId: string;
   storePath: string;
   sessionKey: string;
 }): ReplySessionInitializationSnapshot {
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const storePath = resolveSessionStorePathForScope(params);
   const store = Object.fromEntries(
-    listSessionEntriesReadOnly({ agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesReadOnly({ agentId: params.agentId, storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
   );
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
@@ -90,6 +121,18 @@ export function loadReplySessionInitializationSnapshot(params: {
       entry: currentEntry,
       storePath,
     }),
+  };
+}
+
+function createStaleReplySessionInitializationResult(
+  currentEntry: SessionEntry | undefined,
+  storePath: string,
+): ReplySessionInitializationCommitResult {
+  return {
+    ok: false,
+    ...(currentEntry ? { currentEntry } : {}),
+    reason: "stale-snapshot",
+    revision: createReplySessionInitializationRevision({ entry: currentEntry, storePath }),
   };
 }
 
@@ -114,6 +157,8 @@ export async function commitReplySessionInitialization(params: {
     context: ReplySessionInitializationCommitContext,
   ) => Promise<SessionEntry> | SessionEntry;
   resetBoundaryReason?: import("./session-reset-boundary-event.js").SessionResetBoundaryReason;
+  /** Authoritative contextual route facts observed by the admitted inbound turn. */
+  routeContext?: ConversationRouteContext | null;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -121,12 +166,13 @@ export async function commitReplySessionInitialization(params: {
   snapshotEntry?: SessionEntry;
   storePath: string;
 }): Promise<ReplySessionInitializationCommitResult> {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const storePath = resolveSessionStorePathForScope({
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
   const store = Object.fromEntries(
-    listSessionEntries({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
+    listSessionEntriesCore({ agentId: params.agentId, storePath }).map(({ sessionKey, entry }) => [
       sessionKey,
       entry,
     ]),
@@ -138,12 +184,7 @@ export async function commitReplySessionInitialization(params: {
     storePath,
   });
   if (revision !== params.expectedRevision) {
-    return {
-      ok: false,
-      ...(currentEntry ? { currentEntry } : {}),
-      reason: "stale-snapshot",
-      revision,
-    };
+    return createStaleReplySessionInitializationResult(currentEntry, storePath);
   }
 
   const readEntry = (sessionKey: string) => {
@@ -163,17 +204,13 @@ export async function commitReplySessionInitialization(params: {
     sessionEntry: preparedSessionEntry,
     storePath,
   });
-  let staleCommit:
-    | {
-        currentEntry?: SessionEntry;
-        revision: string;
-      }
-    | undefined;
+  let staleCommit: SessionEntry | null | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
+      ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundaryReason ? { resetBoundaryReason: params.resetBoundaryReason } : {}),
       buildEntry: async ({ store: currentStore }) => {
         const commitResolved = resolveSessionEntryFromStore({
@@ -186,10 +223,7 @@ export async function commitReplySessionInitialization(params: {
           storePath,
         });
         if (commitRevision !== params.expectedRevision) {
-          staleCommit = {
-            ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
-            revision: commitRevision,
-          };
+          staleCommit = commitEntry ? { ...commitEntry } : null;
           return null;
         }
         // The identity-only guard allows commits when background activity
@@ -218,23 +252,36 @@ export async function commitReplySessionInitialization(params: {
     const retiredEntry = params.retiredEntry;
     upserts.push({
       sessionKey: retiredEntry.key,
-      buildEntry: () => (staleCommit ? null : retiredEntry.entry),
+      buildEntry: () => (staleCommit === undefined ? retiredEntry.entry : null),
     });
   }
-  await applySessionEntryLifecycleMutation({
-    activeSessionKey: params.activeSessionKey,
-    agentId: params.agentId,
-    maintenanceOverride: params.maintenanceConfig,
-    storePath,
-    upserts,
-  });
-  if (staleCommit) {
-    return {
-      ok: false,
-      ...(staleCommit.currentEntry ? { currentEntry: staleCommit.currentEntry } : {}),
-      reason: "stale-snapshot",
-      revision: staleCommit.revision,
-    };
+  try {
+    await applySessionEntryLifecycleMutation({
+      activeSessionKey: params.activeSessionKey,
+      agentId: params.agentId,
+      maintenanceOverride: params.maintenanceConfig,
+      storePath,
+      upserts,
+    });
+  } catch (error) {
+    if (
+      !(error instanceof SessionEntryLifecycleUpsertConflictError) ||
+      error.sessionKey !== resolved.normalizedKey
+    ) {
+      throw error;
+    }
+    return createStaleReplySessionInitializationResult(
+      loadSessionEntry({
+        agentId: params.agentId,
+        readConsistency: "latest",
+        sessionKey: error.sessionKey,
+        storePath,
+      }),
+      storePath,
+    );
+  }
+  if (staleCommit !== undefined) {
+    return createStaleReplySessionInitializationResult(staleCommit ?? undefined, storePath);
   }
   store[resolved.normalizedKey] = committedSessionEntry;
   if (params.retiredEntry) {
@@ -251,9 +298,7 @@ export async function commitReplySessionInitialization(params: {
     isIncognitoSessionKey(params.sessionKey) || params.previousEntry?.incognito === true
       ? {}
       : params.archivePreviousTranscript === false
-        ? params.previousEntry?.sessionFile
-          ? { sessionFile: params.previousEntry.sessionFile, transcriptArchived: false }
-          : {}
+        ? {}
         : await archivePreviousSessionTranscript({
             agentId: params.agentId,
             onArchiveError: params.onArchiveError,
@@ -280,7 +325,6 @@ async function archivePreviousSessionTranscript(params: {
   const archivedTranscripts = archiveSessionTranscriptsDetailed({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,
-    sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     reason: "reset",
     onArchiveError: params.onArchiveError,
@@ -288,7 +332,6 @@ async function archivePreviousSessionTranscript(params: {
   return resolveStableSessionEndTranscript({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,
-    sessionFile: params.previousEntry.sessionFile,
     agentId: params.agentId,
     archivedTranscripts,
   });

@@ -127,6 +127,9 @@ describe("command-analysis risks", () => {
     expect(detectCommandCarrierArgv(["env", "-S", "sh -c id"])).toEqual([
       { command: "env", flag: "-S" },
     ]);
+    expect(
+      detectCommandCarrierArgv(["runuser", "-u", "root", "python3", "-c", "print(1)"]),
+    ).toEqual([{ command: "runuser" }]);
   });
 
   it.each([
@@ -271,11 +274,14 @@ describe("command-analysis risks", () => {
         raw: "sudo python3 -c 'print(1)'",
         argv: ["sudo", "python3", "-c", "print(1)"],
         resolution: {
+          kind: "command",
           execution: {
+            kind: "executable",
             rawExecutable: "sudo",
             executableName: "sudo",
           },
           policy: {
+            kind: "executable",
             rawExecutable: "sudo",
             executableName: "sudo",
           },

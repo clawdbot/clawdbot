@@ -3,7 +3,10 @@
  * launch/restart, Chrome MCP attach, and profile stop handling.
  */
 import fs from "node:fs";
-import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
+import {
+  assertChromeMcpCdpTransportAllowed,
+  resolveCdpReachabilityPolicy,
+} from "./cdp-reachability-policy.js";
 import {
   CHROME_MCP_ATTACH_READY_POLL_MS,
   CHROME_MCP_ATTACH_READY_WINDOW_MS,
@@ -19,6 +22,7 @@ import {
   isChromeReachable,
   launchOpenClawChrome,
   ManagedChromeCleanupError,
+  stopOwnedOpenClawChrome,
   stopOpenClawChrome,
 } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
@@ -42,10 +46,12 @@ import {
   ProfileRestartRequiredError,
   registerProfileHandle,
   releaseProfileHandle,
+  withProfileOperationLease,
 } from "./server-context.lifecycle.js";
 import type {
   BrowserServerState,
   ContextOptions,
+  ProfileContext,
   ProfileRuntimeState,
 } from "./server-context.types.js";
 
@@ -59,7 +65,7 @@ type AvailabilityDeps = {
 
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
-  isTransportAvailable: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable: ProfileContext["isTransportAvailable"];
   isReachable: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
@@ -178,7 +184,7 @@ export function createProfileAvailability({
     }
     const { ensureExtensionRelayForProfile } = await getExtensionRelayModule();
     const current = state();
-    await ensureExtensionRelayForProfile(current, profile);
+    await ensureExtensionRelayForProfile(current, profile, signal);
     signal?.throwIfAborted();
   };
   const isReachable = async (
@@ -190,18 +196,13 @@ export function createProfileAvailability({
       // countChromeMcpTabs creates the session if needed — no separate availability call required.
       // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
       // but do not seed a new persistent session as a side effect of read-only status calls.
+      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { countChromeMcpTabs } = await getChromeMcpModule();
-      const callOptions: { timeoutMs?: number; ephemeral?: boolean; signal?: AbortSignal } = {};
-      if (timeoutMs != null) {
-        callOptions.timeoutMs = timeoutMs;
-      }
-      if (options?.ephemeral) {
-        callOptions.ephemeral = true;
-      }
-      if (options?.signal) {
-        callOptions.signal = options.signal;
-      }
-      await countChromeMcpTabs(profile.name, profile, callOptions);
+      await countChromeMcpTabs(profile.name, profile, {
+        ...(timeoutMs != null ? { timeoutMs } : {}),
+        ...(options?.ephemeral ? { ephemeral: true } : {}),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      });
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
@@ -213,13 +214,19 @@ export function createProfileAvailability({
     );
   };
 
-  const isTransportAvailable = async (timeoutMs?: number, signal?: AbortSignal) => {
+  const isTransportAvailable: AvailabilityOps["isTransportAvailable"] = async (
+    timeoutMs,
+    signal,
+    pageProbe,
+  ) => {
     if (capabilities.usesChromeMcp) {
+      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile, {
         ephemeral: true,
         timeoutMs,
         signal,
+        ...(pageProbe ? { pageProbe } : {}),
       });
       return true;
     }
@@ -437,6 +444,7 @@ export function createProfileAvailability({
           `Browser user data directory not found for profile "${profile.name}": ${profile.userDataDir}`,
         );
       }
+      assertChromeMcpCdpTransportAllowed(profile, getCdpReachabilityPolicy());
       const { ensureChromeMcpAvailable } = await getChromeMcpModule();
       await ensureChromeMcpAvailable(profile.name, profile, { signal });
       await waitForChromeMcpReadyAfterAttach(signal);
@@ -445,7 +453,22 @@ export function createProfileAvailability({
     const current = state();
     const remoteCdp = capabilities.isRemote;
     const attachOnly = profile.attachOnly;
-    const httpReachable = await isHttpReachable(undefined, signal);
+    let httpReachable: boolean;
+    if (capabilities.mode === "local-extension") {
+      const { ensureExtensionRelayForProfile } = await getExtensionRelayModule();
+      const relay = await ensureExtensionRelayForProfile(current, profile, signal);
+      const connected = await relay.bridge.waitForExtensionConnection(
+        signal,
+        CHROME_MCP_ATTACH_READY_WINDOW_MS,
+      );
+      signal.throwIfAborted();
+      httpReachable =
+        connected &&
+        current.extensionRelays?.get(profile.name) === relay &&
+        (await isHttpReachable(undefined, signal));
+    } else {
+      httpReachable = await isHttpReachable(undefined, signal);
+    }
     const launchOptions = launchOptionsForEnsure(options);
 
     if (!httpReachable) {
@@ -551,6 +574,24 @@ export function createProfileAvailability({
   };
 
   const ensureBrowserAvailable = async (options?: BrowserEnsureOptions): Promise<void> => {
+    if (capabilities.mode === "local-extension") {
+      // Gateway authentication needs a concurrent lease before it can send the
+      // hello this caller-owned, abortable readiness operation is waiting for.
+      await withProfileOperationLease({
+        state: state(),
+        runtime,
+        configRevision,
+        signal: options?.signal,
+        run: async (signal) =>
+          await ensureBrowserAvailableOnce(
+            signal,
+            getProfileLifecycle(runtime).generation,
+            options,
+          ),
+      });
+      return;
+    }
+
     const key = ensureOptionsKey(options);
     for (;;) {
       try {
@@ -584,14 +625,24 @@ export function createProfileAvailability({
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
-    assertProfileLifecycleContext({ state: state(), runtime, configRevision });
+    const current = state();
+    assertProfileLifecycleContext({ state: current, runtime, configRevision });
     resetManagedLaunchFailure(runtime);
+    let stoppedOwnedProcess = false;
     const result = await beginProfileTransition({
-      state: state(),
+      state: current,
       runtime,
       reason: "stop requested",
+      afterCleanup: async () => {
+        if (profile.attachOnly || capabilities.mode !== "local-managed") {
+          return;
+        }
+        stoppedOwnedProcess = await stopOwnedOpenClawChrome(current.resolved, profile);
+      },
     });
-    return { stopped: result.stopped || profile.attachOnly || capabilities.isRemote };
+    return {
+      stopped: result.stopped || stoppedOwnedProcess || profile.attachOnly || capabilities.isRemote,
+    };
   };
 
   return {

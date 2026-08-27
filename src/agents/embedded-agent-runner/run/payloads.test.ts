@@ -76,12 +76,17 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("keeps media directives while sanitizing streamed assistant text", () => {
     const payloads = buildPayloads({
       assistantTexts: ["</mm:think>MEDIA:/tmp/reply-image.png\nAttached image"],
+      assistantMessageIndex: 1,
     });
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Attached image");
     expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
     expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      assistantMessageIndex: 1,
+      assistantTranscriptMediaUrls: ["/tmp/reply-image.png"],
+    });
   });
 
   it("falls back to final-answer assistant text when streamed text is unavailable", () => {
@@ -536,32 +541,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
-    // Middleware failures after useful assistant output warn the user without
-    // replacing the successful answer as the terminal payload. Uses a non-exec
-    // mutating tool so the warning still surfaces under the recovery policy.
-    const payloads = buildPayloads({
-      assistantTexts: ["Queued 3 topics."],
-      lastToolError: {
-        toolName: "write",
-        error: "Tool output unavailable due to post-processing error",
-        middlewareError: true,
-        mutatingAction: true,
-      },
-      verboseLevel: "off",
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Queued 3 topics.");
-    expect(payloads[1]).toMatchObject({
-      isError: true,
-    });
-    expect(payloads[1]?.text).toContain("Write failed");
-    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
-      nonTerminalToolErrorWarning: true,
-    });
-  });
-
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
@@ -591,7 +570,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("surfaces exec tool errors for cron sessions even when verbose mode is off", () => {
+  it("keeps timed-out cron exec failures compact when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -605,12 +584,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail:
+      absentDetail:
         "Command timed out after 1800 seconds. The command was terminated, but external side effects may already have completed. Verify the resulting state before retrying. Do not automatically rerun non-idempotent commands. Use a higher timeout only when the command is known to be safe to retry.",
     });
   });
 
-  it("surfaces timed-out exec tool errors for cron-triggered custom session keys", () => {
+  it("keeps timed-out cron-trigger exec failures compact", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -624,11 +603,11 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
-      detail: "Command timed out after 1800 seconds.",
+      absentDetail: "Command timed out after 1800 seconds.",
     });
   });
 
-  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+  it("keeps heartbeat exec commands and paths private without full verbosity", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -641,8 +620,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSingleToolErrorPayload(payloads, {
-      title: "show last 20 lines",
-      detail: "No such file or directory",
+      title: "Exec",
+      absentDetail: "/home/user/.openclaw/workspace/memory/2026-06-04.md",
     });
   });
 
@@ -691,10 +670,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       },
     });
 
-    expect(payloads.at(-1)).toMatchObject({
-      isError: true,
-      text: expect.stringContaining("Message failed"),
-    });
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("The heartbeat check completed.");
     for (const payload of payloads) {
       expect(getReplyPayloadMetadata(payload)?.heartbeatTerminalToolFailure).toEqual({
         toolName: "message",
@@ -867,19 +844,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps stale full-verbose tool errors compact when live verbose is off", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "permission denied" },
-      suppressToolErrorWarnings: () => false,
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Write",
-      absentDetail: "permission denied",
-    });
-  });
-
   it("preserves full-verbose tool error details with static suppression disabled", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "write", error: "permission denied" },
@@ -944,10 +908,14 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         mutatingAction: true,
       },
     },
-  ])("suppresses sessions_send errors for $name", ({ lastToolError }) => {
-    expectNoPayloads({
+  ])("warns for silent sessions_send failures: $name", ({ lastToolError }) => {
+    const payloads = buildPayloads({
       lastToolError,
       verboseLevel: "on",
+    });
+    expectSingleToolErrorPayload(payloads, {
+      title: "Session Send",
+      absentDetail: "delivery timeout",
     });
   });
 

@@ -1,9 +1,11 @@
 // Control UI config module wires vitest behavior.
 import { defineConfig } from "vitest/config";
 import { resolveDefaultVitestPool } from "../test/vitest/vitest.shared.config.ts";
+import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 
 // Node-only tests for pure logic (no Playwright/browser dependency).
 export default defineConfig({
+  plugins: [controlUiLocaleModulesPlugin()],
   test: {
     isolate: false,
     pool: resolveDefaultVitestPool(),

@@ -9,7 +9,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelMessageToolDiscovery,
+  ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
@@ -23,6 +23,7 @@ const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
   "poll-vote",
   "react",
   "reactions",
+  "emoji-list",
   "read",
   "edit",
   "delete",
@@ -77,6 +78,7 @@ function createMatrixExposedActions(params: {
   if (params.gate("reactions")) {
     actions.add("react");
     actions.add("reactions");
+    actions.add("emoji-list");
   }
   if (params.gate("pins")) {
     actions.add("pin");
@@ -92,13 +94,13 @@ function createMatrixExposedActions(params: {
   if (params.gate("channelInfo")) {
     actions.add("channel-info");
   }
-  if (params.encryptionEnabled && params.gate("verification")) {
+  if (params.encryptionEnabled && params.gate("verification") && params.senderIsOwner === true) {
     actions.add("permissions");
   }
   return actions;
 }
 
-function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery["schema"]> {
+function buildMatrixProfileToolSchema(): ChannelMessageToolSchemaContribution {
   return {
     actions: ["set-profile"],
     properties: {
@@ -117,17 +119,23 @@ function buildMatrixProfileToolSchema(): NonNullable<ChannelMessageToolDiscovery
   };
 }
 
+function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: string | null }) {
+  if (!params.accountId && requiresExplicitMatrixDefaultAccount(params.cfg)) {
+    return null;
+  }
+  const account = resolveMatrixAccount({
+    cfg: params.cfg,
+    accountId: params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  });
+  return account.enabled && account.configured ? account : null;
+}
+
 export const matrixMessageActions: ChannelMessageActionAdapter = {
+  providerOwnedReadGates: true,
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
     const resolvedCfg = cfg as CoreConfig;
-    if (!accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)) {
-      return { actions: [], capabilities: [] };
-    }
-    const account = resolveMatrixAccount({
-      cfg: resolvedCfg,
-      accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
-    });
-    if (!account.enabled || !account.configured) {
+    const account = resolveMatrixActionAccount({ cfg: resolvedCfg, accountId });
+    if (!account) {
       return { actions: [], capabilities: [] };
     }
     const gate = createActionGate(account.config.actions);
@@ -137,10 +145,26 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       senderIsOwner,
     });
     const listedActions = Array.from(actions);
+    const schema: ChannelMessageToolSchemaContribution[] = [];
+    if (actions.has("set-profile")) {
+      schema.push(buildMatrixProfileToolSchema());
+    }
+    if (actions.has("react")) {
+      schema.push({
+        actions: ["react", "reactions"],
+        properties: {
+          emoji: Type.Optional(
+            Type.String({
+              description: `Unicode emoji or custom emote shortcode.${actions.has("emoji-list") ? ' Discover room and personal custom emotes with action:"emoji-list".' : ""}`,
+            }),
+          ),
+        },
+      });
+    }
     return {
       actions: listedActions,
       capabilities: ["presentation"],
-      schema: listedActions.includes("set-profile") ? buildMatrixProfileToolSchema() : null,
+      schema: schema.length > 1 ? schema : (schema[0] ?? null),
       mediaSourceParams: listedActions.includes("set-profile")
         ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
         : null,
@@ -149,6 +173,16 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
+  },
+  prepareSendPayload: ({ ctx, payload }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const account = resolveMatrixActionAccount({
+      cfg: ctx.cfg as CoreConfig,
+      accountId: ctx.accountId,
+    });
+    return account && createActionGate(account.config.actions)("messages") ? payload : null;
   },
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
@@ -161,6 +195,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
         },
         cfg as CoreConfig,
         {
+          ...(action === "send" && ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
           mediaLocalRoots,
           readContext: {
             accountId,
@@ -187,6 +222,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       const content = readStringParam(params, "message", {
         required: !mediaUrl,
         allowEmpty: true,
+        trim: false,
       });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
@@ -240,6 +276,23 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
       });
     }
 
+    if (action === "emoji-list") {
+      const roomId =
+        readStringParam(params, "roomId") ??
+        readStringParam(params, "channelId") ??
+        readStringParam(params, "to") ??
+        (ctx.toolContext?.currentChannelProvider === "matrix"
+          ? ctx.toolContext.currentChannelId
+          : undefined);
+      if (!roomId) {
+        throw new Error("Matrix emoji-list requires a roomId or current Matrix conversation.");
+      }
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
+      return await dispatch({ action: "emoji-list", roomId, limit });
+    }
+
     if (action === "read") {
       const limit = readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
@@ -256,7 +309,7 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "edit") {
       const messageId = readStringParam(params, "messageId", { required: true });
-      const content = readStringParam(params, "message", { required: true });
+      const content = readStringParam(params, "message", { required: true, trim: false });
       return await dispatch({
         action: "editMessage",
         roomId: resolveRoomId(),
@@ -319,6 +372,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     }
 
     if (action === "permissions") {
+      if (ctx.senderIsOwner !== true) {
+        throw new ToolAuthorizationError("Matrix verification actions require owner access.");
+      }
       const operation = normalizeLowercaseStringOrEmpty(
         readStringParam(params, "operation") ??
           readStringParam(params, "mode") ??

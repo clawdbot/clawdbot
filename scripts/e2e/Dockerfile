@@ -4,7 +4,7 @@
 # `bare` is a clean Node/Git runner for install/update lanes. `functional`
 # installs the prepared OpenClaw npm tarball into /app for built-app lanes.
 
-FROM node:24-bookworm-slim@sha256:6f7b03f7c2c8e2e784dcf9295400527b9b1270fd37b7e9a7285cf83b6951452d AS e2e-runner
+FROM node:24-bookworm-slim@sha256:3638d9a6fe4030bd716be989438248074489337ba3275657f93595428be4fc03 AS e2e-runner
 
 # openssl provisions short-lived fixture certificates for HTTPS-only provider
 # routes. python3 covers package/plugin install paths that execute helper scripts.
@@ -15,7 +15,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
-RUN npm install -g tsx@4.21.0 --no-fund --no-audit
+RUN npm install -g tsx@4.23.12 --no-fund --no-audit
 
 RUN useradd --create-home --shell /bin/bash appuser \
  && mkdir -p /app \
@@ -45,15 +45,14 @@ FROM bare AS functional-manifest
 # manifest alone so the expensive install layer below is keyed on it and stays
 # a warm-cache hit until dependencies actually change.
 COPY --from=openclaw_package --chown=appuser:appuser openclaw-current.tgz /tmp/openclaw-current.tgz
-# Bundled dependencies ship inside the tarball and are absent from the
-# shrinkwrap, and the packaged lifecycle scripts reference files outside this
-# manifest-only tree; drop both (plus dev deps, which the shrinkwrap omits) so
-# the install below reifies registry dependencies only.
+# Bundled dependencies ship inside the tarball, and the packaged lifecycle
+# scripts reference files outside this manifest-only tree. Drop both plus dev
+# dependencies so the install below reifies registry dependencies only.
 RUN <<'PREPARE_MANIFEST'
 set -eu
 mkdir -p /tmp/openclaw-deps
 tar -xzf /tmp/openclaw-current.tgz -C /tmp/openclaw-deps --strip-components=1 \
-  package/package.json package/npm-shrinkwrap.json
+  package/package.json
 node - <<'NODE'
 const fs = require("node:fs");
 const manifestPath = "/tmp/openclaw-deps/package.json";
@@ -70,14 +69,11 @@ PREPARE_MANIFEST
 
 FROM bare AS functional-deps
 
-# Cache key: normalized manifest + shrinkwrap contents only (COPY hashes file
-# content, not the tarball), so unchanged dependencies skip the full reify.
+# Cache key: normalized manifest contents only, so unchanged dependencies skip
+# the full reify.
 COPY --from=functional-manifest --chown=appuser:appuser /tmp/openclaw-deps /tmp/openclaw-deps
-# `npm install` (not `npm ci`) because the generated shrinkwrap is not
-# guaranteed to pass `npm ci`'s strict manifest sync check; the shrinkwrap
-# still pins every synced edge, and this reify follows it more faithfully than
-# `npm install -g <tarball>` does. Drop npm's hidden tree manifest so the
-# copied node_modules matches a plain package install.
+# Drop npm's hidden tree manifest so the copied node_modules matches a plain
+# package install.
 # The pinned Node image owns uid 1000, so useradd assigns appuser uid/gid 1001.
 RUN --mount=type=cache,target=/home/appuser/.npm,uid=1001,gid=1001,sharing=locked \
     cd /tmp/openclaw-deps \

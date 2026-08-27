@@ -1,9 +1,10 @@
-// Openrouter tests cover video generation provider plugin behavior.
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   expectExplicitVideoGenerationCapabilities,
   expectUnifiedModelCatalogEntries,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+// Openrouter tests cover video generation provider plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildOpenRouterVideoGenerationProvider,
@@ -142,12 +143,7 @@ function requireFetchCallHeaders(index: number): Headers {
   return new Headers(init.headers);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
@@ -353,6 +349,52 @@ describe("openrouter video generation provider", () => {
       enabled: true,
       maxInputImages: 2,
     });
+  });
+
+  it("keeps valid rows when OpenRouter video catalog data is mixed with malformed entries", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+      releasedJson({
+        data: [null, "malformed-row", ["nested-array"], { id: "google/veo-3.1", name: "Veo 3.1" }],
+      }),
+    );
+
+    const rows = await listOpenRouterVideoModelCatalog({
+      config: {} as never,
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    expect(rows?.map((row) => row.model)).toEqual(["google/veo-3.1"]);
+  });
+
+  it("returns an empty catalog for a malformed OpenRouter video catalog envelope", async () => {
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(releasedJson(null));
+
+    const rows = await listOpenRouterVideoModelCatalog({
+      config: {} as never,
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: "k",
+        discoveryApiKey: "d",
+        mode: "api_key" as const,
+        source: "env" as const,
+      }),
+    });
+
+    expect(rows).toEqual([]);
   });
 
   it("lets configured auth replace the OpenRouter catalog default", async () => {
@@ -637,10 +679,11 @@ describe("openrouter video generation provider", () => {
       releasedJson({
         id: "job-123",
         polling_url: "/api/v1/videos/job-123",
-        status: "pending",
+        status: "in_progress",
       }),
     );
     fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce(releasedJson({ id: "job-123", status: "in_progress" }))
       .mockResolvedValueOnce(
         releasedJson({
           id: "job-123",
@@ -756,10 +799,16 @@ describe("openrouter video generation provider", () => {
     expect(requireFetchCallHeaders(0).get("authorization")).toBe("Bearer openrouter-key");
     expectOpenRouterFetchCall(
       1,
+      "https://custom.openrouter.test/api/v1/videos/job-123",
+      "openrouter-video-status",
+    );
+    expectOpenRouterFetchCall(
+      2,
       "https://custom.openrouter.test/api/v1/videos/job-123/content?index=0",
       "openrouter-video-download",
     );
-    expect(requireFetchCallHeaders(1).get("authorization")).toBe("Bearer openrouter-key");
+    expect(requireFetchCallHeaders(2).get("authorization")).toBe("Bearer openrouter-key");
+    expect(waitProviderOperationPollIntervalMock).toHaveBeenCalledOnce();
     const { video, buffer } = requireGeneratedVideoBuffer(result, 0);
     expect(buffer.toString()).toBe("mp4-bytes");
     expect(video.mimeType).toBe("video/mp4");

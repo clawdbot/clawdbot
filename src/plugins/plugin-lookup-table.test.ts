@@ -5,9 +5,19 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
-const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
-const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() => vi.fn());
-const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
+const {
+  listPotentialConfiguredChannelIds,
+  listExplicitlyDisabledChannelIdsForConfig,
+  loadPluginManifestRegistryForInstalledIndex,
+} = vi.hoisted(() => {
+  // Shared plugin workers must load the lookup graph under this file's manifest mocks.
+  vi.resetModules();
+  return {
+    listPotentialConfiguredChannelIds: vi.fn(),
+    listExplicitlyDisabledChannelIdsForConfig: vi.fn(),
+    loadPluginManifestRegistryForInstalledIndex: vi.fn(),
+  };
+});
 
 vi.mock("../channels/config-presence.js", () => ({
   hasMeaningfulChannelConfig: (value: unknown) =>
@@ -22,6 +32,15 @@ vi.mock("../channels/config-presence.js", () => ({
     env: NodeJS.ProcessEnv,
     options?: { includePersistedAuthState?: boolean },
   ) => listPotentialConfiguredChannelIds(config, env, options),
+  listPotentialConfiguredChannelPresenceSignals: (
+    config: OpenClawConfig,
+    env: NodeJS.ProcessEnv,
+    options?: { includePersistedAuthState?: boolean },
+  ) =>
+    listPotentialConfiguredChannelIds(config, env, options).map((channelId: string) => ({
+      channelId,
+      source: "env" as const,
+    })),
   listExplicitlyDisabledChannelIdsForConfig: (config: OpenClawConfig) =>
     listExplicitlyDisabledChannelIdsForConfig(config),
 }));
@@ -78,9 +97,6 @@ function createIndex(
       startup: {
         sidecar: false,
         memory: false,
-        deferConfiguredChannelFullLoadUntilAfterListen: Boolean(
-          plugin.startupDeferConfiguredChannelFullLoadUntilAfterListen,
-        ),
         agentHarnesses: [],
         configPaths: plugin.activation?.onConfigPaths ?? [],
       },
@@ -236,7 +252,6 @@ describe("loadPluginLookUpTable", () => {
     expect(table.metrics.indexPluginCount).toBe(2);
     expect(table.metrics.manifestPluginCount).toBe(2);
     expect(table.metrics.startupPluginCount).toBe(1);
-    expect(table.metrics.deferredChannelPluginCount).toBe(0);
     for (const metricName of [
       "registrySnapshotMs",
       "manifestRegistryMs",
@@ -259,8 +274,62 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);
     expect(table.startup.channelPluginIds).toEqual(["telegram"]);
-    expect(table.startup.configuredDeferredChannelPluginIds).toStrictEqual([]);
     expect(table.startup.pluginIds).toEqual(["telegram"]);
+  });
+
+  it("memoizes prepared lookup tables by metadata snapshot and startup scope", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      plugins: { slots: { memory: "none" } },
+    } as OpenClawConfig;
+    const env = { TELEGRAM_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv;
+    const index = createIndex(plugins, {
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins,
+      diagnostics: [],
+    });
+    listPotentialConfiguredChannelIds.mockImplementation(
+      (
+        _config: OpenClawConfig,
+        _env: NodeJS.ProcessEnv,
+        options?: { ambientEnvTriggers?: string },
+      ) => (options?.ambientEnvTriggers === "suppress" ? [] : ["telegram"]),
+    );
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env, index });
+
+    const ambient = loadPluginLookUpTable({ config, env, index, metadataSnapshot });
+    const repeatedAmbient = loadPluginLookUpTable({ config, env, index, metadataSnapshot });
+    const suppressed = loadPluginLookUpTable({
+      config,
+      env,
+      index,
+      metadataSnapshot,
+      ambientEnvTriggers: "suppress",
+    });
+    const repeatedSuppressed = loadPluginLookUpTable({
+      config,
+      env,
+      index,
+      metadataSnapshot,
+      ambientEnvTriggers: "suppress",
+    });
+
+    expect(repeatedAmbient).toBe(ambient);
+    expect(repeatedSuppressed).toBe(suppressed);
+    expect(suppressed).not.toBe(ambient);
+    expect(ambient.startup.pluginIds).toEqual(["telegram"]);
+    expect(suppressed.startup.pluginIds).toStrictEqual([]);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
 
   it("excludes ambient-only channels from the suppressed gateway startup plan", async () => {

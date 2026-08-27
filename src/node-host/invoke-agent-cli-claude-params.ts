@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 const MAX_ARG_COUNT = 128;
@@ -53,6 +54,7 @@ const VALUE_ARGS = new Set([
 const ENV_ALLOWLIST = new Set([
   "ANTHROPIC_API_KEY",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "FORCE_COLOR",
   "LANG",
@@ -72,6 +74,7 @@ const CLEAR_ENV_ALLOWLIST = new Set([
   "ANTHROPIC_UNIX_SOCKET",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_DISABLE_1M_CONTEXT",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
   "CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
@@ -124,12 +127,6 @@ export type ClaudeCliNodeRunResult = {
   truncated: boolean;
   timeoutKind?: "hard" | "idle";
 };
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function decodeJson(raw?: string | null): unknown {
   if (!raw) {

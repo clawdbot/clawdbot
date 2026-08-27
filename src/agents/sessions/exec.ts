@@ -2,11 +2,11 @@
  * Shared command execution utilities for extensions and custom tools.
  */
 
-import { StringDecoder } from "node:string_decoder";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
+import { createCommandTerminationController } from "../../process/exec-termination.js";
 import { spawnCommand } from "../../process/exec.js";
-import { killProcessTree } from "../../process/kill-tree.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 5000;
@@ -42,9 +42,10 @@ type OutputCapture = {
   text: string;
   truncatedChars: number;
 };
+type OutputDecoder = ReturnType<typeof createWindowsOutputDecoder>;
 
-function decodeCapturedOutput(decoder: StringDecoder, chunk: Buffer | string): string {
-  return Buffer.isBuffer(chunk) ? decoder.write(chunk) : `${decoder.end()}${chunk}`;
+function decodeCapturedOutput(decoder: OutputDecoder, chunk: Buffer | string): string {
+  return Buffer.isBuffer(chunk) ? decoder.decode(chunk) : `${decoder.flush()}${chunk}`;
 }
 
 function clampMaxOutputChars(value: number | undefined): number {
@@ -89,22 +90,37 @@ export async function execCommand(
   options?: ExecOptions,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
+    const cancelController = new AbortController();
     const proc = spawnCommand([command, ...args], {
       buffer: false,
+      cancelSignal: cancelController.signal,
       cwd,
       detached: process.platform !== "win32",
+      forceKillAfterDelay: FORCE_KILL_GRACE_MS,
       reject: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const releaseOutput = releaseChildProcessOutputAfterExit(proc);
+    const releaseOutput = releaseChildProcessOutputAfterExit(proc.nodeChildProcess);
+    let childExited = false;
+    proc.nodeChildProcess.once("exit", () => {
+      childExited = true;
+    });
+    let commandSettled = false;
+    const terminationController = createCommandTerminationController({
+      child: proc.nodeChildProcess,
+      cancelController,
+      processTree: { mode: "graceful" },
+      killGraceMs: FORCE_KILL_GRACE_MS,
+      isChildExited: () => childExited,
+      isCommandSettled: () => commandSettled,
+    });
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
     let stderr: OutputCapture = { text: "", truncatedChars: 0 };
-    const stdoutDecoder = new StringDecoder("utf8");
-    const stderrDecoder = new StringDecoder("utf8");
+    const stdoutDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
+    const stderrDecoder = createWindowsOutputDecoder({ preserveUtf8Bom: true });
     let killed = false;
     let timeoutId: NodeJS.Timeout | undefined;
-    let forceKillTimer: NodeJS.Timeout | undefined;
     let settled = false;
     const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
     const truncateOutput = options?.maxOutputChars !== undefined;
@@ -115,27 +131,26 @@ export async function execCommand(
         killProcess();
       }
     };
-    const finish = (code: number) => {
+    const finish = async (code: number) => {
       if (settled) {
         return;
       }
       settled = true;
+      commandSettled = true;
       if (timeoutId) {
         clearTimeout(timeoutId);
-      }
-      if (forceKillTimer) {
-        clearTimeout(forceKillTimer);
       }
       if (options?.signal) {
         options.signal.removeEventListener("abort", killProcess);
       }
+      await terminationController.settle();
       const stdoutBeforeFlush = stdout.truncatedChars;
-      stdout = appendCapturedOutput(stdout, stdoutDecoder.end(), maxOutputChars, truncateOutput);
+      stdout = appendCapturedOutput(stdout, stdoutDecoder.flush(), maxOutputChars, truncateOutput);
       if (!truncateOutput && stdout.truncatedChars > stdoutBeforeFlush && !outputLimitExceeded) {
         outputLimitExceeded = "stdout";
       }
       const stderrBeforeFlush = stderr.truncatedChars;
-      stderr = appendCapturedOutput(stderr, stderrDecoder.end(), maxOutputChars, truncateOutput);
+      stderr = appendCapturedOutput(stderr, stderrDecoder.flush(), maxOutputChars, truncateOutput);
       if (!truncateOutput && stderr.truncatedChars > stderrBeforeFlush && !outputLimitExceeded) {
         outputLimitExceeded = "stderr";
       }
@@ -161,19 +176,8 @@ export async function execCommand(
     const killProcess = () => {
       if (!killed) {
         killed = true;
-        if (proc.pid) {
-          killProcessTree(proc.pid, {
-            detached: process.platform !== "win32",
-            graceMs: FORCE_KILL_GRACE_MS,
-          });
-        } else {
-          proc.kill("SIGTERM");
-          forceKillTimer = setTimeout(() => {
-            if (!settled) {
-              proc.kill("SIGKILL");
-            }
-          }, FORCE_KILL_GRACE_MS);
-          forceKillTimer.unref?.();
+        if (!terminationController.terminate()) {
+          cancelController.abort();
         }
       }
     };
@@ -226,12 +230,8 @@ export async function execCommand(
     });
 
     void proc
-      .then((result) => {
-        finish(result.exitCode ?? (result.failed ? 1 : 0));
-      })
-      .catch(() => {
-        finish(1);
-      })
+      .then((result) => finish(result.exitCode ?? (result.failed ? 1 : 0)))
+      .catch(() => finish(1))
       .finally(releaseOutput);
   });
 }

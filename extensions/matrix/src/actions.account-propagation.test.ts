@@ -76,11 +76,61 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.options).toMatchObject({ mediaLocalRoots: undefined });
   });
 
+  it.each([
+    { action: "send" as const, expectedAction: "sendMessage", message: "    @room" },
+    {
+      action: "send" as const,
+      expectedAction: "sendMessage",
+      message: "    @alice:example.org",
+    },
+    { action: "edit" as const, expectedAction: "editMessage", message: "    @room" },
+    {
+      action: "edit" as const,
+      expectedAction: "editMessage",
+      message: "    @alice:example.org",
+    },
+  ])(
+    "preserves leading Markdown indentation for $action with $message",
+    async ({ action, expectedAction, message }) => {
+      await matrixMessageActions.handleAction?.(
+        createContext({
+          action,
+          accountId: "ops",
+          params:
+            action === "send"
+              ? { to: "room:!room:example", message }
+              : { roomId: "!room:example", messageId: "$original", message },
+        }),
+      );
+
+      expect(matrixActionCall().input).toMatchObject({
+        action: expectedAction,
+        accountId: "ops",
+        content: message,
+      });
+    },
+  );
+
+  it.each(["send", "edit"] as const)("rejects a missing %s message", async (action) => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action,
+          params:
+            action === "send"
+              ? { to: "room:!room:example" }
+              : { roomId: "!room:example", messageId: "$original" },
+        }),
+      ),
+    ).rejects.toThrow("message required");
+  });
+
   it("forwards accountId for permissions actions", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
         action: "permissions",
         accountId: "ops",
+        senderIsOwner: true,
         params: {
           operation: "verification-list",
         },
@@ -92,6 +142,25 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.input.accountId).toBe("ops");
     expect(call.cfg).toBeTypeOf("object");
     expect(call.options).toMatchObject({ mediaLocalRoots: undefined });
+  });
+
+  it("rejects verification actions without sender owner context", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: "permissions",
+          accountId: "ops",
+          senderIsOwner: false,
+          params: {
+            operation: "verification-bootstrap",
+            forceResetCrossSigning: true,
+            recoveryKey: "test-recovery-key",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Matrix verification actions require owner access.");
+
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
   });
 
   it("forwards accountId for self-profile updates", async () => {
@@ -171,15 +240,21 @@ describe("matrixMessageActions account propagation", () => {
   });
 
   it("forwards mediaLocalRoots for media sends", async () => {
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw-matrix-test"],
+      readFile: async () => Buffer.from("chart"),
+      workspaceDir: "/tmp/openclaw-matrix-test",
+    };
     await matrixMessageActions.handleAction?.(
       createContext({
         action: "send",
         accountId: "ops",
-        mediaLocalRoots: ["/tmp/openclaw-matrix-test"],
+        mediaAccess,
+        mediaLocalRoots: mediaAccess.localRoots,
         params: {
           to: "room:!room:example",
           message: "hello",
-          media: "file:///tmp/photo.png",
+          media: "chart.png",
         },
       }),
     );
@@ -187,8 +262,9 @@ describe("matrixMessageActions account propagation", () => {
     const call = matrixActionCall();
     expect(call.input.action).toBe("sendMessage");
     expect(call.input.accountId).toBe("ops");
-    expect(call.input.mediaUrl).toBe("file:///tmp/photo.png");
+    expect(call.input.mediaUrl).toBe("chart.png");
     expect(call.cfg).toBeTypeOf("object");
+    expect(call.options.mediaAccess).toBe(mediaAccess);
     expect(call.options).toMatchObject({ mediaLocalRoots: ["/tmp/openclaw-matrix-test"] });
   });
 
@@ -263,5 +339,49 @@ describe("matrixMessageActions account propagation", () => {
         currentChatType: "direct",
       },
     });
+  });
+
+  it("defaults custom-emote discovery to the bound current Matrix conversation", async () => {
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: "emoji-list",
+        accountId: "ops",
+        requesterAccountId: "ops",
+        params: { limit: 3 },
+        toolContext: {
+          currentChannelId: "room:!current:example.org",
+          currentChannelProvider: "matrix",
+          currentChatType: "group",
+        },
+      }),
+    );
+
+    expect(matrixActionCall().input).toMatchObject({
+      action: "emoji-list",
+      accountId: "ops",
+      roomId: "room:!current:example.org",
+      limit: 3,
+    });
+    expect(matrixActionCall().options.readContext).toMatchObject({
+      requesterAccountId: "ops",
+      currentChannelId: "room:!current:example.org",
+      currentChannelProvider: "matrix",
+    });
+  });
+
+  it("rejects custom-emote discovery without an explicit room or bound Matrix conversation", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
+        createContext({
+          action: "emoji-list",
+          params: {},
+          toolContext: {
+            currentChannelId: "room:!foreign:example.org",
+            currentChannelProvider: "slack",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Matrix emoji-list requires a roomId or current Matrix conversation.");
+    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
   });
 });

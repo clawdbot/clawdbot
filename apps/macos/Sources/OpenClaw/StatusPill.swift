@@ -4,6 +4,11 @@ struct StatusPill: View {
     let text: String
     let tint: Color
 
+    /// Protocol identifiers and runtime values are operator data, not localized UI copy.
+    static func verbatim(_ text: String, tint: Color) -> Self {
+        Self(text: text, tint: tint)
+    }
+
     var body: some View {
         Text(self.text)
             .font(.caption2.weight(.semibold))

@@ -15,6 +15,63 @@ import {
 
 const MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX = "openclaw.matrix.thread-relations-start:";
 
+function resolveMatrixReplacementTarget(event: MatrixRawEvent): string | undefined {
+  const relation = event.content["m.relates_to"];
+  if (!relation || typeof relation !== "object") {
+    return undefined;
+  }
+  const replacement = relation as { rel_type?: unknown; event_id?: unknown };
+  return replacement.rel_type === "m.replace" && typeof replacement.event_id === "string"
+    ? replacement.event_id
+    : undefined;
+}
+
+function resolveLatestMatrixReplacements(events: readonly MatrixRawEvent[]) {
+  const pageEventIds = new Set(events.map((event) => event.event_id));
+  const originals = new Map(
+    events
+      .filter(
+        (event) =>
+          event.type === EventType.RoomMessage &&
+          !event.unsigned?.redacted_because &&
+          event.state_key === undefined &&
+          !resolveMatrixReplacementTarget(event),
+      )
+      .map((event) => [event.event_id, event] as const),
+  );
+  const replacements = new Map<string, MatrixRawEvent>();
+
+  for (const event of events) {
+    const targetId = resolveMatrixReplacementTarget(event);
+    const original = targetId ? originals.get(targetId) : undefined;
+    const newContent = event.content["m.new_content"];
+    if (
+      !targetId ||
+      !original ||
+      event.sender !== original.sender ||
+      event.type !== original.type ||
+      event.state_key !== undefined ||
+      event.unsigned?.redacted_because ||
+      !newContent ||
+      typeof newContent !== "object" ||
+      Array.isArray(newContent)
+    ) {
+      continue;
+    }
+
+    const latest = replacements.get(targetId);
+    if (
+      !latest ||
+      event.origin_server_ts > latest.origin_server_ts ||
+      (event.origin_server_ts === latest.origin_server_ts && event.event_id > latest.event_id)
+    ) {
+      replacements.set(targetId, event);
+    }
+  }
+
+  return { pageEventIds, replacements };
+}
+
 export async function sendMatrixMessage(
   to: string,
   content: string | undefined,
@@ -31,6 +88,7 @@ export async function sendMatrixMessage(
   return await sendMessageMatrix(to, content, {
     cfg: opts.cfg,
     mediaUrl: opts.mediaUrl,
+    ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
     mediaLocalRoots: opts.mediaLocalRoots,
     replyToId: opts.replyToId,
     threadId: opts.threadId,
@@ -50,11 +108,10 @@ export async function editMatrixMessage(
   if (!opts.cfg) {
     throw new Error("Matrix message actions require a resolved runtime config.");
   }
-  const trimmed = content.trim();
-  if (!trimmed) {
+  if (!content.trim()) {
     throw new Error("Matrix edit requires content");
   }
-  const eventId = await editMessageMatrix(roomId, messageId, trimmed, {
+  const eventId = await editMessageMatrix(roomId, messageId, content.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId ?? undefined,
     client: opts.client,
@@ -134,6 +191,9 @@ export async function readMatrixMessages(
       resolvedRoom,
       relationPage ? (rootFillsThreadPage ? [] : relationPage.events) : (flatPage?.chunk ?? []),
     );
+    // Matrix edits are separate timeline events; apply only the newest valid,
+    // same-sender replacement so streaming updates cannot duplicate a message.
+    const { pageEventIds, replacements } = resolveLatestMatrixReplacements(hydratedChunk);
     const messages: MatrixMessageSummary[] = [];
     if (threadRootSummary) {
       messages.push(threadRootSummary);
@@ -149,7 +209,37 @@ export async function readMatrixMessages(
         if (threadId && event.event_id === threadId) {
           continue;
         }
-        messages.push(summarizeMatrixRawEvent(event));
+        const replacementTarget = resolveMatrixReplacementTarget(event);
+        if (replacementTarget) {
+          const newContent = event.content["m.new_content"];
+          if (
+            pageEventIds.has(replacementTarget) ||
+            !newContent ||
+            typeof newContent !== "object" ||
+            Array.isArray(newContent)
+          ) {
+            continue;
+          }
+          // Incremental pages can contain an edit without its original; keep
+          // the valid update instead of silently dropping the visible change.
+          messages.push(summarizeMatrixRawEvent(event));
+          continue;
+        }
+        const replacement = replacements.get(event.event_id);
+        const originalRelation = event.content["m.relates_to"];
+        messages.push(
+          summarizeMatrixRawEvent(
+            replacement
+              ? {
+                  ...event,
+                  content: {
+                    ...(replacement.content["m.new_content"] as Record<string, unknown>),
+                    "m.relates_to": originalRelation,
+                  },
+                }
+              : event,
+          ),
+        );
         continue;
       }
       if (!isPollEventType(event.type)) {
@@ -199,11 +289,19 @@ function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: s
   }
   const encoded = raw.slice(MATRIX_THREAD_RELATIONS_START_CURSOR_PREFIX.length);
   try {
-    const decoded = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as {
+    const bytes = Buffer.from(encoded, "base64url");
+    if (bytes.toString("base64url") !== encoded) {
+      return false;
+    }
+    const decoded = JSON.parse(bytes.toString("utf8")) as {
       v?: unknown;
       threadId?: unknown;
     };
-    return decoded.v === 1 && decoded.threadId === threadId;
+    return (
+      decoded.v === 1 &&
+      decoded.threadId === threadId &&
+      encodeMatrixThreadRelationsStartCursor(decoded.threadId) === raw
+    );
   } catch {
     return false;
   }

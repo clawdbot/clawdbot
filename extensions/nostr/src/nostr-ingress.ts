@@ -1,12 +1,15 @@
 // Nostr plugin module owns durable relay-event admission and replay draining.
 import type { Event } from "nostr-tools";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import {
   inspectNostrIngressEvent,
   isNostrIngressRecord,
@@ -18,11 +21,6 @@ import {
 import { getNostrRuntime } from "./runtime.js";
 
 const NOSTR_INGRESS_POLL_INTERVAL_MS = 500;
-const NOSTR_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const NOSTR_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const NOSTR_INGRESS_COMPLETED_MAX_ENTRIES = 100_000;
-const NOSTR_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const NOSTR_INGRESS_FAILED_MAX_ENTRIES = 100_000;
 const NOSTR_INGRESS_APPEND_RETRY_MS = [0, 100, 300] as const;
 
 type PreparedNostrAdmission = {
@@ -41,15 +39,12 @@ type NostrIngressMonitor = {
   waitForIdle: () => Promise<void>;
 };
 
-export class NostrIngressAdmissionRejectedError extends Error {
-  readonly reason: "backpressure" | "oversized-event" | "rate-limited";
-
-  constructor(reason: "backpressure" | "oversized-event" | "rate-limited", message: string) {
-    super(message);
-    this.name = "NostrIngressAdmissionRejectedError";
-    this.reason = reason;
-  }
-}
+export const NostrIngressAdmissionRejectedError = createChannelIngressError<
+  "backpressure" | "oversized-event" | "rate-limited"
+>("NostrIngressAdmissionRejectedError", { withReason: true });
+export type NostrIngressAdmissionRejectedError = InstanceType<
+  typeof NostrIngressAdmissionRejectedError
+>;
 
 function deserializeNostrIngressEvent(rawEvent: string, claimedId: string): Event {
   let parsed: unknown;
@@ -114,11 +109,6 @@ export function createNostrIngress(options: {
     return queue;
   };
 
-  const legacyMigration = migrateNostrLegacyRecentEventIds({
-    queue: getQueue(),
-    eventIds: options.legacyEventIds ?? [],
-  });
-
   const monitor = createChannelIngressMonitor<
     Event,
     { receivedAt: number; rawEvent: string },
@@ -167,11 +157,8 @@ export function createNostrIngress(options: {
     deliver: (event, lifecycle) => options.deliver(event, lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: NOSTR_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: NOSTR_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: NOSTR_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: NOSTR_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: NOSTR_INGRESS_FAILED_MAX_ENTRIES,
+      completedMaxEntries: 100_000,
+      failedMaxEntries: 100_000,
     },
     drain: {
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
@@ -184,13 +171,20 @@ export function createNostrIngress(options: {
     createStoppedError,
     onError: (error) => options.onError?.(error as Error, "ingress drain"),
   });
-  const monitorStart = legacyMigration.then(() => {
+  const monitorStart = (async () => {
+    // Open through the shared monitor first so a denied queue is classified for
+    // gateway health before Nostr's legacy tombstone migration touches it.
+    monitor.ensureQueueAvailable();
+    await migrateNostrLegacyRecentEventIds({
+      queue: getQueue(),
+      eventIds: options.legacyEventIds ?? [],
+    });
     // stop() may run while the legacy migration is pending. Do not let that
     // deferred startup revive polling after shutdown has begun.
     if (!stopping) {
       monitor.start();
     }
-  });
+  })();
   void monitorStart.catch((error: unknown) => options.onError?.(error as Error, "ingress drain"));
 
   // Admission stays local because relay ack needs accepted/duplicate plus rate,
@@ -244,7 +238,7 @@ export function createNostrIngress(options: {
   };
 
   const admitOnce = async (prepared: PreparedNostrAdmission): Promise<"accepted" | "duplicate"> => {
-    await legacyMigration;
+    await monitorStart;
     const pending = await getQueue().listPending({ limit: options.maxPendingEvents });
     const claims = await getQueue().listClaims();
     if (pending.length + claims.length >= options.maxPendingEvents) {
@@ -254,28 +248,29 @@ export function createNostrIngress(options: {
       );
     }
 
-    let lastError: unknown;
-    for (const delayMs of NOSTR_INGRESS_APPEND_RETRY_MS) {
-      if (delayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        const result = await getQueue().enqueue(prepared.facts.eventId, prepared.payload, {
-          receivedAt: prepared.receivedAt,
-          laneKey: prepared.facts.laneKey,
-        });
-        options.afterDurableAppend(prepared.event);
-        monitor.requestDrain();
-        return result.kind === "accepted" ? "accepted" : "duplicate";
-      } catch (error) {
-        lastError = error;
-      }
+    try {
+      return await retryAsync(
+        async () => {
+          const result = await getQueue().enqueue(prepared.facts.eventId, prepared.payload, {
+            receivedAt: prepared.receivedAt,
+            laneKey: prepared.facts.laneKey,
+          });
+          options.afterDurableAppend(prepared.event);
+          monitor.requestDrain();
+          return result.kind === "accepted" ? "accepted" : "duplicate";
+        },
+        {
+          attempts: NOSTR_INGRESS_APPEND_RETRY_MS.length,
+          minDelayMs: 0,
+          delayMs: ({ attempt }) => NOSTR_INGRESS_APPEND_RETRY_MS[attempt] ?? 0,
+          sleep: (delayMs) => sleepWithAbort(delayMs),
+        },
+      );
+    } catch (error) {
+      throw new Error(`Nostr durable admission failed: ${formatErrorMessage(error)}`, {
+        cause: error,
+      });
     }
-    throw new Error(`Nostr durable admission failed: ${formatErrorMessage(lastError)}`, {
-      cause: lastError,
-    });
   };
 
   return {

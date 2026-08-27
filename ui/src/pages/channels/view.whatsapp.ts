@@ -93,7 +93,7 @@ export function renderWhatsAppCard(params: {
         ? html`
             <div class="settings-row settings-row--stacked">
               <div class="qr-wrap">
-                <img src=${props.whatsappQrDataUrl} alt="WhatsApp QR" />
+                <img src=${props.whatsappQrDataUrl} alt=${t("channels.setup.whatsappQrAlt")} />
               </div>
             </div>
           `

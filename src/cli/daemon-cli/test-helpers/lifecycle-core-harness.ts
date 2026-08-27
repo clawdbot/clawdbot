@@ -5,7 +5,7 @@ import type { MockFn } from "../../../test-utils/vitest-mock-fn.js";
 import { createCliRuntimeCapture } from "../../test-runtime-capture.js";
 
 const lifecycleRuntimeCapture = createCliRuntimeCapture();
-export const runtimeLogs = lifecycleRuntimeCapture.runtimeLogs;
+export const lifecycleRuntimeLogs = lifecycleRuntimeCapture.runtimeLogs;
 type LifecycleRuntimeHarness = typeof lifecycleRuntimeCapture.defaultRuntime;
 
 type LifecycleServiceHarness = GatewayService & {
@@ -20,7 +20,27 @@ type LifecycleServiceHarness = GatewayService & {
   restart: MockFn<GatewayService["restart"]>;
 };
 
-export const defaultRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
+export const lifecycleTestRuntime: LifecycleRuntimeHarness = lifecycleRuntimeCapture.defaultRuntime;
+
+export function createGatewayUninstallArgs() {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    opts: { json: true as const },
+    stopBeforeUninstall: true,
+    assertNotLoadedAfterUninstall: true,
+  };
+}
+
+export function createGatewayServiceRunArgs(checkTokenDrift?: boolean) {
+  return {
+    serviceNoun: "Gateway",
+    service,
+    renderStartHints: () => [],
+    opts: { json: true as const },
+    ...(checkTokenDrift ? { checkTokenDrift } : {}),
+  };
+}
 
 export const service: LifecycleServiceHarness = {
   label: "TestService",

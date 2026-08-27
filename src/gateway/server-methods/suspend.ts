@@ -28,13 +28,18 @@ function schedulerRecoveryError(retryAfterMs: number) {
 
 export const suspendHandlers: GatewayRequestHandlers = {
   "gateway.suspend.prepare": async ({ respond, params, context }) => {
-    if (!validateGatewaySuspendPrepareParams(params)) {
+    if (
+      !validateGatewaySuspendPrepareParams(params) ||
+      (params.drain === true && params.terminalPolicy === "terminate")
+    ) {
       respond(false, undefined, invalidParams("gateway.suspend.prepare"));
       return;
     }
     const requestId = params.requestId.trim();
     const result = prepareGatewaySuspend({
       requestId,
+      terminalPolicy: params.terminalPolicy ?? "preserve",
+      ...(params.drain === true ? { drain: true } : {}),
       pauseScheduling: () => context.cron.pauseScheduling(),
       resumeScheduling: () => context.cron.resumeScheduling(),
       inspect: createGatewayServerActiveWorkInspectors(context),

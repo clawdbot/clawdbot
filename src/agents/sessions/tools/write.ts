@@ -13,6 +13,7 @@ import { dirname } from "node:path";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { structuredPatch } from "diff";
 import { Type } from "typebox";
+import { isMissingPathError } from "../../../infra/errors.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -20,6 +21,7 @@ import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
+import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
   invalidArgText,
@@ -74,10 +76,10 @@ export interface WriteOperations {
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
   mkdir: (dir: string) => Promise<void>;
-  /** Optional readback used to recover when a write succeeded but the tool aborted before returning */
-  readFile?: (absolutePath: string) => Promise<Buffer | string>;
-  /** Optional stat used to avoid reporting success for files that already matched before execution */
-  statFile?: (absolutePath: string) => Promise<WriteToolFileStat | null>;
+  /** Read persisted content before reporting success */
+  readFile: (absolutePath: string) => Promise<Buffer | string>;
+  /** Stat the target for prechecks and persisted-file verification */
+  statFile: (absolutePath: string) => Promise<PersistedFileStat | null>;
 }
 
 const defaultWriteOperations: WriteOperations = {
@@ -93,12 +95,7 @@ const defaultWriteOperations: WriteOperations = {
         mtimeMs: stat.mtimeMs,
       } as const;
     } catch (error) {
-      if (
-        error &&
-        typeof error === "object" &&
-        "code" in error &&
-        (error as { code?: unknown }).code === "ENOENT"
-      ) {
+      if (isMissingPathError(error)) {
         return null;
       }
       throw error;
@@ -111,15 +108,9 @@ export interface WriteToolOptions {
   operations?: WriteOperations;
 }
 
-type WriteToolFileStat = {
-  type: "file" | "directory" | "other";
-  size: number;
-  mtimeMs?: number;
-};
-
 type WriteToolPrecheck = {
   state: "different" | "same" | "unknown";
-  beforeStat?: WriteToolFileStat | null;
+  beforeStat?: PersistedFileStat | null;
   beforeText?: string;
   readAttempted?: boolean;
 };
@@ -263,7 +254,7 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
 function formatWriteCall(
   args: { path?: string; file_path?: string; content?: string } | undefined,
   options: ToolRenderResultOptions,
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   cache: WriteHighlightCache | undefined,
 ): string {
   const rawPath = str(args?.file_path ?? args?.path);
@@ -304,7 +295,7 @@ function formatWriteResult(
     }>;
     isError?: boolean;
   },
-  theme: typeof import("../../modes/interactive/theme/theme.js").theme,
+  theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
 ): string | undefined {
   if (!result.isError) {
     return undefined;
@@ -320,12 +311,10 @@ function formatWriteResult(
 }
 
 function isMissingFileError(error: unknown): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  if ("code" in error && (error as { code?: unknown }).code === "ENOENT") {
+  if (isMissingPathError(error)) {
     return true;
   }
+  // Injected write operations may preserve only their legacy human-readable error.
   return error instanceof Error && error.message.includes("No such file or directory");
 }
 
@@ -337,7 +326,7 @@ async function readOriginalWriteState(
   if (!ops.statFile) {
     return { state: "unknown" };
   }
-  let stat: WriteToolFileStat | null;
+  let stat: PersistedFileStat | null;
   try {
     stat = await ops.statFile(absolutePath);
   } catch (error) {
@@ -465,7 +454,7 @@ async function resolveWriteDetails(params: {
 
 async function didWriteMetadataChange(
   absolutePath: string,
-  beforeStat: WriteToolFileStat | null | undefined,
+  beforeStat: PersistedFileStat | null | undefined,
   ops: WriteOperations,
 ): Promise<boolean> {
   if (!beforeStat || !ops.statFile) {
@@ -511,16 +500,15 @@ async function recoverSuccessfulWrite(params: {
   details: WriteToolDetails;
   signal?: AbortSignal;
 }) {
-  if (!params.ops.readFile || !isWriteRecoveryCandidate(params.error, params.signal)) {
+  if (!isWriteRecoveryCandidate(params.error, params.signal)) {
     return null;
   }
-  const readback = await params.ops.readFile(params.absolutePath).catch(() => undefined);
-  const currentContent = Buffer.isBuffer(readback) ? readback.toString("utf8") : readback;
+  const verified = await verifyPersistedUtf8File(params.absolutePath, params.content, params.ops);
   const changed =
     params.precheck.state === "different" ||
     (params.precheck.state === "unknown" &&
       (await didWriteMetadataChange(params.absolutePath, params.precheck.beforeStat, params.ops)));
-  if (currentContent !== params.content || !changed) {
+  if (!verified || !changed) {
     return null;
   }
   return successfulWriteResult(params.path, params.content, params.details);
@@ -574,6 +562,11 @@ export function createWriteToolDefinition(
           await ops.writeFile(absolutePath, content);
           if (signal?.aborted) {
             throw new Error("Operation aborted");
+          }
+          if (!(await verifyPersistedUtf8File(absolutePath, content, ops))) {
+            throw new Error(
+              `Write verification failed for ${path}: the persisted regular file does not match the requested content. Inspect the target and retry.`,
+            );
           }
           return successfulWriteResult(path, content, details);
         } catch (error: unknown) {

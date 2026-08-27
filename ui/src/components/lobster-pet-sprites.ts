@@ -9,6 +9,12 @@ import type {
   LobsterPetAntennae,
   LobsterPetPaletteId,
 } from "./lobster-pet-contract.ts";
+import {
+  CHIMERA_STITCHES,
+  ECLIPSE_CORONA,
+  NOTEXTURE_CHECKER,
+  WATERMELON_RIND,
+} from "./lobster-pet-sprites-wild.ts";
 
 export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
   crown: svg`
@@ -69,8 +75,8 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
   `,
 };
 
-// Light speckle trait, distinct from calico's bold mottling; skipped on
-// palettes whose identity is already pattern-driven (see renderLobsterSvg).
+// Light speckle trait; skipped on palettes whose identity is already
+// pattern-driven (see renderLobsterSvg).
 export const FRECKLE_SPOTS = svg`
   <g class="lob-freckles" fill="#ffffff" opacity="0.3">
     <circle cx="42" cy="45" r="1.6" />
@@ -84,7 +90,7 @@ export const FRECKLE_SPOTS = svg`
 
 // Lumen photophores: dotted running lights along the shell. The glow (and
 // its dark-theme-only intensity) lives in lobster-pet.css.
-export const LUMEN_SPOTS = svg`
+const LUMEN_SPOTS = svg`
   <g class="lob-lumen" fill="#7ef5dd">
     <circle cx="36" cy="54" r="2.4" />
     <circle cx="50" cy="66" r="2" />
@@ -95,26 +101,284 @@ export const LUMEN_SPOTS = svg`
   </g>
 `;
 
+const MAGMA_SEAMS = svg`
+  <g class="lob-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
+    <path d="M40 44 L48 54 L42 66 L50 78" />
+    <path d="M74 40 L68 52 L78 64" />
+    <path d="M56 82 L62 90" />
+  </g>
+`;
+
+const OILSLICK_SHEEN = svg`
+  <g class="lob-oilsheen">
+    <ellipse cx="46" cy="60" rx="22" ry="11" fill="#7f77dd" opacity="0.3" transform="rotate(-14 46 60)" />
+    <ellipse cx="76" cy="74" rx="17" ry="8" fill="#1d9e75" opacity="0.28" transform="rotate(10 76 74)" />
+  </g>
+`;
+
+const AURORA_BANDS = svg`
+  <g class="lob-aurora" fill="none" stroke-linecap="round">
+    <path class="lob-aurora__band1" d="M24 62 Q48 48 70 58 T102 54" stroke="#4ecfa6" stroke-width="6" opacity="0.5" />
+    <path class="lob-aurora__band2" d="M28 76 Q54 62 78 72 T100 68" stroke="#a184ec" stroke-width="5" opacity="0.45" />
+  </g>
+`;
+
+const NEBULA_STARS = svg`
+  <g class="lob-nebula-stars">
+    <circle cx="38" cy="52" r="1" fill="#fff" />
+    <circle cx="52" cy="70" r="1.2" fill="#fff" />
+    <circle cx="84" cy="48" r="1.4" fill="#fff" />
+    <circle cx="66" cy="86" r="1" fill="#fff" />
+    <circle cx="72" cy="60" r="1.6" fill="#8be9fd" />
+    <circle cx="46" cy="40" r="1.4" fill="#ff9de2" />
+    <path class="lob-twinkle" d="M60 52 L61.5 55.5 L65 57 L61.5 58.5 L60 62 L58.5 58.5 L55 57 L58.5 55.5 Z" fill="#fff" />
+  </g>
+`;
+
+const GLASS_GLINTS = svg`
+  <g class="lob-glass-glints" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7">
+    <path d="M34 22 L28 32" />
+    <path d="M40 16 L37 22" />
+  </g>
+`;
+
+const GEODE_FACETS = svg`
+  <g class="lob-geode-facets">
+    <polygon points="70,34 80,30 78,44" fill="#9b6ff0" />
+    <polygon points="82,46 94,42 88,58" fill="#b48ef0" />
+    <polygon points="72,58 84,62 74,74" fill="#7a4fd0" />
+    <polygon points="86,68 96,64 90,80" fill="#9b6ff0" />
+    <circle class="lob-twinkle" cx="90" cy="50" r="1.8" fill="#fff" />
+  </g>
+`;
+
+const PHOSPHOR_SCANLINES = svg`
+  <g class="lob-scanlines" stroke="#3fff7d" stroke-width="1" opacity="0.16">
+    <path d="M40 20 H80 M30 27 H90 M26 34 H94 M21 41 H99 M18 48 H102 M17 55 H103 M17 62 H103 M18 69 H102 M22 76 H98 M31 83 H89 M45 90 H75" />
+  </g>
+`;
+
+export const GLITCH_GHOSTS = svg`
+  <g class="lob-glitch-ghosts">
+    <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#ff3355" opacity="0.4" />
+    <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(3 1)" fill="#22d3ee" opacity="0.4" />
+  </g>
+`;
+
+const BLUEPRINT_MARKS = svg`
+  <g class="lob-blueprint" fill="none" stroke="#cfe3ff">
+    <path class="lob-bp-outline" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" stroke-width="1.5" stroke-dasharray="5 3" />
+    <path d="M54 58 H66 M60 52 V64" stroke-width="1" opacity="0.7" />
+    <path d="M16 100 H104" stroke-width="1" stroke-dasharray="2 3" opacity="0.7" />
+  </g>
+`;
+
+const MECHA_PLATES = svg`
+  <g class="lob-mecha">
+    <g fill="none" stroke="#5f6a75" stroke-width="1.5">
+      <path d="M28 56 Q60 66 92 56" />
+      <path d="M34 74 Q60 82 86 74" />
+    </g>
+    <g fill="#5f6a75">
+      <circle cx="36" cy="61" r="1.4" />
+      <circle cx="60" cy="64" r="1.4" />
+      <circle cx="84" cy="61" r="1.4" />
+    </g>
+    <circle class="lob-led" cx="89" cy="7" r="3" fill="#ff4444" />
+  </g>
+`;
+
+export function SELENE_MOON(phaseIndex: number): TemplateResult {
+  const phase = ((Math.round(phaseIndex) % 8) + 8) % 8;
+  if (phase === 0) {
+    return svg`<g class="lob-selene-moon"><circle cx="60" cy="64" r="12" fill="#26304a" /><circle cx="60" cy="64" r="11" fill="none" stroke="#f4f7fc" stroke-width="1" /></g>`;
+  }
+  if (phase === 4) {
+    return svg`<g class="lob-selene-moon"><circle cx="60" cy="64" r="12" fill="#26304a" /><circle cx="60" cy="64" r="11" fill="#f4f7fc" /></g>`;
+  }
+  const darkOffset = phase < 4 ? [-5, -9, -14][phase - 1] : [14, 9, 5][phase - 5];
+  return svg`
+    <g class="lob-selene-moon">
+      <circle cx="60" cy="64" r="12" fill="#26304a" />
+      <circle cx="60" cy="64" r="11" fill="#f4f7fc" />
+      <circle cx=${60 + (darkOffset ?? 0)} cy="64" r="11" fill="#26304a" />
+    </g>
+  `;
+}
+
+export function PIXEL_LOBSTER(openEyeStyle: string, closedEyeStyle: string): TemplateResult {
+  return svg`
+    <g class="lob-pixel-frame" shape-rendering="crispEdges">
+      <g class="lob-pixel-antennae" fill="#d84c3e">
+        <rect x="30" y="0" width="6" height="6" /><rect x="36" y="6" width="6" height="6" /><rect x="42" y="12" width="6" height="6" />
+        <rect x="84" y="0" width="6" height="6" /><rect x="78" y="6" width="6" height="6" /><rect x="72" y="12" width="6" height="6" />
+      </g>
+      <g class="lob-pixel-claws">
+        <path d="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z" fill="#d84c3e" />
+        <rect x="6" y="60" width="12" height="6" fill="#a83428" />
+        <path d="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z" fill="#d84c3e" />
+        <rect x="102" y="60" width="12" height="6" fill="#a83428" />
+      </g>
+      <!-- Main cells keep the palette variable so offline and mood-style tinting still read. -->
+      <g class="lob-pixel-body" fill="var(--lob-shell, #d84c3e)">
+        <rect x="42" y="12" width="36" height="6" /><rect x="36" y="18" width="48" height="6" />
+        <rect x="30" y="24" width="60" height="6" /><rect x="24" y="30" width="72" height="48" />
+        <rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" />
+        <rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" />
+      </g>
+      <g fill="#ef8f6a"><rect x="36" y="24" width="24" height="6" /><rect x="30" y="30" width="18" height="12" /><rect x="24" y="42" width="12" height="12" /></g>
+      <g fill="#a83428"><rect x="30" y="78" width="60" height="12" /><rect x="36" y="90" width="48" height="6" /><rect x="36" y="96" width="12" height="9" /><rect x="72" y="96" width="12" height="9" /></g>
+      <g class="lob-eye-open" style=${openEyeStyle}>
+        <rect x="42" y="30" width="6" height="6" fill="#0a1014" /><rect x="72" y="30" width="6" height="6" fill="#0a1014" />
+        <rect x="42" y="30" width="2.5" height="2.5" fill="#fff" /><rect x="72" y="30" width="2.5" height="2.5" fill="#fff" />
+      </g>
+      <g class="lob-eye-closed" style=${closedEyeStyle} fill="#0a1014"><rect x="42" y="33" width="6" height="3" /><rect x="72" y="33" width="6" height="3" /></g>
+    </g>
+  `;
+}
+
 // Palettes whose identity is already pattern-driven skip the freckle trait;
 // stacking speckle sets reads as noise, not a variant.
 export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
-  "calico",
   "split",
   "retro",
   "lumen",
+  "magma",
+  "oilslick",
+  "aurora",
+  "nebula",
+  "glass",
+  "geode",
+  "phosphor",
+  "heisenbug",
+  "blueprint",
+  "clawtron",
+  "selene",
+  "pixel",
+  "banana",
+  "bee",
+  "rubberduck",
+  "watermelon",
+  "sourdough",
+  "zombie",
+  "plush",
+  "balloon",
+  "disco",
+  "cryptid",
+  "flatpack",
+  "tinfoil",
+  "actual",
+  "chimera",
+  "notexture",
+  "loading",
+  "eclipse",
+  "ascii",
+  "portal",
+  "invisible",
+  "goldenretro",
 ]);
 
-// Calico mottling: dark blotches scattered clear of the eye line.
-export const CALICO_SPOTS = svg`
-  <g class="lob-spots" fill="#2a1f16" opacity="0.8">
-    <ellipse cx="40" cy="50" rx="6" ry="4" transform="rotate(-15 40 50)" />
-    <ellipse cx="72" cy="62" rx="7" ry="4.5" transform="rotate(18 72 62)" />
-    <ellipse cx="55" cy="76" rx="5" ry="3.5" transform="rotate(-8 55 76)" />
-    <ellipse cx="84" cy="42" rx="4" ry="3" transform="rotate(25 84 42)" />
-    <ellipse cx="47" cy="18" rx="4.5" ry="3" transform="rotate(-20 47 18)" />
-    <ellipse cx="30" cy="64" rx="4" ry="3" transform="rotate(12 30 64)" />
+const BANANA_MARKS = svg`
+  <g fill="#8a6430">
+    <rect x="56" y="8" width="8" height="6" rx="2.5" />
+    <ellipse cx="60" cy="91" rx="6" ry="3.5" />
+    <circle cx="37" cy="48" r="2.5" />
+    <circle cx="79" cy="55" r="2" />
+    <circle cx="47" cy="70" r="1.8" />
+    <circle cx="72" cy="79" r="2.3" />
   </g>
 `;
+
+const BEE_PARTS = svg`
+  <g class="lob-bee-wings" fill="#ffffff" opacity="0.45">
+    <ellipse cx="38" cy="14" rx="8" ry="4.5" transform="rotate(-24 38 14)" />
+    <ellipse cx="82" cy="14" rx="8" ry="4.5" transform="rotate(24 82 14)" />
+  </g>
+  <g fill="#2b2b23" opacity="0.9">
+    <path d="M19 42 Q60 51 101 42 L103 50 Q60 60 17 50 Z" />
+    <path d="M17 58 Q60 67 103 58 L101 67 Q60 76 19 67 Z" />
+    <path d="M24 76 Q60 84 96 76 L90 85 Q60 92 30 85 Z" />
+  </g>
+`;
+
+const DUCK_BILL = svg`
+  <g>
+    <ellipse cx="60" cy="71" rx="21" ry="14" fill="#ffffff" opacity="0.5" />
+    <rect x="47" y="41" width="26" height="8" rx="4" fill="#ff9a2e" />
+    <rect x="50" y="47" width="20" height="5" rx="2.5" fill="#e98322" />
+  </g>
+`;
+
+const SOURDOUGH_SCORING = svg`
+  <g fill="none" stroke="#a8763e" stroke-width="2.5" stroke-linecap="round">
+    <path d="M38 23 Q45 29 52 30" />
+    <path d="M52 17 Q59 24 66 25" />
+    <path d="M67 18 Q74 24 81 25" />
+  </g>
+  <g fill="#ffffff" opacity="0.5">
+    <circle cx="34" cy="39" r="1.2" /><circle cx="86" cy="38" r="1" />
+    <circle cx="45" cy="57" r="1.4" /><circle cx="74" cy="62" r="1.1" />
+    <circle cx="56" cy="78" r="1" /><circle cx="83" cy="75" r="1.3" />
+  </g>
+`;
+
+const ZOMBIE_STITCHES = svg`
+  <g fill="none" stroke="#5a6b52" stroke-width="2" stroke-linecap="round">
+    <path d="M32 24 Q47 19 61 23" />
+    <path d="M38 19 L40 26 M46 18 L47 25 M54 19 L53 26" />
+    <path d="M57 72 Q72 78 87 72" />
+    <path d="M65 72 L63 79 M73 73 L72 80 M81 71 L83 78" />
+  </g>
+  <ellipse cx="35" cy="61" rx="9" ry="6" fill="#86987a" opacity="0.8" transform="rotate(-18 35 61)" />
+`;
+
+const PLUSH_SEAMS = svg`
+  <g fill="none" stroke="#c97a5e" stroke-width="1.5" stroke-dasharray="3 3">
+    <path d="M30 32 Q60 4 90 32" />
+    <path d="M60 50 Q58 72 60 96" />
+  </g>
+  <g class="lob-plush-button">
+    <circle cx="78" cy="44" r="3.5" fill="#7a4a3a" />
+    <circle cx="76.8" cy="44" r="0.7" fill="#e8967a" />
+    <circle cx="79.2" cy="44" r="0.7" fill="#e8967a" />
+  </g>
+`;
+
+const DISCO_FACETS = svg`
+  <g class="lob-disco" fill="#ffffff">
+    <rect x="42" y="18" width="4" height="4" opacity="0.3" /><rect x="52" y="16" width="4" height="4" opacity="0.5" />
+    <rect x="63" y="17" width="4" height="4" opacity="0.25" /><rect x="74" y="20" width="4" height="4" opacity="0.4" />
+    <rect x="31" y="40" width="4" height="4" opacity="0.4" /><rect x="53" y="39" width="4" height="4" opacity="0.25" />
+    <rect x="65" y="42" width="4" height="4" opacity="0.5" /><rect x="86" y="40" width="4" height="4" opacity="0.3" />
+    <rect x="39" y="59" width="4" height="4" opacity="0.25" /><rect x="51" y="62" width="4" height="4" opacity="0.45" />
+    <rect x="68" y="60" width="4" height="4" opacity="0.3" /><rect x="80" y="58" width="4" height="4" opacity="0.5" />
+    <rect x="49" y="79" width="4" height="4" opacity="0.35" /><rect x="70" y="80" width="4" height="4" opacity="0.25" />
+  </g>
+`;
+
+export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
+  lumen: LUMEN_SPOTS,
+  magma: MAGMA_SEAMS,
+  oilslick: OILSLICK_SHEEN,
+  aurora: AURORA_BANDS,
+  nebula: NEBULA_STARS,
+  glass: GLASS_GLINTS,
+  geode: GEODE_FACETS,
+  phosphor: PHOSPHOR_SCANLINES,
+  blueprint: BLUEPRINT_MARKS,
+  clawtron: MECHA_PLATES,
+  banana: BANANA_MARKS,
+  bee: BEE_PARTS,
+  rubberduck: DUCK_BILL,
+  sourdough: SOURDOUGH_SCORING,
+  zombie: ZOMBIE_STITCHES,
+  plush: PLUSH_SEAMS,
+  disco: DISCO_FACETS,
+  watermelon: WATERMELON_RIND,
+  eclipse: ECLIPSE_CORONA,
+  notexture: NOTEXTURE_CHECKER,
+  chimera: CHIMERA_STITCHES,
+};
 
 // Split two-tone: the right half of the body (down to the belly midline)
 // repainted in the second shell color; the right claw and antenna follow via
@@ -137,6 +401,7 @@ export const RETRO_MEGA_CLAW = svg`
   />
   <path
     d="M92 14 C97 22 99 31 95 41"
+    class="lob-retro-claw-line"
     stroke="#b8151b"
     stroke-width="3"
     stroke-linecap="round"

@@ -1,9 +1,13 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import type { DraftNode } from "./discovery.ts";
-import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
+import { disambiguate } from "./place-labels.ts";
 
-type LabelFixture = Pick<DraftNode, "nodeId" | "displayName" | "modelIdentifier" | "remoteIp">;
+type LabelFixture = {
+  nodeId: string;
+  displayName: string;
+  modelIdentifier?: string;
+  remoteIp?: string;
+};
 
 const nodeCandidates = [
   (node: LabelFixture) => node.modelIdentifier,
@@ -111,67 +115,18 @@ describe("disambiguate", () => {
   });
 
   it("uses parent folders, then full paths, for recent basename collisions", () => {
-    const items: Array<{ folder: string; label: string; execNode?: string }> = [
+    const items: Array<{ folder: string; label: string }> = [
       { folder: "/a/openclaw", label: "openclaw" },
       { folder: "/b/openclaw", label: "openclaw" },
       { folder: "/one/shared/openclaw", label: "openclaw · Mac Studio" },
       { folder: "/two/shared/openclaw", label: "openclaw · Mac Studio" },
-      {
-        folder: "/same/openclaw",
-        execNode: "11111111aaaaaaaa",
-        label: "openclaw · Duplicate Mac",
-      },
-      {
-        folder: "/same/openclaw",
-        execNode: "22222222bbbbbbbb",
-        label: "openclaw · Duplicate Mac",
-      },
     ];
     expect(
       disambiguate(items, (item) => item.label, [
         (item) => item.folder.split("/").at(-2),
         (item) => item.folder,
-        () => undefined,
-        () => undefined,
-        (item) => `${item.folder}${item.execNode ? ` · ${item.execNode.slice(0, 8)}` : ""}`,
+        (item) => item.folder,
       ]),
-    ).toEqual([
-      "a",
-      "b",
-      "/one/shared/openclaw",
-      "/two/shared/openclaw",
-      "/same/openclaw · 11111111",
-      "/same/openclaw · 22222222",
-    ]);
-  });
-});
-
-describe("isPhoneFamily", () => {
-  it.each([
-    ["iPhone", true],
-    ["iPad", true],
-    ["iOS 26", true],
-    ["Android", true],
-    ["Mac", false],
-    [undefined, false],
-  ])("classifies %s as %s", (deviceFamily, expected) => {
-    expect(isPhoneFamily(deviceFamily)).toBe(expected);
-  });
-});
-
-describe("nodeTooltip", () => {
-  it("prettifies the platform and preserves model and IP facts", () => {
-    expect(
-      nodeTooltip({
-        nodeId: "11111111",
-        displayName: "Mac Studio",
-        platform: "darwin",
-        modelIdentifier: "Mac14,12",
-        remoteIp: "192.168.1.11",
-        connected: true,
-        canExec: true,
-        canBrowse: true,
-      }),
-    ).toBe("macOS · Mac14,12 · 192.168.1.11");
+    ).toEqual(["a", "b", "/one/shared/openclaw", "/two/shared/openclaw"]);
   });
 });

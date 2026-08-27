@@ -77,10 +77,16 @@ export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
   return {
     name: "firecrawl_search",
     label: "Firecrawl Search",
+    resultContentSource: "network" as const,
     description:
-      "Search the web using Firecrawl v2/search. Can optionally include scraped content from result pages.",
+      "Search the web using Firecrawl v2/search. Supports includeDomains/excludeDomains filtering and tbs time filters (day/week/month/year). Can optionally include scraped content from result pages.",
     parameters: FirecrawlSearchToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted();
       const query = readStringParam(rawParams, "query", { required: true });
       const count = readPositiveIntegerParam(rawParams, "count", {
         max: 100,
@@ -110,6 +116,7 @@ export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
           location,
           country,
           scrapeResults,
+          ...(signal ? { signal } : {}),
         }),
       );
     },

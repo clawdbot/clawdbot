@@ -45,14 +45,14 @@
   padding: 14px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--bg-subtle);
+  background: var(--bg-muted);
 }
 
 .onboarding-memory-import__provider label {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .onboarding-memory-import__provider input {

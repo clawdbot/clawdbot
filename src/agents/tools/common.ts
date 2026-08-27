@@ -9,6 +9,7 @@ import {
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
@@ -21,6 +22,7 @@ import type {
   AgentToolUpdateCallback,
 } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import { registerTrustedToolInputError } from "../tool-result-error.js";
 import { textResult } from "./tool-results.js";
 
 export { jsonResult, textResult } from "./tool-results.js";
@@ -69,9 +71,7 @@ export type AnyAgentTool = Omit<AgentTool, "execute"> &
   };
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
-  return params && typeof params === "object" && !Array.isArray(params)
-    ? (params as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(params);
 }
 
 type StringParamOptions = {
@@ -92,6 +92,7 @@ export class ToolInputError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ToolInputError";
+    registerTrustedToolInputError(this);
   }
 }
 
@@ -122,17 +123,17 @@ function isBlankParamValue(raw: unknown): boolean {
   return typeof raw === "string" && raw.trim() === "";
 }
 
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options: StringParamOptions & { required: true },
 ): string;
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options?: StringParamOptions,
 ): string | undefined;
-export function readStringParam(
+export function readToolStringParam(
   params: Record<string, unknown>,
   key: string,
   options: StringParamOptions = {},
@@ -386,7 +387,7 @@ export function readReactionParams(
   const emojiKey = options.emojiKey ?? "emoji";
   const removeKey = options.removeKey ?? "remove";
   const remove = typeof params[removeKey] === "boolean" ? params[removeKey] : false;
-  const emoji = readStringParam(params, emojiKey, {
+  const emoji = readToolStringParam(params, emojiKey, {
     required: true,
     allowEmpty: true,
   });

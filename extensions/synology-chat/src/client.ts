@@ -5,18 +5,20 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import {
-  formatErrorMessage,
-  resolvePinnedHostnameWithPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { classifyTransientNetworkErrorCode, retryAsync } from "openclaw/plugin-sdk/retry-runtime";
+import { sleep, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { z } from "zod";
+import type { SynologyHostedMediaUrl } from "./outbound-media.js";
 
 const MIN_SEND_INTERVAL_MS = 500;
+export const SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT = 2_000;
 /** user_list JSON can be larger than inbound webhook pre-auth payloads. */
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 /** Wall-clock budget for user_list fetch including response body. */
@@ -25,6 +27,42 @@ const USER_LIST_REQUEST_TIMEOUT_MS = 15_000;
 const POST_REQUEST_TIMEOUT_MS = 30_000;
 let lastSendTime = 0;
 let sendQueue: Promise<void> = Promise.resolve();
+
+const UNPROVEN_TRANSPORT_ERROR_BRANCH = "unproven transport error branch";
+
+function nestedTransportErrorCandidates(current: Record<string, unknown>): unknown[] {
+  const aggregateBranches = Array.isArray(current.errors)
+    ? current.errors.map((branch) => branch ?? UNPROVEN_TRANSPORT_ERROR_BRANCH)
+    : [];
+  const wrappers = [current.cause, current.original, current.error, current.reason].filter(
+    (candidate) => candidate !== undefined && candidate !== null,
+  );
+  return [...aggregateBranches, ...wrappers];
+}
+
+function isProvenPreConnectFailure(error: unknown): boolean {
+  let foundPreConnectLeaf = false;
+  for (const candidate of collectErrorGraphCandidates(error, nestedTransportErrorCandidates)) {
+    const classification = classifyTransientNetworkErrorCode(extractErrorCode(candidate));
+    const nested =
+      candidate && typeof candidate === "object"
+        ? nestedTransportErrorCandidates(candidate as Record<string, unknown>)
+        : [];
+    // A webhook POST is safe to replay only when every terminal transport branch
+    // proves it failed before connect; aggregate summary codes cannot hide a reset.
+    if (nested.length > 0) {
+      if (classification === "ambiguous") {
+        return false;
+      }
+      continue;
+    }
+    if (classification !== "pre-connect") {
+      return false;
+    }
+    foundPreConnectLeaf = true;
+  }
+  return foundPreConnectLeaf;
+}
 
 // --- Chat user_id resolution ---
 // Synology Chat uses two different user_id spaces:
@@ -49,6 +87,12 @@ type ChatWebhookPayload = {
   file_url?: string;
   user_ids?: number[];
 };
+
+type SynologyHostedFileSendResult =
+  | { status: "accepted" }
+  | { status: "not-dispatched" }
+  | { status: "rejected" }
+  | { status: "indeterminate" };
 
 const ChatUserSchema = z
   .object({
@@ -98,52 +142,64 @@ export async function sendMessage(
   text: string,
   userId?: string | number,
   allowInsecureSsl = false,
+  onPlatformSendDispatch?: () => Promise<void>,
 ): Promise<boolean> {
-  // Synology Chat API requires user_ids (numeric) to specify the recipient
-  // The @mention is optional but user_ids is mandatory
-  const body = buildWebhookBody({ text }, userId);
-
-  // Retry with exponential backoff (3 attempts, 300ms base)
-  const maxRetries = 3;
-  const baseDelay = 300;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
+  const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  for (const chunk of chunks.length > 0 ? chunks : [text]) {
+    // Synology Chat API requires numeric user_ids to specify the recipient.
+    const body = buildWebhookBody({ text: chunk }, userId);
+    // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
+    await waitForSendSlot();
+    await onPlatformSendDispatch?.();
+    let result: SynologyHostedFileSendResult["status"];
     try {
-      await waitForSendSlot();
-      const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-      if (ok) {
-        return true;
-      }
+      result = await retryAsync(() => doPost(incomingUrl, body, allowInsecureSsl), {
+        attempts: 3,
+        minDelayMs: 0,
+        shouldRetry: isProvenPreConnectFailure,
+        delayMs: ({ attempt }) => 300 * 2 ** (attempt - 1),
+        sleep: async (delayMs) => {
+          await sleepWithAbort(delayMs);
+          await waitForSendSlot();
+          await onPlatformSendDispatch?.();
+        },
+      });
     } catch {
-      // will retry
+      return false;
     }
-
-    if (attempt < maxRetries - 1) {
-      await sleep(baseDelay * 2 ** attempt);
+    if (result !== "accepted") {
+      return false;
     }
   }
-
-  return false;
+  return true;
 }
 
 /**
- * Send a file URL to Synology Chat.
+ * Send an OpenClaw-hosted immutable file URL to Synology Chat.
  */
-export async function sendFileUrl(
+export async function sendHostedFileUrl(
   incomingUrl: string,
-  fileUrl: string,
+  fileUrl: SynologyHostedMediaUrl,
   userId?: string | number,
   allowInsecureSsl = false,
-): Promise<boolean> {
+  onPlatformSendDispatch?: () => Promise<void>,
+): Promise<SynologyHostedFileSendResult> {
+  let body: string;
   try {
-    const safeFileUrl = await assertSafeWebhookFileUrl(fileUrl);
-    const body = buildWebhookBody({ file_url: safeFileUrl }, userId);
-
-    await waitForSendSlot();
-    const ok = await doPost(incomingUrl, body, allowInsecureSsl);
-    return ok;
+    body = buildWebhookBody({ file_url: assertHostedMediaUrl(fileUrl) }, userId);
   } catch {
-    return false;
+    return { status: "not-dispatched" };
+  }
+
+  await waitForSendSlot();
+  await onPlatformSendDispatch?.();
+
+  try {
+    return { status: await doPost(incomingUrl, body, allowInsecureSsl) };
+  } catch (error) {
+    // Proven pre-connect failures cannot have queued the capability. All other
+    // transport errors stay indeterminate because Synology may have the POST.
+    return { status: isProvenPreConnectFailure(error) ? "not-dispatched" : "indeterminate" };
   }
 }
 
@@ -268,7 +324,7 @@ async function waitForSendSlot(): Promise<void> {
   await next;
 }
 
-async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
+function assertHostedMediaUrl(fileUrl: SynologyHostedMediaUrl): string {
   let parsed: URL;
   try {
     parsed = new URL(fileUrl);
@@ -276,11 +332,17 @@ async function assertSafeWebhookFileUrl(fileUrl: string): Promise<string> {
     throw new Error(`Invalid Synology Chat file URL: ${formatErrorMessage(err)}`, { cause: err });
   }
 
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("Synology Chat file URL must use HTTP or HTTPS");
+  if (
+    parsed.protocol !== "https:" ||
+    !parsed.hostname ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error(
+      "Synology Chat hosted attachment URL must use HTTPS without credentials or a fragment",
+    );
   }
-
-  await resolvePinnedHostnameWithPolicy(parsed.hostname);
   return parsed.toString();
 }
 
@@ -335,12 +397,16 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   return parseStrictNonNegativeInteger(userId);
 }
 
-function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {
+function doPost(
+  url: string,
+  body: string,
+  allowInsecureSsl = false,
+): Promise<SynologyHostedFileSendResult["status"]> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let response: http.IncomingMessage | undefined;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (result: { ok?: boolean; error?: Error }) => {
+    const finish = (result: { status?: SynologyHostedFileSendResult["status"]; error?: Error }) => {
       if (settled) {
         return;
       }
@@ -353,38 +419,69 @@ function doPost(url: string, body: string, allowInsecureSsl = false): Promise<bo
         reject(result.error);
         return;
       }
-      resolve(result.ok === true);
+      resolve(result.status ?? "rejected");
     };
     let parsedUrl: URL;
     try {
       parsedUrl = new URL(url);
     } catch {
-      reject(new Error(`Invalid URL: ${url}`));
+      resolve("not-dispatched");
       return;
     }
     const transport = parsedUrl.protocol === "https:" ? https : http;
 
-    const req = transport.request(
-      url,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Content-Length": Buffer.byteLength(body),
+    let req: http.ClientRequest;
+    try {
+      req = transport.request(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Length": Buffer.byteLength(body),
+          },
+          // Synology NAS may use self-signed certs on local network.
+          // Set allowInsecureSsl: true in channel config to skip verification.
+          rejectUnauthorized: !allowInsecureSsl,
         },
-        // Synology NAS may use self-signed certs on local network.
-        // Set allowInsecureSsl: true in channel config to skip verification.
-        rejectUnauthorized: !allowInsecureSsl,
-      },
-      (res) => {
-        response = res;
-        res.on("end", () => {
-          finish({ ok: res.statusCode === 200 });
-        });
-        res.on("error", (error) => finish({ error }));
-        res.resume();
-      },
-    );
+        (res) => {
+          response = res;
+          const responseChunks: Buffer[] = [];
+          let responseBytes = 0;
+          res.on("data", (chunk: Buffer) => {
+            responseBytes += chunk.length;
+            if (responseBytes <= USER_LIST_RESPONSE_MAX_BYTES) {
+              responseChunks.push(chunk);
+            } else {
+              responseChunks.length = 0;
+            }
+          });
+          res.on("end", () => {
+            const result =
+              responseBytes <= USER_LIST_RESPONSE_MAX_BYTES
+                ? safeParseJsonWithSchema(
+                    ChatUserListResponseSchema.pick({ success: true }),
+                    Buffer.concat(responseChunks).toString("utf8"),
+                  )
+                : null;
+            if (res.statusCode === 200) {
+              finish({ status: result?.success === false ? "rejected" : "accepted" });
+              return;
+            }
+            // A reverse proxy can emit a server error after forwarding the POST
+            // and losing Synology's response, so 5xx cannot prove non-acceptance.
+            finish({ status: (res.statusCode ?? 500) >= 500 ? "indeterminate" : "rejected" });
+          });
+          res.on("error", (error) => finish({ error }));
+          res.resume();
+        },
+      );
+    } catch {
+      // Synchronous request construction failed before Node returned a request
+      // that could write the capability to the network.
+      finish({ status: "not-dispatched" });
+      return;
+    }
 
     req.on("error", (error) => finish({ error }));
     // ClientRequest timeout is socket-idle based. Keep one absolute budget

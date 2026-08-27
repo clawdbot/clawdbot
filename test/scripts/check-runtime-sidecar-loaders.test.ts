@@ -1,11 +1,78 @@
 // Check Runtime Sidecar Loaders tests cover check runtime sidecar loaders script behavior.
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   collectTsdownEntrySources,
   findRuntimeSidecarLoaderViolations,
-} from "../../scripts/check-runtime-sidecar-loaders.mjs";
+} from "../../scripts/check-runtime-sidecar-loaders.mts";
+
+function listRuntimeStaticSpecifiers(sourcePath: string): string[] {
+  const source = readFileSync(sourcePath, "utf8");
+  const sourceFile = ts.createSourceFile(sourcePath, source, ts.ScriptTarget.Latest, true);
+  return sourceFile.statements.flatMap((statement) => {
+    if (
+      ts.isImportDeclaration(statement) &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      !statement.importClause?.isTypeOnly
+    ) {
+      return [statement.moduleSpecifier.text];
+    }
+    if (
+      ts.isExportDeclaration(statement) &&
+      statement.moduleSpecifier &&
+      ts.isStringLiteral(statement.moduleSpecifier) &&
+      !statement.isTypeOnly &&
+      !(
+        statement.exportClause &&
+        ts.isNamedExports(statement.exportClause) &&
+        statement.exportClause.elements.every((element) => element.isTypeOnly)
+      )
+    ) {
+      return [statement.moduleSpecifier.text];
+    }
+    return [];
+  });
+}
+
+function resolveLocalSource(importerPath: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) {
+    return null;
+  }
+  const resolved = resolve(dirname(importerPath), specifier);
+  const candidates = [resolved, resolved.replace(/\.js$/, ".ts"), resolve(resolved, "index.ts")];
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
+}
+
+function collectRuntimeStaticGraph(entryPath: string): Set<string> {
+  const pending = [entryPath];
+  const visited = new Set<string>();
+  for (const sourcePath of pending) {
+    if (visited.has(sourcePath)) {
+      continue;
+    }
+    visited.add(sourcePath);
+    for (const specifier of listRuntimeStaticSpecifiers(sourcePath)) {
+      const resolved = resolveLocalSource(sourcePath, specifier);
+      if (resolved && !visited.has(resolved)) {
+        pending.push(resolved);
+      }
+    }
+  }
+  return visited;
+}
 
 describe("check-runtime-sidecar-loaders", () => {
+  it("keeps the memory runtime facade out of the manager sidecar graph", () => {
+    const sourcePath = new URL("../../extensions/memory-core/runtime-api.ts", import.meta.url);
+    const runtimeGraph = [...collectRuntimeStaticGraph(sourcePath.pathname)].map((filePath) =>
+      relative(resolve(dirname(sourcePath.pathname), "../.."), filePath),
+    );
+
+    expect(runtimeGraph.filter((filePath) => /(^|\/)manager(?:-|\.)/.test(filePath))).toEqual([]);
+  });
+
   it("flags hidden createRequire runtime sidecars that are not build entries", () => {
     const source = `
       import { createRequire } from "node:module";

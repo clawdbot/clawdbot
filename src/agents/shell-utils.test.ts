@@ -486,6 +486,51 @@ describe("getShellConfig on Windows", () => {
     expect(getShellConfig().shell).toBe(pwshPath);
   });
 
+  it("finds pwsh.exe on PATH when PowerShell 7 is not in ProgramFiles", () => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bin-"));
+    tempDirs.push(programFiles, binDir);
+    const pwshPath = path.join(binDir, "pwsh.exe");
+    fs.writeFileSync(pwshPath, "");
+    fs.chmodSync(pwshPath, 0o755);
+
+    process.env.ProgramFiles = programFiles;
+    process.env.PATH = binDir;
+    delete process.env.ProgramW6432;
+    delete process.env.SystemRoot;
+    delete process.env.WINDIR;
+
+    expect(getShellConfig().shell).toBe(pwshPath);
+  });
+
+  it("prefers a native pwsh.exe over earlier bare shims, batch wrappers, and PowerShell 5.1", () => {
+    const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shim-"));
+    const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bin-"));
+    const systemRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sysroot-"));
+    tempDirs.push(programFiles, shimDir, binDir, systemRoot);
+    const bareShimPath = path.join(shimDir, "pwsh");
+    const pwshPath = path.join(binDir, "pwsh.exe");
+    const batchPath = path.join(binDir, "pwsh.cmd");
+    const powershellDir = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0");
+    fs.mkdirSync(powershellDir, { recursive: true });
+    fs.writeFileSync(bareShimPath, "");
+    fs.writeFileSync(pwshPath, "");
+    fs.writeFileSync(batchPath, "");
+    fs.writeFileSync(path.join(powershellDir, "powershell.exe"), "");
+    fs.chmodSync(bareShimPath, 0o755);
+    fs.chmodSync(pwshPath, 0o755);
+    fs.chmodSync(batchPath, 0o755);
+
+    process.env.ProgramFiles = programFiles;
+    process.env.SystemRoot = systemRoot;
+    process.env.PATH = [shimDir, binDir].join(path.delimiter);
+    delete process.env.ProgramW6432;
+    delete process.env.WINDIR;
+
+    expect(getShellConfig().shell).toBe(pwshPath);
+  });
+
   it("falls back to Windows PowerShell 5.1 path when pwsh is unavailable", () => {
     const programFiles = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pfiles-"));
     const sysRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sysroot-"));

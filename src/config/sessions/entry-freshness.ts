@@ -4,7 +4,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { getCliSessionBinding } from "./cli-session-binding.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
-import { resolveStorePath as resolveSessionStorePath } from "./paths.js";
+import { resolveSessionStorePathCore as resolveSessionStorePath } from "./paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
@@ -54,7 +54,8 @@ export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolea
 export function resolveSessionEntryResetFreshness(
   params: ResolveSessionEntryResetFreshnessParams,
 ): ResolvedSessionEntryResetFreshness {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const agentId =
+    params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey, params.defaultAgentId);
   const sessionCfg = params.sessionCfg;
   const storePath =
     params.storePath ??
@@ -76,6 +77,7 @@ export function resolveSessionEntryResetFreshness(
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
+    sessionKey: params.sessionKey,
     storePath,
   });
   const base = {

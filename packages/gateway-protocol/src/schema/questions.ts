@@ -8,10 +8,26 @@ import { withSince } from "./since.js";
 const QuestionIdSchema = Type.String({ pattern: "^[a-z][a-z0-9_]*$" });
 // UI chip/tag display cap shared by every question input and output shape.
 const QuestionHeaderSchema = Type.String({ maxLength: 12 });
+const QuestionSecretStoreAllowedHostsSchema = Type.Array(
+  Type.String({ minLength: 1, maxLength: 253 }),
+  { maxItems: 128, uniqueItems: true },
+);
 
 export const QuestionOptionSchema = closedObject({
   label: NonEmptyString,
   description: Type.Optional(Type.String()),
+});
+
+export const QuestionSecretStoreBindingSchema = closedObject({
+  name: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Z][A-Z0-9_]{0,127}$" }),
+  kind: Type.Union([Type.Literal("secret"), Type.Literal("env")]),
+  allowedHosts: Type.Optional(QuestionSecretStoreAllowedHostsSchema),
+  reason: Type.Optional(Type.String({ maxLength: 200 })),
+});
+
+export const QuestionSecretStoreExistingSchema = closedObject({
+  updatedAtMs: Type.Integer({ minimum: 0 }),
+  updatedBy: Type.Optional(NonEmptyString),
 });
 
 const QuestionInputFields = {
@@ -22,6 +38,7 @@ const QuestionInputFields = {
   multiSelect: Type.Optional(Type.Boolean()),
   isOther: Type.Optional(Type.Boolean()),
   isSecret: Type.Optional(Type.Boolean()),
+  secretStore: Type.Optional(withSince("2026.8", QuestionSecretStoreBindingSchema)),
 };
 
 /** Unnormalized question accepted by question.request. */
@@ -29,6 +46,7 @@ export const QuestionRequestQuestionSchema = closedObject(QuestionInputFields);
 
 const QuestionFields = {
   ...QuestionInputFields,
+  secretStoreExisting: Type.Optional(withSince("2026.8", QuestionSecretStoreExistingSchema)),
 };
 
 /** Canonical normalized question shown to an operator. */
@@ -56,6 +74,7 @@ export const QuestionRecordSchema = closedObject({
   questions: Type.Array(QuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
   createdAtMs: Type.Integer({ minimum: 0 }),
   expiresAtMs: Type.Integer({ minimum: 0 }),
   status: QuestionStatusSchema,
@@ -68,6 +87,7 @@ export const QuestionRequestParamsSchema = closedObject({
   questions: Type.Array(QuestionRequestQuestionSchema, { minItems: 1, maxItems: 3 }),
   agentId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
+  runId: Type.Optional(NonEmptyString),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
@@ -92,6 +112,9 @@ export const QuestionResolveParamsSchema = Type.Union([
   closedObject({
     id: NonEmptyString,
     answers: QuestionAnswersSchema,
+    secretStoreAllowedHosts: Type.Optional(
+      withSince("2026.8", QuestionSecretStoreAllowedHostsSchema),
+    ),
     resolvedBy: Type.Optional(NonEmptyString),
   }),
   closedObject({

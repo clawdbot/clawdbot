@@ -2,6 +2,7 @@ import { createAssistantMessageEventStream } from "@openclaw/llm-core";
 import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createApiRegistry, type ApiRegistry } from "./api-registry.js";
+import type { AiTransformTransportMessages } from "./host.js";
 
 const CUSTOM_API = "openclaw-openai-chatgpt-responses-transport";
 
@@ -57,7 +58,6 @@ describe("AI transport host configuration", () => {
     configureAiTransportHost({ registerCustomApi: registrar });
 
     const provider = registry.getApiProvider(CUSTOM_API);
-    expect(provider).toBeDefined();
     expect(registrar).toHaveBeenCalledOnce();
     expect(provider).toMatchObject({
       api: CUSTOM_API,
@@ -70,5 +70,44 @@ describe("AI transport host configuration", () => {
     });
     expect(configuredModel.api).toBe(CUSTOM_API);
     expect(provider?.streamSimple(configuredModel, { messages: [] })).toHaveProperty("result");
+  });
+
+  it("uses package transcript normalization until the embedding host overrides it", async () => {
+    const { configureAiTransportHost, getAiTransportHost } = await import("./host.js");
+    configureAiTransportHost({});
+    const model: Model<"anthropic-messages"> = {
+      id: "claude-text-only",
+      name: "Claude Text Only",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8_192,
+      maxTokens: 1_024,
+    };
+    const messages = [
+      {
+        role: "user" as const,
+        content: [{ type: "image" as const, data: "aW1n", mimeType: "image/png" }],
+        timestamp: 1,
+      },
+    ];
+
+    expect(getAiTransportHost().transformTransportMessages(messages, model)).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "(image omitted: model does not support images)" }],
+        timestamp: 1,
+      },
+    ]);
+
+    const override = vi.fn(
+      (nextMessages: Parameters<AiTransformTransportMessages>[0]) => nextMessages,
+    );
+    configureAiTransportHost({ transformTransportMessages: override });
+    expect(getAiTransportHost().transformTransportMessages(messages, model)).toBe(messages);
+    expect(override).toHaveBeenCalledOnce();
   });
 });

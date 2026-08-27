@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import { sleep as delay } from "../../lib/sleep.mjs";
 import { readPositiveIntEnv } from "./env-limits.ts";
 import { exists, readJson } from "./filesystem.ts";
@@ -28,12 +29,7 @@ export async function packageBuildCommitFromTgz(tgzPath: string): Promise<string
 }
 
 function resolveNpmPackTarballFilename(value: unknown): string {
-  // npm 10/11 return arrays; npm 12 keys local-workspace results by package name.
-  const result = Array.isArray(value)
-    ? value.at(-1)
-    : value && typeof value === "object" && "openclaw" in value
-      ? value.openclaw
-      : value;
+  const result = resolveNpmJsonEntries(value).at(-1);
   const filename =
     result &&
     typeof result === "object" &&

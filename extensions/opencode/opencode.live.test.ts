@@ -8,7 +8,10 @@ import {
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { buildStaticOpencodeZenProviderConfig } from "./provider-catalog.js";
+import {
+  buildOpencodeZenLiveProviderConfig,
+  listOpencodeZenModelCatalogEntries,
+} from "./provider-catalog.js";
 
 const OPENCODE_ZEN_MODELS_URL = "https://opencode.ai/zen/v1/models";
 const OPENCODE_API_KEY =
@@ -17,7 +20,7 @@ const LIVE_MODEL_ID =
   process.env.OPENCLAW_LIVE_OPENCODE_DEEPSEEK_MODEL?.trim() || "deepseek-v4-flash-free";
 const LIVE = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
-const describeCatalogLive = isLiveTestEnabled(["OPENCODE_LIVE_TEST"]) ? describe : describe.skip;
+const describeCatalogLive = LIVE ? describe : describe.skip;
 
 type OpencodeModelsResponse = {
   data?: Array<{ id?: unknown; object?: unknown }>;
@@ -82,31 +85,31 @@ async function fetchOpencodeZenModelIds(): Promise<string[]> {
   return modelIds;
 }
 
-function listStaticOpencodeZenModelIds(): string[] {
-  return buildStaticOpencodeZenProviderConfig()
-    .models.map((model) => model.id)
-    .toSorted();
-}
-
 describeCatalogLive("opencode Zen live catalog drift", () => {
-  it("keeps the provider-owned static seed aligned with the live model ids", async () => {
+  it("discovers active live ids from authoritative metadata without hardcoding the catalog", async () => {
     const liveIds = await fetchOpencodeZenModelIds();
-    const staticIds = listStaticOpencodeZenModelIds();
-    expect(new Set(staticIds).size).toBe(staticIds.length);
+    const discovered = await buildOpencodeZenLiveProviderConfig({
+      apiKey: OPENCODE_API_KEY,
+      discoveryApiKey: OPENCODE_API_KEY,
+    });
+    const discoveredIds = discovered.models.map((model) => model.id).toSorted();
+    expect(new Set(discoveredIds).size).toBe(discoveredIds.length);
 
-    const staticIdSet = new Set(staticIds);
-    const liveIdSet = new Set(liveIds);
-    const missingStaticMetadata = liveIds.filter((id) => !staticIdSet.has(id));
-    const staleStaticRows = staticIds.filter((id) => !liveIdSet.has(id));
+    const trustedRows = listOpencodeZenModelCatalogEntries();
+    const trustedIdSet = new Set(trustedRows.map((row) => row.id));
+    const missingTrustedMetadata = liveIds.filter((id) => !trustedIdSet.has(id));
+    const deprecatedIds = new Set(
+      trustedRows.filter((row) => row.status === "deprecated").map((row) => row.id),
+    );
 
-    expect(
-      { missingStaticMetadata, staleStaticRows },
-      [
-        "OpenCode Zen live catalog drifted from the provider-owned static seed.",
-        "Add routing/baseUrl/cost/context/capability metadata for missing live ids,",
-        "or remove stale static rows if OpenCode retired them.",
-      ].join(" "),
-    ).toEqual({ missingStaticMetadata: [], staleStaticRows: [] });
+    expect(missingTrustedMetadata).toEqual([]);
+    expect(discoveredIds.every((id) => liveIds.includes(id) && !deprecatedIds.has(id))).toBe(true);
+    expect(discovered.models.find((model) => model.id === "x-preview-f-free")).toMatchObject({
+      api: "openai-completions",
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      compat: { supportedReasoningEfforts: ["low", "high", "max"] },
+    });
   }, 30_000);
 });
 

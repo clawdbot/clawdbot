@@ -9,6 +9,12 @@ export async function startAsyncSearchSync(params: {
   if (!params.enabled || (!params.dirty && !params.sessionsDirty)) {
     return;
   }
+  if (params.sessionsDirty && !params.dirty) {
+    // Session reconciliation can enumerate and parse a large transcript corpus. Keep
+    // the existing sync admission/close ownership while letting indexed searches proceed.
+    void params.sync({ reason: "search" }).catch(params.onError);
+    return;
+  }
   try {
     await params.sync({ reason: "search" });
   } catch (err: unknown) {

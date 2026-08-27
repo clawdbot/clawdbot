@@ -1,14 +1,14 @@
 // Discord plugin module implements account inspect behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { inspectDiscordConfiguredToken } from "./account-token-inspect.js";
+import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
 import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccountConfig,
 } from "./accounts.js";
-import type { DiscordAccountConfig, OpenClawConfig } from "./runtime-api.js";
 import type { DiscordCredentialStatus } from "./token.js";
 
 export type InspectedDiscordAccount = {
@@ -36,71 +36,26 @@ export function inspectDiscordAccount(params: {
   const hasAccountToken = Boolean(
     accountConfig && Object.hasOwn(accountConfig as Record<string, unknown>, "token"),
   );
-  const accountToken = inspectDiscordConfiguredToken(accountConfig?.token);
-  if (accountToken) {
-    return {
+  return inspectDiscordAccountTokenState({
+    base: {
       accountId,
       enabled,
       name: normalizeOptionalString(merged.name),
-      token: accountToken.token,
-      tokenSource: accountToken.tokenSource,
-      tokenStatus: accountToken.tokenStatus,
-      configured: true,
-      config: merged,
-    };
-  }
-  if (hasAccountToken) {
-    return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
-      token: "",
-      tokenSource: "none",
-      tokenStatus: "missing",
-      configured: false,
-      config: merged,
-    };
-  }
-
-  const channelToken = inspectDiscordConfiguredToken(params.cfg.channels?.discord?.token);
-  if (channelToken) {
-    return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
-      token: channelToken.token,
-      tokenSource: channelToken.tokenSource,
-      tokenStatus: channelToken.tokenStatus,
-      configured: true,
-      config: merged,
-    };
-  }
-
-  const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-  const envToken = allowEnv
-    ? normalizeSecretInputString(params.envToken ?? process.env.DISCORD_BOT_TOKEN)
-    : undefined;
-  if (envToken) {
-    return {
-      accountId,
-      enabled,
-      name: normalizeOptionalString(merged.name),
-      token: envToken.replace(/^Bot\s+/i, ""),
-      tokenSource: "env",
-      tokenStatus: "available",
-      configured: true,
-      config: merged,
-    };
-  }
-
-  return {
-    accountId,
-    enabled,
-    name: normalizeOptionalString(merged.name),
-    token: "",
-    tokenSource: "none",
-    tokenStatus: "missing",
-    configured: false,
+    },
     config: merged,
-  };
+    accountToken: accountConfig?.token,
+    hasAccountToken,
+    channelToken: params.cfg.channels?.discord?.token,
+    // Known divergence: doctor inspection must use its injected environment snapshot.
+    resolveFallbackToken: () => {
+      const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
+      const envToken = allowEnv
+        ? normalizeSecretInputString(params.envToken ?? process.env.DISCORD_BOT_TOKEN)
+        : undefined;
+      return {
+        token: envToken?.replace(/^Bot\s+/i, "") ?? "",
+        source: envToken ? ("env" as const) : ("none" as const),
+      };
+    },
+  });
 }

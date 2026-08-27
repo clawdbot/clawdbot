@@ -75,8 +75,8 @@ describe("lobsterdex", () => {
   it("tolerates corrupt storage", () => {
     localStorage.setItem("openclaw.control.lobsterdex.v1", "{not json");
     expect(getLobsterdex().size).toBe(0);
-    recordLobsterVisit("teal");
-    expect(getLobsterdex().has("teal")).toBe(true);
+    recordLobsterVisit("blue");
+    expect(getLobsterdex().has("blue")).toBe(true);
   });
 });
 

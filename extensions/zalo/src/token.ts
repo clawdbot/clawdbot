@@ -1,23 +1,40 @@
 // Zalo plugin module implements token behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
-import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "./secret-input.js";
-import type { ZaloConfig } from "./types.js";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
+import { resolveSecretInputString, type SecretInputStringResolutionMode } from "./secret-input.js";
+import type { ResolvedZaloAccount, ZaloConfig, ZaloTokenStatus } from "./types.js";
 
 type ZaloTokenResolution = BaseTokenResolution & {
   source: "env" | "config" | "configFile" | "none";
+  status: ZaloTokenStatus;
+  credentialDiagnostics?: ResolvedZaloAccount["credentialDiagnostics"];
 };
 
-function readTokenFromFile(tokenFile: string | undefined): string {
-  return tryReadSecretFileSync(tokenFile, "Zalo token file", { rejectSymlink: true }) ?? "";
+function readTokenFromFile(tokenFile: string, configPath: string): ZaloTokenResolution {
+  const result = tryReadSecretFileSync(
+    tokenFile,
+    "Zalo token file",
+    { rejectSymlink: true },
+    {
+      configPath,
+    },
+  );
+  return result.status === "available"
+    ? { token: result.value, source: "configFile", status: "available" }
+    : {
+        token: "",
+        source: "configFile",
+        status: "configured_unavailable",
+        credentialDiagnostics: [result.diagnostic],
+      };
 }
 
 export function resolveZaloToken(
   config: ZaloConfig | undefined,
   accountId?: string | null,
-  options?: { allowUnresolvedSecretRef?: boolean },
+  options?: { mode?: SecretInputStringResolutionMode },
 ): ZaloTokenResolution {
   const resolvedAccountId = normalizeAccountId(accountId ?? config?.defaultAccount);
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
@@ -29,50 +46,49 @@ export function resolveZaloToken(
   const accountHasBotToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "botToken"));
 
   if (accountConfig && accountHasBotToken) {
-    const token = options?.allowUnresolvedSecretRef
-      ? normalizeSecretInputString(accountConfig.botToken)
-      : normalizeResolvedSecretInputString({
-          value: accountConfig.botToken,
-          path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
-        });
-    if (token) {
-      return { token, source: "config" };
+    const token = resolveSecretInputString({
+      value: accountConfig.botToken,
+      path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
+      mode: options?.mode,
+    });
+    if (token.status === "available") {
+      return { token: token.value, source: "config", status: "available" };
     }
-    const fileToken = readTokenFromFile(accountConfig.tokenFile);
-    if (fileToken) {
-      return { token: fileToken, source: "configFile" };
+    if (token.status === "configured_unavailable") {
+      return { token: "", source: "config", status: "configured_unavailable" };
     }
   }
 
-  if (!accountHasBotToken) {
-    const fileToken = readTokenFromFile(accountConfig?.tokenFile);
-    if (fileToken) {
-      return { token: fileToken, source: "configFile" };
-    }
+  if (accountConfig?.tokenFile?.trim()) {
+    return readTokenFromFile(
+      accountConfig.tokenFile,
+      `channels.zalo.accounts.${resolvedAccountId}.tokenFile`,
+    );
   }
 
   if (!accountHasBotToken) {
-    const token = options?.allowUnresolvedSecretRef
-      ? normalizeSecretInputString(baseConfig?.botToken)
-      : normalizeResolvedSecretInputString({
-          value: baseConfig?.botToken,
-          path: "channels.zalo.botToken",
-        });
-    if (token) {
-      return { token, source: "config" };
+    const token = resolveSecretInputString({
+      value: baseConfig?.botToken,
+      path: "channels.zalo.botToken",
+      mode: options?.mode,
+    });
+    if (token.status === "available") {
+      return { token: token.value, source: "config", status: "available" };
     }
-    const fileToken = readTokenFromFile(baseConfig?.tokenFile);
-    if (fileToken) {
-      return { token: fileToken, source: "configFile" };
+    if (token.status === "configured_unavailable") {
+      return { token: "", source: "config", status: "configured_unavailable" };
+    }
+    if (baseConfig?.tokenFile?.trim()) {
+      return readTokenFromFile(baseConfig.tokenFile, "channels.zalo.tokenFile");
     }
   }
 
   if (isDefaultAccount) {
     const envToken = process.env.ZALO_BOT_TOKEN?.trim();
     if (envToken) {
-      return { token: envToken, source: "env" };
+      return { token: envToken, source: "env", status: "available" };
     }
   }
 
-  return { token: "", source: "none" };
+  return { token: "", source: "none", status: "missing" };
 }

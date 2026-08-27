@@ -1,4 +1,5 @@
 // Collects configured model, generation, voice, and memory provider ownership.
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import {
   buildModelCatalogMergeKey,
   parseModelCatalogRef,
@@ -9,15 +10,16 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveConfiguredTalkRealtimeProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import type {
   ConfiguredGenerationProviderIds,
   ConfiguredVoiceProviderIds,
 } from "./gateway-startup-plugin-contracts.js";
-import { normalizeConfiguredSpeechProviderIdForStartup } from "./gateway-startup-speech-providers.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -30,7 +32,7 @@ export function manifestOwnsConfiguredSpeechProvider(params: {
     return false;
   }
   return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
-    const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
+    const normalized = normalizeOptionalLowercaseString(providerId);
     return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
   });
 }
@@ -57,29 +59,8 @@ export function manifestOwnsConfiguredWebSearchProvider(params: {
   });
 }
 
-function listModelProviderRefs(value: unknown): string[] {
-  if (typeof value === "string") {
-    return [value];
-  }
-  if (!isRecord(value)) {
-    return [];
-  }
-  const refs: string[] = [];
-  if (typeof value.primary === "string") {
-    refs.push(value.primary);
-  }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string") {
-        refs.push(fallback);
-      }
-    }
-  }
-  return refs;
-}
-
 function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
-  return listModelProviderRefs(value)
+  return listModelRefsFromConfigValue(value)
     .map(parseModelCatalogRef)
     .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
     .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
@@ -87,7 +68,7 @@ function listModelProviderRefParts(value: unknown): Array<{ providerId: string; 
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   return new Set(
-    listModelProviderRefs(value)
+    listModelRefsFromConfigValue(value)
       .map((ref) => {
         const slashIndex = ref.indexOf("/");
         return slashIndex > 0 ? normalizeProviderId(ref.slice(0, slashIndex)) : "";
@@ -103,11 +84,22 @@ type ManifestModelProviderLookup = {
 
 function buildManifestModelProviderLookup(
   manifestRegistry: PluginManifestRegistry,
+  config: OpenClawConfig,
+  modelIdsByProvider: ReadonlyMap<string, ReadonlySet<string>>,
 ): ManifestModelProviderLookup {
-  const modelApis = new Map(
-    planManifestModelCatalogRows({ registry: manifestRegistry }).rows.flatMap((row) =>
-      row.api ? [[row.mergeKey, row.api] as const] : [],
+  const providerFilters = [...modelIdsByProvider.keys()];
+  const mergeKeyFilter = new Set(
+    [...modelIdsByProvider].flatMap(([providerId, modelIds]) =>
+      [...modelIds].map((modelId) => buildModelCatalogMergeKey(providerId, modelId)),
     ),
+  );
+  const modelApis = new Map(
+    planEffectiveModelCatalogRows({
+      registry: manifestRegistry,
+      config,
+      providerFilters,
+      mergeKeyFilter,
+    }).rows.flatMap((row) => (row.api ? [[row.mergeKey, row.api] as const] : [])),
   );
   return {
     modelApis,
@@ -122,7 +114,6 @@ export function collectConfiguredAgentModelProviderIds(
   manifestRegistry: PluginManifestRegistry,
 ): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
-  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry);
   const addModelProviderRefs = (value: unknown) => {
     for (const { providerId, modelId } of listModelProviderRefParts(value)) {
       const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
@@ -144,8 +135,7 @@ export function collectConfiguredAgentModelProviderIds(
   addModelProviderRefs(defaults?.utilityModel);
   addModelMapProviderIds(defaults?.models);
 
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
-  for (const agent of agents) {
+  for (const agent of listAgentEntries(config)) {
     if (!isRecord(agent)) {
       continue;
     }
@@ -153,6 +143,15 @@ export function collectConfiguredAgentModelProviderIds(
     addModelProviderRefs(agent.utilityModel);
     addModelMapProviderIds(agent.models);
   }
+
+  if (modelIdsByProvider.size === 0) {
+    return new Set();
+  }
+  const manifestModelProviders = buildManifestModelProviderLookup(
+    manifestRegistry,
+    config,
+    modelIdsByProvider,
+  );
 
   return new Set(
     [...modelIdsByProvider.entries()]
@@ -217,10 +216,15 @@ export function collectConfiguredVoiceProviderIds(
   config: OpenClawConfig,
 ): ConfiguredVoiceProviderIds {
   const providerIds = collectModelProviderIds(config.agents?.defaults?.voiceModel);
+  const realtimeProviderIds = new Set(providerIds);
+  const talkRealtimeProviderId = resolveConfiguredTalkRealtimeProviderId(config);
+  if (talkRealtimeProviderId) {
+    realtimeProviderIds.add(talkRealtimeProviderId.toLowerCase());
+  }
   return {
     speechProviders: providerIds,
     realtimeTranscriptionProviders: providerIds,
-    realtimeVoiceProviders: providerIds,
+    realtimeVoiceProviders: realtimeProviderIds,
   };
 }
 
@@ -366,8 +370,7 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     }
   };
   addEffectiveProviders(undefined);
-  const agents = config.agents?.list;
-  const agentEntries = Array.isArray(agents) ? agents.filter(isRecord) : [];
+  const agentEntries = listAgentEntries(config);
   if (agentEntries.length === 0) {
     return [...byConfiguredIdAndSource.values()];
   }
@@ -426,17 +429,13 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 }
 
 // Registered embedding provider ids the loaded runtime can actually serve: the live
-// registry's memory + general embedding providers plus the global/core embedding
-// registry. Shared by gateway boot (the startup "configured but unregistered" warning)
-// and the `/status plugins` drift line so both agree on what counts as "registered" and
-// never diverge. The `{ provider: entry.adapter }` wrap makes the core registry entries
-// match the registration shape so the id projection stays uniform across all three sources.
+// registry's embedding providers plus the global/core embedding registry. Shared by
+// gateway boot and `/status plugins` so both agree on what counts as registered.
 export function collectRegisteredEmbeddingProviderIds(
-  registry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>,
+  registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
   return new Set(
     [
-      ...(registry.memoryEmbeddingProviders ?? []),
       ...(registry.embeddingProviders ?? []),
       ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
     ].map((entry) => entry.provider.id),

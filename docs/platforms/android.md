@@ -1,5 +1,5 @@
 ---
-summary: "Android app (node): connection runbook + Connect/Chat/OpenClaw/Voice/Canvas command surface"
+summary: "Android app (node): connection runbook + Connect/Chat/OpenClaw/Voice command surface"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android gateway discovery or auth
@@ -301,34 +301,11 @@ The Android Chat tab supports session selection (default `main`, plus other exis
 - History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
 - Send: `chat.send`
 - Durable sending: every send (text, picked images, and voice notes) is journaled to a per-gateway on-device outbox before any network attempt, so app termination cannot lose submitted input. Sends queued while offline deliver in order on reconnect with stable idempotency keys, and a send is retired only after the turn is visible in canonical `chat.history` — an acknowledgement alone is not treated as proof of delivery. Ambiguous outcomes (lost acknowledgement, app killed mid-send, gateway restart before the transcript write) surface as visible rows with explicit **Retry**/**Delete** instead of auto-resending. Slash commands never auto-replay across a reconnect; they park for explicit retry. The queue is bounded (50 messages and 48 MB of attachment bytes per gateway) and unsent rows expire after 48 hours. Composer drafts that were never submitted are not process-durable.
+- Image input works through the picker and Android Sharesheet. Assistant-generated images resolve through the paired Gateway connection, render inline with a full-screen preview, and retain only their small artifact references in the offline transcript cache. Downloads are capped at 12 MiB and decoded to bounded display bitmaps.
 - Push updates (best-effort): `chat.subscribe` -> `event:"chat"`
 - Listen: long-press an assistant message and choose **Listen** to hear it; audio renders via gateway `tts.speak` with the configured TTS provider chain, and on-device system TTS is used when the gateway cannot render audio. Playback stops on session switch, new chat, app backgrounding, or chat close.
 
-### 7. Canvas + camera
-
-#### Gateway Canvas Host (recommended for web content)
-
-To have the node show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
-
-<Note>
-Nodes load canvas from the Gateway HTTP server (same port as `gateway.port`, default `18789`).
-</Note>
-
-1. Create `~/.openclaw/workspace/canvas/index.html` on the gateway host.
-2. Navigate the node to it (LAN):
-
-```bash
-openclaw nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18789/__openclaw__/canvas/"}'
-```
-
-Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__openclaw__/canvas/`.
-
-This server injects a live-reload client into HTML and reloads on file changes. The Gateway also serves `/__openclaw__/a2ui/`, but the Android app treats remote A2UI pages as render-only. Action-capable A2UI commands use the bundled app-owned A2UI page.
-
-Canvas commands (foreground only):
-
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). `canvas.snapshot` returns `{ format, base64 }` (default `format="jpeg"`).
-- A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias). These use the bundled app-owned A2UI page for action-capable rendering.
+### 7. Camera
 
 Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camera.clip` (mp4). See [Camera node](/nodes/camera) for parameters and CLI helpers.
 

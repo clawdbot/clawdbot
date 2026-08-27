@@ -10,6 +10,58 @@ import { testing } from "./openai-transport-stream.test-support.js";
 // streams that emitted nothing. These cover the two sides of that guard: an incomplete turn
 // whose text arrived only on the terminal event, and one whose text already streamed.
 describe("incomplete Responses terminal output", () => {
+  it("recovers safe partial output when an incomplete event omits response status", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp-status-omitted",
+            incomplete_details: { reason: "max_output_tokens" },
+            output: [
+              {
+                type: "message",
+                id: "msg-status-omitted",
+                role: "assistant",
+                content: [{ type: "output_text", text: "TERMINAL_PARTIAL" }],
+              },
+              {
+                type: "function_call",
+                id: "fc-status-omitted",
+                call_id: "call-status-omitted",
+                name: "write",
+                arguments: '{"path":"unfinished',
+              },
+            ],
+            usage: {
+              input_tokens: 21,
+              output_tokens: 4,
+              total_tokens: 25,
+              input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+            },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("length");
+    expect(output.content).toMatchObject([{ type: "text", text: "TERMINAL_PARTIAL" }]);
+    expect(output.content.some((block) => block.type === "toolCall")).toBe(false);
+    expect(output.usage).toMatchObject({
+      input: 13,
+      output: 4,
+      cacheRead: 6,
+      cacheWrite: 2,
+      totalTokens: 25,
+    });
+  });
+
   it("does not replay terminal text that already streamed", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);

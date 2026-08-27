@@ -20,6 +20,9 @@ function createParams() {
     sessionId: "session-1",
     sessionKey: "agent:main:telegram:direct:chat-1",
     senderId: "user-1",
+    senderName: "User One",
+    senderUsername: "user-one",
+    senderE164: "+15551234567",
     timeoutMs: 60_000,
   };
 }
@@ -42,6 +45,10 @@ describe("createRecoveryMessageActionTurnCapability", () => {
     ).toMatchObject({
       requesterAccountId: "work",
       requesterSenderId: "user-1",
+      requesterSenderName: "User One",
+      requesterSenderUsername: "user-one",
+      requesterSenderE164: "+15551234567",
+      sourceReplySessionKey: "agent:main:telegram:direct:chat-1",
       toolContext: {
         currentChannelId: "chat-1",
         currentChannelProvider: "telegram",

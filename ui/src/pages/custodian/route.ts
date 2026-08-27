@@ -1,5 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveOnboardingMode } from "../../app/onboarding-mode.ts";
 
@@ -13,8 +14,7 @@ function resolveCustodianIntent(search: string): CustodianRouteData["intent"] {
 }
 
 export const page = definePage({
-  id: "custodian",
-  path: "/custodian",
+  ...routePageSpec("custodian"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: (_context: ApplicationContext, { location }): CustodianRouteData => ({
     onboarding: resolveOnboardingMode(location.search),

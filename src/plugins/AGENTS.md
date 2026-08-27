@@ -83,4 +83,4 @@ assembly, and contract enforcement.
   change bundled plugin import fanout, run `pnpm build`.
 - If the change can alter bundled plugin startup cost, re-profile the affected
   plugin entrypoint with:
-  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`
+  `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`

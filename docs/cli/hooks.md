@@ -15,12 +15,23 @@ Related: [Hooks](/automation/hooks) - [Plugin hooks](/plugins/hooks)
 ## List hooks
 
 ```bash
-openclaw hooks list [--eligible] [--json] [-v|--verbose]
+openclaw hooks --agent <id> --json
+openclaw hooks list [--agent <id>] [--eligible] [--json] [-v|--verbose]
 ```
 
-Lists hooks discovered from workspace, managed, extra, and bundled directories.
+Bare `openclaw hooks` and `openclaw hooks --json` use the same list operation as
+`openclaw hooks list`. The command discovers hooks from workspace, managed,
+extra, and bundled directories.
+
+Hook reports (`hooks`, `list`, `info`, and `check`) first request the selected
+Gateway's inventory. Configured remote Gateways and explicit
+`OPENCLAW_GATEWAY_URL` targets are authoritative: missing URLs, connection or
+authentication failures, and unsupported methods fail instead of showing
+client-local hooks. An implicitly selected local Gateway may fall back to local
+discovery when it is offline or does not support the current hook-report method.
 
 - `--eligible`: only hooks whose requirements are met.
+- `--agent <id>`: inspect hooks for that agent's workspace. Required when multiple agents are configured without an implicit owner.
 - `--json`: structured output.
 - `-v, --verbose`: include a Missing column with unmet requirements.
 
@@ -30,14 +41,14 @@ Hooks (4/5 ready)
 Ready:
   🚀 boot-md ✓ - Run BOOT.md on gateway startup
   📎 bootstrap-extra-files ✓ - Inject additional workspace bootstrap files during agent bootstrap
-  📝 command-logger ✓ - Log all command events to a centralized audit file
+  📝 command-logger ✓ - Log emitted command events to a centralized audit file
   💾 session-memory ✓ - Save session context to memory when /new or /reset command is issued
 ```
 
 ## Get hook info
 
 ```bash
-openclaw hooks info <name> [--json]
+openclaw hooks info <name> [--agent <id>] [--json]
 ```
 
 `<name>` is the hook name or hook key (for example `session-memory`). Shows source, file/handler paths, homepage, events, and per-requirement status (binaries, env, config, OS).
@@ -45,7 +56,7 @@ openclaw hooks info <name> [--json]
 ## Check eligibility
 
 ```bash
-openclaw hooks check [--json]
+openclaw hooks check [--agent <id>] [--json]
 ```
 
 Prints a ready/not-ready count summary; with hooks not ready, lists each with its blocking reason.
@@ -53,10 +64,14 @@ Prints a ready/not-ready count summary; with hooks not ready, lists each with it
 ## Enable a hook
 
 ```bash
-openclaw hooks enable <name>
+openclaw hooks enable <name> [--agent <id>]
 ```
 
 Adds/updates `hooks.internal.entries.<name>.enabled = true` in config and also flips the `hooks.internal.enabled` master switch on (the gateway does not load any internal hook handler until at least one is configured). Fails if the hook does not exist, is plugin-managed, or is not eligible (missing requirements).
+
+`--agent <id>` selects the workspace used to discover the hook and is required
+when multiple agents are configured without an implicit owner. The persisted
+hook entry is global and applies wherever that hook key is discovered.
 
 Plugin-managed hooks show `plugin:<id>` in `hooks list` and cannot be enabled/disabled here; enable or disable the owning plugin instead.
 
@@ -65,7 +80,7 @@ Restart the gateway after enabling (macOS menu bar app restart, or restart your 
 ## Disable a hook
 
 ```bash
-openclaw hooks disable <name>
+openclaw hooks disable <name> [--agent <id>]
 ```
 
 Sets `hooks.internal.entries.<name>.enabled = false`. Restart the gateway afterward.
@@ -96,13 +111,13 @@ Hook packs install through the unified plugins installer/updater; `openclaw hook
 
 ## Bundled hooks
 
-| Hook                  | Events                                            | What it does                                                                                       |
-| --------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                                  |
-| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during agent bootstrap |
-| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                             |
-| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                             |
-| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                              |
+| Hook                  | Events                                            | What it does                                                                            |
+| --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
+| command-logger        | `command`                                         | Logs emitted command events to `~/.openclaw/logs/commands.log`                          |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 
 Enable any bundled hook with `openclaw hooks enable <hook-name>`. Full details, config keys, and defaults: [Bundled hooks](/automation/hooks#bundled-hooks).
 
@@ -117,6 +132,8 @@ grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .   # filter by action
 ## Notes
 
 - `hooks list --json`, `info --json`, and `check --json` write structured JSON directly to stdout.
+- Failed hook reports use the standard [CLI JSON failure envelope](/cli#json-failures); missing hook info also includes the requested `hook` name.
+- `hooks list`, `info`, and `check` pass `--agent` to a running Gateway and preserve it when an implicit local Gateway requires older-version or offline read-only discovery.
 
 ## Related
 

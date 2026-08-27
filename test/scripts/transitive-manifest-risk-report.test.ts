@@ -7,13 +7,17 @@ import {
   fetchNpmManifest,
   readBoundedNpmRegistryText,
   renderTransitiveManifestRiskMarkdownReport,
-} from "../../scripts/transitive-manifest-risk-report.mjs";
+} from "../../scripts/transitive-manifest-risk-report.mts";
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/transitive-manifest-risk-report.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/transitive-manifest-risk-report.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {
@@ -208,8 +212,9 @@ describe("transitive-manifest-risk-report", () => {
       version: "1.0.0",
       registryBaseUrl: "https://registry.example.test",
       fetchImpl: async (url, init) => {
+        const requestUrl = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
         fetchCalls.push({
-          url: String(url),
+          url: requestUrl,
           accept: new Headers(init?.headers).get("accept"),
           signal: init?.signal instanceof AbortSignal ? init.signal : null,
         });
@@ -238,7 +243,7 @@ describe("transitive-manifest-risk-report", () => {
 
     expect(fetchCalls).toEqual([
       {
-        url: "https://registry.example.test/@scope%2fpackage",
+        url: "https://registry.example.test/@scope%2Fpackage",
         accept: "application/json",
         signal: expect.any(AbortSignal),
       },

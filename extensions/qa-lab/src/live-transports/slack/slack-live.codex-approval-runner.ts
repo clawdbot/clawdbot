@@ -20,7 +20,7 @@ import {
 import type {
   SlackQaCodexApprovalScenarioRun,
   SlackQaScenarioContext,
-  SlackQaScenarioDefinition,
+  SlackQaScenarioMetadata,
   SlackObservedMessage,
   SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
@@ -31,7 +31,7 @@ export async function runSlackCodexApprovalScenario(params: {
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
 }) {
@@ -97,7 +97,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
   observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
-  scenario: SlackQaScenarioDefinition;
+  scenario: SlackQaScenarioMetadata;
   sutAccountId: string;
 }) {
   const requestStartedAt = new Date();
@@ -121,7 +121,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     channelId: params.channelId,
     client: params.context.sutReadClient,
     decision: params.run.decision,
-    extraTextMatches: ["openclaw-codex-app-server", expectedTitle],
+    extraTextMatches: ["codex", expectedTitle],
     observedMessages: params.observedMessages,
     oldestTs,
     scenarioId: params.scenario.id,
@@ -185,7 +185,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
-    extraTextMatches: ["openclaw-codex-app-server", expectedTitle],
+    extraTextMatches: ["codex", expectedTitle],
   });
   const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
     approvalId,

@@ -183,18 +183,19 @@ type WebhookPostResult = {
 };
 
 type WebhookPostInvoker = (params: {
-  failWith?: Error;
+  failWith?: unknown;
   rawBody: string;
   signed: boolean;
 }) => Promise<WebhookPostResult>;
 
 async function invokeNodePostContract(params: {
-  failWith?: Error;
+  failWith?: unknown;
   rawBody: string;
   signed: boolean;
 }) {
   const dispatched = vi.fn(async () => {
     if (params.failWith) {
+      // oxlint-disable-next-line typescript/only-throw-error -- Webhook boundaries must report non-Error throws from downstream dispatchers.
       throw params.failWith;
     }
   });
@@ -223,13 +224,14 @@ async function invokeNodePostContract(params: {
 }
 
 async function invokeMiddlewarePostContract(params: {
-  failWith?: Error;
+  failWith?: unknown;
   rawBody: string;
   signed: boolean;
 }) {
   const runtime = createRuntimeMock();
   const onEvents = vi.fn(async () => {
     if (params.failWith) {
+      // oxlint-disable-next-line typescript/only-throw-error -- Webhook boundaries must report non-Error throws from downstream dispatchers.
       throw params.failWith;
     }
   });
@@ -352,6 +354,26 @@ describe("LINE webhook shared POST contract", () => {
       expect(result.status).toBe(500);
       expect(result.body).toEqual({ error: "Internal server error" });
       expect(result.runtimeError).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(sharedWebhookPostContractCases)(
+    "$name reports non-Error admission failures without object Object",
+    async ({ invoke }) => {
+      const result = await invoke({
+        failWith: { code: "LINE_ADMISSION_REJECTED", retryAfterMs: 250 },
+        rawBody: JSON.stringify({ events: [{ type: "message" }] }),
+        signed: true,
+      });
+
+      expect(result.status).toBe(500);
+      expect(result.body).toEqual({ error: "Internal server error" });
+      expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      const runtimeMessage = String(firstMockCall(result.runtimeError, "runtime error")[0]);
+      expect(runtimeMessage).toContain("line webhook error:");
+      expect(runtimeMessage).toContain("LINE_ADMISSION_REJECTED");
+      expect(runtimeMessage).toContain("retryAfterMs");
+      expect(runtimeMessage).not.toContain("[object Object]");
     },
   );
 });

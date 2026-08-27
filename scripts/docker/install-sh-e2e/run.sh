@@ -855,7 +855,6 @@ run_profile() {
   test -f "$workspace/IDENTITY.md"
   test -f "$workspace/USER.md"
   test -f "$workspace/SOUL.md"
-  test -f "$workspace/TOOLS.md"
   # The remaining checks are deterministic tool smokes, not the interactive
   # first-run identity ritual. Drop BOOTSTRAP.md so provider prompts stay focused
   # on the fixture task and do not spend turns following onboarding copy.

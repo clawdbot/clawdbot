@@ -6,7 +6,10 @@ import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
-import { createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
+import {
+  createAcpTestConfig,
+  createAcpTestReplyDispatcher as createDispatcher,
+} from "./test-fixtures/acp-runtime.js";
 
 const ttsMocks = vi.hoisted(() => ({
   maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
@@ -21,10 +24,12 @@ const deliveryMocks = vi.hoisted(() => ({
       _params: unknown,
     ): Promise<{
       ok: boolean;
+      delivered: boolean;
       messageId?: string;
       suppressed?: boolean;
       reason?: string;
-    }> => ({ ok: true, messageId: "mock-message" }),
+      error?: string;
+    }> => ({ ok: true, delivered: true, messageId: "mock-message" }),
   ),
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
@@ -75,7 +80,7 @@ const channelPluginMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
+vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
@@ -91,18 +96,6 @@ vi.mock("../../channels/plugins/index.js", () => ({
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: (params: unknown) => deliveryMocks.runMessageAction(params),
 }));
-
-function createDispatcher(): ReplyDispatcher {
-  return {
-    sendToolResult: vi.fn(() => true),
-    sendBlockReply: vi.fn(() => true),
-    sendFinalReply: vi.fn(() => true),
-    waitForIdle: vi.fn(async () => {}),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-}
 
 function createCoordinator(onReplyStart?: (...args: unknown[]) => Promise<void>) {
   return createAcpDispatchDeliveryCoordinator({
@@ -180,7 +173,11 @@ async function expectVisibleChatBlockRoutesToAccount(
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
     deliveryMocks.routeReply.mockClear();
-    deliveryMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock-message" });
+    deliveryMocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "mock-message",
+    });
     deliveryMocks.runMessageAction.mockClear();
     deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     channelPluginMocks.getChannelPlugin.mockClear();
@@ -236,10 +233,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     const notice = { text: "Model Fallback: openai/gpt-5.5", isFallbackNotice: true };
     await coordinator.deliver("final", notice);
-    await coordinator.settleVisibleText();
 
     expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
+    expect(coordinator.hasDeliveredAnswerFinalToUser()).toBe(false);
   });
 
   it("tracks successful final delivery separately from routed counters", async () => {
@@ -1042,8 +1039,8 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     deliveryMocks.routeReply.mockImplementationOnce(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as { abortSignal?: AbortSignal };
       return params.abortSignal?.aborted
-        ? { ok: false, error: "Reply routing aborted" }
-        : { ok: true, messageId: "unexpected" };
+        ? { ok: false, delivered: false, error: "Reply routing aborted" }
+        : { ok: true, delivered: true, messageId: "unexpected" };
     });
     const coordinator = createAcpDispatchDeliveryCoordinator({
       cfg: createAcpTestConfig(),
@@ -1070,9 +1067,37 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 
+  it("does not retry routed ACP text after a partial delivery failure", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: false,
+      delivered: true,
+      messageId: "visible-1",
+      error: "later chunk failed",
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+    });
+
+    const delivered = await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(coordinator.getRoutedCounts().final).toBe(1);
+  });
+
   it("treats hook-suppressed routed ACP block text as handled", async () => {
     deliveryMocks.routeReply.mockResolvedValueOnce({
       ok: true,
+      delivered: false,
       suppressed: true,
       reason: "cancelled_by_reply_payload_sending_hook",
     });

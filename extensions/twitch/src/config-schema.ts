@@ -18,6 +18,8 @@ const TwitchAccountShape = {
   channel: z.string().min(1),
   /** Enable this account */
   enabled: z.boolean().optional(),
+  /** Allow channel-initiated configuration writes */
+  configWrites: z.boolean().optional(),
   /** Allowlist of Twitch user IDs who can interact with the bot (use IDs for safety, not usernames) */
   allowFrom: z.array(z.string()).optional(),
   /** Roles allowed to interact with the bot (e.g., ["moderator", "vip", "subscriber"]) */
@@ -47,8 +49,13 @@ const TwitchAccountSchema = z.object(TwitchAccountShape);
 const TwitchConfigBaseShape = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
+  configWrites: z.boolean().optional(),
   markdown: MarkdownConfigSchema.optional(),
   defaultAccount: z.string().optional(),
+  // Both union branches are closed, so a root override declared only on the
+  // account shape is rejected whenever accounts is present.
+  historyLimit: z.number().int().min(0).optional(),
+  responsePrefix: z.string().optional(),
 };
 
 /**

@@ -1,12 +1,9 @@
 // Opencode tests cover onboard plugin behavior.
-import {
-  expectProviderOnboardAllowlistAlias,
-  expectProviderOnboardPrimaryAndFallbacks,
-} from "openclaw/plugin-sdk/provider-test-contracts";
+import { expectProviderOnboardAllowlistAlias } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, it } from "vitest";
-import { applyOpencodeZenConfig, applyOpencodeZenProviderConfig } from "./onboard.js";
+import { applyOpencodeZenProviderConfig } from "./onboard.js";
 
-const MODEL_REF = "opencode/claude-opus-4-6";
+const MODEL_REF = "opencode/claude-opus-5";
 
 describe("opencode onboard", () => {
   it("adds allowlist entry and preserves alias", () => {
@@ -14,13 +11,6 @@ describe("opencode onboard", () => {
       applyProviderConfig: applyOpencodeZenProviderConfig,
       modelRef: MODEL_REF,
       alias: "My Opus",
-    });
-  });
-
-  it("sets primary model and preserves existing model fallbacks", () => {
-    expectProviderOnboardPrimaryAndFallbacks({
-      applyConfig: applyOpencodeZenConfig,
-      modelRef: MODEL_REF,
     });
   });
 });

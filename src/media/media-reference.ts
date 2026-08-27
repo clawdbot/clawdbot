@@ -136,6 +136,9 @@ export function parseInboundMediaUri(source: string): InboundMediaUri | null {
       `Unsupported media URI location: ${parsed.hostname || "(missing)"}`,
     );
   }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
+  }
 
   let id: string;
   try {
@@ -146,7 +149,8 @@ export function parseInboundMediaUri(source: string): InboundMediaUri | null {
     });
   }
 
-  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0")) {
+  const invalidId = !id || id === "." || id === "..";
+  if (invalidId || id.includes("/") || id.includes("\\") || id.includes("\0")) {
     throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
   }
 
@@ -154,6 +158,34 @@ export function parseInboundMediaUri(source: string): InboundMediaUri | null {
     id,
     normalizedSource,
   };
+}
+
+/** Converts a managed inbound path to a URI without exposing paths outside its store. */
+export function buildInboundMediaUriFromPath(source: string): string | undefined {
+  const localPath = maybeLocalPathFromSource(source.trim());
+  if (!localPath) {
+    return undefined;
+  }
+  const inboundDir = path.resolve(getMediaDir(), "inbound");
+  const relativePath = path.relative(inboundDir, path.resolve(localPath));
+  // The inbound id must be a single path component that does not escape the store bucket;
+  // reject traversal, nested segments, and absolute/empty results.
+  if (
+    !relativePath ||
+    relativePathEscapesBase(relativePath) ||
+    relativePath.includes(path.sep) ||
+    relativePath.includes("\\")
+  ) {
+    return undefined;
+  }
+  try {
+    const parsed = parseInboundMediaUri(`media://inbound/${relativePath}`);
+    return parsed?.normalizedSource;
+  } catch {
+    // Malformed percent-encoded ids (e.g. a stray `%`) make the URI decoder throw;
+    // redact instead of propagating the failure into the shared history projection.
+    return undefined;
+  }
 }
 
 async function resolveInboundMediaUri(

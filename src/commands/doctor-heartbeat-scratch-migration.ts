@@ -4,7 +4,6 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +17,8 @@ import {
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
-import { resolveHeartbeatAgents } from "../infra/heartbeat-runner.js";
+import { formatErrorMessage as errorMessage } from "../infra/errors.js";
+import { resolveHeartbeatAgents } from "../infra/heartbeat-config.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readRegularFile } from "../infra/regular-file.js";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -26,6 +26,7 @@ import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 
 const HEARTBEAT_SCRATCH_MIGRATION_CHECK_ID = "core/doctor/heartbeat-scratch-migration";
+const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 type HeartbeatScratchMigrationResult = {
@@ -41,17 +42,13 @@ type HeartbeatSource = {
   sha256: string;
 };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function readHeartbeatSource(
   cfg: OpenClawConfig,
   agentId: string,
   options?: { recoverClaims?: boolean },
 ): Promise<HeartbeatSource | undefined> {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const heartbeatPath = path.join(workspaceDir, DEFAULT_HEARTBEAT_FILENAME);
+  const heartbeatPath = path.join(workspaceDir, LEGACY_HEARTBEAT_FILENAME);
   let sourceStat;
   try {
     sourceStat = await fs.lstat(heartbeatPath);
@@ -108,7 +105,7 @@ async function readHeartbeatSource(
   }
   return {
     path: heartbeatPath,
-    entryKey: path.join(workspaceRealPath, DEFAULT_HEARTBEAT_FILENAME),
+    entryKey: path.join(workspaceRealPath, LEGACY_HEARTBEAT_FILENAME),
     content,
     sha256: hashCronScratchSource(content),
   };
@@ -369,7 +366,7 @@ export async function collectHeartbeatScratchMigrationFindings(
   for (const agent of resolveHeartbeatAgents(cfg)) {
     const heartbeatPath = path.join(
       resolveAgentWorkspaceDir(cfg, agent.agentId),
-      DEFAULT_HEARTBEAT_FILENAME,
+      LEGACY_HEARTBEAT_FILENAME,
     );
     try {
       const source = await readHeartbeatSource(cfg, agent.agentId);
@@ -574,16 +571,16 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     // this run's scratch imports must revert too — otherwise those agents keep
     // serving the imported copy and ignore later edits to the restored file.
     // A monitor that had no row before must return to no-row (not a tombstone),
-    // or the runner's legacy fallback and future migrations stay suppressed.
+    // or a future migration retry treats the rolled-back import as explicitly unset.
     const rollbackCommitted = () => {
       for (const commit of committedThisRun.toReversed()) {
         if (!commit.previous) {
           // Revision-guarded atomic delete restores the pre-migration no-row
-          // state so the runner's legacy fallback stays available. Accepted
+          // state so a future migration retry can import it. Accepted
           // tradeoff: this resets the revision counter to 0, so a writer still
           // holding a pre-migration expectedRevision:0 token could CAS through
           // after the rollback; that requires a third concurrent writer racing
-          // doctor and is preferred over permanently disabling the fallback.
+          // doctor and is preferred over permanently blocking migration.
           const deleted = deleteCronJobScratch(
             storePath,
             commit.monitor.id,

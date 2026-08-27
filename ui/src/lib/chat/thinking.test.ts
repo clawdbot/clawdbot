@@ -1,8 +1,8 @@
 // Control UI tests cover canonical and legacy thinking-level normalization.
 import { describe, expect, it } from "vitest";
+import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import {
   formatThinkingOverrideLabel,
-  normalizeThinkLevel,
   resolveChatThinkingSelectState,
   resolveThinkingLevelInput,
 } from "./thinking.ts";
@@ -20,9 +20,6 @@ describe("chat thinking helpers", () => {
       resolveThinkingLevelInput(
         "ultra",
         {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: 1,
           thinkingLevels: [{ id: "ultra", label: "Ultra" }],
         },
         undefined,
@@ -51,7 +48,12 @@ describe("chat thinking helpers", () => {
       },
     });
 
-    expect(state.currentOverride).toBe("ultra");
+    expect(state.selection).toEqual({
+      kind: "unanchored",
+      source: "override",
+      value: "ultra",
+      displayLabel: "Ultra",
+    });
     expect(state.options.map((option) => option.value)).toEqual(["max"]);
   });
 

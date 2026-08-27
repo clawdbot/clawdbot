@@ -90,44 +90,7 @@ export async function startMatrixQaHarness(
         ).stdout;
     const homeserverPort =
       requestedHomeserverPort || parseMatrixQaPublishedPort(publishedPortOutput);
-    await sleepImpl(1_000);
-    await waitForDockerServiceHealth(
-      MATRIX_QA_SERVICE,
-      files.composeFile,
-      repoRoot,
-      runCommand,
-      sleepImpl,
-    );
-
-    const hostBaseUrl = `http://127.0.0.1:${homeserverPort}/`;
-    let upstreamBaseUrl = hostBaseUrl;
-    const hostReachable = await isMatrixVersionsReachable(hostBaseUrl, fetchImpl);
-    if (!hostReachable) {
-      const containerBaseUrl = await resolveComposeServiceUrl(
-        MATRIX_QA_SERVICE,
-        MATRIX_QA_INTERNAL_PORT,
-        files.composeFile,
-        repoRoot,
-        runCommand,
-      );
-      upstreamBaseUrl = await waitForReachableMatrixBaseUrl({
-        composeFile: files.composeFile,
-        containerBaseUrl,
-        fetchImpl,
-        hostBaseUrl,
-        sleepImpl,
-      });
-    }
-
-    await waitForHealth(buildVersionsUrl(upstreamBaseUrl), {
-      label: "Matrix homeserver",
-      composeFile: files.composeFile,
-      fetchImpl,
-      sleepImpl,
-    });
-    const recording = await startRecordingProxyImpl({ targetBaseUrl: upstreamBaseUrl });
-
-    const waitForReady = async () => {
+    const resolveReadyUpstreamBaseUrl = async (publishedPort: number) => {
       await sleepImpl(1_000);
       await waitForDockerServiceHealth(
         MATRIX_QA_SERVICE,
@@ -136,13 +99,34 @@ export async function startMatrixQaHarness(
         runCommand,
         sleepImpl,
       );
-      await waitForHealth(buildVersionsUrl(upstreamBaseUrl), {
+      const hostBaseUrl = `http://127.0.0.1:${publishedPort}/`;
+      let readyBaseUrl = hostBaseUrl;
+      if (!(await isMatrixVersionsReachable(hostBaseUrl, fetchImpl))) {
+        const containerBaseUrl = await resolveComposeServiceUrl(
+          MATRIX_QA_SERVICE,
+          MATRIX_QA_INTERNAL_PORT,
+          files.composeFile,
+          repoRoot,
+          runCommand,
+        );
+        readyBaseUrl = await waitForReachableMatrixBaseUrl({
+          composeFile: files.composeFile,
+          containerBaseUrl,
+          fetchImpl,
+          hostBaseUrl,
+          sleepImpl,
+        });
+      }
+      await waitForHealth(buildVersionsUrl(readyBaseUrl), {
         label: "Matrix homeserver",
         composeFile: files.composeFile,
         fetchImpl,
         sleepImpl,
       });
+      return readyBaseUrl;
     };
+    let upstreamBaseUrl = await resolveReadyUpstreamBaseUrl(homeserverPort);
+    const recording = await startRecordingProxyImpl({ targetBaseUrl: upstreamBaseUrl });
 
     return {
       ...files,
@@ -150,12 +134,37 @@ export async function startMatrixQaHarness(
       baseUrl: recording.baseUrl,
       recording,
       async restartService() {
-        await runCommand(
-          "docker",
-          ["compose", "-f", files.composeFile, "restart", MATRIX_QA_SERVICE],
-          repoRoot,
+        await withMatrixQaHarnessTimeout(
+          "Matrix homeserver restart",
+          MATRIX_QA_CLEANUP_TIMEOUT_MS,
+          (async () => {
+            await runCommand(
+              "docker",
+              ["compose", "-f", files.composeFile, "restart", MATRIX_QA_SERVICE],
+              repoRoot,
+            );
+            const restartedPort = requestedHomeserverPort
+              ? homeserverPort
+              : parseMatrixQaPublishedPort(
+                  (
+                    await runCommand(
+                      "docker",
+                      [
+                        "compose",
+                        "-f",
+                        files.composeFile,
+                        "port",
+                        MATRIX_QA_SERVICE,
+                        String(MATRIX_QA_INTERNAL_PORT),
+                      ],
+                      repoRoot,
+                    )
+                  ).stdout,
+                );
+            upstreamBaseUrl = await resolveReadyUpstreamBaseUrl(restartedPort);
+            recording.setTargetBaseUrl(upstreamBaseUrl);
+          })(),
         );
-        await waitForReady();
       },
       stopCommand: `docker compose -f ${files.composeFile} down --remove-orphans`,
       async stop() {
@@ -178,7 +187,9 @@ export async function startMatrixQaHarness(
           throw new AggregateError(failures, "Matrix QA harness cleanup failed");
         }
       },
-      upstreamBaseUrl,
+      get upstreamBaseUrl() {
+        return upstreamBaseUrl;
+      },
     };
   } catch (error) {
     try {

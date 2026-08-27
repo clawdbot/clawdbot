@@ -4,9 +4,10 @@
  * Sends rendered reply payloads, records live preview state, and classifies delivery outcomes.
  */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { OutboundDeliveryResult } from "../../infra/outbound/deliver-types.js";
 import {
+  type OutboundDeliveryResult,
   isOutboundDeliveryError,
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliverySuppressionReason,
@@ -16,6 +17,7 @@ import {
   type DeliverOutboundPayloadsParams,
   type OutboundDeliveryIntent,
 } from "../../infra/outbound/deliver.js";
+import { normalizeOutboundReplyFacts } from "../../infra/outbound/reply-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLiveMessageState, markLiveMessagePreviewUpdated } from "./live.js";
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
@@ -103,6 +105,25 @@ export type DurableMessageBatchSendResult =
       stage?: DurableMessageFailureStage;
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     };
+
+/** Whether platform delivery completed or advanced far enough that retry could duplicate it. */
+export function durableMessageBatchMayHaveReachedRecipient(
+  result: DurableMessageBatchSendResult,
+): boolean {
+  if (result.status === "sent" || result.status === "partial_failed") {
+    return true;
+  }
+  if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
+    return true;
+  }
+  return (
+    result.payloadOutcomes?.some((outcome) =>
+      outcome.status === "failed"
+        ? outcome.sentBeforeError
+        : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
+    ) === true
+  );
+}
 
 export type SerializedDurableMessagePayloadOutcome =
   | { index: number; status: "sent"; resultCount: number }
@@ -208,7 +229,7 @@ export type DurableMessageSendContext = MessageSendContext<
   DurableMessageBatchSendResult
 >;
 
-export async function withDurableMessageSendContext<T>(
+export async function withDurableMessageSendContextCore<T>(
   params: DurableMessageSendContextParams,
   run: (ctx: DurableMessageSendContext) => Promise<T>,
 ): Promise<T> {
@@ -230,6 +251,7 @@ export async function withDurableMessageSendContext<T>(
     abortSignal,
     ...deliveryParams
   } = params;
+  const replyToId = normalizeOutboundReplyFacts(deliveryParams)?.replyToId;
   const effectiveSignal = signal ?? abortSignal;
   const queuePolicy = durability === "best_effort" ? "best_effort" : "required";
   let liveState = preview ?? createLiveMessageState<ReplyPayload>();
@@ -277,7 +299,7 @@ export async function withDurableMessageSendContext<T>(
         const receipt = createMessageReceiptFromOutboundResults({
           results,
           threadId: params.threadId == null ? undefined : String(params.threadId),
-          replyToId: params.replyToId ?? undefined,
+          replyToId,
         });
         const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
         if (failedOutcome) {
@@ -324,7 +346,7 @@ export async function withDurableMessageSendContext<T>(
             const receipt = createMessageReceiptFromOutboundResults({
               results: error.results,
               threadId: params.threadId == null ? undefined : String(params.threadId),
-              replyToId: params.replyToId ?? undefined,
+              replyToId,
             });
             return {
               status: "partial_failed",
@@ -392,17 +414,30 @@ export async function withDurableMessageSendContext<T>(
   }
 }
 
-export async function sendDurableMessageBatch(
+export async function sendDurableMessageBatchCore(
   params: DurableMessageSendContextParams,
 ): Promise<DurableMessageBatchSendResult> {
-  return await withDurableMessageSendContext(params, async (ctx) => {
-    const rendered = await ctx.render();
-    const result = await ctx.send(rendered);
-    if (result.status === "sent" || result.status === "suppressed") {
-      await ctx.commit(result.receipt);
-    } else {
-      await ctx.fail(result.error);
-    }
-    return result;
-  });
+  const pendingFinalCompletion = params.deliveryCompletion
+    ? undefined
+    : resolvePendingFinalDeliveryCompletion(params.payloads);
+  const pendingFinalDelivery = pendingFinalCompletion
+    ? {
+        deliveryCompletion: pendingFinalCompletion,
+        deliveryIntentId: pendingFinalCompletion.deliveryId,
+        durability: "required" as const,
+      }
+    : {};
+  return await withDurableMessageSendContextCore(
+    { ...params, ...pendingFinalDelivery },
+    async (ctx) => {
+      const rendered = await ctx.render();
+      const result = await ctx.send(rendered);
+      if (result.status === "sent" || result.status === "suppressed") {
+        await ctx.commit(result.receipt);
+      } else {
+        await ctx.fail(result.error);
+      }
+      return result;
+    },
+  );
 }

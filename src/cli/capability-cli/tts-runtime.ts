@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
+import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -25,13 +26,24 @@ import {
   textToSpeech,
 } from "../../tts/tts.js";
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
+import { publishOutputFileAtomically } from "../media-output.js";
 import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
 import {
   pinRuntimeConfigSnapshot,
   providerHasGenericConfig,
+  resolveCapabilityProviderAgentId,
   resolveLocalCapabilityRuntimeConfig,
   resolveSelectedProviderFromModelRef,
 } from "./shared.js";
+
+async function copyTtsOutputAtomically(sourcePath: string, targetPath: string): Promise<void> {
+  await publishOutputFileAtomically({
+    filePath: targetPath,
+    writeTemp: async (tempPath) => {
+      await fs.copyFile(sourcePath, tempPath);
+    },
+  });
+}
 
 export async function runTtsConvert(params: {
   text: string;
@@ -71,8 +83,7 @@ export async function runTtsConvert(params: {
         );
       }
       const target = path.resolve(params.output);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.copyFile(result.audioPath, target);
+      await copyTtsOutputAtomically(result.audioPath, target);
       outputPath = target;
     }
     return {
@@ -134,8 +145,7 @@ export async function runTtsConvert(params: {
   let outputPath = result.audioPath;
   if (params.output) {
     const target = path.resolve(params.output);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.copyFile(result.audioPath, target);
+    await copyTtsOutputAtomically(result.audioPath, target);
     outputPath = target;
   }
   return {
@@ -195,7 +205,7 @@ async function injectTtsAuthProfileApiKey(params: {
   if (ttsProviderConfigHasApiKey(existingProviderConfig?.value)) {
     return params.cfg;
   }
-  const auth = await resolveApiKeyForProvider({
+  const auth = await resolveApiKeyForProviderCore({
     provider: providerId,
     cfg: params.cfg,
     credentialPrecedence: "profile-first",
@@ -393,10 +403,6 @@ function buildTtsConfigWithHydratedProvider(params: {
   return tts;
 }
 
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function ttsProviderConfigHasApiKey(value: unknown): boolean {
   return isObjectRecord(value) && "apiKey" in value;
 }
@@ -408,9 +414,12 @@ function resolvedTtsConfigHasProviderApiKey(config: unknown, providerId: string)
   return ttsProviderConfigHasApiKey(config.providerConfigs[providerId]);
 }
 
-export async function runTtsProviders(transport: CapabilityTransport) {
+export async function runTtsProviders(transport: CapabilityTransport, rawAgentId?: string) {
   const cfg = getRuntimeConfig();
   if (transport === "gateway") {
+    if (rawAgentId !== undefined) {
+      throw new Error("--agent is only supported with local TTS provider inspection.");
+    }
     const payload: {
       providers?: Array<Record<string, unknown>>;
       active?: string;
@@ -436,6 +445,7 @@ export async function runTtsProviders(transport: CapabilityTransport) {
       }),
     };
   }
+  const agentId = resolveCapabilityProviderAgentId(cfg, rawAgentId);
   const config = resolveTtsConfig(cfg);
   const prefsPath = resolveTtsPrefsPath(config);
   const active = getTtsProvider(config, prefsPath);
@@ -443,7 +453,8 @@ export async function runTtsProviders(transport: CapabilityTransport) {
     providers: listSpeechProviders(cfg).map((provider) => ({
       available: true,
       configured:
-        active === provider.id || providerHasGenericConfig({ cfg, providerId: provider.id }),
+        active === provider.id ||
+        providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
       selected: active === provider.id,
       id: provider.id,
       name: provider.label,

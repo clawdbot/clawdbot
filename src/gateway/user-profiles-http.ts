@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
   formatUserProfileAvatarEtag,
   getProfileAvatar,
@@ -11,12 +12,13 @@ import {
 } from "../state/user-profiles.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { sendJson, sendMethodNotAllowed } from "./http-common.js";
+import { matchesHttpIfNoneMatch } from "./http-conditional.js";
 import {
-  authorizeScopedGatewayHttpRequestOrReply,
+  authorizeScopedUserProfileAvatarHttpRequestOrReply,
   resolveSharedSecretHttpOperatorScopes,
 } from "./http-utils.js";
-import { matchUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
@@ -243,22 +245,18 @@ async function resolveGravatar(
   if (cached) {
     return cached;
   }
-  const inFlight = gravatarRequests.get(hash);
-  if (inFlight) {
-    return await inFlight;
-  }
-  const request = fetchGravatar(hash, options.fetchImpl, options.deadline).then((result) => {
-    if (result.kind !== "error") {
-      cacheGravatar(hash, result, options.nowMs());
-    }
-    return result;
-  });
-  gravatarRequests.set(hash, request);
-  try {
-    return await request;
-  } finally {
-    gravatarRequests.delete(hash);
-  }
+  return await getOrCreatePromise(
+    gravatarRequests,
+    hash,
+    async () => {
+      const result = await fetchGravatar(hash, options.fetchImpl, options.deadline);
+      if (result.kind !== "error") {
+        cacheGravatar(hash, result, options.nowMs());
+      }
+      return result;
+    },
+    { evictOnSettled: true },
+  );
 }
 
 function sendAvatar(
@@ -267,7 +265,7 @@ function sendAvatar(
   avatar: { bytes: Uint8Array; mime: string; etag: string },
   cacheControl: string,
 ): void {
-  if (ifNoneMatchMatches(req.headers["if-none-match"], avatar.etag)) {
+  if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
     res.writeHead(304, { ETag: avatar.etag, "Cache-Control": cacheControl });
@@ -283,13 +281,14 @@ function sendAvatar(
   res.end(req.method === "HEAD" ? undefined : avatar.bytes);
 }
 
-/** Serves a profile avatar with the same HTTP operator auth as sibling gateway endpoints. */
+/** Serves a profile avatar to authenticated HTTP or verified Tailscale UI sessions. */
 export async function handleUserProfileAvatarHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
   opts: {
     auth: ResolvedGatewayAuth;
+    basePath?: string;
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
@@ -297,8 +296,8 @@ export async function handleUserProfileAvatarHttpRequest(
     nowMs?: () => number;
   },
 ): Promise<boolean> {
-  const profileId = matchUserProfileAvatarPath(pathname);
-  if (profileId === undefined) {
+  const parsed = parseControlUiUserAvatarPath(pathname, opts.basePath ?? "");
+  if (!parsed.matched) {
     return false;
   }
   const method = req.method;
@@ -320,7 +319,7 @@ export async function handleUserProfileAvatarHttpRequest(
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
   }
-  const authResult = await authorizeScopedGatewayHttpRequestOrReply({
+  const authResult = await authorizeScopedUserProfileAvatarHttpRequestOrReply({
     req,
     res,
     auth: opts.auth,
@@ -337,6 +336,11 @@ export async function handleUserProfileAvatarHttpRequest(
   // heuristically-cached 404 miss would otherwise hide a later uploaded image.
   // Misses must never be cached; the 200 path overrides this with must-revalidate.
   res.setHeader("Cache-Control", "no-store");
+  const profileId = parsed.value;
+  if (!profileId) {
+    sendJson(res, 404, { ok: false, error: { type: "not_found" } });
+    return true;
+  }
   let uploadedAvatar: ReturnType<typeof getProfileAvatar>;
   try {
     uploadedAvatar = getProfileAvatar(profileId);
@@ -403,17 +407,4 @@ export async function handleUserProfileAvatarHttpRequest(
     error: { type: transientFailure ? "avatar_upstream_unavailable" : "not_found" },
   });
   return true;
-}
-
-// RFC 9110 §13.1.2 weak comparison: wildcard, comma-separated lists, and W/ prefixes
-// all revalidate; exact-string matching alone would miss proxy-normalized headers.
-function ifNoneMatchMatches(header: string | string[] | undefined, etag: string): boolean {
-  const value = Array.isArray(header) ? header.join(",") : header;
-  if (!value) {
-    return false;
-  }
-  return value.split(",").some((candidate) => {
-    const tag = candidate.trim();
-    return tag === "*" || tag === etag || (tag.startsWith("W/") && tag.slice(2) === etag);
-  });
 }

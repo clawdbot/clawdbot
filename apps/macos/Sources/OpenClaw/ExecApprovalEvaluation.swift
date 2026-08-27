@@ -11,7 +11,7 @@ struct ExecApprovalEvaluation {
     let resolution: ExecCommandResolution?
     let allowlistResolutions: [ExecCommandResolution]
     let boundCommand: [String]?
-    let allowAlwaysPatterns: [String]
+    let allowAlwaysPatterns: [ExecAllowAlwaysPattern]
     let allowlistMatches: [ExecAllowlistEntry]
     let allowlistAuthorizationSatisfied: Bool
     let allowlistSatisfied: Bool
@@ -226,11 +226,14 @@ struct ExecApprovalExecutionCommit: Sendable {
         guard context.canPersistAllowAlways else { return [] }
         let resolvedPath = context.allowlistResolutions.first?.resolvedRealPath ??
             context.allowlistResolutions.first?.resolvedPath
-        var seenPatterns = Set<String>()
-        return context.allowAlwaysPatterns.compactMap { pattern in
-            guard seenPatterns.insert(pattern).inserted else { return nil }
+        var seenPatterns = Set<ExecAllowAlwaysPattern>()
+        return context.allowAlwaysPatterns.compactMap { candidate in
+            guard seenPatterns.insert(candidate).inserted else { return nil }
             return ExecAllowlistUse(
-                match: ExecAllowlistEntry(pattern: pattern, source: "allow-always"),
+                match: ExecAllowlistEntry(
+                    pattern: candidate.pattern,
+                    source: "allow-always",
+                    argPattern: candidate.argPattern),
                 resolvedPath: resolvedPath)
         }
     }
@@ -245,6 +248,7 @@ enum ExecApprovalEvaluator {
         envOverrides: [String: String]?,
         agentId: String?) async -> ExecApprovalEvaluation
     {
+        let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(cwd)
         let trimmedAgent = agentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedAgentId = (trimmedAgent?.isEmpty == false) ? trimmedAgent : nil
         let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
@@ -260,11 +264,11 @@ enum ExecApprovalEvaluator {
         let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,
             rawCommand: allowlistRawCommand,
-            cwd: cwd,
+            cwd: effectiveCwd,
             env: env)
         let allowAlwaysPatterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: command,
-            cwd: cwd,
+            cwd: effectiveCwd,
             env: env,
             rawCommand: allowlistRawCommand)
         let boundCommand = ExecCommandResolution.bindForAllowlistExecution(

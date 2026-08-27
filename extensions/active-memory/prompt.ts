@@ -1,12 +1,12 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
   ACTIVE_MEMORY_PLUGIN_TAG,
-  ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER,
+  ACTIVE_MEMORY_CONTEXT_HEADER,
   NO_RECALL_VALUES,
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
@@ -179,7 +179,7 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
 }
 
 function readStructuredMemoryFailure(source: unknown): boolean | undefined {
-  const record = asRecord(source);
+  const record = asOptionalRecord(source);
   if (!record) {
     return undefined;
   }
@@ -206,7 +206,7 @@ function readStructuredMemoryEvidence(source: unknown): boolean | undefined {
   if (Array.isArray(source)) {
     return source.length > 0;
   }
-  const record = asRecord(source);
+  const record = asOptionalRecord(source);
   return record ? readExplicitMemoryEvidence(record) : undefined;
 }
 
@@ -305,7 +305,7 @@ function buildPromptPrefix(summary: string | null): string | undefined {
   if (!metadata) {
     return undefined;
   }
-  return [ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER, metadata].join("\n");
+  return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
 }
 
 export {

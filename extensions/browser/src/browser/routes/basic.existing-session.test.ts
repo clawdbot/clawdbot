@@ -1,5 +1,6 @@
 // Browser tests cover basic.existing session plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import chromeExtensionManifest from "../../../chrome-extension/manifest.json" with { type: "json" };
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const { inspectChromeGraphicsDiagnosticsMock } = vi.hoisted(() => ({
@@ -25,13 +26,15 @@ const { getProfileLifecycle, ProfileRestartRequiredError } =
 const { registerBrowserBasicRoutes } = await import("./basic.js");
 
 function createExistingSessionProfileState(params?: {
-  isHttpReachable?: (timeoutMs?: number) => Promise<boolean>;
-  isTransportAvailable?: (timeoutMs?: number) => Promise<boolean>;
+  isHttpReachable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+  isTransportAvailable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
   isReachable?: (
     timeoutMs?: number,
     options?: { ephemeral?: boolean; signal?: AbortSignal },
   ) => Promise<boolean>;
 }) {
+  const isTransportAvailable = params?.isTransportAvailable ?? (async () => true);
+  const isReachable = params?.isReachable ?? (async () => true);
   return {
     resolved: {
       enabled: true,
@@ -54,8 +57,27 @@ function createExistingSessionProfileState(params?: {
           attachOnly: true,
         },
         isHttpReachable: params?.isHttpReachable ?? (async () => true),
-        isTransportAvailable: params?.isTransportAvailable ?? (async () => true),
-        isReachable: params?.isReachable ?? (async () => true),
+        isTransportAvailable: async (
+          timeoutMs?: number,
+          signal?: AbortSignal,
+          pageProbe?: { timeoutMs?: () => number; onResult: (tabCount: number | null) => void },
+        ) => {
+          const available = await isTransportAvailable(timeoutMs, signal);
+          if (available && pageProbe) {
+            try {
+              const ready = await isReachable(pageProbe.timeoutMs?.() ?? timeoutMs, {
+                ephemeral: true,
+                signal,
+              });
+              pageProbe.onResult(ready ? 1 : null);
+            } catch {
+              signal?.throwIfAborted();
+              pageProbe.onResult(null);
+            }
+          }
+          return available;
+        },
+        isReachable,
       }) as never,
   };
 }
@@ -75,9 +97,10 @@ function readFirstReachabilityCall(
 function createManagedProfileState(
   profileOverrides?: Record<string, unknown>,
   reachability?: {
-    isHttpReachable?: () => Promise<boolean>;
-    isTransportAvailable?: () => Promise<boolean>;
+    isHttpReachable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
+    isTransportAvailable?: (timeoutMs?: number, signal?: AbortSignal) => Promise<boolean>;
   },
+  executablePath?: string,
 ) {
   return {
     resolved: {
@@ -85,7 +108,7 @@ function createManagedProfileState(
       headless: false,
       headlessSource: "default",
       noSandbox: false,
-      executablePath: undefined,
+      executablePath,
     },
     profiles: new Map(),
     forProfile: () =>
@@ -112,8 +135,10 @@ function createManagedProfileState(
 }
 
 async function callBasicRouteWithState(params: {
+  route?: "/" | "/doctor";
   query?: Record<string, string>;
-  state: ReturnType<typeof createExistingSessionProfileState>;
+  state: ReturnType<typeof createExistingSessionProfileState | typeof createManagedProfileState>;
+  signal?: AbortSignal;
 }) {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserBasicRoutes(app, {
@@ -121,11 +146,18 @@ async function callBasicRouteWithState(params: {
     forProfile: params.state.forProfile,
   } as never);
 
-  const handler = getHandlers.get("/");
+  const handler = getHandlers.get(params.route ?? "/");
   expect(handler).toBeTypeOf("function");
 
   const response = createBrowserRouteResponse();
-  await handler?.({ params: {}, query: params.query ?? { profile: "chrome-live" } }, response.res);
+  await handler?.(
+    {
+      params: {},
+      query: params.query ?? { profile: "chrome-live" },
+      ...(params.signal ? { signal: params.signal } : {}),
+    },
+    response.res,
+  );
   return response;
 }
 
@@ -183,6 +215,43 @@ describe("basic browser routes", () => {
     inspectChromeGraphicsDiagnosticsMock.mockReset();
   });
 
+  it("reports version drift only from the selected extension profile owner", async () => {
+    const outdatedVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
+    const state = {
+      ...createManagedProfileState(
+        { name: "chrome", driver: "extension", attachOnly: true },
+        {
+          isHttpReachable: async () => true,
+          isTransportAvailable: async () => true,
+        },
+      ),
+      extensionRelays: new Map([
+        ["chrome", { bridge: { identity: { extensionVersion: outdatedVersion } } }],
+        ["other", { bridge: { identity: { extensionVersion: chromeExtensionManifest.version } } }],
+      ]),
+    };
+
+    const response = await callBasicRouteWithState({
+      route: "/doctor",
+      query: { profile: "chrome" },
+      state,
+    });
+    const report = responseBodyRecord(response);
+    expect(response.statusCode).toBe(200);
+    expect(report.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "extension-version",
+          status: "warn",
+          summary: expect.stringContaining(
+            `running ${outdatedVersion}; bundled ${chromeExtensionManifest.version}`,
+          ),
+        }),
+      ]),
+    );
+    expect(report.status).not.toHaveProperty("chromeExtension");
+  });
+
   it("releases the doctor transaction, restarts once, and retries the live probe", async () => {
     const ensureBrowserAvailable = vi.fn(async () => {});
     const ensureTabAvailable = vi
@@ -216,6 +285,66 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(ensureBrowserAvailable).toHaveBeenCalledOnce();
     expect(ensureTabAvailable).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["/", "/doctor"] as const)(
+    "detects the local managed profile executable for %s",
+    async (route) => {
+      const response = await callBasicRouteWithState({
+        route,
+        query: { profile: "openclaw" },
+        state: createManagedProfileState(
+          { executablePath: process.execPath, headless: true },
+          undefined,
+          "/definitely-missing-global-chromium",
+        ),
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = responseBodyRecord(response);
+      const browserStatus = route === "/doctor" ? responseBodyRecord({ body: body.status }) : body;
+      expect(browserStatus).toMatchObject({
+        executablePath: process.execPath,
+        detectedBrowser: "custom",
+        detectedExecutablePath: process.execPath,
+        detectError: null,
+      });
+      if (route === "/doctor") {
+        expect(body.ok).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    { name: "loopback attach-only", profile: { attachOnly: true } },
+    {
+      name: "remote CDP",
+      profile: {
+        cdpHost: "remote.example",
+        cdpIsLoopback: false,
+        cdpUrl: "http://remote.example:9222",
+      },
+    },
+    { name: "extension relay", profile: { driver: "extension", attachOnly: true } },
+    { name: "existing session", profile: { driver: "existing-session", attachOnly: true } },
+  ])("ignores a non-owning $name profile executable override", async ({ profile }) => {
+    const ignoredExecutable = "/definitely-missing-ignored-profile-chromium";
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state: createManagedProfileState(
+        { ...profile, executablePath: ignoredExecutable, headless: true },
+        undefined,
+        process.execPath,
+      ),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(responseBodyRecord(response)).toMatchObject({
+      executablePath: ignoredExecutable,
+      detectedBrowser: "custom",
+      detectedExecutablePath: process.execPath,
+      detectError: null,
+    });
   });
 
   it("reports Linux no-display headless fallback for local managed profiles", async () => {
@@ -609,7 +738,7 @@ describe("basic browser routes", () => {
 
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
-    expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
+    expect(isTransportAvailable).toHaveBeenCalledWith(5_000, expect.any(AbortSignal));
     const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
     expect(timeoutMs).toBeGreaterThan(0);
     expect(timeoutMs).toBeLessThanOrEqual(7_000);
@@ -621,6 +750,47 @@ describe("basic browser routes", () => {
     expect(body.cdpReady).toBe(true);
     expect(body.pageReady).toBe(true);
     expect(body.running).toBe(true);
+  });
+
+  it("passes cancellation to managed browser status probes", async () => {
+    const isHttpReachable = vi.fn(async () => true);
+    const isTransportAvailable = vi.fn(async () => false);
+
+    const response = await callBasicRouteWithState({
+      query: { profile: "openclaw" },
+      state: createManagedProfileState({}, { isHttpReachable, isTransportAvailable }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(isHttpReachable).toHaveBeenCalledWith(300, expect.any(AbortSignal));
+    expect(isTransportAvailable).toHaveBeenCalledWith(600, expect.any(AbortSignal));
+  });
+
+  it("cancels an in-flight Chrome MCP page-readiness probe", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("browser status cancelled");
+    const isReachable = vi.fn(
+      async (_timeoutMs?: number, options?: { ephemeral?: boolean; signal?: AbortSignal }) =>
+        await new Promise<boolean>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(cancellation), {
+            once: true,
+          });
+        }),
+    );
+
+    const pending = callBasicRouteWithState({
+      state: createExistingSessionProfileState({ isReachable }),
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(isReachable).toHaveBeenCalledOnce());
+    controller.abort(cancellation);
+
+    const response = await pending;
+    expect(response.statusCode).toBe(500);
+    expect(responseBodyRecord(response).error).toBe("Error: browser status cancelled");
+    const [, options] = readFirstReachabilityCall(isReachable);
+    expect(options?.signal?.aborted).toBe(true);
+    expect(options?.signal?.reason).toBe(cancellation);
   });
 
   it("keeps Chrome MCP page-readiness inside the status budget", async () => {

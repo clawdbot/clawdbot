@@ -1,10 +1,13 @@
 // Emits reset hooks and cleanup work around session reset commands.
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -67,6 +70,7 @@ async function loadBeforeResetTranscript(params: {
 
 export async function emitResetCommandHooks(params: {
   action: ResetCommandAction;
+  agentId?: string;
   ctx: HandleCommandsParams["ctx"];
   cfg: HandleCommandsParams["cfg"];
   command: Pick<
@@ -77,14 +81,29 @@ export async function emitResetCommandHooks(params: {
   storePath?: string;
   sessionEntry?: HandleCommandsParams["sessionEntry"];
   previousSessionEntry?: HandleCommandsParams["previousSessionEntry"];
+  onObservedReplyDelivery?: () => Promise<void> | void;
   workspaceDir: string;
 }): Promise<{ routedReply: boolean }> {
+  const hookAgentId =
+    parseAgentSessionKey(params.sessionKey)?.agentId ??
+    params.agentId ??
+    resolveDefaultAgentId(params.cfg);
+  const hookStorePath =
+    hookAgentId && params.storePath
+      ? resolveSessionStorePathForScope({
+          agentId: hookAgentId,
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+        })
+      : params.storePath;
   const hookEvent = createInternalHookEvent("command", params.action, params.sessionKey ?? "", {
+    agentId: hookAgentId,
     sessionEntry: params.sessionEntry,
     previousSessionEntry: params.previousSessionEntry,
     commandSource: params.command.surface,
     senderId: params.command.senderId,
     workspaceDir: params.workspaceDir,
+    storePath: hookStorePath,
     cfg: params.cfg,
   });
   await triggerInternalHook(hookEvent);
@@ -96,7 +115,7 @@ export async function emitResetCommandHooks(params: {
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
     if (channel && to) {
       const { routeReply } = await loadRouteReplyRuntime();
-      await routeReply({
+      const result = await routeReply({
         payload: { text: hookEvent.messages.join("\n\n") },
         channel,
         to,
@@ -110,20 +129,31 @@ export async function emitResetCommandHooks(params: {
         cfg: params.cfg,
         replyKind: "final",
       });
-      routedReply = true;
+      if (result.delivered) {
+        await params.onObservedReplyDelivery?.();
+      }
+      routedReply = result.delivered || result.suppressed === true;
     }
   }
 
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
-    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    const agentId = hookAgentId;
+    const storePath = hookStorePath;
     const beforeResetTranscript = await loadBeforeResetTranscript({
       agentId,
-      sessionFile: prevEntry?.sessionFile,
+      sessionFile:
+        agentId && prevEntry?.sessionId && storePath
+          ? formatSqliteSessionFileMarker({
+              agentId,
+              sessionId: prevEntry.sessionId,
+              storePath,
+            })
+          : params.sessionKey,
       sessionId: prevEntry?.sessionId,
       sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      storePath,
     });
     void (async () => {
       try {

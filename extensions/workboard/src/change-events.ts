@@ -12,7 +12,7 @@ export function createWorkboardChangeEventService(store: WorkboardStore): OpenCl
     id: "workboard-change-events",
     start(ctx) {
       const gatewayEvents = ctx.gatewayEvents;
-      if (!gatewayEvents) {
+      if (!gatewayEvents || unsubscribe) {
         return;
       }
       const emit = (change: WorkboardChange) => {

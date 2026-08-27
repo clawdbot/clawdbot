@@ -38,7 +38,7 @@ vi.mock("./exec-approval-surface.js", () => ({
 }));
 
 import {
-  buildApprovalPresentation,
+  buildApprovalButtonPresentation,
   buildApprovalPresentationFromActionDescriptors,
   buildExecApprovalActionDescriptors,
   buildExecApprovalCommandText,
@@ -267,6 +267,7 @@ describe("exec approval reply helpers", () => {
       cwd: "/tmp/work",
       host: "gateway",
       nodeId: "node-1",
+      scope: { kind: "payment", amount: "49.99", currency: "EUR", target: "Stripe" },
       expiresAtMs: 2500,
       nowMs: 1000,
     });
@@ -324,7 +325,9 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
-    expect(payload.text).toContain("Host: gateway\nNode: node-1\nCWD: /tmp/work\nExpires in: 2s");
+    expect(payload.text).toContain(
+      "Host: gateway\nNode: node-1\nCWD: /tmp/work\nScope: Pay 49.99 EUR to Stripe\nExpires in: 2s",
+    );
     expect(payload.text).toContain("Full id: `req-1`");
   });
 
@@ -352,6 +355,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.text).not.toContain("Scope:");
   });
 
   it("compacts structured cwd paths in pending reply payloads", () => {
@@ -508,7 +512,7 @@ describe("exec approval reply helpers", () => {
     ]);
 
     expect(
-      buildApprovalPresentation({
+      buildApprovalButtonPresentation({
         approvalId: "req-1",
         allowedDecisions: ["deny"],
       }),
@@ -688,18 +692,23 @@ describe("exec approval reply helpers", () => {
       }),
     ).toEqual({
       text: "Careful.\n\nApproval required. I sent approval DMs to the approvers for this account.",
+      channelData: {
+        execApprovalUnavailable: {
+          reason: "no-approval-route",
+        },
+      },
     });
   });
 
   it.each(unavailableReasonCases)(
     "builds unavailable payload for reason $reason",
     ({ reason, channelLabel, expected }) => {
-      expect(
-        buildExecApprovalUnavailableReplyPayload({
-          reason,
-          channelLabel,
-        }).text,
-      ).toContain(expected);
+      const payload = buildExecApprovalUnavailableReplyPayload({
+        reason,
+        channelLabel,
+      });
+      expect(payload.text).toContain(expected);
+      expect(payload.channelData).toEqual({ execApprovalUnavailable: { reason } });
     },
   );
 });

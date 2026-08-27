@@ -104,17 +104,18 @@ describe("config clobber snapshots", () => {
       const warn = vi.fn();
       const observedAt = "2026-05-03T00:00:00.000Z";
 
-      await Promise.all(
-        Array.from({ length: CONFIG_CLOBBER_SNAPSHOT_LIMIT + 24 }, async (_, index) => {
-          await persistBoundedClobberedConfigSnapshot({
+      const snapshotPaths = await Promise.all(
+        Array.from({ length: CONFIG_CLOBBER_SNAPSHOT_LIMIT + 24 }, (_, index) =>
+          persistBoundedClobberedConfigSnapshot({
             deps: { fs, logger: { warn } },
             configPath,
             raw: `polluted-${index}\n`,
             observedAt,
-          });
-        }),
+          }),
+        ),
       );
 
+      expect(snapshotPaths).not.toContain(null);
       const clobberFiles = await listClobberFiles(configPath);
       expect(clobberFiles).toHaveLength(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
       const capWarnings = warn.mock.calls.filter(

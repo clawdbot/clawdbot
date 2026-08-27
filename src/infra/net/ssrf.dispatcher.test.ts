@@ -1,5 +1,6 @@
 // Pinned dispatcher tests cover undici family policy, pinned lookup injection,
 // timeout propagation, and proxy dispatcher construction.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -80,12 +81,7 @@ function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
   return (call?.[0] as { connect?: { lookup?: PinnedHostname["lookup"] } })?.connect?.lookup;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstAgentOptions(): Record<string, unknown> {
   const [call] = agentCtor.mock.calls;
@@ -232,15 +228,18 @@ describe("createPinnedDispatcher", () => {
     });
   });
 
-  it("replaces the pinned lookup when a dispatcher override hostname is provided", () => {
+  it("replaces the pinned lookup when a dispatcher override hostname is provided", async () => {
     const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const lookup = createDispatcherWithPinnedOverride(originalLookup);
 
     expect(lookup).toBeTypeOf("function");
-    const callback = vi.fn();
-    lookup?.("api.telegram.org", callback);
+    const result = await new Promise<[unknown, string, number]>((resolve) => {
+      lookup?.("api.telegram.org", (err, address, family) => {
+        resolve([err, address as string, family as number]);
+      });
+    });
 
-    expect(callback).toHaveBeenCalledWith(null, "149.154.167.220", 4);
+    expect(result).toEqual([null, "149.154.167.220", 4]);
     expect(originalLookup).not.toHaveBeenCalled();
   });
 
@@ -378,6 +377,7 @@ describe("createPinnedDispatcher", () => {
       },
       clientFactory: expect.any(Function),
       allowH2: false,
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -405,6 +405,7 @@ describe("createPinnedDispatcher", () => {
       factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -442,6 +443,7 @@ describe("createPinnedDispatcher", () => {
       factory: expect.any(Function),
       uri: "http://127.0.0.1:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       requestTls: {
         autoSelectFamily: false,
         lookup,

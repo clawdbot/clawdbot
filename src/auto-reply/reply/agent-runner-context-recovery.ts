@@ -2,6 +2,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -23,11 +24,7 @@ function resolveAgentHeartbeatModelRaw(params: {
   const defaultModel = normalizeOptionalString(params.cfg.agents?.defaults?.heartbeat?.model);
   const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const agentModel = agentId
-    ? normalizeOptionalString(
-        params.cfg.agents?.list?.find(
-          (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === agentId,
-        )?.heartbeat?.model,
-      )
+    ? normalizeOptionalString(resolveAgentConfig(params.cfg, agentId)?.heartbeat?.model)
     : undefined;
   return agentModel ?? defaultModel;
 }
@@ -66,24 +63,6 @@ function normalizePositiveContextTokens(value: unknown): number | undefined {
   return Math.floor(value);
 }
 
-function resolveAgentContextTokensForHint(params: {
-  cfg: FollowupRun["run"]["config"];
-  agentId?: string;
-}): number | undefined {
-  const defaultContextTokens = normalizePositiveContextTokens(
-    params.cfg.agents?.defaults?.contextTokens,
-  );
-  const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
-  const agentContextTokens = agentId
-    ? normalizePositiveContextTokens(
-        params.cfg.agents?.list?.find(
-          (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === agentId,
-        )?.contextTokens,
-      )
-    : undefined;
-  return agentContextTokens ?? defaultContextTokens;
-}
-
 function resolveContextWindowForHint(params: {
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
@@ -99,17 +78,7 @@ function resolveContextWindowForHint(params: {
     model: params.ref.model,
     allowAsyncLoad: false,
   });
-  const contextTokens = modelContextTokens ?? sessionContextTokens;
-  if (contextTokens === undefined) {
-    return undefined;
-  }
-  const agentContextTokens = resolveAgentContextTokensForHint({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  return agentContextTokens !== undefined
-    ? Math.min(agentContextTokens, contextTokens)
-    : contextTokens;
+  return modelContextTokens ?? sessionContextTokens;
 }
 
 function resolveHeartbeatBleedHint(params: {

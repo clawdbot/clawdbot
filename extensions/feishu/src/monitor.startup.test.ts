@@ -11,6 +11,8 @@ const probeFeishuMock = vi.hoisted(() => vi.fn());
 const registerFeishuAiAgentMock = vi.hoisted(() => vi.fn());
 const readCachedFeishuBotIdentityMock = vi.hoisted(() => vi.fn());
 const writeCachedFeishuBotIdentityMock = vi.hoisted(() => vi.fn());
+const createEventDispatcherMock = vi.hoisted(() => vi.fn());
+const createFeishuDurableIngressMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -24,7 +26,18 @@ vi.mock("./bot-identity-cache.js", () => ({
 
 vi.mock("./client.js", async () => {
   const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
-  return createFeishuClientMockModule();
+  return {
+    ...createFeishuClientMockModule(),
+    createEventDispatcher: createEventDispatcherMock,
+  };
+});
+vi.mock("./feishu-ingress.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./feishu-ingress.js")>();
+  return {
+    ...actual,
+    createFeishuDurableIngress: (...args: Parameters<typeof actual.createFeishuDurableIngress>) =>
+      createFeishuDurableIngressMock(...args) ?? actual.createFeishuDurableIngress(...args),
+  };
 });
 vi.mock("./runtime.js", async () => {
   const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
@@ -39,6 +52,8 @@ beforeEach(() => {
   registerFeishuAiAgentMock.mockReset().mockResolvedValue({ ok: true });
   readCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(null);
   writeCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(undefined);
+  createEventDispatcherMock.mockReset().mockReturnValue({ register: vi.fn() });
+  createFeishuDurableIngressMock.mockReset().mockReturnValue(undefined);
 });
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
@@ -78,11 +93,42 @@ afterEach(() => {
 afterAll(() => {
   vi.doUnmock("./probe.js");
   vi.doUnmock("./client.js");
+  vi.doUnmock("./feishu-ingress.js");
   vi.doUnmock("./runtime.js");
   vi.resetModules();
 });
 
 describe("Feishu monitor startup preflight", () => {
+  it("stops durable ingress when ingress start throws", async () => {
+    const startError = new Error("durable ingress unavailable");
+    const ingressStart = vi.fn(() => {
+      throw startError;
+    });
+    const ingressStop = vi.fn().mockResolvedValue(undefined);
+    createEventDispatcherMock.mockReturnValue({ register: vi.fn(), invoke: vi.fn() });
+    createFeishuDurableIngressMock.mockReturnValue({
+      invoke: vi.fn(),
+      resolveLifecycle: vi.fn(),
+      setSocketTerminator: vi.fn(),
+      start: ingressStart,
+      stop: ingressStop,
+      waitForIdle: vi.fn(),
+    });
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      appId: "cli_alpha",
+      botOpenId: "bot_alpha",
+      botName: "Alpha",
+    });
+
+    await expect(
+      monitorFeishuProvider({ config: buildMultiAccountWebsocketConfig(["alpha"]) }),
+    ).rejects.toBe(startError);
+
+    expect(ingressStart).toHaveBeenCalledTimes(1);
+    expect(ingressStop).toHaveBeenCalledTimes(1);
+  });
+
   it("parses startup probe timeout env strictly", () => {
     expect(resolveStartupProbeTimeoutMs({})).toBe(30_000);
     expect(

@@ -1,23 +1,27 @@
 // Manages exec approval policy, allowlist entries, and host targeting.
 import {
   normalizeExecApprovalsInternal,
-  resolveExecApprovalsPath,
+  resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
-import type { ExecApprovalsFile, ExecApprovalsResolved } from "./exec-approvals-core.js";
-import { withExecApprovalsReadLock, withExecApprovalsReadLockSync } from "./exec-approvals-lock.js";
+import type {
+  ExecApprovalsFile,
+  ExecApprovalsResolved,
+  ExecApprovalsSnapshot,
+} from "./exec-approvals-core.js";
 import { resolveExecApprovalsFromFilePrepared } from "./exec-approvals-resolver.js";
 import {
   ensureExecApprovals,
   ensureExecApprovalsSnapshot,
-  readExecApprovalsForNoPersistenceUnlocked,
+  loadExecApprovals,
 } from "./exec-approvals-store.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export * from "./exec-approvals-core.js";
+export * from "./exec-approvals-generated-migration.js";
 export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 export type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
@@ -34,6 +38,7 @@ export {
   ensureExecApprovalsSnapshot,
   loadExecApprovals,
   loadExecApprovalsAsync,
+  loadExecApprovalsReadOnly,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
   restoreExecApprovalsSnapshotLocked,
@@ -41,6 +46,21 @@ export {
   updateExecApprovals,
   withAgentExecApprovalsRemoved,
 } from "./exec-approvals-store.js";
+
+export function redactExecApprovals(
+  snapshot: Omit<ExecApprovalsSnapshot, "raw"> & { raw?: ExecApprovalsSnapshot["raw"] },
+): Omit<ExecApprovalsSnapshot, "raw"> {
+  const { raw: _raw, ...rest } = snapshot;
+  const socketPath = snapshot.file.socket?.path?.trim();
+  // Socket connection material is runtime-only; presentation boundaries need only its path.
+  return {
+    ...rest,
+    file: {
+      ...snapshot.file,
+      socket: socketPath ? { path: socketPath } : undefined,
+    },
+  };
+}
 
 export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   const socketPath = file.socket?.path?.trim();
@@ -89,11 +109,9 @@ export function resolveExecApprovals(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
-  const filePath = resolveExecApprovalsPath();
+  const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
-    const file = withExecApprovalsReadLockSync(filePath, () =>
-      readExecApprovalsForNoPersistenceUnlocked(filePath),
-    );
+    const file = loadExecApprovals();
     const resolved = resolveExecApprovalsWithoutSocket({
       file,
       filePath,
@@ -118,11 +136,9 @@ export async function resolveExecApprovalsLocked(
   agentId?: string,
   overrides?: ExecApprovalsDefaultOverrides,
 ): Promise<ExecApprovalsResolved> {
-  const filePath = resolveExecApprovalsPath();
+  const filePath = resolveExecApprovalsDisplayPath();
   if (!overrides?.requireSocket) {
-    const file = await withExecApprovalsReadLock(filePath, async () =>
-      readExecApprovalsForNoPersistenceUnlocked(filePath),
-    );
+    const file = loadExecApprovals();
     const resolved = resolveExecApprovalsWithoutSocket({
       file,
       filePath,
@@ -135,7 +151,7 @@ export async function resolveExecApprovalsLocked(
   }
   return shapeResolvedExecApprovals({
     file: (await ensureExecApprovalsSnapshot()).file,
-    filePath: resolveExecApprovalsPath(),
+    filePath: resolveExecApprovalsDisplayPath(),
     agentId,
     overrides,
     socket: "persisted",

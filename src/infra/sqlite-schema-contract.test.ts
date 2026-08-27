@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { assertSqliteSchemaContains, collectSqliteSchemaIssues } from "./sqlite-schema-contract.js";
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE parents (
@@ -30,6 +30,9 @@ const CANONICAL_SCHEMA = `
     parent_id TEXT,
     FOREIGN KEY (parent_id) REFERENCES parents(id) DEFERRABLE INITIALLY DEFERRED
   );
+  CREATE TABLE compatible_columns (
+    value TEXT
+  ) STRICT;
   CREATE INDEX idx_children_parent ON children(parent_id, id);
   CREATE TRIGGER children_value_after_update
   AFTER UPDATE OF value ON children
@@ -145,6 +148,89 @@ describe("assertSqliteSchemaContains", () => {
     }
   });
 
+  it.each(["ANY", "BLOB", "INT", "INTEGER", "REAL", "TEXT"])(
+    "accepts a compatible future additive %s column only when enabled",
+    (type) => {
+      const database = createDatabase(CANONICAL_SCHEMA);
+      try {
+        database.exec(`ALTER TABLE compatible_columns ADD COLUMN future_note ${type};`);
+
+        expect(() =>
+          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
+        ).toThrow("column definitions differ for compatible_columns");
+        expect(() =>
+          assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+            allowCompatibleAdditiveColumns: true,
+          }),
+        ).not.toThrow();
+      } finally {
+        database.close();
+      }
+    },
+  );
+
+  it.each([
+    "TEXT DEFAULT NULL",
+    "TEXT NOT NULL DEFAULT ''",
+    "TEXT PRIMARY KEY",
+    "TEXT UNIQUE",
+    "TEXT CHECK (length(future_note) > 0)",
+    "TEXT REFERENCES parents(id)",
+    "TEXT COLLATE NOCASE",
+    "TEXT GENERATED ALWAYS AS (value) VIRTUAL",
+  ])("rejects a future additive column declared as %s", (declaration) => {
+    const database = createDatabase(schemaWithFutureColumn(declaration));
+    try {
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+          allowCompatibleAdditiveColumns: true,
+        }),
+      ).toThrow("column definitions differ for compatible_columns");
+    } finally {
+      database.close();
+    }
+  });
+
+  it("keeps allowlisted missing additive columns compatible in the upgrade direction", () => {
+    const futureSchema = CANONICAL_SCHEMA.replace(
+      "    value TEXT\n  ) STRICT;",
+      "    value TEXT,\n    future_note TEXT\n  ) STRICT;",
+    );
+    const database = createDatabase(CANONICAL_SCHEMA);
+    try {
+      expect(() => assertSqliteSchemaContains(database, "test database", futureSchema)).toThrow(
+        "column definitions differ for compatible_columns",
+      );
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", futureSchema, {
+          allowedMissingColumns: ["compatible_columns.future_note"],
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("accepts only allowlisted missing lazy-additive tables", () => {
+    const migratedSchema = CANONICAL_SCHEMA.replace(
+      / {2}CREATE TABLE events \([\s\S]*?\n {2}\);\n/u,
+      "",
+    );
+    const database = createDatabase(migratedSchema);
+    try {
+      expect(() => assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA)).toThrow(
+        "missing table events",
+      );
+      expect(() =>
+        assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA, {
+          allowedMissingTables: ["events"],
+        }),
+      ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
   it("accepts equivalent foreign keys declared in migration order", () => {
     const migratedSchema = CANONICAL_SCHEMA.replace(
       `    FOREIGN KEY (parent_id) REFERENCES parents(id) ON DELETE CASCADE,
@@ -157,6 +243,39 @@ describe("assertSqliteSchemaContains", () => {
       expect(() =>
         assertSqliteSchemaContains(database, "test database", CANONICAL_SCHEMA),
       ).not.toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns a stable missing-table issue", () => {
+    const database = createDatabase("CREATE TABLE unrelated (id INTEGER PRIMARY KEY);");
+    try {
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toContainEqual({
+        code: "missing-table",
+        objectName: "parents",
+        message: "missing table parents",
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns a stable virtual-definition issue", () => {
+    const database = createDatabase(
+      "CREATE VIRTUAL TABLE search_records USING fts5(body, tokenize='porter');",
+    );
+    try {
+      expect(
+        collectSqliteSchemaIssues(
+          database,
+          "CREATE VIRTUAL TABLE search_records USING fts5(body);",
+        ),
+      ).toContainEqual({
+        code: "virtual-table-definition-drift",
+        objectName: "search_records",
+        message: "virtual table definition differs for search_records",
+      });
     } finally {
       database.close();
     }
@@ -245,10 +364,90 @@ describe("assertSqliteSchemaContains", () => {
       database.close();
     }
   });
+
+  it.each([
+    {
+      name: "type",
+      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value BLOB NOT NULL"),
+      issue: { code: "column-definition-drift", objectName: "parents.value" },
+    },
+    {
+      name: "default",
+      schema: CANONICAL_SCHEMA.replace(" DEFAULT 'pending'", " DEFAULT 'other'"),
+      issue: { code: "column-definition-drift", objectName: "events.payload" },
+    },
+    {
+      name: "nullability",
+      schema: CANONICAL_SCHEMA.replace("value TEXT NOT NULL", "value TEXT"),
+      issue: { code: "column-definition-drift", objectName: "parents.value" },
+    },
+    {
+      name: "inline primary key",
+      schema: CANONICAL_SCHEMA.replace("id INTEGER PRIMARY KEY,", "id INTEGER,"),
+      issue: { code: "column-definition-drift", objectName: "features.id" },
+    },
+    {
+      name: "table constraint",
+      schema: CANONICAL_SCHEMA.replace(
+        /,\s*FOREIGN KEY \(parent_id\) REFERENCES parents\(id\) ON DELETE CASCADE/u,
+        "",
+      ),
+      issue: { code: "table-constraint-drift", objectName: "children" },
+    },
+    {
+      name: "index",
+      schema: CANONICAL_SCHEMA.replace(
+        "CREATE INDEX idx_children_parent ON children(parent_id, id)",
+        "CREATE INDEX idx_children_parent ON children(id, parent_id)",
+      ),
+      issue: { code: "missing-or-drifted-index", objectName: "idx_children_parent" },
+    },
+    {
+      name: "trigger",
+      schema: CANONICAL_SCHEMA.replace(
+        "UPDATE parents SET value = NEW.value WHERE id = NEW.parent_id",
+        "UPDATE parents SET value = NULL WHERE id = NEW.parent_id",
+      ),
+      issue: {
+        code: "missing-or-drifted-trigger",
+        objectName: "children_value_after_update",
+      },
+    },
+    {
+      name: "table options",
+      schema: CANONICAL_SCHEMA.replace(
+        `  CREATE TABLE parents (
+    id TEXT PRIMARY KEY,
+    value TEXT NOT NULL CHECK (length(value) > 0)
+  );`,
+        `  CREATE TABLE parents (
+    id TEXT PRIMARY KEY,
+    value TEXT NOT NULL CHECK (length(value) > 0)
+  ) STRICT;`,
+      ),
+      issue: { code: "table-options-drift", objectName: "parents" },
+    },
+  ])("returns a stable issue for drifted $name", ({ schema, issue }) => {
+    const database = createDatabase(schema);
+    try {
+      expect(collectSqliteSchemaIssues(database, CANONICAL_SCHEMA)).toContainEqual(
+        expect.objectContaining(issue),
+      );
+    } finally {
+      database.close();
+    }
+  });
 });
 
 function createDatabase(schema: string): DatabaseSync {
   const database = new DatabaseSync(":memory:");
   database.exec(schema);
   return database;
+}
+
+function schemaWithFutureColumn(declaration: string): string {
+  return CANONICAL_SCHEMA.replace(
+    "    value TEXT\n  ) STRICT;",
+    `    value TEXT,\n    future_note ${declaration}\n  ) STRICT;`,
+  );
 }

@@ -1,9 +1,5 @@
 import { DEV_BRANCH } from "./update-channels.js";
-import {
-  managerInstallIgnoreScriptsArgs,
-  type UpdatePackageManagerFailureReason,
-} from "./update-package-manager.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 const BUILD_MAX_OLD_SPACE_MB = 8192;
 const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
@@ -12,19 +8,7 @@ const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
 };
 const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
 
-export function mapManagerResolutionFailure(
-  reason: UpdatePackageManagerFailureReason,
-): NonNullable<UpdateRunResult["reason"]> {
-  return reason;
-}
-
-export function shouldRetryWindowsInstallIgnoringScripts(manager: "pnpm" | "bun" | "npm"): boolean {
-  return process.platform === "win32" && manager === "pnpm";
-}
-
-export function shouldPreferIgnoreScriptsForWindowsPreflight(
-  manager: "pnpm" | "bun" | "npm",
-): boolean {
+export function shouldInstallWithoutScriptsOnWindows(manager: "pnpm" | "bun" | "npm"): boolean {
   return process.platform === "win32" && manager === "pnpm";
 }
 
@@ -42,13 +26,20 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-export function resolveBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+export function resolveBuildEnv(
+  env?: NodeJS.ProcessEnv,
+  buildCacheRoot?: string,
+): NodeJS.ProcessEnv | undefined {
   const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
   const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
-  if (nextNodeOptions === currentNodeOptions) {
+  if (nextNodeOptions === currentNodeOptions && !buildCacheRoot) {
     return env;
   }
-  return { ...env, NODE_OPTIONS: nextNodeOptions };
+  return {
+    ...env,
+    NODE_OPTIONS: nextNodeOptions,
+    ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
+  };
 }
 
 export function resolveInstallEnv(
@@ -70,24 +61,16 @@ function isSupersededInstallFailure(
   step: UpdateStepResult,
   steps: readonly UpdateStepResult[],
 ): boolean {
-  if (step.exitCode === 0) {
-    return false;
-  }
-  if (step.name === "deps install") {
-    return steps.some(
+  return (
+    step.name === "deps install" &&
+    steps.some(
       (candidate) => candidate.name === "deps install (ignore scripts)" && candidate.exitCode === 0,
-    );
-  }
-  const preflightMatch = /^preflight deps install \((.+)\)$/.exec(step.name);
-  if (!preflightMatch) {
-    return false;
-  }
-  const retryName = `preflight deps install (ignore scripts) (${preflightMatch[1]})`;
-  return steps.some((candidate) => candidate.name === retryName && candidate.exitCode === 0);
+    )
+  );
 }
 
 function isPreflightCandidateFailure(step: UpdateStepResult): boolean {
-  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|lint) \(.+\)$/u.test(
+  return /^preflight (?:checkout|package manager|deps install(?: \(ignore scripts\))?|build|config validate|lint) \(.+\)$/u.test(
     step.name,
   );
 }
@@ -133,8 +116,4 @@ export function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env):
 
 export function resolveDevPreflightLintEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
   return { ...env, ...DEV_PREFLIGHT_LINT_ENV };
-}
-
-export function resolveRetryInstallArgs(manager: "pnpm" | "bun" | "npm") {
-  return managerInstallIgnoreScriptsArgs(manager);
 }

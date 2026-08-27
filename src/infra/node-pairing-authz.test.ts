@@ -1,7 +1,7 @@
 // Covers scope requirements for node pairing approvals.
 import { describe, expect, it } from "vitest";
 import {
-  NODE_BROWSER_PROXY_COMMAND,
+  NODE_BROWSER_PROXY_COMMANDS,
   NODE_EXEC_APPROVALS_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
@@ -11,7 +11,7 @@ import {
 import { resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 
 const ADMIN_ONLY_INVOKE_COMMANDS = [
-  NODE_BROWSER_PROXY_COMMAND,
+  ...NODE_BROWSER_PROXY_COMMANDS,
   NODE_FS_LIST_DIR_COMMAND,
   NODE_TERMINAL_UPLOAD_COMMAND,
 ] as const;

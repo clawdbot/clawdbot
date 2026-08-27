@@ -1,15 +1,20 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { ApplicationGatewaySnapshot } from "../app/context.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import {
+  scopedSessionPullRequestKey,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+  type SessionPullRequestSnapshotStore,
+} from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
-  fetchSessionPullRequestIndicatorState,
+  resolveSessionPullRequestIndicatorState,
   type SessionPullRequestIndicatorState,
 } from "./session-menu-work.ts";
-
-const REFRESH_MS = 60_000;
 
 type IndicatorEntry = {
   state: SessionPullRequestIndicatorState;
@@ -20,20 +25,19 @@ type SessionPullRequestIndicatorsOptions = {
   getConnected: () => boolean;
   getRows: () => readonly SidebarRecentSession[];
   getSelectedAgentId: () => string;
-  getSnapshot: () => ApplicationGatewaySnapshot | undefined;
+  getGateway: () => ApplicationGateway | undefined;
+  getSessions: () => SessionCapability | undefined;
 };
 
-/** Polls compact PR state for visible worktree rows; the gateway owns caching. */
+/** Projects pushed PR snapshots for the currently visible worktree rows. */
 export class SessionPullRequestIndicatorsController implements ReactiveController {
   private readonly states = new Map<string, IndicatorEntry>();
+  private gateway: ApplicationGateway | null = null;
   private client: GatewayBrowserClient | null = null;
   private agentId: string | null = null;
+  private store: SessionPullRequestSnapshotStore | null = null;
+  private stopStoreUpdates: (() => void) | null = null;
   private connected = false;
-  private epoch = 0;
-  private eligibleSignature = "";
-  private refresh: Promise<void> | null = null;
-  private refreshAgain = false;
-  private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private refreshScheduled = false;
 
   constructor(
@@ -53,8 +57,7 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
 
   hostDisconnected(): void {
     this.connected = false;
-    this.client = null;
-    this.agentId = null;
+    this.releaseStore();
     this.reset(false);
   }
 
@@ -71,34 +74,22 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     globalThis.setTimeout(() => {
       this.refreshScheduled = false;
       if (this.connected) {
-        this.refreshVisible(false);
+        this.refreshVisible();
       }
     }, 0);
   }
 
-  private clearRefreshTimer(): void {
-    if (this.refreshTimer === null) {
-      return;
-    }
-    globalThis.clearTimeout(this.refreshTimer);
-    this.refreshTimer = null;
-  }
-
-  private scheduleRefreshTimer(): void {
-    if (this.refreshTimer !== null) {
-      return;
-    }
-    this.refreshTimer = globalThis.setTimeout(() => {
-      this.refreshTimer = null;
-      this.refreshVisible(true);
-    }, REFRESH_MS);
+  private releaseStore(): void {
+    this.store?.unwatch(this);
+    this.stopStoreUpdates?.();
+    this.stopStoreUpdates = null;
+    this.store = null;
+    this.gateway = null;
+    this.client = null;
+    this.agentId = null;
   }
 
   private reset(requestUpdate: boolean): void {
-    this.epoch += 1;
-    this.eligibleSignature = "";
-    this.refreshAgain = false;
-    this.clearRefreshTimer();
     if (this.states.size === 0) {
       return;
     }
@@ -108,134 +99,106 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     }
   }
 
-  private refreshVisible(force: boolean): void {
-    const snapshot = this.options.getSnapshot();
-    if (
-      !snapshot?.client ||
-      !this.options.getConnected() ||
-      isGatewayMethodAdvertised(snapshot, "controlUi.sessionPullRequests") !== true
-    ) {
-      this.client = null;
-      this.agentId = null;
-      this.reset(true);
+  private eligibleRows(): readonly SidebarRecentSession[] {
+    return this.options.getRows().filter((session) => !session.isChild && session.worktreeId);
+  }
+
+  private scopedKey(sessionKey: string): string {
+    return scopedSessionPullRequestKey(
+      sessionKey,
+      parseAgentSessionKey(sessionKey)?.agentId ?? this.options.getSelectedAgentId(),
+    );
+  }
+
+  private applySnapshots(): void {
+    const store = this.store;
+    if (!store) {
       return;
     }
-    const selectedAgentId = this.options.getSelectedAgentId();
-    if (snapshot.client !== this.client || selectedAgentId !== this.agentId) {
-      this.reset(true);
-      this.client = snapshot.client;
-      this.agentId = selectedAgentId;
-    }
-
-    const eligibleRows = this.options
-      .getRows()
-      .filter((session) => !session.isChild && session.worktreeId);
-    const eligibleKeys = new Set(eligibleRows.map((session) => session.key));
-    if ([...this.states.keys()].some((sessionKey) => !eligibleKeys.has(sessionKey))) {
-      for (const sessionKey of this.states.keys()) {
-        if (!eligibleKeys.has(sessionKey)) {
-          this.states.delete(sessionKey);
-        }
+    let changed = false;
+    for (const session of this.eligibleRows()) {
+      if (!session.worktreeId) {
+        continue;
       }
+      const snapshot = store.get(this.scopedKey(session.key));
+      // Empty failure snapshots retain the rendered chip; snapshots carrying
+      // last-known PRs can also hydrate a newly mounted row.
+      if (!snapshot) {
+        const removed = this.states.delete(session.key);
+        if (removed) {
+          const sessions = this.options.getSessions();
+          if (sessions) {
+            sessions.setPullRequestSummary(
+              session.key,
+              undefined,
+              sessions.capturePullRequestEpoch(session.key),
+            );
+          }
+        }
+        changed = removed || changed;
+        continue;
+      }
+      if (snapshot.status !== "ready" && snapshot.pullRequests.length === 0) {
+        continue;
+      }
+      const entry = {
+        state: resolveSessionPullRequestIndicatorState(snapshot.pullRequests),
+        worktreeId: session.worktreeId,
+      };
+      const current = this.states.get(session.key);
+      if (current?.state !== entry.state || current.worktreeId !== entry.worktreeId) {
+        this.states.set(session.key, entry);
+        changed = true;
+      }
+    }
+    if (changed) {
       this.host.requestUpdate();
     }
-    if (eligibleRows.length === 0) {
-      this.eligibleSignature = "";
-      this.clearRefreshTimer();
-      return;
-    }
-
-    const signature = JSON.stringify(
-      eligibleRows.map((session) => [session.key, session.worktreeId]),
-    );
-    if (!force && signature === this.eligibleSignature) {
-      if (this.refresh === null) {
-        this.scheduleRefreshTimer();
-      }
-      return;
-    }
-    this.eligibleSignature = signature;
-    if (this.refresh) {
-      this.refreshAgain = true;
-      return;
-    }
-
-    this.clearRefreshTimer();
-    const epoch = this.epoch;
-    const refresh = this.load({
-      client: snapshot.client,
-      selectedAgentId,
-      eligibleRows,
-      epoch,
-      signature,
-    });
-    this.refresh = refresh;
-    void refresh.finally(() => {
-      if (this.refresh !== refresh) {
-        return;
-      }
-      this.refresh = null;
-      if (!this.connected) {
-        return;
-      }
-      if (this.refreshAgain) {
-        this.refreshAgain = false;
-        this.refreshVisible(true);
-        return;
-      }
-      if (epoch === this.epoch && signature === this.eligibleSignature) {
-        this.scheduleRefreshTimer();
-      }
-    });
   }
 
-  private async load(params: {
-    client: GatewayBrowserClient;
-    selectedAgentId: string;
-    eligibleRows: readonly SidebarRecentSession[];
-    epoch: number;
-    signature: string;
-  }): Promise<void> {
-    for (const session of params.eligibleRows) {
-      if (!this.isCurrent(params)) {
-        return;
-      }
-      try {
-        const indicatorState = await fetchSessionPullRequestIndicatorState({
-          client: params.client,
-          pullRequestsAvailable: true,
-          sessionKey: session.key,
-          agentId: parseAgentSessionKey(session.key)?.agentId ?? params.selectedAgentId,
-        });
-        if (indicatorState === null || !this.isCurrent(params)) {
-          continue;
-        }
-        const worktreeId = session.worktreeId;
-        const current = this.states.get(session.key);
-        if (
-          worktreeId &&
-          (current?.state !== indicatorState || current.worktreeId !== worktreeId)
-        ) {
-          this.states.set(session.key, { state: indicatorState, worktreeId });
-          this.host.requestUpdate();
-        }
-      } catch {
-        // Optional metadata: preserve the last-known indicator and retry next poll.
+  private refreshVisible(): void {
+    const gateway = this.options.getGateway();
+    if (
+      !gateway ||
+      !this.options.getConnected() ||
+      isGatewayMethodAdvertised(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD) !== true
+    ) {
+      this.releaseStore();
+      this.reset(true);
+      return;
+    }
+    if (gateway !== this.gateway) {
+      this.releaseStore();
+      this.gateway = gateway;
+      this.store = sessionPullRequestsForGateway(gateway);
+      this.stopStoreUpdates = this.store.subscribe(() => this.applySnapshots());
+    }
+    if (gateway.snapshot.client !== this.client) {
+      this.client = gateway.snapshot.client;
+      this.reset(true);
+    }
+    const selectedAgentId = this.options.getSelectedAgentId();
+    if (selectedAgentId !== this.agentId) {
+      this.agentId = selectedAgentId;
+      this.reset(true);
+    }
+
+    const eligibleRows = this.eligibleRows();
+    const eligibleKeys = new Set(eligibleRows.map((session) => session.key));
+    let removed = false;
+    for (const sessionKey of this.states.keys()) {
+      if (!eligibleKeys.has(sessionKey)) {
+        this.states.delete(sessionKey);
+        removed = true;
       }
     }
-  }
-
-  private isCurrent(params: {
-    client: GatewayBrowserClient;
-    epoch: number;
-    signature: string;
-  }): boolean {
-    return (
-      this.connected &&
-      this.options.getConnected() &&
-      params.epoch === this.epoch &&
-      params.signature === this.eligibleSignature &&
-      this.options.getSnapshot()?.client === params.client
+    if (removed) {
+      this.host.requestUpdate();
+    }
+    this.store?.watch(
+      this,
+      eligibleRows.map((session) => this.scopedKey(session.key)),
     );
+    this.applySnapshots();
   }
 }

@@ -26,6 +26,23 @@ export type PluginDependencyStatus = {
   optionalDependencies: PluginDependencyEntry[];
 };
 
+type PluginDependencyHealthRegistry = {
+  plugins: Array<{
+    id: string;
+    source: string;
+    enabled: boolean;
+    status: "loaded" | "disabled" | "error";
+    error?: string;
+    dependencyStatus?: PluginDependencyStatus;
+  }>;
+  diagnostics: Array<{
+    level: "warn" | "error";
+    message: string;
+    pluginId?: string;
+    source?: string;
+  }>;
+};
+
 function normalizeDependencyMap(raw: unknown): PluginDependencySpecMap {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return {};
@@ -49,9 +66,14 @@ export function normalizePluginDependencySpecs(params: {
   dependencies: PluginDependencySpecMap;
   optionalDependencies: PluginDependencySpecMap;
 } {
+  const dependencies = normalizeDependencyMap(params.dependencies);
+  const optionalDependencies = normalizeDependencyMap(params.optionalDependencies);
+  for (const name of Object.keys(optionalDependencies)) {
+    delete dependencies[name];
+  }
   return {
-    dependencies: normalizeDependencyMap(params.dependencies),
-    optionalDependencies: normalizeDependencyMap(params.optionalDependencies),
+    dependencies,
+    optionalDependencies,
   };
 }
 
@@ -141,4 +163,47 @@ export function buildPluginDependencyStatus(params: {
     dependencies,
     optionalDependencies,
   };
+}
+
+/** Projects missing required dependencies consistently across cold plugin status surfaces. */
+export function projectPluginDependencyHealth<T extends PluginDependencyHealthRegistry>(
+  registry: T,
+): T {
+  const diagnostics = [...registry.diagnostics];
+  const plugins = registry.plugins.map((plugin) => {
+    const status = plugin.dependencyStatus;
+    if (!plugin.enabled || status?.requiredInstalled !== false) {
+      return plugin;
+    }
+    const message =
+      `Plugin "${plugin.id}" cannot load because required dependencies are missing: ` +
+      `${status.missing.join(", ")}. Install the plugin dependencies or reinstall/update the ` +
+      "plugin, then restart the Gateway.";
+    const existingDiagnosticIndex = diagnostics.findIndex(
+      (entry) => entry.level === "error" && entry.pluginId === plugin.id,
+    );
+    if (existingDiagnosticIndex === -1) {
+      diagnostics.push({ level: "error", pluginId: plugin.id, source: plugin.source, message });
+    } else {
+      const existingDiagnostic = diagnostics[existingDiagnosticIndex];
+      if (existingDiagnostic && !existingDiagnostic.message.includes(message)) {
+        diagnostics[existingDiagnosticIndex] = {
+          ...existingDiagnostic,
+          message: `${existingDiagnostic.message}\n${message}`,
+        };
+      }
+    }
+    if (plugin.status === "error") {
+      const existingError = plugin.error;
+      return {
+        ...plugin,
+        error:
+          existingError && !existingError.includes(message)
+            ? `${existingError}\n${message}`
+            : (existingError ?? message),
+      };
+    }
+    return { ...plugin, status: "error" as const, error: message };
+  });
+  return { ...registry, plugins, diagnostics };
 }

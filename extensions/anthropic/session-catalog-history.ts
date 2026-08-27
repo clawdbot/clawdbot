@@ -1,5 +1,6 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 import type { ClaudeTranscriptItem } from "./session-catalog-transcript.js";
@@ -8,8 +9,7 @@ function importedClaudeMessage(
   item: ClaudeTranscriptItem,
   fallbackTimestamp: number,
 ): AgentMessage | undefined {
-  const parsedTimestamp = item.timestamp ? Date.parse(item.timestamp) : Number.NaN;
-  const timestamp = Number.isFinite(parsedTimestamp) ? parsedTimestamp : fallbackTimestamp;
+  const timestamp = parseDateStringTimestampMs(item.timestamp) ?? fallbackTimestamp;
   const importedText = item.text?.trim();
   if (!importedText && item.type === "reasoning") {
     return undefined;
@@ -55,10 +55,10 @@ function importedClaudeMessage(
 export async function importClaudeHistory(params: {
   items: ClaudeTranscriptItem[];
   threadId: string;
-  sessionFile: string;
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  storePath: string;
   cwd?: string;
   config: OpenClawConfig;
 }): Promise<void> {
@@ -70,10 +70,10 @@ export async function importClaudeHistory(params: {
         continue;
       }
       // The idempotency key rides on the message so recovery re-imports dedupe.
-      const message = {
-        ...(imported as unknown as Record<string, unknown>),
+      const message: AgentMessage & { idempotencyKey: string } = {
+        ...imported,
         idempotencyKey: `claude-catalog:${params.threadId}:${item.uuid ?? index}`,
-      } as unknown as AgentMessage;
+      };
       await transcript.appendMessage({
         message,
         idempotencyLookup: "scan",

@@ -1,6 +1,6 @@
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 // Matrix tests cover draft stream plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
 
 const sendModuleMocks = vi.hoisted(() => {
   const loadConfigMock = vi.fn(() => ({}));
@@ -13,8 +13,11 @@ const sendModuleMocks = vi.hoisted(() => {
   const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
   const convertMarkdownTablesMock = vi.fn((text: string) => text);
   const prepareMatrixSingleText = vi.fn(
-    (text: string, opts: { cfg?: unknown; accountId?: string } = {}) => {
-      const trimmedText = text.trim();
+    (
+      text: string,
+      opts: { cfg?: unknown; accountId?: string; preserveWhitespace?: boolean } = {},
+    ) => {
+      const trimmedText = opts.preserveWhitespace ? text : text.trim();
       const convertedText = convertMarkdownTablesMock(trimmedText);
       const singleEventLimit = Math.min(
         resolveTextChunkLimitMock(opts.cfg ?? {}, "matrix", opts.accountId),
@@ -46,6 +49,7 @@ const sendModuleMocks = vi.hoisted(() => {
       const prepared = prepareMatrixSingleText(text, {
         cfg: opts.cfg,
         accountId: opts.accountId,
+        preserveWhitespace: true,
       });
       if (!prepared.trimmedText) {
         throw new Error("Matrix single-message send requires text");
@@ -228,6 +232,45 @@ describe("createMatrixDraftStream", () => {
       msgtype: "m.text",
     });
     expect(stream.eventId()).toBe("$evt1");
+  });
+
+  it("tracks the provider-visible prepared draft content", async () => {
+    convertMarkdownTablesMock.mockImplementation((text: string) => `prepared:${text}`);
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+    });
+
+    stream.update("raw table");
+    await stream.flush();
+
+    expect(stream.content()).toBe("prepared:raw table");
+  });
+
+  it("preserves indented code through draft sends, edits, and final comparisons", async () => {
+    const stream = createMatrixDraftStream({
+      roomId: "!room:test",
+      client,
+      cfg: {} as import("../types.js").CoreConfig,
+    });
+    const firstMarkdown = "    @room";
+
+    stream.update(`${firstMarkdown}  `);
+    await stream.flush();
+
+    expect(sentContentAt(0).body).toBe(firstMarkdown);
+    expect(stream.content()).toBe(firstMarkdown);
+    expect(stream.matchesPreparedText(`${firstMarkdown}  `)).toBe(true);
+    expect(stream.matchesPreparedText("@room")).toBe(false);
+
+    vi.advanceTimersByTime(1000);
+    const editedMarkdown = "    @alice:example.org";
+    stream.update(editedMarkdown);
+    await stream.flush();
+
+    expect(sendModuleMocks.editMessageMatrix.mock.lastCall?.[2]).toBe(editedMarkdown);
+    expect(stream.content()).toBe(editedMarkdown);
   });
 
   it("sends quiet preview notices when quiet mode is enabled", async () => {

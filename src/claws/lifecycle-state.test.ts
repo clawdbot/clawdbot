@@ -5,6 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import {
+  listOpenClawRegisteredAgentDatabases,
+  registerOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db-registry.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -195,6 +199,107 @@ describe("Claw status and remove", () => {
     });
   });
 
+  it("reports adapter identity drift for an installed extension without mutating provenance", async () => {
+    const current = await addFixture();
+    const extension = {
+      id: "audit-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["skills"],
+      unavailable: ["agents"],
+      adapterIdentity: "openclaw/previous",
+    };
+    persistClawPackageRef(
+      current.plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: packageIntegrity,
+        extension,
+      },
+      { env: current.env, nowMs: 2, relationship: "referenced" },
+    );
+
+    const status = await readClawStatus("worker", {
+      env: current.env,
+      config: current.getConfig(),
+      packageDeps: {
+        resolvePlugin: async () => ({
+          status: "found" as const,
+          pluginId: "audit",
+          installedVersion: "2.0.0",
+          record: { source: "clawhub", integrity: packageIntegrity },
+        }),
+      },
+    });
+
+    expect(status.summary.driftedPackages).toBe(1);
+    expect(status.records[0]?.packages[0]).toMatchObject({
+      state: "present",
+      extension,
+      extensionCompatibility: {
+        state: "drifted",
+        mapped: ["agents", "skills"],
+        unavailable: [],
+        adapterIdentity: "openclaw/v1",
+      },
+    });
+    expect(readClawPackageRefs({ env: current.env })[0]?.extension).toEqual(extension);
+  });
+
+  it("reports unavailable extension inspection separately from package drift", async () => {
+    const current = await addFixture();
+    const extension = {
+      id: "audit-tools",
+      format: "claude" as const,
+      detectedFormat: "claude" as const,
+      mapped: ["skills"],
+      unavailable: ["agents"],
+      adapterIdentity: "openclaw/current",
+    };
+    persistClawPackageRef(
+      current.plan,
+      {
+        kind: "plugin",
+        source: "clawhub",
+        ref: "audit",
+        version: "2.0.0",
+        integrity: packageIntegrity,
+        extension,
+      },
+      { env: current.env, nowMs: 2, relationship: "referenced" },
+    );
+
+    const status = await readClawStatus("worker", {
+      env: current.env,
+      config: current.getConfig(),
+      packageDeps: {
+        resolvePlugin: async () => ({
+          status: "found" as const,
+          pluginId: "audit",
+          installedVersion: "2.0.0",
+          record: { source: "clawhub", integrity: packageIntegrity },
+        }),
+      },
+      packagePreflight: async () => ({
+        ok: false,
+        code: "extension_unavailable",
+        message: "Canonical extension inspection is unavailable.",
+      }),
+    });
+
+    expect(status.summary).toMatchObject({ driftedPackages: 0, unavailableExtensions: 1 });
+    expect(status.records[0]?.packages[0]).toMatchObject({
+      state: "present",
+      extensionCompatibility: {
+        state: "unavailable",
+        message: "Canonical extension inspection is unavailable.",
+      },
+    });
+  });
+
   it("counts every non-complete root install as partial", async () => {
     const current = await fixture();
     persistClawInstallRecord(current.plan, { env: current.env, status: "config_committed" });
@@ -377,6 +482,14 @@ describe("Claw status and remove", () => {
 
   it("removes the agent and unchanged files but only releases package refs", async () => {
     const current = await addFixture({ withFile: true });
+    const databasePath = join(
+      current.env.OPENCLAW_STATE_DIR,
+      "agents",
+      "worker",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    registerOpenClawAgentDatabase({ agentId: "worker", path: databasePath, env: current.env });
     persistClawPackageRef(
       current.plan,
       {
@@ -408,6 +521,9 @@ describe("Claw status and remove", () => {
       workspaceFiles: [{ path: "SOUL.md", action: "deleted" }],
     });
     expect(config.agents?.entries?.worker).toBeUndefined();
+    expect(
+      listOpenClawRegisteredAgentDatabases({ env: current.env }).map((entry) => entry.agentId),
+    ).not.toContain("worker");
     await expect(readFile(join(current.plan.agent.workspace, "SOUL.md"), "utf8")).rejects.toThrow();
     await expect(readClawStatus("worker", { env: current.env, config })).resolves.toMatchObject({
       summary: { claws: 0 },
@@ -456,7 +572,7 @@ describe("Claw status and remove", () => {
     });
   });
 
-  it("accepts the scheduler's default tool cap when removing a Claw cron job", async () => {
+  it("accepts scheduler defaults when removing a Claw cron job", async () => {
     const current = await addFixture({ withCron: true });
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,
@@ -475,6 +591,7 @@ describe("Claw status and remove", () => {
         get: async () => ({
           ...live,
           payload: { ...live.payload, toolsAllow: ["*"] },
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
         }),
         remove,
       },
@@ -834,6 +951,14 @@ describe("Claw status and remove", () => {
       config,
       packageDeps,
     });
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "packageRef",
+        action: "release",
+        reason: expect.stringContaining("Claw add introduced this shared requirement"),
+        details: expect.objectContaining({ introducedByClawAdd: true }),
+      }),
+    );
 
     await expect(
       applyClawRemovePlan(plan, {

@@ -1,6 +1,12 @@
 // Discord plugin module implements setup surface behavior.
+import { resolveBasicAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   createSetupTranslator,
+  patchChannelConfigForAccount,
+  promptResolvedAllowFrom,
+  resolveEntriesWithOptionalToken,
+  resolveSetupAccountId,
+  splitSetupEntries,
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
@@ -14,13 +20,6 @@ import {
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
 import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
-import {
-  patchChannelConfigForAccount,
-  promptResolvedAllowFrom,
-  resolveEntriesWithOptionalToken,
-  resolveSetupAccountId,
-  splitSetupEntries,
-} from "./setup-runtime-helpers.js";
 import { resolveDiscordToken } from "./token.js";
 
 const t = createSetupTranslator();
@@ -28,25 +27,11 @@ const t = createSetupTranslator();
 const channel = "discord" as const;
 
 async function resolveDiscordAllowFromEntries(params: { token?: string; entries: string[] }) {
-  return await resolveEntriesWithOptionalToken({
+  return await resolveBasicAllowFromEntries({
     token: params.token,
     entries: params.entries,
-    buildWithoutToken: (input) => ({
-      input,
-      resolved: false,
-      id: null,
-    }),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveDiscordUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveDiscordUserAllowlist({ token, entries }),
   });
 }
 

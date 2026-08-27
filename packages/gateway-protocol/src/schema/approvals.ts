@@ -72,6 +72,42 @@ export const PluginApprovalSeveritySchema = Type.Union([
   Type.Literal("critical"),
 ]);
 
+/** Message/email delivery blast radius declared by the approval owner. */
+export const MessageSendApprovalScopeSchema = closedObject({
+  kind: Type.Literal("message-send"),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+  recipientCount: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  recipients: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 5 }),
+  ),
+  audience: Type.Optional(Type.Union([Type.Literal("internal"), Type.Literal("external")])),
+});
+
+/** Payment blast radius declared by the approval owner. */
+export const PaymentApprovalScopeSchema = closedObject({
+  kind: Type.Literal("payment"),
+  amount: Type.String({ minLength: 1, maxLength: 40 }),
+  currency: Type.String({ minLength: 1, maxLength: 12 }),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
+/** External publication blast radius declared by the approval owner. */
+export const ExternalPostApprovalScopeSchema = closedObject({
+  kind: Type.Literal("external-post"),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+  visibility: Type.Union([Type.Literal("public"), Type.Literal("restricted")]),
+});
+
+/**
+ * Owner-declared blast-radius facts for a pending approval. Variants are
+ * named schemas so native protocol generators emit the discriminated union.
+ */
+export const ApprovalScopeSchema = Type.Union([
+  MessageSendApprovalScopeSchema,
+  PaymentApprovalScopeSchema,
+  ExternalPostApprovalScopeSchema,
+]);
+
 const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   minItems: 1,
   maxItems: 3,
@@ -96,6 +132,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    scope: Type.Optional(ApprovalScopeSchema),
     allowedDecisions: ApprovalAllowedDecisionsSchema,
   },
   {
@@ -115,6 +152,7 @@ export const PluginApprovalPresentationSchema = closedObject({
   pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  scope: Type.Optional(ApprovalScopeSchema),
   allowedDecisions: ApprovalAllowedDecisionsSchema,
 });
 
@@ -243,10 +281,17 @@ export const ApprovalHistoryResultSchema = closedObject({
 });
 
 /** Reviewer decision for one approval identified by its exact full id. */
+export const ApprovalChannelReviewerSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  senderId: NonEmptyString,
+});
+
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
@@ -305,6 +350,7 @@ export type ApprovalDecision = Static<typeof ApprovalDecisionSchema>;
 export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
 export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>;
 export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
+export type ApprovalScope = Static<typeof ApprovalScopeSchema>;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;
@@ -315,6 +361,7 @@ export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
 export type ApprovalHistoryParams = Static<typeof ApprovalHistoryParamsSchema>;
 export type ApprovalHistoryResult = Static<typeof ApprovalHistoryResultSchema>;
+export type ApprovalChannelReviewer = Static<typeof ApprovalChannelReviewerSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
 export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;

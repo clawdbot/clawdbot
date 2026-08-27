@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
 const resolveUtilityModelRefForAgent = vi.hoisted(() => vi.fn());
+const readSessionTitleFieldsFromTranscript = vi.hoisted(() => vi.fn());
 const updateSessionEntry = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent }));
@@ -10,10 +11,15 @@ vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback,
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({ updateSessionEntry }));
+vi.mock("./session-transcript-title-reader.js", () => ({ readSessionTitleFieldsFromTranscript }));
 
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { maybeGenerateDashboardSessionTitle } from "./dashboard-session-title.js";
+import type { ChatAttachment } from "./chat-attachments.js";
+import {
+  buildDashboardSessionTitleSource,
+  maybeGenerateDashboardSessionTitle,
+} from "./dashboard-session-title.js";
 
 const cfg = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -47,6 +53,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     generateConversationLabelWithFallback.mockReset();
     resolveUtilityModelRefForAgent.mockReset();
     updateSessionEntry.mockReset();
+    readSessionTitleFieldsFromTranscript.mockReset();
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: null,
+      lastMessagePreview: null,
+    });
     generateConversationLabelWithFallback.mockResolvedValue("Release Planning");
     resolveUtilityModelRefForAgent.mockReturnValue("openai/gpt-5.6-luna");
     mockSessionUpdate(baseEntry);
@@ -64,7 +75,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(generateConversationLabelWithFallback).toHaveBeenCalledWith({
       userMessage: "Help me plan the release",
       prompt:
-        "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message. No emoji. Return only the title.",
+        "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.",
       cfg,
       agentId: "main",
       utilityModelRef: "openai/gpt-5.6-luna",
@@ -109,6 +120,38 @@ describe("maybeGenerateDashboardSessionTitle", () => {
         regularModelRef: "anthropic/claude-fable-5@work",
         preferredProfile: "work",
       }),
+    );
+  });
+
+  it("preserves a locked session harness as the title runtime owner", async () => {
+    const entry = {
+      ...baseEntry,
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+    );
+  });
+
+  it("preserves a compatible session runtime override for title generation", async () => {
+    const entry = {
+      ...baseEntry,
+      providerOverride: "anthropic",
+      modelOverride: "claude-fable-5",
+      agentRuntimeOverride: "claude-cli",
+    };
+    mockSessionUpdate(entry);
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: "claude-cli" }),
     );
   });
 
@@ -197,7 +240,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     ["group subject", { entry: { ...baseEntry, subject: "Release team" } }],
     ["channel name", { entry: { ...baseEntry, groupChannel: "releases" } }],
     ["space name", { entry: { ...baseEntry, space: "Engineering" } }],
-    ["existing session history", { entry: { ...baseEntry, systemSent: true } }],
   ])("skips %s", async (_name, override) => {
     await expect(
       maybeGenerateDashboardSessionTitle({ ...titleParams(), ...override }),
@@ -205,6 +247,58 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
     expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
     expect(updateSessionEntry).not.toHaveBeenCalled();
+  });
+
+  it("retries a historical session from the transcript's first user message", async () => {
+    const entry = { ...baseEntry, systemSent: true };
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Original release plan",
+      lastMessagePreview: "Latest follow-up",
+    });
+    mockSessionUpdate(entry);
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(entry),
+        currentUserMessage: "Latest follow-up",
+        userMessage: "Latest follow-up",
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+      "Original release plan",
+    );
+  });
+
+  it("preserves attachment-aware input when the first turn is already in the transcript", async () => {
+    readSessionTitleFieldsFromTranscript.mockReturnValue({
+      firstUserMessage: "[Mon 2026-08-10 12:00 UTC] Review this rollout",
+      lastMessagePreview: "Review this rollout",
+    });
+
+    await expect(
+      maybeGenerateDashboardSessionTitle({
+        ...titleParams(),
+        currentUserMessage: "Review this rollout",
+        userMessage: "Review this rollout\nDeployment context",
+      }),
+    ).resolves.toBe(true);
+
+    expect(generateConversationLabelWithFallback.mock.calls[0]?.[0]?.userMessage).toBe(
+      "Review this rollout\nDeployment context",
+    );
+  });
+
+  it("evicts a failed request so later activity can retry", async () => {
+    generateConversationLabelWithFallback
+      .mockRejectedValueOnce(new Error("route unavailable"))
+      .mockResolvedValueOnce("Release Planning");
+
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).rejects.toThrow(
+      "route unavailable",
+    );
+    await expect(maybeGenerateDashboardSessionTitle(titleParams())).resolves.toBe(true);
+    expect(generateConversationLabelWithFallback).toHaveBeenCalledTimes(2);
   });
 
   it("does not overwrite a name added while the model request is running", async () => {
@@ -239,3 +333,70 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     expect(generateConversationLabelWithFallback).toHaveBeenCalledOnce();
   });
 });
+
+describe("buildDashboardSessionTitleSource", () => {
+  it("combines an ordinary command with large pasted text within the title-source cap", async () => {
+    const pastedText = `Release details ${"x".repeat(2_000)}`;
+    const source = buildDashboardSessionTitleSource({
+      message: "Review this rollout [[reply_to_current]]",
+      attachments: [textAttachment("Deployment context"), textAttachment(pastedText)],
+    });
+    expect(source).toBe(
+      `Review this rollout [[reply_to_current]]\nDeployment context\n${pastedText}`.slice(0, 1_000),
+    );
+  });
+
+  it.each([
+    ["attachment-only", "", "Pasted migration checklist"],
+    ["slash command with attachment", "/status", "Pasted incident report"],
+  ])("titles an %s turn from its text attachment", async (_name, userMessage, text) => {
+    expect(
+      buildDashboardSessionTitleSource({
+        message: userMessage,
+        attachments: [textAttachment(text)],
+      }),
+    ).toBe(text);
+  });
+
+  it.each([
+    ["malformed base64", { mimeType: "text/plain", content: "%%%" }],
+    [
+      "invalid UTF-8",
+      { mimeType: "text/plain", content: Buffer.from([0xc3, 0x28]).toString("base64") },
+    ],
+    ["non-text", { mimeType: "image/png", content: Buffer.from("not text").toString("base64") }],
+  ] satisfies Array<[string, ChatAttachment]>)(
+    "ignores %s attachments",
+    async (_name, attachment) =>
+      expect(buildDashboardSessionTitleSource({ message: "", attachments: [attachment] })).toBe(""),
+  );
+
+  it("ignores a long text attachment with malformed trailing base64", async () => {
+    const valid = Buffer.from("a".repeat(4_000)).toString("base64");
+    const malformed = `${valid.slice(0, -4)}AAA%`;
+
+    expect(
+      buildDashboardSessionTitleSource({
+        message: "",
+        attachments: [{ mimeType: "text/plain", content: malformed }],
+      }),
+    ).toBe("");
+  });
+
+  it("keeps attachment-derived title input on a UTF-16 boundary", async () => {
+    expect(
+      buildDashboardSessionTitleSource({
+        message: "",
+        attachments: [textAttachment(`${"a".repeat(999)}🚀tail`)],
+      }),
+    ).toBe("a".repeat(999));
+  });
+});
+
+function textAttachment(text: string): ChatAttachment {
+  return {
+    type: "file",
+    mimeType: "text/plain",
+    content: Buffer.from(text).toString("base64"),
+  };
+}

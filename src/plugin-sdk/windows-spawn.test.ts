@@ -1,7 +1,8 @@
 /**
  * Tests Windows spawn compatibility helpers.
  */
-import { writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { link, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -15,6 +16,33 @@ const { createTempDir } = createPluginSdkTestHarness({
 });
 
 describe("resolveWindowsSpawnProgram", () => {
+  it.runIf(process.platform === "win32")(
+    "resolves mixed-case PATH and PATHEXT keys for a native Windows spawn",
+    async () => {
+      const dir = await createTempDir("openclaw-windows-spawn-env-case-");
+      const executable = path.join(dir, "mixed-env-tool.MiXeD");
+      await link(process.execPath, executable);
+      const env = { pAtH: dir, pAtHeXt: ".MiXeD" };
+
+      const program = resolveWindowsSpawnProgram({
+        command: "mixed-env-tool",
+        platform: "win32",
+        env,
+        execPath: process.execPath,
+      });
+      const invocation = materializeWindowsSpawnProgram(program, [
+        "-e",
+        'process.stdout.write("native-ok")',
+      ]);
+      const child = spawnSync(invocation.command, invocation.argv, { env, encoding: "utf8" });
+
+      expect(program).toMatchObject({ command: executable, resolution: "direct" });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe("native-ok");
+    },
+  );
+
   it("rejects node command strings that include inline entrypoint arguments on Windows", () => {
     expect(() =>
       resolveWindowsSpawnProgram({

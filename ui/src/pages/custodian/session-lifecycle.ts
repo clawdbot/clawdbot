@@ -2,6 +2,7 @@ import {
   readSystemAgentSessionInvalidatedErrorDetails,
   type SystemAgentChatParams,
 } from "@openclaw/gateway-protocol";
+import { inferBasePathFromPathname, routeIdFromPath } from "../../app-route-paths.ts";
 
 export type CustodianSessionVariant = "onboarding" | "new-agent" | "caretaker";
 
@@ -12,10 +13,25 @@ export function sessionVariant(
   return onboarding ? "onboarding" : newAgentIntent ? "new-agent" : "caretaker";
 }
 
-export function welcomeVariant(
+export function custodianChatParams(
   variant: CustodianSessionVariant,
-): Pick<SystemAgentChatParams, "welcomeVariant"> {
-  return variant === "caretaker" ? {} : { welcomeVariant: variant };
+  message?: string,
+): Pick<SystemAgentChatParams, "welcomeVariant" | "message" | "context"> {
+  const variantParams = variant === "caretaker" ? {} : { welcomeVariant: variant };
+  if (message === undefined) {
+    return variantParams;
+  }
+  const pathname = window.location.pathname;
+  const page = routeIdFromPath(pathname, inferBasePathFromPathname(pathname));
+  return { ...variantParams, message, ...(page ? { context: { page } } : {}) };
+}
+
+export function hasCustodianUserInput(params: SystemAgentChatParams): boolean {
+  return (
+    params.message !== undefined ||
+    params.wizardAnswer !== undefined ||
+    params.wizardCancel !== undefined
+  );
 }
 
 export function isCustodianSessionInvalidatedError(error: unknown): boolean {

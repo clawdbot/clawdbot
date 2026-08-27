@@ -1,8 +1,8 @@
 // Matrix plugin module implements channel account paths behavior.
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import type { CoreConfig } from "./types.js";
 
@@ -66,7 +66,7 @@ export function createMatrixProbeAccount(params: {
     } catch (err) {
       return {
         ok: false,
-        error: formatMatrixErrorMessage(err),
+        error: formatErrorMessage(err),
         elapsedMs: 0,
       };
     }

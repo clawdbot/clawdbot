@@ -1,7 +1,9 @@
 // Resolves whether completed replies should send visibly or stay tool-only.
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { SourceReplyDeliveryMode } from "../source-reply-delivery-mode.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
@@ -10,10 +12,7 @@ type CompletionChatType = ChatType | "unknown";
 
 type DurableCompletionDeliveryMode = "automatic" | "host_owned";
 
-type CompletionDeliverySessionEntry = {
-  chatType?: string | null;
-  origin?: { chatType?: string | null } | null;
-};
+type CompletionDeliverySessionEntry = Pick<SessionEntry, "chatType" | "delivery">;
 
 function resolveCompletionChatType(params: {
   requesterSessionKey?: string | null;
@@ -23,7 +22,7 @@ function resolveCompletionChatType(params: {
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {
   const explicit = normalizeChatType(
-    params.requesterEntry?.chatType ?? params.requesterEntry?.origin?.chatType ?? undefined,
+    params.requesterEntry?.chatType ?? sessionDeliveryOrigin(params.requesterEntry)?.chatType,
   );
   if (explicit) {
     return explicit;

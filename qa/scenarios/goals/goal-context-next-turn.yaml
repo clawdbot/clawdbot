@@ -31,7 +31,7 @@ scenario:
       conversationId: goal-context-next-turn
       senderId: qa-goal-operator
       goalObjective: Compile the QA release evidence bundle
-      expectedGoalContext: "Active goal: Compile the QA release evidence bundle — advance it or update its status (get_goal/update_goal)."
+      expectedGoalContext: "Active goal: Compile the QA release evidence bundle — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final."
       secondMessage: GOAL-CONTEXT-NEXT-TURN unrelated weather question
 
 flow:

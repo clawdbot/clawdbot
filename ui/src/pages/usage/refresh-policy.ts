@@ -1,9 +1,16 @@
-export const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+import {
+  IncompleteUsageRetry,
+  isUsageIncomplete,
+  type UsageRetryState,
+} from "../../lib/incomplete-usage-retry.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 
-export type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
+const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
+
+type UsageRefreshReason = "focus" | "manual" | "poll" | "reconnect";
 type UsageRefreshDecision = "defer" | "fetch" | "skip";
 
-export function decideUsageRefresh(params: {
+function decideUsageRefresh(params: {
   reason: UsageRefreshReason;
   visible: boolean;
   interrupted: boolean;
@@ -27,4 +34,142 @@ export function decideUsageRefresh(params: {
     return "skip";
   }
   return "fetch";
+}
+
+type UsageRefreshPolicyOptions = {
+  isLoading: () => boolean;
+  reload: () => void | Promise<void>;
+  onIncompleteUsageExhausted?: () => void;
+};
+
+/** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
+export class UsageRefreshPolicy {
+  private lastLoadedAtMs: number | null = null;
+  private providerConvergenceOutstanding = false;
+  private providerConvergenceConnection: unknown;
+  private pendingAutomaticRefresh = false;
+  private reloadPending = false;
+  private readonly incompleteUsageRetry = new IncompleteUsageRetry({
+    retry: () => this.requestAndWait("poll"),
+    onExhausted: () => this.options.onIncompleteUsageExhausted?.(),
+  });
+
+  constructor(private readonly options: UsageRefreshPolicyOptions) {}
+
+  get incompleteUsageExhausted(): boolean {
+    return this.incompleteUsageRetry.exhausted;
+  }
+
+  setLastLoadedAtMs(
+    value: number | null,
+    params?: { incomplete?: boolean; connection?: unknown },
+  ): UsageRetryState {
+    return this.applyLoadState(value, params?.incomplete === true, params?.connection);
+  }
+
+  markLoaded(params?: { incomplete?: boolean; connection?: unknown }): UsageRetryState {
+    return this.applyLoadState(Date.now(), params?.incomplete === true, params?.connection);
+  }
+
+  markProviderUsage(
+    result: ProviderUsageRequestResult | null,
+    value: number | null,
+    connection: unknown,
+  ): UsageRetryState {
+    const incomplete =
+      result?.ok === false || (result?.ok === true && isUsageIncomplete(result.value));
+    return this.applyLoadState(value, incomplete, connection);
+  }
+
+  resetPayload(): void {
+    this.applyLoadState(null, false);
+    this.reloadPending = false;
+  }
+
+  dispose(): void {
+    this.providerConvergenceOutstanding = false;
+    this.providerConvergenceConnection = undefined;
+    this.incompleteUsageRetry.dispose();
+  }
+
+  private applyLoadState(
+    loadedAtMs: number | null,
+    incomplete: boolean,
+    connection?: unknown,
+  ): UsageRetryState {
+    const state = this.incompleteUsageRetry.observe(incomplete, connection);
+    this.providerConvergenceOutstanding = incomplete;
+    this.providerConvergenceConnection = incomplete ? connection : undefined;
+    // Incomplete provider usage must not start the TTL or focus/reconnect can skip recovery.
+    this.lastLoadedAtMs = state === "complete" ? loadedAtMs : null;
+    return state;
+  }
+
+  /** Keeps an existing provider convergence cycle alive across aggregate load failures. */
+  markLoadFailed(connection?: unknown): void {
+    if (!this.providerConvergenceOutstanding) {
+      return;
+    }
+    if (connection !== this.providerConvergenceConnection) {
+      this.providerConvergenceOutstanding = false;
+      this.providerConvergenceConnection = undefined;
+      this.incompleteUsageRetry.useConnection(connection);
+      return;
+    }
+    this.incompleteUsageRetry.observe(true, connection);
+  }
+
+  interrupt(): void {
+    this.reloadPending ||= this.options.isLoading();
+  }
+
+  markLoadDeferred(): void {
+    this.reloadPending = true;
+  }
+
+  beginLoad(): void {
+    this.reloadPending = false;
+  }
+
+  reload(): void {
+    void this.reloadAndWait();
+  }
+
+  private async reloadAndWait(): Promise<void> {
+    this.pendingAutomaticRefresh = false;
+    await this.options.reload();
+  }
+
+  request(reason: UsageRefreshReason): void {
+    void this.requestAndWait(reason);
+  }
+
+  private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
+    if (this.options.isLoading() && reason !== "manual") {
+      this.pendingAutomaticRefresh = true;
+      return;
+    }
+    this.pendingAutomaticRefresh = false;
+    const decision = decideUsageRefresh({
+      reason,
+      visible: document.visibilityState === "visible" && document.hasFocus(),
+      interrupted: this.reloadPending,
+      nowMs: Date.now(),
+      lastLoadedAtMs: this.lastLoadedAtMs,
+    });
+    if (decision === "fetch") {
+      if (reason !== "poll") {
+        this.incompleteUsageRetry.startCycle();
+      }
+      await this.reloadAndWait();
+    }
+  }
+
+  flushPending(): void {
+    if (!this.pendingAutomaticRefresh) {
+      return;
+    }
+    this.pendingAutomaticRefresh = false;
+    this.request("focus");
+  }
 }

@@ -5,6 +5,7 @@ import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
+  setSetupChannelEnabled,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
@@ -14,19 +15,11 @@ import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
+const channel = "msteams" as const;
 
 export const msteamsSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: () => DEFAULT_ACCOUNT_ID,
-  applyAccountConfig: ({ cfg }) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-      },
-    },
-  }),
+  applyAccountConfig: ({ cfg }) => setSetupChannelEnabled(cfg, channel, true),
 };
 
 export const msteamsSetupContract = defineChannelSetupContract({
@@ -34,32 +27,23 @@ export const msteamsSetupContract = defineChannelSetupContract({
   legacyAdapter: msteamsSetupAdapter,
 });
 
-const channel = "msteams" as const;
-
 async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
   appId: string;
   appPassword: string;
   tenantId: string;
 }> {
-  const appId = (
-    await prompter.text({
-      message: t("wizard.msteams.appIdPrompt"),
-      validate: (value) => (value?.trim() ? undefined : t("common.required")),
-    })
-  ).trim();
-  const appPassword = (
-    await prompter.text({
-      message: t("wizard.msteams.appPasswordPrompt"),
-      validate: (value) => (value?.trim() ? undefined : t("common.required")),
-    })
-  ).trim();
-  const tenantId = (
-    await prompter.text({
-      message: t("wizard.msteams.tenantIdPrompt"),
-      validate: (value) => (value?.trim() ? undefined : t("common.required")),
-    })
-  ).trim();
-  return { appId, appPassword, tenantId };
+  const promptRequired = async (message: string) =>
+    (
+      await prompter.text({
+        message,
+        validate: (value) => (value?.trim() ? undefined : t("common.required")),
+      })
+    ).trim();
+  return {
+    appId: await promptRequired(t("wizard.msteams.appIdPrompt")),
+    appPassword: await promptRequired(t("wizard.msteams.appPasswordPrompt")),
+    tenantId: await promptRequired(t("wizard.msteams.tenantIdPrompt")),
+  };
 }
 
 async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
@@ -121,26 +105,18 @@ export function createMSTeamsSetupWizardBase(): Pick<
         await noteMSTeamsCredentialHelp(prompter);
       }
 
-      if (canUseEnv) {
-        const keepEnv = await prompter.confirm({
-          message: t("wizard.msteams.envPrompt"),
+      if (canUseEnv || hasConfigCreds) {
+        const keep = await prompter.confirm({
+          message: t(canUseEnv ? "wizard.msteams.envPrompt" : "wizard.msteams.credentialsKeep"),
           initialValue: true,
         });
-        if (keepEnv) {
+        if (keep) {
           next = msteamsSetupAdapter.applyAccountConfig({
             cfg: next,
             accountId: DEFAULT_ACCOUNT_ID,
             input: {},
           });
         } else {
-          ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
-        }
-      } else if (hasConfigCreds) {
-        const keep = await prompter.confirm({
-          message: t("wizard.msteams.credentialsKeep"),
-          initialValue: true,
-        });
-        if (!keep) {
           ({ appId, appPassword, tenantId } = await promptMSTeamsCredentials(prompter));
         }
       } else {

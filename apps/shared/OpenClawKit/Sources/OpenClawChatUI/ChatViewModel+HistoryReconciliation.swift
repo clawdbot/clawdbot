@@ -25,7 +25,15 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                artifactId: content.artifactId,
+                url: content.url,
+                openUrl: content.openUrl,
+                alt: content.alt,
+                width: content.width,
+                height: content.height,
+                sizeBytes: content.sizeBytes,
                 durationSeconds: content.durationSeconds,
+                playback: content.playback,
                 content: content.content,
                 id: content.id,
                 name: content.name,
@@ -39,6 +47,8 @@ extension OpenClawChatViewModel {
             role: message.role,
             content: sanitizedContent,
             timestamp: message.timestamp,
+            transcriptMessageID: message.transcriptMessageID,
+            isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
             toolName: message.toolName,
@@ -46,7 +56,9 @@ extension OpenClawChatViewModel {
             stopReason: message.stopReason,
             errorMessage: message.errorMessage,
             details: message.details,
-            isError: message.isError)
+            isError: message.isError,
+            provenance: message.provenance,
+            historyMarker: message.historyMarker)
     }
 
     static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
@@ -56,7 +68,12 @@ extension OpenClawChatViewModel {
             let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
+            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let mimeType = (item.mimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, id, name, fileName, artifactId, url, openUrl, mimeType]
+                .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -64,7 +81,10 @@ extension OpenClawChatViewModel {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text].joined(separator: "\\u{001F}")
+            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, artifactId, url, openUrl].joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -76,6 +96,9 @@ extension OpenClawChatViewModel {
         // so a server timestamp change cannot replace the optimistic row's ID.
         if let idempotencyKey = Self.normalizedIdempotencyKey(message.idempotencyKey) {
             return [role, "idempotency", idempotencyKey].joined(separator: "|")
+        }
+        if let transcriptMessageID = Self.normalizedTranscriptMessageID(message.transcriptMessageID) {
+            return [role, "transcript", transcriptMessageID].joined(separator: "|")
         }
 
         let timestamp: String = {
@@ -131,6 +154,11 @@ extension OpenClawChatViewModel {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private static func normalizedTranscriptMessageID(_ id: String?) -> String? {
+        let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func adoptingCanonicalMessage(
         _ incoming: OpenClawChatMessage,
         over existing: OpenClawChatMessage) -> OpenClawChatMessage
@@ -142,6 +170,7 @@ extension OpenClawChatViewModel {
                 in: incoming.content,
                 from: existing.content),
             timestamp: incoming.timestamp ?? existing.timestamp,
+            transcriptMessageID: incoming.transcriptMessageID ?? existing.transcriptMessageID,
             idempotencyKey: incoming.idempotencyKey,
             toolCallId: incoming.toolCallId,
             toolName: incoming.toolName,
@@ -149,7 +178,9 @@ extension OpenClawChatViewModel {
             stopReason: incoming.stopReason,
             errorMessage: incoming.errorMessage,
             details: incoming.details,
-            isError: incoming.isError)
+            isError: incoming.isError,
+            provenance: incoming.provenance ?? existing.provenance,
+            historyMarker: incoming.historyMarker ?? existing.historyMarker)
     }
 
     private static func preservingLocalAudioDurations(
@@ -176,7 +207,15 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                artifactId: content.artifactId,
+                url: content.url,
+                openUrl: content.openUrl,
+                alt: content.alt,
+                width: content.width,
+                height: content.height,
+                sizeBytes: content.sizeBytes,
                 durationSeconds: localDuration,
+                playback: content.playback,
                 content: content.content,
                 id: content.id,
                 name: content.name,
@@ -447,6 +486,8 @@ extension OpenClawChatViewModel {
                 role: existing.role,
                 content: existing.content,
                 timestamp: existing.timestamp,
+                transcriptMessageID: existing.transcriptMessageID,
+                isTruncated: existing.isTruncated,
                 idempotencyKey: remoteKey,
                 toolCallId: existing.toolCallId,
                 toolName: existing.toolName,
@@ -454,7 +495,9 @@ extension OpenClawChatViewModel {
                 stopReason: existing.stopReason,
                 errorMessage: existing.errorMessage,
                 details: existing.details,
-                isError: existing.isError)
+                isError: existing.isError,
+                provenance: existing.provenance,
+                historyMarker: existing.historyMarker)
         }
         self.replaceMessages(Self.dedupeMessages(updated))
         guard let survivingIndex = self.messages.firstIndex(where: { message in
@@ -674,6 +717,9 @@ extension OpenClawChatViewModel {
         if let idempotencyKey = normalizedIdempotencyKey(message.idempotencyKey) {
             return "\(message.role)|idempotency|\(idempotencyKey)"
         }
+        if let transcriptMessageID = normalizedTranscriptMessageID(message.transcriptMessageID) {
+            return "\(message.role)|transcript|\(transcriptMessageID)"
+        }
         guard let timestamp = message.timestamp else { return nil }
         let text = message.content.compactMap(\.text).joined(separator: "\n")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -804,6 +850,7 @@ extension OpenClawChatViewModel {
         // Wholesale history replacement drops local-only queued bubbles;
         // re-adopt or re-append them from the durable outbox.
         restoreOutboxMessages(session: request.session)
+        self.scheduleProgressCardFetch(for: request.session)
         self.applyDeferredExternalStateIfReady()
         return true
     }

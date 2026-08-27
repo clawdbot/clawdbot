@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildChromeMcpArgsFromOptions, normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpCoords,
@@ -32,6 +34,7 @@ import {
   uploadChromeMcpFile,
   withChromeMcpDocument,
 } from "./chrome-mcp.js";
+import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 
 type ToolCall = {
   name: string;
@@ -239,6 +242,26 @@ describe("chrome MCP page parsing", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it("passes HTTP CDP endpoints to Chrome MCP as browserUrl discovery endpoints", () => {
+    const args = buildChromeMcpArgsFromOptions(
+      normalizeChromeMcpOptions({ cdpUrl: "http://127.0.0.1:9222" }),
+    );
+
+    expect(args).toContain("--browserUrl");
+    expect(args).toContain("http://127.0.0.1:9222");
+    expect(args).not.toContain("--wsEndpoint");
+  });
+
+  it("passes direct WebSocket CDP endpoints to Chrome MCP as wsEndpoint attachments", () => {
+    const args = buildChromeMcpArgsFromOptions(
+      normalizeChromeMcpOptions({ cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
+    );
+
+    expect(args).toContain("--wsEndpoint");
+    expect(args).toContain("ws://127.0.0.1:9222/devtools/browser/abc");
+    expect(args).not.toContain("--browserUrl");
   });
 
   it("keeps document-bound evaluations on one pinned target and raw snapshot uid", async () => {
@@ -544,6 +567,35 @@ describe("chrome MCP page parsing", () => {
       ([call]) => call.name,
     );
     expect(calls).toEqual(["list_pages", "close_page"]);
+  });
+
+  it("rejects a close result when Chrome MCP kept the target open", async () => {
+    const pages: SessionPage[] = [{ id: 1, url: "https://a.example", selected: true }];
+    const session = createPageSession({
+      pid: 131,
+      pages,
+      onTool: (call) =>
+        call.name === "close_page"
+          ? {
+              structuredContent: {
+                message: "The last open page cannot be closed. It is fine to keep it open.",
+                pages,
+              },
+            }
+          : undefined,
+    });
+    const factory = vi.fn(async () => session);
+    setChromeMcpSessionFactoryForTest(factory);
+    const targetId = (await listChromeMcpTabs("chrome-live"))[0]?.targetId ?? "";
+
+    await expect(closeChromeMcpTab("chrome-live", targetId)).rejects.toThrow(
+      "The last open page cannot be closed",
+    );
+    await expect(listChromeMcpTabs("chrome-live")).resolves.toEqual([
+      expect.objectContaining({ targetId, url: "https://a.example" }),
+    ]);
+    expect(factory).toHaveBeenCalledOnce();
+    expect((session.client.close as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(0);
   });
 
   it("retires a closed target and issues a new handle when Chrome reuses its page id", async () => {
@@ -972,6 +1024,38 @@ describe("chrome MCP page parsing", () => {
     expect(clickedUids).toEqual(["1_2", "1_2"]);
   });
 
+  it("wraps deeply nested snapshot refs without recursive traversal", async () => {
+    let root: ChromeMcpSnapshotNode = { id: "leaf", role: "text", name: "leaf" };
+    for (let index = 0; index < 50_000; index += 1) {
+      root = {
+        id: `n${index}`,
+        role: "generic",
+        name: `n${index}`,
+        children: [root],
+      };
+    }
+    const session = createPageSession({
+      pid: 141,
+      pages: [{ id: 1, url: "https://a.example" }],
+      onTool: (call) =>
+        call.name === "take_snapshot" ? { structuredContent: { snapshot: root } } : undefined,
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const [target] = await listChromeMcpTabs("chrome-live");
+    let node = await takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: target?.targetId ?? "",
+    });
+    let depth = 0;
+    while (node.children?.[0]) {
+      node = node.children[0];
+      depth += 1;
+    }
+    expect(depth).toBe(50_000);
+    expect(node.id).toMatch(/^mcp-ref:/);
+  });
+
   it("unwraps current snapshot refs for every ref-scoped MCP adapter", async () => {
     const session = createPageSession({
       pid: 141,
@@ -1233,6 +1317,34 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it.each(["linux", "darwin", "win32"] as const)(
+    "stops %s cleanup immediately once every owned process is absent",
+    async (platform) => {
+      const session = createFakeSession();
+      Object.assign(session, { processCleanup: { status: "open" } });
+      let alive = true;
+      session.client.close = vi.fn(async () => {
+        alive = false;
+      }) as typeof session.client.close;
+      const listProcesses = vi.fn(async () => (alive ? [processSnapshot(123, 1)] : []));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      setChromeMcpProcessCleanupDepsForTest({
+        platform,
+        listProcesses,
+        sleep,
+        taskkillProcessTree: async () => {
+          alive = false;
+        },
+      });
+      setChromeMcpSessionFactoryForTest(async () => session);
+
+      await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+      expect(listProcesses).toHaveBeenCalledTimes(platform === "win32" ? 3 : 2);
+      expect(sleep).toHaveBeenCalledTimes(platform === "win32" ? 1 : 0);
+    },
+  );
+
   it("retains the proven root while skipping exited and reparented descendants", async () => {
     const session = createFakeSession();
     Object.assign(session, { processCleanup: { status: "open" } });
@@ -1423,6 +1535,47 @@ describe("chrome MCP page parsing", () => {
     expect(taskkillProcessTree).not.toHaveBeenCalledWith(123);
   });
 
+  it("never taskkills a descendant pid recycled while another Windows cleanup is awaited", async () => {
+    const session = createFakeSession();
+    Object.assign(session, {
+      processCleanup: {
+        status: "tracked",
+        target: {
+          root: { pid: 123, identity: "start-123" },
+          descendants: [
+            { pid: 124, identity: "start-124" },
+            { pid: 125, identity: "start-125" },
+          ],
+        },
+      },
+    });
+    let firstDescendantAlive = true;
+    let secondDescendantIdentity = "start-124";
+    const taskkillProcessTree = vi.fn(async (pid: number) => {
+      if (pid !== 125) {
+        throw new Error("attempted to terminate a recycled pid");
+      }
+      firstDescendantAlive = false;
+      secondDescendantIdentity = "start-reused";
+    });
+    setChromeMcpProcessCleanupDepsForTest({
+      platform: "win32",
+      listProcesses: async () => [
+        processSnapshot(124, 1, secondDescendantIdentity),
+        ...(firstDescendantAlive ? [processSnapshot(125, 1)] : []),
+      ],
+      taskkillProcessTree,
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await ensureChromeMcpAvailable("chrome-live", undefined, { ephemeral: true });
+
+    expect(secondDescendantIdentity).toBe("start-reused");
+    expect(taskkillProcessTree).toHaveBeenCalledExactlyOnceWith(125);
+    expect(taskkillProcessTree).not.toHaveBeenCalledWith(124);
+  });
+
   it("surfaces a surviving Chrome MCP process and retries its exact retained handle", async () => {
     const session = createFakeSession();
     Object.assign(session, { processCleanup: { status: "open" } });
@@ -1467,10 +1620,12 @@ describe("chrome MCP page parsing", () => {
     const user = "browser-user";
     const password = "browser-password-1234567890"; // pragma: allowlist secret
     const cdpUrl = `wss://${user}:${password}@browserless.example/chrome?token=${secretToken}`;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-test-"));
-    const configPath = path.join(tempDir, "openclaw.json");
-    await fs.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-chrome-mcp-test-",
+    });
+    await openClawState.writeConfig({ logging: { redactSensitive: "off" } });
+    const tempDir = openClawState.root;
     const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
     await fs.writeFile(
       fakeMcpCommand,
@@ -1505,7 +1660,7 @@ describe("chrome MCP page parsing", () => {
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
+      await openClawState.cleanup();
     }
 
     expect(message).toContain("Chrome MCP existing-session attach failed");
@@ -2878,11 +3033,34 @@ describe("chrome MCP page parsing", () => {
     });
 
     const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
-    const navigateCall = callToolMock.mock.calls.find(
-      ([call]) => call.name === "navigate_page",
-    )?.[0];
-    expect(navigateCall?.arguments?.timeout).toBe(20_000);
+    const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
+    expect(navigateCall?.[0].arguments?.timeout).toBe(20_000);
+    expect(navigateCall?.[2]?.timeout).toBe(25_000);
   });
+
+  it.each([
+    { requestedTimeoutMs: 10, expectedTimeoutMs: 1_000 },
+    { requestedTimeoutMs: 180_000, expectedTimeoutMs: 120_000 },
+    { requestedTimeoutMs: Number.MAX_SAFE_INTEGER, expectedTimeoutMs: 120_000 },
+  ])(
+    "normalizes Chrome MCP navigation timeout $requestedTimeoutMs before SDK watchdog grace",
+    async ({ requestedTimeoutMs, expectedTimeoutMs }) => {
+      const session = createFakeSession();
+      setChromeMcpSessionFactoryForTest(async () => session);
+
+      await navigateChromeMcpPage({
+        profileName: "chrome-live",
+        targetId: FAKE_TARGET_1,
+        url: "https://example.com",
+        timeoutMs: requestedTimeoutMs,
+      });
+
+      const callToolMock = session.client["callTool"] as unknown as ToolCallMock;
+      const navigateCall = callToolMock.mock.calls.find(([call]) => call.name === "navigate_page");
+      expect(navigateCall?.[0].arguments?.timeout).toBe(expectedTimeoutMs);
+      expect(navigateCall?.[2]?.timeout).toBe(expectedTimeoutMs + 5_000);
+    },
+  );
 
   it("caps the navigate_page safety-net timeout", () => {
     expect(resolveChromeMcpNavigateCallTimeoutMs(10_000)).toBe(15_000);

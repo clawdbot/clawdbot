@@ -1,4 +1,3 @@
-import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   discoverOpenClawPlugins,
   type PluginCandidate,
@@ -14,7 +13,7 @@ import {
 import { createPluginCandidatesFromManifestRegistry, pushDiagnostics } from "./loader-shared.js";
 import type { PluginLoadOptions } from "./loader-types.js";
 import {
-  loadPluginManifestRegistry,
+  loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
@@ -40,9 +39,14 @@ export function resolvePluginLoadDiscovery(params: {
   suppliedManifestRegistry?: PluginManifestRegistry;
 }): ResolvedPluginLoadDiscovery {
   const { options, context } = params;
-  const discovery = params.suppliedManifestRegistry
+  // The load context has already verified workspace, environment, config, and
+  // plugin scope against the current lifecycle-owned metadata generation.
+  const suppliedManifestRegistry =
+    params.suppliedManifestRegistry ??
+    (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
+  const discovery = suppliedManifestRegistry
     ? {
-        candidates: createPluginCandidatesFromManifestRegistry(params.suppliedManifestRegistry),
+        candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
         diagnostics: [] as PluginDiagnostic[],
       }
     : (options.discovery ??
@@ -53,14 +57,15 @@ export function resolvePluginLoadDiscovery(params: {
         installRecords: context.installRecords,
       }));
   const manifestRegistry =
-    params.suppliedManifestRegistry ??
-    loadPluginManifestRegistry({
+    suppliedManifestRegistry ??
+    loadPluginManifestRegistryCore({
       config: context.cfg,
       workspaceDir: options.workspaceDir,
       env: context.env,
       candidates: discovery.candidates,
       diagnostics: discovery.diagnostics,
-      installRecords: nonEmptyInstallRecords(context.installRecords),
+      installRecords:
+        Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
     });
   pushDiagnostics(params.diagnostics, manifestRegistry.diagnostics);
   warnWhenAllowlistIsOpen({
@@ -102,10 +107,4 @@ export function resolvePluginLoadDiscovery(params: {
     }),
   );
   return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
-}
-
-function nonEmptyInstallRecords(
-  records: Record<string, PluginInstallRecord>,
-): Record<string, PluginInstallRecord> | undefined {
-  return Object.keys(records).length > 0 ? records : undefined;
 }

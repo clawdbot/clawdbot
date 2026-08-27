@@ -1,6 +1,7 @@
 // Detects suspicious config clobbers and finds recovery snapshots.
 import path from "node:path";
 import { createDedupeCache } from "../infra/dedupe.js";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { sleep } from "../utils/sleep.js";
 
 /** Maximum retained clobbered-config snapshots per config file. */
@@ -9,6 +10,8 @@ const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 const CONFIG_CLOBBER_LOCK_STALE_MS = 30_000;
 const CONFIG_CLOBBER_LOCK_RETRY_MS = 10;
 const CONFIG_CLOBBER_LOCK_TIMEOUT_MS = 2_000;
+// Queue local writes first so filesystem-lock timeouts cover other processes, not sibling tasks.
+const clobberSnapshotQueue = new KeyedAsyncQueue();
 const clobberCapWarnedPaths = createDedupeCache({
   ttlMs: 0,
   maxSize: 4096,
@@ -268,38 +271,40 @@ export async function persistBoundedClobberedConfigSnapshot(params: {
   observedAt: string;
 }): Promise<string | null> {
   const paths = resolveClobberPaths(params.configPath);
-  const locked = await acquireClobberLock(params.deps, paths.lockPath);
-  if (!locked) {
-    return null;
-  }
-  try {
-    const existing = await listClobberedSiblings(params.deps, paths.dir, paths.prefix);
-    if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
-      warnClobberCapReached(params.deps, params.configPath, existing.length);
-      const rotated = await rotateOldestClobberedSiblings(params.deps, existing);
-      if (!rotated) {
-        return null;
-      }
+  return await clobberSnapshotQueue.enqueue(paths.lockPath, async () => {
+    const locked = await acquireClobberLock(params.deps, paths.lockPath);
+    if (!locked) {
+      return null;
     }
-    for (let attempt = 0; attempt < CONFIG_CLOBBER_SNAPSHOT_LIMIT; attempt++) {
-      const targetPath = buildClobberedTargetPath(params.configPath, params.observedAt, attempt);
-      try {
-        await params.deps.fs.promises.writeFile(targetPath, params.raw, {
-          encoding: "utf-8",
-          mode: 0o600,
-          flag: "wx",
-        });
-        return targetPath;
-      } catch (error) {
-        if (!isFsErrorCode(error, "EEXIST")) {
+    try {
+      const existing = await listClobberedSiblings(params.deps, paths.dir, paths.prefix);
+      if (existing.length >= CONFIG_CLOBBER_SNAPSHOT_LIMIT) {
+        warnClobberCapReached(params.deps, params.configPath, existing.length);
+        const rotated = await rotateOldestClobberedSiblings(params.deps, existing);
+        if (!rotated) {
           return null;
         }
       }
+      for (let attempt = 0; attempt < CONFIG_CLOBBER_SNAPSHOT_LIMIT; attempt++) {
+        const targetPath = buildClobberedTargetPath(params.configPath, params.observedAt, attempt);
+        try {
+          await params.deps.fs.promises.writeFile(targetPath, params.raw, {
+            encoding: "utf-8",
+            mode: 0o600,
+            flag: "wx",
+          });
+          return targetPath;
+        } catch (error) {
+          if (!isFsErrorCode(error, "EEXIST")) {
+            return null;
+          }
+        }
+      }
+      return null;
+    } finally {
+      await params.deps.fs.promises.rmdir(paths.lockPath).catch(() => {});
     }
-    return null;
-  } finally {
-    await params.deps.fs.promises.rmdir(paths.lockPath).catch(() => {});
-  }
+  });
 }
 
 export function persistBoundedClobberedConfigSnapshotSync(params: {

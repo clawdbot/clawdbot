@@ -1,8 +1,8 @@
 // Hook install command tests cover hook installation workflow behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { installHooksFromPath } from "./install.js";
 import {
   clearInternalHooks,
@@ -11,35 +11,19 @@ import {
 } from "./internal-hooks.js";
 import { loadInternalHooks } from "./loader.js";
 
-const tempDirs: string[] = [];
-
-async function makeTempDir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hooks-e2e-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("hooks install (e2e)", () => {
   let workspaceDir: string;
 
   beforeEach(async () => {
-    const baseDir = await makeTempDir();
+    const baseDir = tempDirs.make("openclaw-hooks-e2e-");
     workspaceDir = path.join(baseDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
   });
 
-  afterEach(async () => {
-    for (const dir of tempDirs.splice(0)) {
-      try {
-        await fs.rm(dir, { recursive: true, force: true });
-      } catch {
-        // ignore cleanup failures
-      }
-    }
-  });
-
   it("installs a hook pack and triggers the handler", async () => {
-    const baseDir = await makeTempDir();
+    const baseDir = tempDirs.make("openclaw-hooks-e2e-");
     const packDir = path.join(baseDir, "hook-pack");
     const hookDir = path.join(packDir, "hooks", "hello-hook");
     await fs.mkdir(hookDir, { recursive: true });

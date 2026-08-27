@@ -4,20 +4,22 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  onSessionIdentityMutation,
-  type SessionIdentityMutation,
-} from "../../config/sessions/session-accessor.js";
+import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  claimAgentRunContext,
+  emitAgentEventIfCurrent,
   emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
   getAgentRunContext,
+  getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
   registerAgentRunContext,
   releaseAgentRunContext,
-} from "../../infra/agent-events.js";
+} from "../../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
   createWorkerLiveTrajectoryRecorder,
@@ -25,9 +27,15 @@ import {
   prepareWorkerLiveEventData,
   recordWorkerLiveTrajectoryEvent,
   type WorkerLiveTrajectoryRecorder,
-  type WorkerLiveTrajectoryTarget,
 } from "./live-event-projection.js";
-import { resolveWorkerSessionTarget } from "./session-target.js";
+import {
+  isValidLiveSessionBinding,
+  matchesSessionIdentityMutation,
+  prepareBoundLiveSessionSafely,
+  type BoundLiveSession,
+  type LiveEventTarget,
+  type WorkerLiveSessionBinding,
+} from "./live-event-session-binding.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -43,27 +51,20 @@ type PendingLiveEvent = {
 type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
+  emissionMode: "exclusive" | "shared";
   lifecycleGeneration: string;
   trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type LiveEventTarget = WorkerLiveTrajectoryTarget;
-
-type WorkerLiveSessionBinding = Readonly<{
-  environmentId: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
-
-type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
-
-type WorkerLiveCredentialRotation = Readonly<{
-  credentialHash: string;
-  environmentId: string;
-  previousCredentialHash: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
+type WorkerLiveCredentialRotation = Readonly<
+  {
+    credentialHash: string;
+    environmentId: string;
+    previousCredentialHash: string;
+    runEpoch: number;
+    sessionId: string;
+  } & ({ newProcessTurn: true; ackedSeq: number } | { newProcessTurn?: false })
+>;
 
 type LiveEventWindow = {
   activeRuns: Map<string, OwnedLiveRun>;
@@ -100,67 +101,6 @@ function invalidEvent(): WorkerLiveEventFailure {
 
 function capacityExceeded(): WorkerLiveEventFailure {
   return { ok: false, details: { reason: "capacity-exceeded" } };
-}
-
-function resolveLiveEventTarget(
-  config: OpenClawConfig,
-  sessionId: string,
-): LiveEventTarget | undefined {
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
-    return undefined;
-  }
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
-}
-
-function prepareBoundLiveSession(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  if (!isValidLiveSessionBinding(binding)) {
-    return undefined;
-  }
-  const target = resolveLiveEventTarget(config, binding.sessionId);
-  return target ? { ...binding, target } : undefined;
-}
-
-function isValidLiveSessionBinding(binding: WorkerLiveSessionBinding): boolean {
-  return (
-    binding.environmentId.length > 0 &&
-    binding.sessionId.length > 0 &&
-    Number.isSafeInteger(binding.runEpoch) &&
-    binding.runEpoch >= 0
-  );
-}
-
-function prepareBoundLiveSessionSafely(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  try {
-    return prepareBoundLiveSession(config, binding);
-  } catch {
-    return undefined;
-  }
-}
-
-function matchesSessionIdentityMutation(
-  binding: WorkerLiveSessionBinding,
-  prepared: BoundLiveSession | undefined,
-  mutation: SessionIdentityMutation,
-): boolean {
-  const targets =
-    "current" in mutation ? [mutation.previous, mutation.current] : [mutation.previous];
-  return targets.some(
-    (target) =>
-      target.sessionId === binding.sessionId ||
-      (prepared ? target.sessionKeys.includes(prepared.target.sessionKey) : false),
-  );
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions) {
@@ -233,6 +173,26 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.environmentId === rotation.environmentId &&
       window.runEpoch === rotation.runEpoch
     ) {
+      if (rotation.newProcessTurn === true) {
+        if (
+          !Number.isSafeInteger(rotation.ackedSeq) ||
+          rotation.ackedSeq < 0 ||
+          rotation.ackedSeq > window.ackedSeq
+        ) {
+          return false;
+        }
+        // A per-turn credential is an unforgeable process boundary. Retire only
+        // the prior process's transient state and rewind previews to the durable
+        // ACK cursor; cron may intentionally reuse its durable run id.
+        for (const [runId, owned] of window.activeRuns) {
+          releaseAgentRunContext(runId, owned.claimId);
+        }
+        window.activeRuns.clear();
+        window.ackedSeq = rotation.ackedSeq;
+        window.pending.clear();
+        window.pendingBytes = 0;
+        window.terminalRuns.clear();
+      }
       window.credentialHash = rotation.credentialHash;
       return true;
     }
@@ -541,22 +501,22 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    // A dispatch-owned turn context (e.g. a worker-routed turn) owns the run's
-    // Control UI visibility; adopt it so worker live events keep reaching the
-    // visible clients that started the turn. Identity still has to match, so a
-    // foreign run is rejected; only the visibility preference is inherited. With
-    // no pre-existing turn context we scope live events to this session.
+    // Existing dispatch contexts must admit their outer terminal. Ownerless contexts still need
+    // worker-owned cleanup so a definitive worker terminal cannot leave the session active.
     const controlUiVisible = existingContext?.isControlUiVisible ?? false;
-    const adoptExistingUnowned = existingContext !== undefined;
     if (
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
         existingContext.sessionKey !== window.target.sessionKey ||
-        existingContext.agentId !== window.target.agentId ||
+        (existingContext.agentId !== undefined &&
+          existingContext.agentId !== window.target.agentId) ||
         existingContext.lifecycleGeneration !== lifecycleGeneration)
     ) {
       return invalidEvent();
     }
+    const hasExistingTrackedOwner =
+      getAgentRunContextOwnership(runId)?.lifecycleGeneration === lifecycleGeneration;
+    const emissionMode: OwnedLiveRun["emissionMode"] = existingContext ? "shared" : "exclusive";
     const claimId = claimAgentRunContext(
       runId,
       {
@@ -568,14 +528,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         sessionKey: window.target.sessionKey,
       },
       {
-        adoptExistingUnowned,
-        exclusive: true,
+        exclusive: existingContext === undefined,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
             fenceReleasedRun(window, runId);
           }
         },
-        ownsContext: true,
+        ownsContext: !hasExistingTrackedOwner,
         trackOwner: true,
       },
     );
@@ -585,6 +544,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     const claimed = {
       claimId,
       controlUiVisible,
+      emissionMode,
       lifecycleGeneration,
       trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
     };
@@ -607,14 +567,21 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Fence first so terminal delivery cannot reopen the run ID.
       window.terminalRuns.set(request.runId, request.seq);
     }
-    emitAgentEventForOwner(
-      {
-        runId: request.runId,
-        stream: request.event.kind,
-        data: prepareWorkerLiveEventData(request.event),
-      },
-      owned.claimId,
-    );
+    const event = {
+      runId: request.runId,
+      stream: request.event.kind,
+      data: prepareWorkerLiveEventData(request.event),
+    };
+    if (owned.emissionMode === "shared") {
+      if (!emitAgentEventIfCurrent(event)) {
+        if (definitiveTerminal) {
+          window.terminalRuns.delete(request.runId);
+        }
+        return invalidEvent();
+      }
+    } else {
+      emitAgentEventForOwner(event, owned.claimId);
+    }
     recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
@@ -736,12 +703,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
       fencedEnvironmentEpochs.delete(environmentId);
       fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      if (fencedEnvironmentEpochs.size > MAX_FENCED_ENVIRONMENTS) {
-        const oldestEnvironmentId = fencedEnvironmentEpochs.keys().next().value;
-        if (oldestEnvironmentId) {
-          fencedEnvironmentEpochs.delete(oldestEnvironmentId);
-        }
-      }
+      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 

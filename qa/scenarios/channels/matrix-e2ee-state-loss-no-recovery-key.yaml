@@ -6,7 +6,6 @@ scenario:
     primary:
       - matrix.legacy-state
   execution:
-    profiles: { "matrix:all": 69, "matrix:e2ee-deep": 3 }
     kind: flow
     channel: matrix
     timeoutMs: 120000

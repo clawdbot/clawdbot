@@ -1,6 +1,12 @@
 // Line plugin module implements template messages behavior.
 import type { messagingApi } from "@line/bot-sdk";
-import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
+import {
+  messageAction,
+  normalizeLineAction,
+  postbackAction,
+  uriAction,
+  type Action,
+} from "./actions.js";
 import type { LineTemplateMessagePayload } from "./types.js";
 
 type TemplateMessage = messagingApi.TemplateMessage;
@@ -8,10 +14,9 @@ type ConfirmTemplate = messagingApi.ConfirmTemplate;
 type ButtonsTemplate = messagingApi.ButtonsTemplate;
 type CarouselTemplate = messagingApi.CarouselTemplate;
 type CarouselColumn = messagingApi.CarouselColumn;
-type ImageCarouselTemplate = messagingApi.ImageCarouselTemplate;
-type ImageCarouselColumn = messagingApi.ImageCarouselColumn;
 
 const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
+const TEMPLATE_ALT_TEXT_LIMIT = 1500;
 const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 type TemplatePayloadAction = {
@@ -70,14 +75,17 @@ function truncateOptionalTemplateText(
   return value === undefined ? undefined : truncateTemplateText(value, limit);
 }
 
-function formatProductCarouselText(description: string, price?: string): string {
-  if (!price) {
-    return description;
-  }
-  const priceText = truncateTemplateText(price, COMPACT_TEMPLATE_TEXT_LIMIT);
-  const descriptionLimit = Math.max(0, COMPACT_TEMPLATE_TEXT_LIMIT - priceText.length - 1);
-  const descriptionText = truncateTemplateText(description, descriptionLimit);
-  return descriptionText ? `${descriptionText}\n${priceText}` : priceText;
+function resolveTemplateAltText(value: string | undefined, fallback: string): string {
+  return truncateTemplateText(value ?? fallback, TEMPLATE_ALT_TEXT_LIMIT);
+}
+
+function normalizeCarouselColumnActions(column: CarouselColumn): CarouselColumn {
+  return {
+    ...column,
+    actions: column.actions.map((action) => normalizeLineAction(action)),
+    defaultAction:
+      column.defaultAction === undefined ? undefined : normalizeLineAction(column.defaultAction),
+  };
 }
 
 /**
@@ -92,12 +100,12 @@ export function createConfirmTemplate(
   const template: ConfirmTemplate = {
     type: "confirm",
     text: truncateTemplateText(text, 240), // LINE limit
-    actions: [confirmAction, cancelAction],
+    actions: [normalizeLineAction(confirmAction), normalizeLineAction(cancelAction)],
   };
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(altText, 400) ?? truncateTemplateText(text, 400),
+    altText: resolveTemplateAltText(altText, text),
     template,
   };
 }
@@ -128,19 +136,21 @@ export function createButtonTemplate(
     type: "buttons",
     ...(normalizedTitle ? { title: truncateTemplateText(normalizedTitle, 40) } : {}), // LINE limit
     text: truncateTemplateText(text, textLimit),
-    actions: actions.slice(0, 4), // LINE limit: max 4 actions
+    actions: actions.slice(0, 4).map((action) => normalizeLineAction(action)), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
     imageBackgroundColor: options?.imageBackgroundColor,
-    defaultAction: options?.defaultAction,
+    defaultAction:
+      options?.defaultAction === undefined ? undefined : normalizeLineAction(options.defaultAction),
   };
 
   return {
     type: "template",
-    altText:
-      truncateOptionalTemplateText(options?.altText, 400) ??
-      truncateTemplateText(normalizedTitle ? `${normalizedTitle}: ${text}` : text, 400),
+    altText: resolveTemplateAltText(
+      options?.altText,
+      normalizedTitle ? `${normalizedTitle}: ${text}` : text,
+    ),
     template,
   };
 }
@@ -158,14 +168,14 @@ export function createTemplateCarousel(
 ): TemplateMessage {
   const template: CarouselTemplate = {
     type: "carousel",
-    columns: columns.slice(0, 10), // LINE limit: max 10 columns
+    columns: columns.slice(0, 10).map(normalizeCarouselColumnActions), // LINE limit: max 10 columns
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
     imageSize: options?.imageSize ?? "cover",
   };
 
   return {
     type: "template",
-    altText: truncateOptionalTemplateText(options?.altText, 400) ?? "View carousel",
+    altText: resolveTemplateAltText(options?.altText, "View carousel"),
     template,
   };
 }
@@ -189,141 +199,12 @@ export function createCarouselColumn(params: {
   return {
     title: truncateOptionalTemplateText(params.title, 40),
     text: truncateTemplateText(params.text, textLimit),
-    actions: params.actions.slice(0, 3), // LINE limit: max 3 actions per column
+    actions: params.actions.slice(0, 3).map((action) => normalizeLineAction(action)), // LINE limit: max 3 actions per column
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
-    defaultAction: params.defaultAction,
+    defaultAction:
+      params.defaultAction === undefined ? undefined : normalizeLineAction(params.defaultAction),
   };
-}
-
-/**
- * Create an image carousel template (simpler, image-focused carousel)
- */
-export function createImageCarousel(
-  columns: ImageCarouselColumn[],
-  altText?: string,
-): TemplateMessage {
-  const template: ImageCarouselTemplate = {
-    type: "image_carousel",
-    columns: columns.slice(0, 10), // LINE limit: max 10 columns
-  };
-
-  return {
-    type: "template",
-    altText: truncateOptionalTemplateText(altText, 400) ?? "View images",
-    template,
-  };
-}
-
-/**
- * Create an image carousel column for use with createImageCarousel
- */
-export function createImageCarouselColumn(imageUrl: string, action: Action): ImageCarouselColumn {
-  return {
-    imageUrl,
-    action,
-  };
-}
-
-/**
- * Create a simple yes/no confirmation dialog
- */
-export function createYesNoConfirm(
-  question: string,
-  options?: {
-    yesText?: string;
-    noText?: string;
-    yesData?: string;
-    noData?: string;
-    altText?: string;
-  },
-): TemplateMessage {
-  const yesAction: Action = options?.yesData
-    ? postbackAction(options.yesText ?? "Yes", options.yesData, options.yesText ?? "Yes")
-    : messageAction(options?.yesText ?? "Yes");
-
-  const noAction: Action = options?.noData
-    ? postbackAction(options.noText ?? "No", options.noData, options.noText ?? "No")
-    : messageAction(options?.noText ?? "No");
-
-  return createConfirmTemplate(question, yesAction, noAction, options?.altText);
-}
-
-/**
- * Create a button menu with simple text buttons
- */
-export function createButtonMenu(
-  title: string,
-  text: string,
-  buttons: Array<{ label: string; text?: string }>,
-  options?: {
-    thumbnailImageUrl?: string;
-    altText?: string;
-  },
-): TemplateMessage {
-  const actions = buttons.slice(0, 4).map((btn) => messageAction(btn.label, btn.text));
-
-  return createButtonTemplate(title, text, actions, {
-    thumbnailImageUrl: options?.thumbnailImageUrl,
-    altText: options?.altText,
-  });
-}
-
-/**
- * Create a button menu with URL links
- */
-export function createLinkMenu(
-  title: string,
-  text: string,
-  links: Array<{ label: string; url: string }>,
-  options?: {
-    thumbnailImageUrl?: string;
-    altText?: string;
-  },
-): TemplateMessage {
-  const actions = links.slice(0, 4).map((link) => uriAction(link.label, link.url));
-
-  return createButtonTemplate(title, text, actions, {
-    thumbnailImageUrl: options?.thumbnailImageUrl,
-    altText: options?.altText,
-  });
-}
-
-/**
- * Create a simple product/item carousel
- */
-export function createProductCarousel(
-  products: Array<{
-    title: string;
-    description: string;
-    imageUrl?: string;
-    price?: string;
-    actionLabel?: string;
-    actionUrl?: string;
-    actionData?: string;
-  }>,
-  altText?: string,
-): TemplateMessage {
-  const columns = products.slice(0, 10).map((product) => {
-    const actions: Action[] = [];
-
-    if (product.actionUrl) {
-      actions.push(uriAction(product.actionLabel ?? "View", product.actionUrl));
-    } else if (product.actionData) {
-      actions.push(postbackAction(product.actionLabel ?? "Select", product.actionData));
-    } else {
-      actions.push(messageAction(product.actionLabel ?? "Select", product.title));
-    }
-
-    return createCarouselColumn({
-      title: product.title,
-      text: formatProductCarouselText(product.description, product.price),
-      thumbnailImageUrl: product.imageUrl,
-      actions,
-    });
-  });
-
-  return createTemplateCarousel(columns, { altText });
 }
 
 /**
@@ -382,12 +263,4 @@ export function buildTemplateMessageFromPayload(
   }
 }
 
-export type {
-  TemplateMessage,
-  ConfirmTemplate,
-  ButtonsTemplate,
-  CarouselTemplate,
-  CarouselColumn,
-  ImageCarouselTemplate,
-  ImageCarouselColumn,
-};
+export type { TemplateMessage, ConfirmTemplate, ButtonsTemplate, CarouselTemplate, CarouselColumn };

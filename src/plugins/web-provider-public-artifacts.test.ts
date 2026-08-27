@@ -1,12 +1,12 @@
 // Covers web provider public artifact extraction from plugin metadata.
 import { describe, expect, it } from "vitest";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import {
   loadBundledWebFetchProviderEntriesFromDir,
   loadBundledWebSearchProviderEntriesFromDir,
 } from "./web-provider-public-artifacts.explicit.js";
 
-const registry = loadPluginManifestRegistry();
+const registry = loadPluginManifestRegistryCore();
 const webSearchPluginIds = bundledPluginIdsWithContract("webSearchProviders");
 const webFetchPluginIds = bundledPluginIdsWithContract("webFetchProviders");
 

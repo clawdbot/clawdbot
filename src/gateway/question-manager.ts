@@ -1,7 +1,10 @@
 // Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
-import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import type {
   Question,
   QuestionAnswers,
@@ -10,7 +13,10 @@ import type {
   QuestionResolveResult,
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import {
+  retainGatewayRootWorkAdmissionContinuationScope,
+  type GatewayRootWorkAdmissionContinuationScope,
+} from "../process/gateway-work-admission.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -40,6 +46,7 @@ type QuestionManagerRequest = {
   questions: Question[];
   agentId?: string;
   sessionKey?: string;
+  runId?: string;
   timeoutMs: number;
   onResolved?: (event: QuestionResolvedEvent) => void;
 };
@@ -55,6 +62,7 @@ type QuestionEntry = {
   cleanupTimer: ReturnType<typeof setTimeout> | null;
   waiters: Set<Waiter>;
   onResolved?: (event: QuestionResolvedEvent) => void;
+  admissionContinuation: GatewayRootWorkAdmissionContinuationScope | null;
 };
 
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
@@ -108,19 +116,21 @@ export class QuestionManager {
       questions: params.questions,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.runId ? { runId: params.runId } : {}),
       createdAtMs,
       expiresAtMs,
       status: "pending",
     };
+    const expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     const entry: QuestionEntry = {
       record,
-      expiryTimer: null as unknown as ReturnType<typeof setTimeout>,
+      expiryTimer,
       cleanupTimer: null,
       waiters: new Set(),
       onResolved: params.onResolved,
+      admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
-    entry.expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     unrefTimer(entry.expiryTimer);
     return record;
   }
@@ -147,6 +157,19 @@ export class QuestionManager {
     return records.toSorted(
       (left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id),
     );
+  }
+
+  /** Re-enters only the still-pending question's original admitted root. */
+  runPendingContinuation<T>(id: string, run: () => Promise<T>): Promise<T> | null {
+    const entry = this.entries.get(id);
+    if (
+      !entry?.admissionContinuation ||
+      entry.record.status !== "pending" ||
+      entry.record.expiresAtMs <= Date.now()
+    ) {
+      return null;
+    }
+    return entry.admissionContinuation.run(run);
   }
 
   waitAnswer(id: string, timeoutMs?: number): Promise<QuestionWaitAnswerResult> {
@@ -202,6 +225,8 @@ export class QuestionManager {
   reset(): void {
     for (const entry of this.entries.values()) {
       clearTimeout(entry.expiryTimer);
+      entry.admissionContinuation?.release();
+      entry.admissionContinuation = null;
       if (entry.cleanupTimer) {
         clearTimeout(entry.cleanupTimer);
       }
@@ -308,6 +333,8 @@ export class QuestionManager {
 
   private finish(entry: QuestionEntry): void {
     clearTimeout(entry.expiryTimer);
+    entry.admissionContinuation?.release();
+    entry.admissionContinuation = null;
     const result = waitResult(entry.record);
     for (const waiter of entry.waiters) {
       if (waiter.timer) {

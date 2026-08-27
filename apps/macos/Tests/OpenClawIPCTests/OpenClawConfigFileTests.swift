@@ -56,68 +56,6 @@ struct OpenClawConfigFileTests {
         }
     }
 
-    @MainActor
-    @Test
-    func `set remote gateway url string replaces scheme`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "wss://old-host:111",
-                    ],
-                ],
-            ])
-            OpenClawConfigFile.setRemoteGatewayUrlString("ws://127.0.0.1:18789")
-            let root = OpenClawConfigFile.loadDict()
-            let url = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any])?["url"] as? String
-            #expect(url == "ws://127.0.0.1:18789")
-        }
-    }
-
-    @MainActor
-    @Test
-    func `set remote gateway url preserves scheme`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "wss://old-host:111",
-                    ],
-                ],
-            ])
-            OpenClawConfigFile.setRemoteGatewayUrl(host: "new-host", port: 2222)
-            let root = OpenClawConfigFile.loadDict()
-            let url = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any])?["url"] as? String
-            #expect(url == "wss://new-host:2222")
-        }
-    }
-
-    @MainActor
-    @Test
-    func `clear remote gateway url removes only url field`() async {
-        let override = self.makeConfigOverridePath()
-
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
-            OpenClawConfigFile.saveDict([
-                "gateway": [
-                    "remote": [
-                        "url": "wss://old-host:111",
-                        "token": "tok",
-                    ],
-                ],
-            ])
-            OpenClawConfigFile.clearRemoteGatewayUrl()
-            let root = OpenClawConfigFile.loadDict()
-            let remote = ((root["gateway"] as? [String: Any])?["remote"] as? [String: Any]) ?? [:]
-            #expect((remote["url"] as? String) == nil)
-            #expect((remote["token"] as? String) == "tok")
-        }
-    }
-
     @Test
     func `state dir override sets config path`() async {
         let dir = FileManager().temporaryDirectory
@@ -173,6 +111,53 @@ struct OpenClawConfigFileTests {
             #expect(auditRoot?["nextMode"] is NSNumber)
             #expect(auditRoot?["previousIno"] is NSNull)
             #expect(auditRoot?["nextIno"] as? String != nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict removes retired config metadata`() async throws {
+        let configPath = self.makeConfigOverridePath()
+        defer { try? FileManager().removeItem(at: URL(fileURLWithPath: configPath).deletingLastPathComponent()) }
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": ["mode": "local"],
+                "meta": ["lastTouchedAt": "2026-08-05T22:45:14Z"],
+            ]))
+
+            let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let meta = try #require(root["meta"] as? [String: Any])
+            #expect(meta["lastTouchedVersion"] as? String != nil)
+            #expect(meta["lastTouchedAt"] == nil)
+        }
+    }
+
+    @MainActor
+    @Test
+    func `gateway start migration repairs existing retired config metadata`() async throws {
+        let configPath = self.makeConfigOverridePath()
+        let configURL = URL(fileURLWithPath: configPath)
+        defer { try? FileManager().removeItem(at: configURL.deletingLastPathComponent()) }
+
+        try FileManager().createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try Data(
+            #"{"gateway":{"mode":"local"},"meta":{"lastTouchedAt":"2026-08-05T22:45:14Z"}}"#.utf8)
+            .write(to: configURL)
+
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.migrateRetiredAppMetadataForGatewayStart())
+
+            let data = try Data(contentsOf: configURL)
+            let root = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let gateway = try #require(root["gateway"] as? [String: Any])
+            let meta = try #require(root["meta"] as? [String: Any])
+            #expect(gateway["mode"] as? String == "local")
+            #expect(meta["lastTouchedVersion"] as? String != nil)
+            #expect(meta["lastTouchedAt"] == nil)
         }
     }
 
@@ -328,6 +313,51 @@ struct OpenClawConfigFileTests {
                 #expect(!FileManager().fileExists(atPath: auditPath.path))
                 let persistedHealth = try String(contentsOf: configHealthPath, encoding: .utf8)
                 #expect(persistedHealth == legacyHealth)
+            }
+        }
+    }
+
+    @MainActor
+    @Test
+    func `load dict skips unchanged forensic fingerprints`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        try """
+        {
+          "gateway": {
+            "mode": "local"
+          }
+        }
+        """.write(to: configPath, atomically: true, encoding: .utf8)
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            try OpenClawConfigFile.withTestingFileLock {
+                let before = OpenClawConfigFile.testingConfigObservationCount()
+                _ = OpenClawConfigFile.loadDict()
+                let afterFirstRead = OpenClawConfigFile.testingConfigObservationCount()
+                _ = OpenClawConfigFile.loadDict()
+                let afterUnchangedRead = OpenClawConfigFile.testingConfigObservationCount()
+
+                let attributes = try FileManager.default.attributesOfItem(atPath: configPath.path)
+                let currentMode = try #require(
+                    (attributes[.posixPermissions] as? NSNumber)?.intValue)
+                try FileManager().setAttributes(
+                    [.posixPermissions: currentMode ^ 0o100],
+                    ofItemAtPath: configPath.path)
+                _ = OpenClawConfigFile.loadDict()
+                let afterMetadataChange = OpenClawConfigFile.testingConfigObservationCount()
+
+                #expect(afterFirstRead == before + 1)
+                #expect(afterUnchangedRead == afterFirstRead)
+                #expect(afterMetadataChange == afterFirstRead + 1)
             }
         }
     }

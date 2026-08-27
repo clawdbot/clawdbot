@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import { buildSessionUsageDateParams, requestSessionsUsage } from "./usage.ts";
+import { buildSessionUsageDateParams, requestSessionUsage } from "./usage.ts";
 
 describe("buildSessionUsageDateParams", () => {
   afterEach(() => {
@@ -27,46 +27,43 @@ describe("buildSessionUsageDateParams", () => {
   });
 });
 
-describe("requestSessionsUsage", () => {
-  it("retries older gateways with the legacy UTC offset", async () => {
+describe("requestSessionUsage", () => {
+  it("requests canonical family grouping", async () => {
     const result = { sessions: [] };
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(
-        new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "invalid sessions.usage params: at root: unexpected property 'timeZone'",
-        }),
-      )
-      .mockResolvedValueOnce(result);
-    const params = {
-      range: "all",
-      mode: "specific",
-      timeZone: "Europe/Vienna",
-      utcOffset: "UTC+2",
-    };
+    const request = vi.fn().mockResolvedValue(result);
 
-    await expect(requestSessionsUsage({ request } as never, params)).resolves.toBe(result);
-    expect(request).toHaveBeenNthCalledWith(1, "sessions.usage", params);
-    expect(request).toHaveBeenNthCalledWith(2, "sessions.usage", {
-      range: "all",
-      mode: "specific",
-      utcOffset: "UTC+2",
+    await expect(
+      requestSessionUsage({ request } as never, {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "family",
+        timeZone: "utc",
+      }),
+    ).resolves.toBe(result);
+    expect(request).toHaveBeenCalledWith("sessions.usage", {
+      startDate: "2026-07-01",
+      endDate: "2026-07-28",
+      agentScope: "all",
+      mode: "utc",
+      groupBy: "family",
+      limit: 1000,
+      includeContextWeight: true,
     });
   });
 
-  it("does not retry unrelated invalid usage parameters", async () => {
+  it("surfaces a rejected request without retrying an older Gateway shape", async () => {
     const error = new GatewayRequestError({
       code: "INVALID_REQUEST",
-      message: "invalid sessions.usage params: invalid IANA timeZone",
+      message: "invalid sessions.usage params: at root: unexpected property 'timeZone'",
     });
     const request = vi.fn().mockRejectedValue(error);
 
     await expect(
-      requestSessionsUsage({ request } as never, {
-        mode: "specific",
-        timeZone: "Not/AZone",
-        utcOffset: "UTC+2",
+      requestSessionUsage({ request } as never, {
+        startDate: "2026-07-01",
+        endDate: "2026-07-28",
+        scope: "instance",
+        timeZone: "local",
       }),
     ).rejects.toBe(error);
     expect(request).toHaveBeenCalledOnce();

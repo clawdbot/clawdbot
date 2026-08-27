@@ -1,18 +1,23 @@
+import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
+import {
+  markReplyDispatchBeforeDeliverDeadlineOwned,
+  type ReplyDispatchBeforeDeliver,
+} from "../../auto-reply/reply/reply-dispatcher.js";
 // Applies outbound hooks and shapes stable delivery outcomes/errors.
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
+import { consumeReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
+import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
-  buildCanonicalSentMessageHookContext,
-  toInternalMessageSentContext,
+  deriveInboundMessageHookContext,
+  resolveInboundReplyHookTarget,
   toPluginMessageContext,
-  toPluginMessageSentEvent,
 } from "../../hooks/message-hook-mappers.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { formatErrorMessage } from "../errors.js";
-import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
+import { normalizeEmptyPayloadForDelivery } from "./deliver-payload.js";
 import {
   OutboundDeliveryError,
   type OutboundDeliveryFailureStage,
@@ -20,94 +25,104 @@ import {
   type OutboundPayloadDeliveryOutcome,
   type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
-import type { QueuedReplyPayloadSendingHook } from "./delivery-queue.js";
-import type { NormalizedOutboundPayload } from "./payloads.js";
-import type { OutboundChannel } from "./targets.js";
+import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
+import {
+  summarizeOutboundPayloadForTransport,
+  type NormalizedOutboundPayload,
+} from "./payloads.js";
 
-const log = createSubsystemLogger("outbound/deliver");
+export type ReplyPayloadSuppressedObserver = (
+  payload: ReplyPayload,
+  info: Parameters<ReplyDispatchBeforeDeliver>[1],
+  reason: "cancelled_by_reply_payload_sending_hook" | "empty_after_reply_payload_sending_hook",
+) => void | Promise<void>;
 
-type MessageSentEvent = {
-  success: boolean;
-  content: string;
-  error?: string;
-  messageId?: string;
-};
-
-/**
- * Best-effort session identifier for delivery telemetry only. Falls back to
- * `policyKey` as a last resort so diagnostic emission still has a stable
- * string when neither mirror nor canonical key are available. **Do not use
- * this value for hook-context correlation** — use `sessionKeyForInternalHooks`
- * (mirror.sessionKey ?? session.key, no policyKey fallback) instead, so we
- * never accidentally hand the policy key to plugins that expect the canonical
- * session key.
- */
-export function createMessageSentEmitter(params: {
-  hookRunner: ReturnType<typeof getGlobalHookRunner>;
-  channel: Exclude<OutboundChannel, "none">;
-  to: string;
-  accountId?: string;
-  sessionKeyForInternalHooks?: string;
-  mirrorIsGroup?: boolean;
-  mirrorGroupId?: string;
-}): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
-  const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
-  const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
-  const emitMessageSent = (event: MessageSentEvent) => {
-    if (!hasMessageSentHooks && !canEmitInternalHook) {
-      return;
-    }
-    const canonical = buildCanonicalSentMessageHookContext({
-      to: params.to,
-      content: event.content,
-      success: event.success,
-      error: event.error,
-      channelId: params.channel,
-      accountId: params.accountId ?? undefined,
-      conversationId: params.to,
-      // Mirror the canonical outbound session key into the `message_sent`
-      // hook context so plugins that observe both `message_sending` and
-      // `message_sent` see the same `sessionKey` (and so it matches the
-      // value the internal `message:sent` hook fires with). The value is
-      // already computed for the internal hook below; reusing it here
-      // keeps the contract documented in `PluginHookMessageContext`
-      // honest for both outbound delivery hooks.
-      sessionKey: params.sessionKeyForInternalHooks,
-      messageId: event.messageId,
-      isGroup: params.mirrorIsGroup,
-      groupId: params.mirrorGroupId,
+export function buildInboundReplyPayloadSendingBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+  runState: { runId?: string },
+  onSuppressed?: ReplyPayloadSuppressedObserver,
+): ReplyDispatchBeforeDeliver {
+  const finalized = finalizeInboundContext(ctx);
+  const hookCtx = deriveInboundMessageHookContext(finalized);
+  return markReplyDispatchBeforeDeliverDeadlineOwned(async (payload, info) => {
+    const runId = runState.runId;
+    const hookedPayload = await runReplyPayloadSendingHook({
+      payload,
+      kind: info.kind,
+      channel: finalized.Surface ?? finalized.Provider,
+      sessionKey: finalized.SessionKey,
+      runId,
+      usageState: consumeReplyUsageState(runId),
+      context: { ...toPluginMessageContext(hookCtx), runId },
     });
-    if (hasMessageSentHooks) {
-      fireAndForgetHook(
-        params.hookRunner!.runMessageSent(
-          toPluginMessageSentEvent(canonical),
-          toPluginMessageContext(canonical),
-        ),
-        `${OUTBOUND_DELIVERY_LOG_SCOPE}: message_sent plugin hook failed`,
-        (message) => {
-          log.warn(message);
-        },
+    if (!hookedPayload) {
+      await onSuppressed?.(payload, info, "cancelled_by_reply_payload_sending_hook");
+      return null;
+    }
+    if (!hasOutboundReplyContent(hookedPayload)) {
+      await onSuppressed?.(hookedPayload, info, "empty_after_reply_payload_sending_hook");
+      return null;
+    }
+    return hookedPayload;
+  });
+}
+
+/** Legacy dispatcher-owned `message_sending` stage retained for low-level SDK compatibility. */
+export function buildLegacyInboundMessageSendingBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+): ReplyDispatchBeforeDeliver | undefined {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sending")) {
+    return undefined;
+  }
+  const finalized = finalizeInboundContext(ctx);
+  const hookCtx = deriveInboundMessageHookContext(finalized);
+  const replyTarget = resolveInboundReplyHookTarget(finalized, hookCtx);
+  return markReplyDispatchBeforeDeliverDeadlineOwned(
+    async (payload: ReplyPayload): Promise<ReplyPayload | null> => {
+      if (!payload.text) {
+        return payload;
+      }
+      const result = await hookRunner.runMessageSending(
+        { content: payload.text, to: replyTarget },
+        toPluginMessageContext(hookCtx),
       );
+      if (result?.cancel) {
+        return null;
+      }
+      return result?.content == null
+        ? payload
+        : copyReplyPayloadMetadata(payload, { ...payload, text: result.content });
+    },
+  );
+}
+
+/** Run media-aware message policy before a core owner can capture projected output. */
+export function buildProjectedInboundMessageSendingBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+): ReplyDispatchBeforeDeliver {
+  const finalized = finalizeInboundContext(ctx);
+  const hookCtx = deriveInboundMessageHookContext(finalized);
+  const replyTarget = resolveInboundReplyHookTarget(finalized, hookCtx);
+  return markReplyDispatchBeforeDeliverDeadlineOwned(async (payload) => {
+    const hookRunner = getGlobalHookRunner();
+    const hookResult = await applyMessageSendingHook({
+      hookRunner,
+      enabled: hookRunner?.hasHooks("message_sending") ?? false,
+      payload,
+      payloadSummary: summarizeOutboundPayloadForTransport(payload),
+      to: replyTarget,
+      channel: hookCtx.channelId,
+      accountId: hookCtx.accountId,
+      replyToId: payload.replyToId ?? finalized.ReplyToIdFull ?? finalized.ReplyToId,
+      threadId: finalized.MessageThreadId,
+      sessionKey: finalized.SessionKey,
+    });
+    if (hookResult.cancelled) {
+      return null;
     }
-    if (!canEmitInternalHook) {
-      return;
-    }
-    fireAndForgetHook(
-      triggerInternalHook(
-        createInternalHookEvent(
-          "message",
-          "sent",
-          params.sessionKeyForInternalHooks!,
-          toInternalMessageSentContext(canonical),
-        ),
-      ),
-      `${OUTBOUND_DELIVERY_LOG_SCOPE}: message:sent internal hook failed`,
-      (message) => {
-        log.warn(message);
-      },
-    );
-  };
-  return { emitMessageSent, hasMessageSentHooks };
+    return normalizeEmptyPayloadForDelivery(hookResult.payload);
+  });
 }
 
 export async function applyMessageSendingHook(params: {
@@ -116,7 +131,7 @@ export async function applyMessageSendingHook(params: {
   payload: ReplyPayload;
   payloadSummary: NormalizedOutboundPayload;
   to: string;
-  channel: Exclude<OutboundChannel, "none">;
+  channel: string;
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;

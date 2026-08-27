@@ -1,5 +1,5 @@
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownWithAttributedRanges,
 } from "openclaw/plugin-sdk/text-chunking";
@@ -12,13 +12,9 @@ type IMessageFormatRange = {
   styles: IMessageFormatStyle[];
 };
 
-const IMESSAGE_FORMAT_PROFILE = {
+const IMESSAGE_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "ranges",
   constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
     spoiler: "strip",
     codeInline: "fallback",
     codeBlock: "fallback",
@@ -34,12 +30,12 @@ const IMESSAGE_FORMAT_PROFILE = {
     mention: "strip",
   },
   chunk: { limit: 4_000, unit: "utf16" },
-} satisfies FormatCapabilityProfile;
+});
 
-const IMESSAGE_CODE_PROFILE = {
+const IMESSAGE_CODE_PROFILE = FormatCapabilityProfile.define({
   ...IMESSAGE_FORMAT_PROFILE,
   constructs: { ...IMESSAGE_FORMAT_PROFILE.constructs, codeInline: "native" },
-} satisfies FormatCapabilityProfile;
+});
 
 const IMESSAGE_STYLE_MAP = {
   bold: "bold",
@@ -54,39 +50,6 @@ function codeDelimiter(content: string): string {
 }
 
 type TextEdit = { start: number; end: number; text: string };
-type DunderProtection = { token: string; identifier: string };
-
-function protectDunderIdentifiers(input: string): {
-  markdown: string;
-  protections: DunderProtection[];
-} {
-  const protections: DunderProtection[] = [];
-  let markdown = "";
-  let cursor = 0;
-  for (const match of input.matchAll(/__[\p{L}_][\p{L}\p{N}_]*__/gu)) {
-    const identifier = match[0];
-    const start = match.index ?? 0;
-    const end = start + identifier.length;
-    const before = input[start - 1];
-    const beforeBefore = input[start - 2];
-    const after = input[end];
-    const member = before === ".";
-    const call = after === "(";
-    const functionArgument = before === "(" && /[\p{L}\p{N}_]/u.test(beforeBefore ?? "");
-    const index = after === "[";
-    if (!member && !call && !functionArgument && !index) {
-      continue;
-    }
-    let token = `OCdunder${protections.length}token`;
-    while (input.includes(token)) {
-      token += "x";
-    }
-    markdown += input.slice(cursor, start) + token;
-    protections.push({ token, identifier });
-    cursor = end;
-  }
-  return { markdown: markdown + input.slice(cursor), protections };
-}
 
 function applyTextEdits(text: string, edits: TextEdit[]) {
   const ordered = edits.toSorted((left, right) => left.start - right.start);
@@ -106,31 +69,6 @@ function applyTextEdits(text: string, edits: TextEdit[]) {
           delta + (edit.end <= offset ? edit.text.length - edit.end + edit.start : 0),
         0,
       ),
-  };
-}
-
-function restoreDunderIdentifiers(
-  text: string,
-  ranges: IMessageFormatRange[],
-  codeRanges: Array<{ start: number; length: number }>,
-  protections: DunderProtection[],
-) {
-  const edits = protections.flatMap((protection) => {
-    const start = text.indexOf(protection.token);
-    return start === -1
-      ? []
-      : [{ start, end: start + protection.token.length, text: protection.identifier }];
-  });
-  const edited = applyTextEdits(text, edits);
-  const mapRange = <T extends { start: number; length: number }>(range: T): T => ({
-    ...range,
-    start: edited.mapOffset(range.start),
-    length: edited.mapOffset(range.start + range.length) - edited.mapOffset(range.start),
-  });
-  return {
-    text: edited.text,
-    ranges: ranges.map(mapRange),
-    codeRanges: codeRanges.map(mapRange),
   };
 }
 
@@ -161,12 +99,12 @@ export function extractMarkdownFormatRuns(input: string): {
   text: string;
   ranges: IMessageFormatRange[];
 } {
-  const protectedDunders = protectDunderIdentifiers(input);
-  const ir = markdownToIR(protectedDunders.markdown, {
+  const ir = markdownToIR(input, {
     autolink: false,
     enableHtmlUnderline: true,
     headingStyle: "rich",
     linkify: false,
+    preserveDunderIdentifiers: true,
     preserveSourceBlockSpacing: true,
   });
   const rendered = renderMarkdownWithAttributedRanges(
@@ -179,7 +117,7 @@ export function extractMarkdownFormatRuns(input: string): {
     { styleMap: { code: "code" } },
     IMESSAGE_CODE_PROFILE,
   );
-  const dunders = restoreDunderIdentifiers(
+  return restoreCodeMarkers(
     rendered.text,
     rendered.ranges.map(({ start, length, style }) => ({
       start,
@@ -187,7 +125,5 @@ export function extractMarkdownFormatRuns(input: string): {
       styles: [style],
     })),
     code.ranges,
-    protectedDunders.protections,
   );
-  return restoreCodeMarkers(dunders.text, dunders.ranges, dunders.codeRanges);
 }

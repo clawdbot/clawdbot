@@ -3,9 +3,9 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
+import { cancelUnreadResponseBody } from "./http-body.js";
 import {
   buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
   fetchJson,
   parseUsageResetAt,
   readUsageJson,
@@ -159,7 +159,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!orgRes.ok) {
-    await discardUsageResponseBody(orgRes);
+    await cancelUnreadResponseBody(orgRes);
     return null;
   }
 
@@ -180,7 +180,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
-    await discardUsageResponseBody(usageRes);
+    await cancelUnreadResponseBody(usageRes);
     return null;
   }
 

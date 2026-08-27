@@ -2,7 +2,106 @@
 import { describe, expect, it } from "vitest";
 import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload_validation.js";
 
+const BUZZ_DRIVER_PRIVATE_KEY = "01".repeat(32);
+const BUZZ_SUT_PRIVATE_KEY = "02".repeat(32);
+const BUZZ_DRIVER_NSEC = "nsec1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqstywftw";
+
 describe("QA Convex credential payload validation", () => {
+  it("normalizes Buzz credential payloads", () => {
+    expect(
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: " wss://relay.qa.example ",
+        roomId: " 123E4567-E89B-42D3-A456-426614174000 ",
+        driverPrivateKey: ` ${BUZZ_DRIVER_PRIVATE_KEY} `,
+        sutPrivateKey: ` ${BUZZ_SUT_PRIVATE_KEY} `,
+        driverAuthTag: ' ["auth","driver","conditions","signature"] ',
+        ignored: true,
+      }),
+    ).toEqual({
+      relayUrl: "wss://relay.qa.example",
+      roomId: "123e4567-e89b-42d3-a456-426614174000",
+      driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+      sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      driverAuthTag: '["auth","driver","conditions","signature"]',
+    });
+  });
+
+  it.each(["ws://localhost:8080", "ws://127.0.0.1:8080", "ws://[::1]:8080"])(
+    "allows plaintext loopback Buzz relay URL %s",
+    (relayUrl) => {
+      expect(
+        normalizeCredentialPayloadForKind("buzz", {
+          relayUrl,
+          roomId: "123e4567-e89b-42d3-a456-426614174000",
+          driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+          sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+        }),
+      ).toMatchObject({ relayUrl });
+    },
+  );
+
+  it("rejects plaintext remote Buzz relay URLs", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "ws://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      }),
+    ).toThrow(/wss:\/\//u);
+  });
+
+  it("rejects malformed Buzz credential payloads without echoing values", () => {
+    const privateKey = BUZZ_DRIVER_PRIVATE_KEY;
+    const invalidRelay = "https://relay.qa.example/private-path";
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: invalidRelay,
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: privateKey,
+        sutPrivateKey: privateKey,
+      }),
+    ).toThrow(/wss:\/\//u);
+    try {
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: privateKey,
+        sutPrivateKey: privateKey,
+      });
+    } catch (error) {
+      expect(String(error)).not.toContain(privateKey);
+    }
+  });
+
+  it("rejects runtime-invalid Buzz secrets and equivalent key encodings", () => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_DRIVER_NSEC,
+      }),
+    ).toThrow(/distinct driver and SUT identities/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: "not-a-private-key",
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+      }),
+    ).toThrow(/nsec or 64-character hex private key/u);
+    expect(() =>
+      normalizeCredentialPayloadForKind("buzz", {
+        relayUrl: "wss://relay.qa.example",
+        roomId: "123e4567-e89b-42d3-a456-426614174000",
+        driverPrivateKey: BUZZ_DRIVER_PRIVATE_KEY,
+        sutPrivateKey: BUZZ_SUT_PRIVATE_KEY,
+        driverAuthTag: "not-an-auth-tag",
+      }),
+    ).toThrow(/auth tag JSON array/u);
+  });
+
   it("normalizes Discord credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("discord", {

@@ -4,11 +4,14 @@
  */
 import type { Command } from "commander";
 import { formatBrowserGraphicsSummary } from "../browser/chrome.graphics.js";
-import { runCommandWithRuntime } from "../core-api.js";
+import type { BrowserDoctorReport } from "../browser/doctor.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
+  printBrowserJsonResult as printJsonResult,
+  resolveBrowserProfileQuery as resolveProfileQuery,
+  runBrowserCliCommand as runBrowserCommand,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
 import {
@@ -35,29 +38,8 @@ type BrowserDoctorCheck = {
   ok: boolean;
   detail?: string;
   warning?: boolean;
+  info?: boolean;
 };
-
-function resolveProfileQuery(
-  profile?: string,
-  extra?: Record<string, string | number | boolean | undefined>,
-) {
-  const query: Record<string, string | number | boolean | undefined> = {};
-  if (profile) {
-    query.profile = profile;
-  }
-  if (extra) {
-    Object.assign(query, extra);
-  }
-  return Object.keys(query).length > 0 ? query : undefined;
-}
-
-function printJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {
-  if (!parent?.json) {
-    return false;
-  }
-  defaultRuntime.writeJson(payload);
-  return true;
-}
 
 function sanitizeTableCell(value: string): string {
   // Strip C0/C1 control characters (Unicode Cc) so profile names cannot inject
@@ -124,13 +106,6 @@ async function runBrowserToggle(
   defaultRuntime.log(info(`🦞 browser [${name}] running: ${status.running}${headlessLabel}`));
 }
 
-function runBrowserCommand(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
-}
-
 function parseTabIndex(value: string): number {
   return parseBrowserPositiveIntegerValue(value) ?? Number.NaN;
 }
@@ -159,7 +134,7 @@ function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
 }
 
 function formatDoctorLine(check: BrowserDoctorCheck): string {
-  const prefix = check.warning ? "WARN" : check.ok ? "OK" : "FAIL";
+  const prefix = check.warning ? "WARN" : check.info ? "INFO" : check.ok ? "OK" : "FAIL";
   return `${prefix} ${check.name}${check.detail ? `: ${check.detail}` : ""}`;
 }
 
@@ -183,10 +158,18 @@ function formatBrowserDoctorGatewayError(error: unknown): string {
 
 async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, deep?: boolean) {
   const checks: BrowserDoctorCheck[] = [];
-  let status: BrowserStatus | null;
+  let report: BrowserDoctorReport;
 
   try {
-    status = await fetchBrowserStatus(parent, profile);
+    report = await callBrowserRequest<BrowserDoctorReport>(
+      parent,
+      {
+        method: "GET",
+        path: "/doctor",
+        query: resolveProfileQuery(profile),
+      },
+      { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
+    );
     checks.push({
       name: "gateway",
       ok: true,
@@ -201,6 +184,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
     return { ok: false, checks };
   }
 
+  const status = report.status;
   checks.push({
     name: "plugin",
     ok: status.enabled,
@@ -218,6 +202,16 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
       ? `running${status.cdpReady === false ? ", CDP not ready" : ""}`
       : "not running; run `openclaw browser start`",
   });
+  const extensionVersionCheck = report.checks.find((check) => check.id === "extension-version");
+  if (extensionVersionCheck) {
+    checks.push({
+      name: extensionVersionCheck.id,
+      ok: extensionVersionCheck.status !== "fail",
+      warning: extensionVersionCheck.status === "warn",
+      info: extensionVersionCheck.status === "info",
+      detail: `${extensionVersionCheck.summary}${extensionVersionCheck.fixHint ? `; ${extensionVersionCheck.fixHint}` : ""}`,
+    });
+  }
   if (status.graphics) {
     checks.push({
       name: "graphics",
@@ -413,12 +407,11 @@ export function registerBrowserManageCommands(
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
         const result = await runBrowserDoctor(parent, profile, opts.deep === true);
-        if (printJsonResult(parent, result)) {
-          return;
+        if (!printJsonResult(parent, result)) {
+          defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         }
-        defaultRuntime.log(result.checks.map(formatDoctorLine).join("\n"));
         if (!result.ok) {
-          defaultRuntime.exit(1);
+          process.exitCode = 1;
         }
       });
     });
@@ -457,15 +450,11 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserCommand(async () => {
-        const result = await callBrowserRequest<BrowserResetProfileResult>(
-          parent,
-          {
-            method: "POST",
-            path: "/reset-profile",
-            query: resolveProfileQuery(profile),
-          },
-          { timeoutMs: 20000 },
-        );
+        const result = await callBrowserRequest<BrowserResetProfileResult>(parent, {
+          method: "POST",
+          path: "/reset-profile",
+          query: resolveProfileQuery(profile),
+        });
         if (printJsonResult(parent, result)) {
           return;
         }
@@ -838,21 +827,24 @@ export function registerBrowserManageCommands(
       ) => {
         const parent = parentOpts(cmd);
         await runBrowserCommand(async () => {
-          const result = await callBrowserRequest<BrowserCreateProfileResult>(
-            parent,
-            {
-              method: "POST",
-              path: "/profiles/create",
-              body: {
-                name: opts.name,
-                color: opts.color,
-                cdpUrl: opts.cdpUrl,
-                userDataDir: opts.userDataDir,
-                driver: opts.driver === "existing-session" ? "existing-session" : undefined,
-              },
+          if (
+            opts.driver !== undefined &&
+            opts.driver !== "openclaw" &&
+            opts.driver !== "existing-session"
+          ) {
+            throw new Error("--driver must be openclaw or existing-session");
+          }
+          const result = await callBrowserRequest<BrowserCreateProfileResult>(parent, {
+            method: "POST",
+            path: "/profiles/create",
+            body: {
+              name: opts.name,
+              color: opts.color,
+              cdpUrl: opts.cdpUrl,
+              userDataDir: opts.userDataDir,
+              driver: opts.driver === "existing-session" ? "existing-session" : undefined,
             },
-            { timeoutMs: 10_000 },
-          );
+          });
           if (printJsonResult(parent, result)) {
             return;
           }
@@ -875,14 +867,10 @@ export function registerBrowserManageCommands(
     .action(async (opts: { name: string }, cmd) => {
       const parent = parentOpts(cmd);
       await runBrowserCommand(async () => {
-        const result = await callBrowserRequest<BrowserDeleteProfileResult>(
-          parent,
-          {
-            method: "DELETE",
-            path: `/profiles/${encodeURIComponent(opts.name)}`,
-          },
-          { timeoutMs: 20_000 },
-        );
+        const result = await callBrowserRequest<BrowserDeleteProfileResult>(parent, {
+          method: "DELETE",
+          path: `/profiles/${encodeURIComponent(opts.name)}`,
+        });
         if (printJsonResult(parent, result)) {
           return;
         }

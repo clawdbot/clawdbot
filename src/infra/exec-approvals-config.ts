@@ -1,11 +1,13 @@
 // Parses and normalizes the persisted exec approval policy.
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import type {
   ExecApprovalsAgent,
@@ -16,17 +18,55 @@ import type {
 } from "./exec-approvals-core.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix, resolveHomeRelativePath } from "./home-dir.js";
-import { isPlainObject } from "./plain-object.js";
 
 const toStringOrUndefined = readStringValue;
 
-function isExecSecurity(value: unknown): value is ExecSecurity {
-  return value === "allowlist" || value === "full" || value === "deny";
+const execSecuritySchema = z.enum(["allowlist", "full", "deny"]);
+const execAskSchema = z.enum(["always", "off", "on-miss"]);
+const persistedExecApprovalPolicySchema = z.looseObject({
+  security: execSecuritySchema.optional(),
+  ask: execAskSchema.optional(),
+  askFallback: execSecuritySchema.optional(),
+  autoAllowSkills: z.boolean().optional(),
+});
+function normalizePersistedAllowlistSource(value: string): "allow-always" | undefined {
+  return value === "allow-always" ? value : undefined;
 }
-
-function isExecAsk(value: unknown): value is ExecAsk {
-  return value === "always" || value === "off" || value === "on-miss";
-}
+const persistedExecAllowlistEntrySchema = z
+  .union([
+    z.string().trim().min(1),
+    z.looseObject({
+      pattern: z.string().refine((value) => value.trim().length > 0),
+      id: z.string().optional(),
+      source: z.string().transform(normalizePersistedAllowlistSource).optional(),
+      commandText: z.string().optional(),
+      argPattern: z.string().optional(),
+      lastUsedAt: z.number().finite().optional(),
+      lastUsedCommand: z.string().optional(),
+      lastResolvedPath: z.string().optional(),
+    }),
+  ])
+  .transform(
+    (value): ExecAllowlistEntry => (typeof value === "string" ? { pattern: value } : value),
+  );
+const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
+  allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
+});
+const persistedExecApprovalsAgentsSchema = z
+  .unknown()
+  .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
+  .pipe(z.record(z.string(), persistedExecApprovalsAgentSchema));
+const persistedExecApprovalsSchema = z.looseObject({
+  version: z.literal(1),
+  socket: z
+    .looseObject({
+      path: z.string().optional(),
+      token: z.string().optional(),
+    })
+    .optional(),
+  defaults: persistedExecApprovalPolicySchema.optional(),
+  agents: persistedExecApprovalsAgentsSchema.optional(),
+});
 
 export const DEFAULT_SECURITY: ExecSecurity = "full";
 export const DEFAULT_ASK: ExecAsk = "off";
@@ -53,8 +93,8 @@ function resolveExecApprovalsStateDir(env: NodeJS.ProcessEnv = process.env): {
   };
 }
 
-export function resolveExecApprovalsPath(): string {
-  return path.join(resolveExecApprovalsStateDir().path, EXEC_APPROVALS_FILE);
+export function resolveExecApprovalsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveExecApprovalsStateDir(env).path, EXEC_APPROVALS_FILE);
 }
 
 export function resolveExecApprovalsSocketPath(): string {
@@ -63,15 +103,16 @@ export function resolveExecApprovalsSocketPath(): string {
 
 export function resolveExecApprovalsDisplayPath(): string {
   const stateDir = resolveExecApprovalsStateDir().displayPath;
+  const locator = path.join("state", "openclaw.sqlite#exec_approvals_config");
   return stateDir === DEFAULT_EXEC_APPROVALS_STATE_DIR
-    ? `${stateDir}/${EXEC_APPROVALS_FILE}`
-    : path.join(stateDir, EXEC_APPROVALS_FILE);
+    ? `${stateDir}/${locator}`
+    : path.join(stateDir, locator);
 }
 
 export function resolveExecApprovalsTranscriptPath(): string {
   return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? `$OPENCLAW_STATE_DIR/${EXEC_APPROVALS_FILE}`
-    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
+    ? "$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config"
+    : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/state/openclaw.sqlite#exec_approvals_config`;
 }
 
 export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
@@ -87,82 +128,18 @@ export function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
   });
 }
 
-function hasValidExecApprovalPolicyFields(value: unknown): value is Record<string, unknown> {
-  if (!isPlainObject(value)) {
-    return false;
-  }
-  return (
-    (value.security === undefined || isExecSecurity(value.security)) &&
-    (value.ask === undefined || isExecAsk(value.ask)) &&
-    (value.askFallback === undefined || isExecSecurity(value.askFallback)) &&
-    (value.autoAllowSkills === undefined || typeof value.autoAllowSkills === "boolean")
-  );
-}
-
-function isValidPersistedExecAllowlistEntry(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0;
-  }
-  if (!isPlainObject(value) || typeof value.pattern !== "string" || !value.pattern.trim()) {
-    return false;
-  }
-  return (
-    (value.id === undefined || typeof value.id === "string") &&
-    (value.source === undefined || typeof value.source === "string") &&
-    (value.commandText === undefined || typeof value.commandText === "string") &&
-    (value.argPattern === undefined || typeof value.argPattern === "string") &&
-    (value.lastUsedAt === undefined ||
-      (typeof value.lastUsedAt === "number" && Number.isFinite(value.lastUsedAt))) &&
-    (value.lastUsedCommand === undefined || typeof value.lastUsedCommand === "string") &&
-    (value.lastResolvedPath === undefined || typeof value.lastResolvedPath === "string")
-  );
-}
-
-function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFile {
-  if (!isPlainObject(value) || value.version !== 1) {
-    return false;
-  }
-  if (value.socket !== undefined) {
-    if (
-      !isPlainObject(value.socket) ||
-      (value.socket.path !== undefined && typeof value.socket.path !== "string") ||
-      (value.socket.token !== undefined && typeof value.socket.token !== "string")
-    ) {
-      return false;
-    }
-  }
-  if (value.defaults !== undefined && !hasValidExecApprovalPolicyFields(value.defaults)) {
-    return false;
-  }
-  if (value.agents !== undefined) {
-    if (!isPlainObject(value.agents)) {
-      return false;
-    }
-    for (const agent of Object.values(value.agents)) {
-      if (
-        !hasValidExecApprovalPolicyFields(agent) ||
-        (agent.allowlist !== undefined &&
-          (!Array.isArray(agent.allowlist) ||
-            !agent.allowlist.every(isValidPersistedExecAllowlistEntry)))
-      ) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-export function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
+/** Parse only structurally valid persisted approvals without inventing fallback policy. */
+export function tryParsePersistedExecApprovals(raw: string): ExecApprovalsFile | null {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (isValidPersistedExecApprovals(parsed)) {
-      return normalizeExecApprovalsInternal(parsed);
+    const result = persistedExecApprovalsSchema.safeParse(parsed);
+    if (result.success) {
+      return normalizeExecApprovalsInternal(result.data);
     }
   } catch {
     // A partial Windows fallback write is existing state, not a missing policy.
   }
-  // Never let malformed persisted state inherit permissive product defaults.
-  return createFailClosedExecApprovalsFallback();
+  return null;
 }
 
 function normalizeAllowlistPattern(value: string | undefined): string | null {

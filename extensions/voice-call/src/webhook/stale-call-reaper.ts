@@ -1,6 +1,6 @@
 // Voice Call plugin module implements stale call reaper behavior.
-import type { CallId, CallRecord, CallState } from "../types.js";
-import { TerminalStates } from "../types.js";
+import type { CallManager } from "../manager.js";
+import { TerminalStates, type CallRecord, type CallState } from "../types.js";
 
 // Background cleanup loop for calls that never reached answered/terminal state.
 
@@ -14,7 +14,7 @@ const LiveConversationStates: ReadonlySet<CallState> = new Set(["speaking", "lis
 
 type StaleCallReaperManager = {
   getActiveCalls(): Array<Pick<CallRecord, "answeredAt" | "callId" | "startedAt" | "state">>;
-  endCall(callId: CallId): Promise<{ success: boolean; error?: string }>;
+  endCall: CallManager["endCall"];
 };
 
 /** Start a stale-call reaper and return its cleanup callback. */
@@ -48,13 +48,19 @@ export function startStaleCallReaper(params: {
       // Unanswered provider calls can be stranded when callbacks are missed; end them explicitly.
       const age = now - call.startedAt;
       if (age > maxAgeMs && !callsBeingReaped.has(call.callId)) {
-        // Keep one hangup attempt per call in flight; settlement releases the call for later retries.
         callsBeingReaped.add(call.callId);
         console.log(
           `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
         );
         void params.manager
           .endCall(call.callId)
+          .then((result) => {
+            if (!result.success) {
+              console.warn(
+                `[voice-call] Reaper failed to end call ${call.callId}: ${result.error ?? "unknown error"}`,
+              );
+            }
+          })
           .catch((err: unknown) => {
             console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
           })

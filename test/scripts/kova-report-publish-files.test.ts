@@ -23,7 +23,7 @@ describe("Kova report publish files", () => {
       "bundle.json",
       "bundle.tar.gz.sha256",
     ]);
-    expect(readdirSync(destinationDir).sort()).toEqual(["bundle.json", "bundle.tar.gz.sha256"]);
+    expect(readdirSync(destinationDir).toSorted()).toEqual(["bundle.json", "bundle.tar.gz.sha256"]);
     expect(readFileSync(join(destinationDir, "bundle.tar.gz.sha256"), "utf8")).toBe(
       "abc  bundle.tar.gz\n",
     );

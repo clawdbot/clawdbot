@@ -1,7 +1,7 @@
 // Model command shared tests cover shared config and provider helper behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatTokenK, loadValidConfigOrThrow, updateConfig } from "./shared.js";
+import { loadValidConfigOrThrow, resolveModelsTargetAgent, updateConfig } from "./shared.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -39,6 +39,61 @@ describe("models/shared", () => {
 
     await expect(loadValidConfigOrThrow()).rejects.toThrowError(
       "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
+    );
+  });
+
+  it("names only the supported model-command escape for an ambiguous roster", () => {
+    expect(() =>
+      resolveModelsTargetAgent(
+        {
+          agents: { ownership: "explicit", entries: { main: {}, helper: {}, third: {} } },
+        },
+        undefined,
+        { kind: "mutation" },
+      ),
+    ).toThrow(
+      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
+    );
+  });
+
+  it("resolves unscoped model reads through the configured system agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "helper" } },
+        entries: { main: {}, helper: {} },
+      },
+    };
+
+    expect(resolveModelsTargetAgent(cfg, undefined, { kind: "read" }).agentId).toBe("helper");
+    expect(resolveModelsTargetAgent(cfg, "main", { kind: "read" }).agentId).toBe("main");
+    expect(() => resolveModelsTargetAgent(cfg, "", { kind: "read" })).toThrow(
+      "--agent must not be blank",
+    );
+    expect(() =>
+      resolveModelsTargetAgent(
+        {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "missing" } },
+            entries: { main: {}, helper: {} },
+          },
+        },
+        undefined,
+        { kind: "read" },
+      ),
+    ).toThrow('Unknown agent id "missing".');
+  });
+
+  it("keeps credential mutations explicit on an ambiguous roster", () => {
+    expect(() =>
+      resolveModelsTargetAgent(
+        { agents: { ownership: "explicit", entries: { main: {}, helper: {} } } },
+        undefined,
+        { kind: "mutation" },
+      ),
+    ).toThrow(
+      "Multiple agents are configured, but the model command has no explicit owner. Pass --agent <id>.",
     );
   });
 
@@ -93,28 +148,5 @@ describe("models/shared", () => {
     const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
     expect(replaceParams?.nextConfig).toEqual(sourceConfig);
     expect(replaceParams?.baseHash).toBe("config-2");
-  });
-
-  describe("formatTokenK", () => {
-    // Token context windows are decimal, so round windows must not shrink
-    // (regression: /1024 rendered 200000 as "195k" instead of "200k").
-    it("renders round token context windows in decimal K", () => {
-      expect(formatTokenK(200_000)).toBe("200k");
-      expect(formatTokenK(128_000)).toBe("128k");
-      expect(formatTokenK(1_000_000)).toBe("1000k");
-      expect(formatTokenK(195_000)).toBe("195k");
-    });
-
-    it("passes small counts through and switches to K at 1000", () => {
-      expect(formatTokenK(999)).toBe("999");
-      expect(formatTokenK(1_000)).toBe("1k");
-    });
-
-    it("returns a dash for missing or non-finite values", () => {
-      expect(formatTokenK(undefined)).toBe("-");
-      expect(formatTokenK(null)).toBe("-");
-      expect(formatTokenK(0)).toBe("-");
-      expect(formatTokenK(Number.NaN)).toBe("-");
-    });
   });
 });

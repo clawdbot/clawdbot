@@ -1,5 +1,5 @@
 // Discord message processing coverage split by cohesive behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   BASE_CHANNEL_ROUTE,
   createBaseContext,
@@ -10,7 +10,7 @@ import {
   getLastDispatchCtx,
   getLastDispatchReplyOptions,
   getLastRouteUpdate,
-  notifyDiscordInboundEventOutboundSuccess,
+  discordInboundEventDelivery,
   readSessionUpdatedAt,
   runProcessDiscordMessage,
   sendMocksForTest as sendMocks,
@@ -112,6 +112,7 @@ describe("processDiscordMessage session routing and room events", () => {
       inboundEventKind: "room_event",
       baseSessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       route: BASE_CHANNEL_ROUTE,
+      sender: { id: "U1", label: "user", name: "alice", isPluralKit: false },
     });
 
     await runProcessDiscordMessage(ctx);
@@ -124,6 +125,10 @@ describe("processDiscordMessage session routing and room events", () => {
         body: "hi",
         messageId: "m1",
         sender: "Alice",
+        senderProvenance: {
+          id: "U1",
+          memberRoleIds: [],
+        },
       },
     ]);
   });
@@ -131,7 +136,7 @@ describe("processDiscordMessage session routing and room events", () => {
   it("clears Discord room event history after a visible action send succeeds", async () => {
     const guildHistories = new Map();
     dispatchInboundMessage.mockImplementationOnce(async () => {
-      notifyDiscordInboundEventOutboundSuccess({
+      discordInboundEventDelivery.notify({
         sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
         inboundEventKind: "room_event",
         to: "channel:c1",
@@ -157,7 +162,7 @@ describe("processDiscordMessage session routing and room events", () => {
   it("clears Discord group DM room event history after a visible action send succeeds", async () => {
     const guildHistories = new Map();
     dispatchInboundMessage.mockImplementationOnce(async () => {
-      notifyDiscordInboundEventOutboundSuccess({
+      discordInboundEventDelivery.notify({
         sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
         inboundEventKind: "room_event",
         to: "channel:c1",
@@ -201,7 +206,7 @@ describe("processDiscordMessage session routing and room events", () => {
     const begin = getLastDispatchReplyOptions()?.queuedDeliveryCorrelations?.[0]?.begin;
     expect(begin).toBeTypeOf("function");
     const end = begin?.();
-    notifyDiscordInboundEventOutboundSuccess({
+    discordInboundEventDelivery.notify({
       sessionKey: BASE_CHANNEL_ROUTE.sessionKey,
       inboundEventKind: "room_event",
       to: "channel:c1",
@@ -294,6 +299,7 @@ describe("processDiscordMessage session routing and room events", () => {
       persist: false,
       enableSweeper: false,
     });
+    onTestFinished(() => threadBindings.stop());
     await threadBindings.bindTarget({
       threadId: "thread-1",
       channelId: "c-parent",
@@ -358,7 +364,8 @@ describe("processDiscordMessage session routing and room events", () => {
   });
 
   it("omits thread starter context when the effective thread session already exists", async () => {
-    const threadSessionKey = "agent:main:discord:channel:thread-1";
+    const threadId = "thread-existing-session";
+    const threadSessionKey = `agent:main:discord:channel:${threadId}`;
     readSessionUpdatedAt.mockImplementation((params?: unknown) => {
       const sessionKey = (params as { sessionKey?: string } | undefined)?.sessionKey;
       return sessionKey === threadSessionKey ? 1_700_000_000_000 : undefined;
@@ -377,17 +384,17 @@ describe("processDiscordMessage session routing and room events", () => {
       },
       baseSessionKey: threadSessionKey,
       route: BASE_CHANNEL_ROUTE,
-      messageChannelId: "thread-1",
+      messageChannelId: threadId,
       message: {
         id: "m1",
-        channelId: "thread-1",
+        channelId: threadId,
         content: "follow-up",
         timestamp: new Date().toISOString(),
         attachments: [],
       },
       messageText: "follow-up",
       baseText: "follow-up",
-      threadChannel: { id: "thread-1", name: "child-thread" },
+      threadChannel: { id: threadId, name: "child-thread" },
       threadParentId: "parent-1",
       client: { rest },
       channelConfig: { allowed: true, users: ["U2"] },
@@ -398,7 +405,7 @@ describe("processDiscordMessage session routing and room events", () => {
     expect(rest.get).toHaveBeenCalled();
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: threadSessionKey,
-      MessageThreadId: "thread-1",
+      MessageThreadId: threadId,
       ThreadLabel: "Discord thread #parent",
     });
     expect(getLastDispatchCtx()?.ThreadStarterBody).toBeUndefined();

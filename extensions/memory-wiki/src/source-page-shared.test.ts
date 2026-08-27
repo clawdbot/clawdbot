@@ -220,6 +220,72 @@ describe("writeImportedSourcePage", () => {
     expect(after).toContain(userNote);
   });
 
+  it.each([
+    { group: "bridge" as const, missingMarker: "opening" as const },
+    { group: "bridge" as const, missingMarker: "closing" as const },
+    { group: "unsafe-local" as const, missingMarker: "opening" as const },
+    { group: "unsafe-local" as const, missingMarker: "closing" as const },
+  ])(
+    "preserves a $group page and tracked state when its human Notes $missingMarker marker is missing",
+    async ({ group, missingMarker }) => {
+      const sourcePath = path.join(suiteRoot, "imported-malformed.txt");
+      const pagePath = "sources/imported-malformed.md";
+      const syncKey = `${group}:imported-malformed`;
+      const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
+        entries: {},
+        version: 1,
+      };
+      const firstSource = "first imported body";
+
+      await fs.writeFile(sourcePath, firstSource, "utf8");
+      await writeImportedSourcePage({
+        vaultRoot: suiteRoot,
+        syncKey,
+        sourcePath,
+        sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
+        sourceSize: Buffer.byteLength(firstSource),
+        renderFingerprint: "fp-1",
+        pagePath,
+        group,
+        state,
+        buildRendered: buildSourcePage,
+      });
+
+      const absPage = path.join(suiteRoot, pagePath);
+      const userNote = `DURABLE ${group.toUpperCase()} ANNOTATION`;
+      const malformedNotes =
+        missingMarker === "opening"
+          ? `${userNote}\n<!-- openclaw:human:end -->`
+          : `<!-- openclaw:human:start -->\n${userNote}`;
+      const existing = (await fs.readFile(absPage, "utf8")).replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        malformedNotes,
+      );
+      await fs.writeFile(absPage, existing, "utf8");
+      const previousState = structuredClone(state);
+      const secondSource = "second imported body must not overwrite human Notes";
+      await fs.writeFile(sourcePath, secondSource, "utf8");
+
+      await expect(
+        writeImportedSourcePage({
+          vaultRoot: suiteRoot,
+          syncKey,
+          sourcePath,
+          sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
+          sourceSize: Buffer.byteLength(secondSource),
+          renderFingerprint: "fp-2",
+          pagePath,
+          group,
+          state,
+          buildRendered: buildSourcePage,
+        }),
+      ).rejects.toThrow(/human Notes.*missing|missing.*human Notes|openclaw:human:(start|end)/i);
+
+      await expect(fs.readFile(absPage, "utf8")).resolves.toBe(existing);
+      expect(state).toEqual(previousState);
+    },
+  );
+
   it("preserves CRLF human notes without copying marker comments from existing imported content", async () => {
     const sourcePath = path.join(suiteRoot, "imported-crlf.txt");
     const pagePath = "sources/imported-crlf.md";

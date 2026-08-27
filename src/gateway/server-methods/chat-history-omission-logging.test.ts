@@ -5,12 +5,11 @@
 // production helpers and capture the real diagnostic event bus output.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { onDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { DiagnosticPayloadLargeEvent } from "../../infra/diagnostic-events.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
-  enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
 } from "./chat-history-budget.js";
@@ -18,8 +17,8 @@ import {
 type Captured = DiagnosticPayloadLargeEvent[];
 
 // Mirrors the production sequence in handleChatHistoryRequest: replace oversized
-// messages, cap the array by byte budget, enforce the final budget, then report
-// omissions. Captures any emitted `payload.large` diagnostic event.
+// messages, cap the array by byte budget, then report omissions. Captures any
+// emitted `payload.large` diagnostic event.
 function runHistoryBudgetPipeline(params: {
   messages: unknown[];
   maxHistoryBytes: number;
@@ -38,11 +37,10 @@ function runHistoryBudgetPipeline(params: {
       maxSingleMessageBytes: perMessageHardCap,
     });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
-    const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const emittedCount = reportOmittedChatHistory({
       originalMessages: messages,
-      finalMessages: bounded.messages,
-      normalizedBytes: Buffer.byteLength(JSON.stringify(messages), "utf8"),
+      finalMessages: capped,
+      getNormalizedBytes: () => Buffer.byteLength(JSON.stringify(messages), "utf8"),
       maxHistoryBytes,
       logDebug: () => {},
     });
@@ -81,14 +79,18 @@ describe("chat.history truncation logging (real diagnostic bus)", () => {
   });
 
   it("emits no diagnostic when nothing is omitted", () => {
-    const result = runHistoryBudgetPipeline({
-      messages: [textMessage("user", "hello"), textMessage("assistant", "hi")],
+    const messages = [textMessage("user", "hello"), textMessage("assistant", "hi")];
+    const getNormalizedBytes = vi.fn(() => Buffer.byteLength(JSON.stringify(messages), "utf8"));
+    const emittedCount = reportOmittedChatHistory({
+      originalMessages: messages,
+      finalMessages: messages,
+      getNormalizedBytes,
       maxHistoryBytes: 1_000_000,
-      perMessageHardCap: 1_000_000,
+      logDebug: () => {},
     });
 
-    expect(result.events).toHaveLength(0);
-    expect(result.emittedCount).toBe(0);
+    expect(emittedCount).toBe(0);
+    expect(getNormalizedBytes).not.toHaveBeenCalled();
   });
 
   it("counts a replaced-then-trimmed message once, not twice", () => {

@@ -1,12 +1,28 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
+  GatewayDrainingError,
+  isGatewaySubordinateWorkAdmissionClosed,
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+  runWithGatewayIndependentRootWorkAdmission,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../process/gateway-work-admission.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { sleep } from "../../utils/sleep.js";
+import {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "./ingress-monitor.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
+import type { IngressRetryPolicyConfig } from "./ingress-retry-policy.js";
+import {
+  ChannelIngressUnavailableError,
+  isChannelIngressUnavailableError,
+} from "./ingress-unavailable.js";
 
 type RawEvent = { id: string; lane: string; text: string };
 type StoredEvent = { version: 1; rawEvent: string };
@@ -27,7 +43,7 @@ async function withQueue<T>(
 }
 
 function createMonitor(
-  queue: ChannelIngressQueue<StoredEvent>,
+  queue: ChannelIngressQueue<StoredEvent> | (() => ChannelIngressQueue<StoredEvent>),
   deliver: (
     raw: RawEvent,
     lifecycle: ChannelIngressMonitorLifecycle,
@@ -39,8 +55,22 @@ function createMonitor(
     | ((active: boolean) => void)
     | {
         admissionMode?: "durable-after-stop";
+        deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
+        inspect?: (raw: RawEvent) => { eventId: string; laneKey: string } | null;
+        retention?:
+          | "standard"
+          | Partial<{
+              pruneIntervalMs: number;
+              completedTtlMs: number;
+              completedMaxEntries: number;
+              failedTtlMs: number;
+              failedMaxEntries: number;
+            }>;
+        now?: () => number;
         waitForDeliveryIdleBeforeRepump?: boolean;
         waitForDeliveryIdleOnStop?: boolean;
+        retryPolicy?: IngressRetryPolicyConfig;
+        runPumpTask?: (work: () => Promise<void>) => Promise<void>;
       },
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
@@ -51,9 +81,10 @@ function createMonitor(
     typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
   const monitorOptions =
     typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
+  const { inspect, retryPolicy, ...baseMonitorOptions } = monitorOptions;
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
-    inspect: (raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` }),
+    inspect: inspect ?? ((raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` })),
     payload: {
       storage: "raw-event",
       version: 1,
@@ -64,10 +95,10 @@ function createMonitor(
     deliver,
     pollIntervalMs,
     retention: { pruneIntervalMs: 60_000 },
-    ...monitorOptions,
+    ...baseMonitorOptions,
     drain: {
       adoptionStallTimeoutMs: 5_000,
-      retryPolicy: { baseMs: retryBaseMs, maxMs: retryBaseMs },
+      retryPolicy: retryPolicy ?? { baseMs: retryBaseMs, maxMs: retryBaseMs },
       resolveNonRetryableFailure: (error) =>
         error instanceof PermanentIngressError
           ? { reason: "invalid-event", message: error.message }
@@ -80,6 +111,7 @@ function createMonitor(
 }
 
 afterEach(() => {
+  resetGatewayWorkAdmission();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
@@ -87,6 +119,127 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("channel ingress monitor", () => {
+  it("creates named plain and reasoned ingress errors", () => {
+    const PayloadError = createChannelIngressError("TestIngressPayloadError");
+    const PermanentError = createChannelIngressError<"invalid-event">("TestIngressPermanentError", {
+      withReason: true,
+    });
+
+    expect(PayloadError.name).toBe("TestIngressPayloadError");
+    const payloadError = new PayloadError("invalid");
+    expect(payloadError).toMatchObject({
+      name: "TestIngressPayloadError",
+      message: "invalid",
+    });
+    expect(payloadError).toBeInstanceOf(PayloadError);
+    expect("reason" in payloadError).toBe(false);
+    expect(new PermanentError("invalid-event", "invalid")).toMatchObject({
+      name: "TestIngressPermanentError",
+      reason: "invalid-event",
+      message: "invalid",
+    });
+  });
+
+  it("applies standard retention with explicit per-channel overrides", async () => {
+    for (const [retention, completedMaxEntries] of [
+      ["standard", 20_000],
+      [{ completedMaxEntries: 1_000 }, 1_000],
+    ] as const) {
+      await withQueue(async (queue) => {
+        let currentTime = CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
+        const prune = vi.spyOn(queue, "prune");
+        const monitor = createMonitor(queue, vi.fn(), {
+          retention,
+          now: () => currentTime,
+        });
+        monitor.start();
+        await monitor.waitForIdle();
+
+        expect(prune).toHaveBeenCalledOnce();
+        expect(prune).toHaveBeenCalledWith({
+          completedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.completedTtlMs,
+          completedMaxEntries,
+          failedTtlMs: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedTtlMs,
+          failedMaxEntries: CHANNEL_INGRESS_RETENTION_DEFAULTS.failedMaxEntries,
+          now: expect.any(Number),
+        });
+
+        currentTime += CHANNEL_INGRESS_RETENTION_DEFAULTS.pruneIntervalMs;
+        monitor.requestDrain();
+        await monitor.waitForPumpIdle();
+        expect(prune).toHaveBeenCalledTimes(2);
+        await monitor.stop();
+      });
+    }
+  });
+
+  it("does not prune zero-interval retention from startup or idle polls", async () => {
+    await withQueue(async (queue) => {
+      const prune = vi.spyOn(queue, "prune");
+      const monitor = createMonitor(queue, vi.fn(), {
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+      });
+
+      monitor.start();
+      await sleep(65);
+      await monitor.stop();
+
+      expect(prune).not.toHaveBeenCalled();
+    });
+  });
+
+  it("skips ignored events and prunes once before one admission enqueue", async () => {
+    await withQueue(async (queue) => {
+      const prune = vi.spyOn(queue, "prune");
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const monitor = createMonitor(queue, vi.fn(), {
+        inspect: (raw) =>
+          raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+      });
+
+      await expect(monitor.admit({ id: "ignored", lane: "a", text: "receipt" })).resolves.toEqual({
+        kind: "ignored",
+      });
+      expect(prune).not.toHaveBeenCalled();
+      expect(enqueue).not.toHaveBeenCalled();
+
+      await monitor.admit({ id: "event-one", lane: "a", text: "hello" });
+      expect(prune).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledOnce();
+      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
+        Math.min(...enqueue.mock.invocationCallOrder),
+      );
+      await monitor.stop();
+    });
+  });
+
+  it("prunes zero-interval retention once before a multi-event batch", async () => {
+    await withQueue(async (queue) => {
+      const prune = vi.spyOn(queue, "prune");
+      const enqueue = vi.spyOn(queue, "enqueue");
+      const monitor = createMonitor(queue, vi.fn(), {
+        inspect: (raw) =>
+          raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
+        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+      });
+
+      await monitor.admitBatch([
+        { id: "ignored", lane: "a", text: "receipt" },
+        { id: "event-batch-1", lane: "a", text: "first" },
+        { id: "event-batch-2", lane: "b", text: "second" },
+        { id: "event-batch-3", lane: "c", text: "third" },
+      ]);
+
+      expect(prune).toHaveBeenCalledOnce();
+      expect(enqueue).toHaveBeenCalledTimes(3);
+      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
+        Math.min(...enqueue.mock.invocationCallOrder),
+      );
+      await monitor.stop();
+    });
+  });
+
   it("adopts terminal no-dispatch events", async () => {
     await withQueue(async (queue) => {
       const monitor = createMonitor(queue, vi.fn());
@@ -305,6 +458,124 @@ describe("channel ingress monitor", () => {
     });
   });
 
+  it("defers a claimed event across restart drain without consuming retry budget", async () => {
+    await withQueue(async (queue) => {
+      const event = {
+        id: "event-restart-drain",
+        lane: "a",
+        text: "recover me",
+      } satisfies RawEvent;
+      const storedEvent = {
+        version: 1,
+        rawEvent: JSON.stringify(event),
+      } satisfies StoredEvent;
+      const drainErrors: unknown[] = [];
+      const oldDeliver = vi.fn(
+        async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          try {
+            await runWithGatewayIndependentRootWorkAdmission(async () => {
+              await lifecycle.onAdopted();
+            });
+          } catch (error) {
+            drainErrors.push(error);
+            throw error;
+          }
+        },
+      );
+      const monitorOptions = {
+        retryPolicy: {
+          maxAttempts: 8,
+          deadLetterMinAgeMs: 0,
+          baseMs: 0,
+          maxMs: 0,
+        },
+      } as const;
+      const oldMonitor = createMonitor(
+        queue,
+        oldDeliver,
+        monitorOptions,
+        undefined,
+        undefined,
+        60_000,
+      );
+      let successorMonitor: ReturnType<typeof createMonitor> | undefined;
+      oldMonitor.start();
+      try {
+        await oldMonitor.waitForIdle();
+
+        let markPendingScanStarted = () => {};
+        const pendingScanStarted = new Promise<void>((resolve) => {
+          markPendingScanStarted = resolve;
+        });
+        let releasePendingScan = () => {};
+        const pendingScanGate = new Promise<void>((resolve) => {
+          releasePendingScan = resolve;
+        });
+        const listPending = queue.listPending.bind(queue);
+        let gateNextPendingScan = true;
+        queue.listPending = async (...args) => {
+          if (gateNextPendingScan) {
+            gateNextPendingScan = false;
+            markPendingScanStarted();
+            await pendingScanGate;
+          }
+          return await listPending(...args);
+        };
+
+        oldMonitor.requestDrain();
+        await pendingScanStarted;
+        markGatewayRestartDraining();
+        await queue.enqueue(event.id, storedEvent, { laneKey: "lane:a" });
+        releasePendingScan();
+        await vi.waitFor(() => expect(drainErrors.length).toBeGreaterThan(0));
+
+        for (let cycle = 0; cycle < 8; cycle += 1) {
+          oldMonitor.requestDrain();
+          await oldMonitor.waitForIdle();
+        }
+
+        expect(drainErrors[0]).toBeInstanceOf(GatewayDrainingError);
+        expect(drainErrors).toHaveLength(1);
+        expect(oldDeliver).toHaveBeenCalledOnce();
+        await expect(queue.listClaims()).resolves.toEqual([]);
+        await expect(queue.listPending()).resolves.toEqual([
+          expect.objectContaining({ id: event.id, attempts: 0 }),
+        ]);
+        await expect(queue.listFailed?.()).resolves.toEqual([]);
+
+        await oldMonitor.stop();
+        resetGatewayWorkAdmission();
+        const successorDeliver = vi.fn(
+          async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+            await runWithGatewayIndependentRootWorkAdmission(async () => {
+              await lifecycle.onAdopted();
+            });
+          },
+        );
+        successorMonitor = createMonitor(
+          queue,
+          successorDeliver,
+          monitorOptions,
+          undefined,
+          undefined,
+          60_000,
+        );
+        successorMonitor.start();
+        await successorMonitor.waitForIdle();
+
+        expect(successorDeliver).toHaveBeenCalledOnce();
+        expect(oldDeliver).toHaveBeenCalledOnce();
+        await expect(
+          queue.enqueue(event.id, { version: 1, rawEvent: "duplicate" }),
+        ).resolves.toMatchObject({ kind: "completed" });
+      } finally {
+        await successorMonitor?.stop();
+        await oldMonitor.stop();
+        resetGatewayWorkAdmission();
+      }
+    });
+  });
+
   it("reports active delivery work until the channel callback settles", async () => {
     await withQueue(async (queue) => {
       let releaseDelivery: (() => void) | undefined;
@@ -384,6 +655,111 @@ describe("channel ingress monitor", () => {
         expect.objectContaining({ id: "event-stop-retry", lastError: expect.any(String) }),
       ]);
       await expect(monitor.waitForIdle()).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps a started delivery admissible after its detached pump root releases", async () => {
+    await withQueue(async (queue) => {
+      let releaseDeliver = () => {};
+      const deliverGate = new Promise<void>((resolve) => {
+        releaseDeliver = resolve;
+      });
+      let admissionClosedDuringDelivery: boolean | undefined;
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await deliverGate;
+        admissionClosedDuringDelivery = isGatewaySubordinateWorkAdmissionClosed();
+        await lifecycle.onAdopted();
+      });
+      let markPumpTaskSettled = () => {};
+      const pumpTaskSettled = new Promise<void>((resolve) => {
+        markPumpTaskSettled = resolve;
+      });
+      // Mirror the production webhook-spool combination: the pump runs on its
+      // own detached root and does not wait for deliveries before returning.
+      const monitor = createMonitor(queue, deliver, {
+        waitForDeliveryIdleBeforeRepump: false,
+        runPumpTask: (work) =>
+          runWithGatewayIndependentRootWorkContinuation(work).finally(() => markPumpTaskSettled()),
+      });
+      monitor.start();
+      try {
+        // Admit inside its own root and let it release right away, the way an
+        // ack-first webhook request root releases once the 200 is written.
+        await runWithGatewayIndependentRootWorkAdmission(async () => {
+          await monitor.admit({ id: "event-detached-root", lane: "a", text: "hello" });
+        });
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+        // The pump returns while the delivery is still in flight; every root
+        // the dispatch could have inherited is released at this point.
+        await pumpTaskSettled;
+        releaseDeliver();
+
+        await vi.waitFor(() => expect(admissionClosedDuringDelivery).toBeDefined());
+        expect(admissionClosedDuringDelivery).toBe(false);
+        await monitor.waitForIdle();
+        await expect(queue.listPending()).resolves.toEqual([]);
+        await expect(queue.listClaims()).resolves.toEqual([]);
+      } finally {
+        releaseDeliver();
+        await monitor.stop();
+      }
+    });
+  });
+
+  it("dispatches outside an already-released inherited root instead of refusing", async () => {
+    await withQueue(async (queue) => {
+      let releaseDeliver = () => {};
+      const deliverGate = new Promise<void>((resolve) => {
+        releaseDeliver = resolve;
+      });
+      let admissionClosedDuringDelivery: boolean | undefined;
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await deliverGate;
+        admissionClosedDuringDelivery = isGatewaySubordinateWorkAdmissionClosed();
+        await lifecycle.onAdopted();
+      });
+      // No runPumpTask: the pump chain inherits the admitting caller's context,
+      // the way a transport request that enqueues an event does.
+      const monitor = createMonitor(queue, deliver, {}, undefined, undefined, 60_000);
+      let markPendingScanStarted = () => {};
+      const pendingScanStarted = new Promise<void>((resolve) => {
+        markPendingScanStarted = resolve;
+      });
+      let releasePendingScan = () => {};
+      const pendingScanGate = new Promise<void>((resolve) => {
+        releasePendingScan = resolve;
+      });
+      const listPending = queue.listPending.bind(queue);
+      let gateNextPendingScan = true;
+      queue.listPending = async (...args) => {
+        if (gateNextPendingScan) {
+          gateNextPendingScan = false;
+          markPendingScanStarted();
+          await pendingScanGate;
+        }
+        return await listPending(...args);
+      };
+      monitor.start();
+      try {
+        // Admit inside a root that releases as soon as the enqueue returns;
+        // the gated scan keeps the claim from happening until after that.
+        await runWithGatewayIndependentRootWorkAdmission(async () => {
+          await monitor.admit({ id: "event-released-root", lane: "a", text: "hello" });
+          await pendingScanStarted;
+        });
+        releasePendingScan();
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+        releaseDeliver();
+
+        await vi.waitFor(() => expect(admissionClosedDuringDelivery).toBeDefined());
+        expect(admissionClosedDuringDelivery).toBe(false);
+        await monitor.waitForIdle();
+        await expect(queue.listClaims()).resolves.toEqual([]);
+      } finally {
+        releaseDeliver();
+        releasePendingScan();
+        await monitor.stop();
+      }
     });
   });
 
@@ -473,6 +849,51 @@ describe("channel ingress monitor", () => {
       await expect(queue.listClaims()).resolves.toHaveLength(1);
     });
   });
+
+  it("waits for tracked deferred claims to settle after drain disposal", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: ChannelIngressMonitorLifecycle | undefined;
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+        },
+        { deferredClaims: "wait-on-stop" },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-tracked-deferred", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deferredLifecycle).toBeDefined());
+
+      let stopped = false;
+      const stopping = monitor.stop().then(() => {
+        stopped = true;
+      });
+      await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
+      expect(stopped).toBe(false);
+
+      await deferredLifecycle?.onAbandoned();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
+  });
+
+  it("can settle tracked deferred bookkeeping on abort", async () => {
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          lifecycle.onDeferred();
+        },
+        { deferredClaims: "settle-on-abort" },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-abort-deferred", lane: "a", text: "hello" });
+
+      await expect(monitor.stop()).resolves.toBeUndefined();
+      await expect(monitor.waitForDeferredClaims()).resolves.toBeUndefined();
+    });
+  });
   it("keeps append-only admission available after stop when explicitly requested", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn();
@@ -491,6 +912,63 @@ describe("channel ingress monitor", () => {
       expect(deliver).toHaveBeenCalledOnce();
       await recovered.stop();
     });
+  });
+
+  it("can prepare the durable queue before starting the drain", async () => {
+    await withQueue(async (queue) => {
+      const queueFactory = vi.fn(() => queue);
+      const monitor = createMonitor(queueFactory, vi.fn());
+
+      monitor.ensureQueueAvailable();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(false);
+
+      monitor.start();
+      expect(queueFactory).toHaveBeenCalledOnce();
+      expect(monitor.isRunning()).toBe(true);
+      await monitor.stop();
+    });
+  });
+
+  it("fails start once when the durable queue cannot be opened", async () => {
+    const denial = new Error(
+      'openChannelIngressQueue is only available for trusted plugins in this release. Plugin "slack" loaded with origin "config"',
+    );
+    const queueFactory = vi.fn((): ChannelIngressQueue<StoredEvent> => {
+      throw denial;
+    });
+    const onError = vi.fn();
+    const monitor = createMonitor(queueFactory, vi.fn(), undefined, onError, undefined, 1);
+
+    // The typed rethrow is the gateway's only way to tell dead inbound apart from
+    // an ordinary channel crash; the denial stays reachable as the cause.
+    const startError = (() => {
+      try {
+        monitor.start();
+        return expect.unreachable("start must fail while the durable queue is denied");
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(startError).toBeInstanceOf(ChannelIngressUnavailableError);
+    expect((startError as Error).cause).toBe(denial);
+    expect(isChannelIngressUnavailableError(startError)).toBe(true);
+    // A channel plugin is free to wrap the start failure in its own error.
+    expect(
+      isChannelIngressUnavailableError(new Error("slack start failed", { cause: startError })),
+    ).toBe(true);
+    expect(isChannelIngressUnavailableError(denial)).toBe(false);
+    expect(monitor.isRunning()).toBe(false);
+    // An armed poll timer would have retried the denied factory many times over this window.
+    await sleep(25);
+    expect(queueFactory).toHaveBeenCalledOnce();
+    expect(onError).not.toHaveBeenCalled();
+
+    // Accepted transport input still fails closed rather than being silently dropped.
+    await expect(monitor.admit({ id: "event-denied", lane: "a", text: "hello" })).rejects.toBe(
+      denial,
+    );
+    await monitor.stop();
   });
 
   it("can defer delivery-idle waiting to a channel-owned shutdown grace", async () => {

@@ -75,7 +75,7 @@ describe("estimateTokens image accounting", () => {
     const toolTokens = estimateTokens(toolResultImage(1));
 
     expect(userTokens).toBe(toolTokens);
-    expect(userTokens).toBeGreaterThanOrEqual(1200);
+    expect(userTokens).toBe(2_000);
   });
 });
 
@@ -89,7 +89,7 @@ describe("findCutPoint with image-heavy recent turns", () => {
   });
 
   it("matches the cut point of an equivalent text-cost control", () => {
-    const equivalentText = "x".repeat(4800);
+    const equivalentText = "x".repeat(8_000);
     const imageEntries = buildTranscript([userImage(10), userImage(20), userImage(30)]);
     const textEntries = buildTranscript([
       userText(equivalentText, 10),

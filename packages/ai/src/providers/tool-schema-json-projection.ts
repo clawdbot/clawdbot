@@ -1,4 +1,5 @@
 import { types as utilTypes } from "node:util";
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 
 /** JSON-safe schema value used when projecting runtime tool parameters. */
 export type RuntimeToolInputSchemaJson =
@@ -33,12 +34,6 @@ function isJsonValue(value: unknown): value is RuntimeToolInputSchemaJson {
     default:
       return false;
   }
-}
-
-function isJsonObject(value: RuntimeToolInputSchemaJson): value is {
-  [key: string]: RuntimeToolInputSchemaJson;
-} {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isNonFiniteNumberValue(value: unknown): boolean {

@@ -2,7 +2,10 @@
 import { createHash, randomUUID } from "node:crypto";
 import process from "node:process";
 import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
-import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const APP_SERVER_BINDING_DATA_VERSION = 2;
 const CLI_BINDING_DATA_VERSION = 1;
@@ -160,10 +163,10 @@ export function readCodexConversationBindingDataRecord(
 function readConversationSource(
   value: CodexAppServerConversationSource | Record<string, unknown> | undefined,
 ): CodexAppServerConversationSource | undefined {
-  const agentId = readString(value, "agentId");
-  const sessionId = readString(value, "sessionId");
-  const threadId = readString(value, "threadId");
-  const sessionKey = readString(value, "sessionKey");
+  const agentId = normalizeOptionalString(value?.agentId);
+  const sessionId = normalizeOptionalString(value?.sessionId);
+  const threadId = normalizeOptionalString(value?.threadId);
+  const sessionKey = normalizeOptionalString(value?.sessionKey);
   if (!agentId || !sessionId || !threadId) {
     return undefined;
   }
@@ -182,13 +185,8 @@ export function legacyCodexConversationBindingId(sessionFile: string): string {
 
 export function resolveCodexDefaultWorkspaceDir(pluginConfig: unknown): string {
   const appServer = readRecord(readRecord(pluginConfig)?.appServer);
-  const configured = readString(appServer, "defaultWorkspaceDir");
+  const configured = normalizeOptionalString(appServer?.defaultWorkspaceDir);
   return configured ?? process.cwd();
-}
-
-function readString(record: Record<string, unknown> | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function readConversationStart(

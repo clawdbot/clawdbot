@@ -1,10 +1,7 @@
 // Slack tests cover channel type plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  resetSlackChannelTypeCacheForTest,
-  resolveSlackChannelType,
-  resolveSlackConversationInfo,
-} from "./channel-type.js";
+import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
 
 const slackClientMocks = vi.hoisted(() => {
   const conversationsInfo = vi.fn();
@@ -12,6 +9,12 @@ const slackClientMocks = vi.hoisted(() => {
   return {
     conversationsInfo,
     conversationsOpen,
+    createSlackReadClient: vi.fn(() => ({
+      conversations: {
+        info: conversationsInfo,
+        open: conversationsOpen,
+      },
+    })),
     createSlackWebClient: vi.fn(() => ({
       conversations: {
         info: conversationsInfo,
@@ -23,10 +26,12 @@ const slackClientMocks = vi.hoisted(() => {
 const {
   conversationsInfo: conversationsInfoMock,
   conversationsOpen: conversationsOpenMock,
+  createSlackReadClient: createSlackReadClientMock,
   createSlackWebClient: createSlackWebClientMock,
 } = slackClientMocks;
 
 vi.mock("./client.js", () => ({
+  createSlackReadClient: slackClientMocks.createSlackReadClient,
   createSlackWebClient: slackClientMocks.createSlackWebClient,
 }));
 
@@ -34,10 +39,10 @@ describe("resolveSlackChannelType", () => {
   beforeEach(() => {
     conversationsInfoMock.mockReset();
     conversationsOpenMock.mockReset();
+    createSlackReadClientMock.mockClear();
     createSlackWebClientMock.mockClear();
     vi.stubEnv("SLACK_BOT_TOKEN", "");
     vi.stubEnv("SLACK_USER_TOKEN", "");
-    resetSlackChannelTypeCacheForTest();
   });
 
   afterEach(() => {
@@ -45,7 +50,7 @@ describe("resolveSlackChannelType", () => {
   });
 
   it("uses configured defaultAccount for omitted-account cache keys", async () => {
-    const channelId = "C123";
+    const channelId = "CDEFAULTACCOUNT1";
 
     await expect(
       resolveSlackChannelType({
@@ -87,7 +92,7 @@ describe("resolveSlackChannelType", () => {
   it("returns Slack IM peer user metadata from conversations.info", async () => {
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {
-        id: "D0AEWSDHAQH",
+        id: "DINFOMETADATA1",
         is_im: true,
         user: "U09G2DJ0275",
       },
@@ -102,21 +107,37 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DINFOMETADATA1",
       }),
     ).resolves.toEqual({
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxb-test");
-    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0AEWSDHAQH" });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxb-test", { teamId: undefined });
+    expect(createSlackWebClientMock).not.toHaveBeenCalled();
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "DINFOMETADATA1" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unscoped Enterprise conversation lookup before creating a client", async () => {
+    const installationState = registerSlackInstallationState("default", "enterprise");
+    try {
+      await expect(
+        resolveSlackConversationInfo({
+          cfg: { channels: { slack: { botToken: "xoxb-test" } } } as never,
+          channelId: "CENTERPRISELOOKUP1",
+        }),
+      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
+      expect(createSlackReadClientMock).not.toHaveBeenCalled();
+    } finally {
+      installationState.release();
+    }
   });
 
   it("uses conversations.open only for explicit native IM writes", async () => {
     conversationsOpenMock.mockResolvedValueOnce({
       channel: {
-        id: "D0AEWSDHAQH",
+        id: "DEXPLICITWRITE1",
         is_im: true,
         user: "U09G2DJ0275",
       },
@@ -132,16 +153,17 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DEXPLICITWRITE1",
         operation: "write",
       }),
     ).resolves.toEqual({
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("botB");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("botB", { teamId: undefined });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
-      channel: "D0AEWSDHAQH",
+      channel: "DEXPLICITWRITE1",
       prevent_creation: true,
       return_im: true,
     });
@@ -151,7 +173,7 @@ describe("resolveSlackChannelType", () => {
   it("uses the user token to open native IMs for user identity", async () => {
     conversationsOpenMock.mockResolvedValueOnce({
       channel: {
-        id: "D0AEWSDHAQH",
+        id: "DUSERIDENTITY1",
         is_im: true,
         user: "U09G2DJ0275",
       },
@@ -167,16 +189,19 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DUSERIDENTITY1",
         operation: "write",
       }),
     ).resolves.toEqual({
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-user-token");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("test-user-token", {
+      teamId: undefined,
+    });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
-      channel: "D0AEWSDHAQH",
+      channel: "DUSERIDENTITY1",
       prevent_creation: true,
       return_im: true,
     });
@@ -187,7 +212,7 @@ describe("resolveSlackChannelType", () => {
     vi.stubEnv("SLACK_USER_TOKEN", "envUsr");
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {
-        id: "D0AEWSDHAQH",
+        id: "DENVUSERREAD1",
         is_im: true,
         user: "U09G2DJ0275",
       },
@@ -202,15 +227,16 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DENVUSERREAD1",
         operation: "read",
       }),
     ).resolves.toEqual({
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("envUsr");
-    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "D0AEWSDHAQH" });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("envUsr", { teamId: undefined });
+    expect(createSlackWebClientMock).not.toHaveBeenCalled();
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "DENVUSERREAD1" });
     expect(conversationsOpenMock).not.toHaveBeenCalled();
   });
 
@@ -218,7 +244,7 @@ describe("resolveSlackChannelType", () => {
     vi.stubEnv("SLACK_BOT_TOKEN", "envBot");
     conversationsOpenMock.mockResolvedValueOnce({
       channel: {
-        id: "D0AEWSDHAQH",
+        id: "DENVBOTWRITE1",
         is_im: true,
         user: "U09G2DJ0275",
       },
@@ -233,16 +259,17 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DENVBOTWRITE1",
         operation: "write",
       }),
     ).resolves.toEqual({
       type: "dm",
       user: "U09G2DJ0275",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("envBot");
+    expect(createSlackWebClientMock).toHaveBeenCalledWith("envBot", { teamId: undefined });
+    expect(createSlackReadClientMock).not.toHaveBeenCalled();
     expect(conversationsOpenMock).toHaveBeenCalledWith({
-      channel: "D0AEWSDHAQH",
+      channel: "DENVBOTWRITE1",
       prevent_creation: true,
       return_im: true,
     });
@@ -252,7 +279,7 @@ describe("resolveSlackChannelType", () => {
   it("uses the read credential to classify C-prefixed MPIMs and returns their name", async () => {
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {
-        id: "C0MPIM",
+        id: "CREADCREDENTIAL1",
         is_mpim: true,
         name: "mpdm-alice--bob-1",
       },
@@ -268,28 +295,31 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "C0MPIM",
+        channelId: "CREADCREDENTIAL1",
         operation: "read",
       }),
     ).resolves.toEqual({
       type: "group",
       name: "mpdm-alice--bob-1",
     });
-    expect(createSlackWebClientMock).toHaveBeenCalledWith("xoxp-reader");
-    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "C0MPIM" });
+    expect(createSlackReadClientMock).toHaveBeenCalledWith("xoxp-reader", {
+      teamId: undefined,
+    });
+    expect(createSlackWebClientMock).not.toHaveBeenCalled();
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "CREADCREDENTIAL1" });
   });
 
   it("does not reuse cached metadata across Slack credential rotation", async () => {
     conversationsInfoMock
       .mockResolvedValueOnce({
         channel: {
-          id: "C0CHANNEL",
+          id: "CCREDENTIALROTATION1",
           name: "before-rotation",
         },
       })
       .mockResolvedValueOnce({
         channel: {
-          id: "C0CHANNEL",
+          id: "CCREDENTIALROTATION1",
           name: "after-rotation",
         },
       });
@@ -303,7 +333,7 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "C0CHANNEL",
+        channelId: "CCREDENTIALROTATION1",
       }),
     ).resolves.toMatchObject({ name: "before-rotation" });
     await expect(
@@ -315,12 +345,16 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "C0CHANNEL",
+        channelId: "CCREDENTIALROTATION1",
       }),
     ).resolves.toMatchObject({ name: "after-rotation" });
 
-    expect(createSlackWebClientMock).toHaveBeenNthCalledWith(1, "xoxb-before");
-    expect(createSlackWebClientMock).toHaveBeenNthCalledWith(2, "xoxb-after");
+    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(1, "xoxb-before", {
+      teamId: undefined,
+    });
+    expect(createSlackReadClientMock).toHaveBeenNthCalledWith(2, "xoxb-after", {
+      teamId: undefined,
+    });
     expect(conversationsInfoMock).toHaveBeenCalledTimes(2);
   });
 
@@ -328,13 +362,13 @@ describe("resolveSlackChannelType", () => {
     conversationsInfoMock
       .mockResolvedValueOnce({
         channel: {
-          id: "C0CHANNEL",
+          id: "CFRESHNAME1",
           name: "old-name",
         },
       })
       .mockResolvedValueOnce({
         channel: {
-          id: "C0CHANNEL",
+          id: "CFRESHNAME1",
           name: "new-name",
         },
       });
@@ -349,14 +383,14 @@ describe("resolveSlackChannelType", () => {
     await expect(
       resolveSlackConversationInfo({
         cfg,
-        channelId: "C0CHANNEL",
+        channelId: "CFRESHNAME1",
         requireFreshName: true,
       }),
     ).resolves.toMatchObject({ name: "old-name" });
     await expect(
       resolveSlackConversationInfo({
         cfg,
-        channelId: "C0CHANNEL",
+        channelId: "CFRESHNAME1",
         requireFreshName: true,
       }),
     ).resolves.toMatchObject({ name: "new-name" });
@@ -376,7 +410,7 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DLOOKUPFAILURE1",
       }),
     ).resolves.toEqual({
       type: "dm",
@@ -386,19 +420,19 @@ describe("resolveSlackChannelType", () => {
   it.each([
     {
       name: "group DM",
-      channelId: "C0MPIM",
+      channelId: "CCONFIGGROUP1",
       slackConfig: {
         dm: {
-          groupChannels: ["C0MPIM"],
+          groupChannels: ["CCONFIGGROUP1"],
         },
       },
     },
     {
       name: "channel",
-      channelId: "C0CHANNEL",
+      channelId: "CCONFIGCHANNEL1",
       slackConfig: {
         channels: {
-          C0CHANNEL: {},
+          CCONFIGCHANNEL1: {},
         },
       },
     },
@@ -429,7 +463,7 @@ describe("resolveSlackChannelType", () => {
   it("keeps successful Slack metadata authoritative over configured fallback", async () => {
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {
-        id: "C0CHANNEL",
+        id: "CAUTHORITATIVE1",
         is_mpim: false,
       },
     });
@@ -441,12 +475,12 @@ describe("resolveSlackChannelType", () => {
             slack: {
               botToken: "xoxb-test",
               dm: {
-                groupChannels: ["C0CHANNEL"],
+                groupChannels: ["CAUTHORITATIVE1"],
               },
             },
           },
         } as never,
-        channelId: "C0CHANNEL",
+        channelId: "CAUTHORITATIVE1",
       }),
     ).resolves.toEqual({
       type: "channel",
@@ -458,7 +492,7 @@ describe("resolveSlackChannelType", () => {
       .mockRejectedValueOnce(new Error("temporary_failure"))
       .mockResolvedValueOnce({
         channel: {
-          id: "D0AEWSDHAQH",
+          id: "DRETRYLOOKUP1",
           is_im: true,
           user: "U09G2DJ0275",
         },
@@ -475,7 +509,7 @@ describe("resolveSlackChannelType", () => {
     await expect(
       resolveSlackConversationInfo({
         cfg,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DRETRYLOOKUP1",
       }),
     ).resolves.toEqual({
       type: "dm",
@@ -483,7 +517,7 @@ describe("resolveSlackChannelType", () => {
     await expect(
       resolveSlackConversationInfo({
         cfg,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DRETRYLOOKUP1",
       }),
     ).resolves.toEqual({
       type: "dm",
@@ -500,12 +534,12 @@ describe("resolveSlackChannelType", () => {
           channels: {
             slack: {
               dm: {
-                groupChannels: ["D0AEWSDHAQH"],
+                groupChannels: ["DNATIVEOVERRIDE1"],
               },
             },
           },
         } as never,
-        channelId: "D0AEWSDHAQH",
+        channelId: "DNATIVEOVERRIDE1",
       }),
     ).resolves.toEqual({
       type: "dm",
@@ -533,32 +567,32 @@ describe("resolveSlackChannelType", () => {
     for (let index = 0; index < cacheMaxEntries; index++) {
       await resolveSlackConversationInfo({
         cfg,
-        channelId: `C${index.toString().padStart(8, "0")}`,
+        channelId: `C${index.toString().padStart(10, "0")}`,
       });
     }
     expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries);
 
     await resolveSlackConversationInfo({
       cfg,
-      channelId: "C00000000",
+      channelId: "C0000000000",
     });
     expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries);
 
     await resolveSlackConversationInfo({
       cfg,
-      channelId: `C${cacheMaxEntries.toString().padStart(8, "0")}`,
+      channelId: `C${cacheMaxEntries.toString().padStart(10, "0")}`,
     });
     expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries + 1);
 
     await resolveSlackConversationInfo({
       cfg,
-      channelId: "C00000001",
+      channelId: "C0000000001",
     });
     expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries + 2);
 
     await resolveSlackConversationInfo({
       cfg,
-      channelId: "C00000000",
+      channelId: "C0000000000",
     });
     expect(conversationsInfoMock).toHaveBeenCalledTimes(cacheMaxEntries + 2);
   });
@@ -566,7 +600,7 @@ describe("resolveSlackChannelType", () => {
   it("preserves the channel-type wrapper contract", async () => {
     conversationsInfoMock.mockResolvedValueOnce({
       channel: {
-        id: "G123",
+        id: "GWRAPPERCONTRACT1",
         is_mpim: true,
       },
     });
@@ -580,7 +614,7 @@ describe("resolveSlackChannelType", () => {
             },
           },
         } as never,
-        channelId: "G123",
+        channelId: "GWRAPPERCONTRACT1",
       }),
     ).resolves.toBe("group");
   });

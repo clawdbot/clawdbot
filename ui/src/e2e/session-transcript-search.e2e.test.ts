@@ -5,6 +5,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -145,7 +146,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("01-initial.png");
 
@@ -178,11 +179,235 @@ describeControlUiE2e("Control UI session transcript search", () => {
     await result.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
     await result.click();
-    await expect.poll(() => page?.url()).toContain("session=agent%3Amain%3Alaunch");
+    await expect
+      .poll(() => (page ? new URL(page.url()).pathname : ""))
+      .toBe(controlUiSessionPath("agent:main:launch"));
     await page
       .getByText("The nebula launch checklist is ready.", { exact: true })
       .waitFor({ state: "visible", timeout: 10_000 });
     await captureUiProof("04-matching-chat.png");
+  });
+
+  it("clears transcript matches when switching from active to archived sessions", async () => {
+    const timestamp = Date.parse("2026-08-26T12:00:00.000Z");
+    context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 1000, width: 1440 },
+      ...(captureProof
+        ? { recordVideo: { dir: artifactDir, size: { height: 1000, width: 1440 } } }
+        : {}),
+    });
+    page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      sessionArchiveFiltering: true,
+      methodResponses: {
+        "sessions.list": {
+          count: 2,
+          defaults: { contextTokens: null, model: null, modelProvider: null },
+          path: "",
+          sessions: [
+            {
+              key: "agent:main:active",
+              label: "Active task",
+              kind: "direct",
+              updatedAt: timestamp,
+            },
+            {
+              key: "agent:main:archived",
+              label: "Archived task",
+              kind: "direct",
+              archived: true,
+              updatedAt: timestamp,
+            },
+          ],
+          ts: timestamp,
+        },
+        "sessions.search": {
+          results: [
+            {
+              messageId: "message-active",
+              role: "assistant",
+              score: 1,
+              sessionId: "session-active",
+              sessionKey: "agent:main:active",
+              snippet: "Release notes from the active task.",
+              timestamp,
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    const search = page.getByRole("search", { name: "Search transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    await input.fill("Release notes");
+    await input.press("Enter");
+    await page.getByText("Release notes from the active task.", { exact: true }).waitFor();
+    expect((await gateway.getRequests("sessions.search"))[0]?.params).toMatchObject({
+      sessionKeys: ["agent:main:active"],
+    });
+
+    await page.locator('.sessions-view-segment wa-radio[value="archived"]').click();
+    await expect.poll(() => new URL(page!.url()).searchParams.get("status")).toBe("archived");
+    await page.locator(".session-data-row").getByText("Archived task", { exact: true }).waitFor();
+    await captureUiProof("filter-scope.png");
+    expect(await page.locator(".sessions-transcript-search__result").count()).toBe(0);
+    expect(await input.inputValue()).toBe("Release notes");
+    await gateway.setMethodResponse("sessions.search", { results: [] });
+    await input.press("Enter");
+    await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(2);
+    expect((await gateway.getRequests("sessions.search"))[1]?.params).toMatchObject({
+      sessionKeys: ["agent:main:archived"],
+    });
+  });
+
+  it("finds a transcript when updated session order moves across a paged roster", async () => {
+    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
+    const first = { key: "agent:main:first", kind: "direct", updatedAt: timestamp };
+    const moved = { key: "agent:main:moved", kind: "direct", updatedAt: timestamp + 1 };
+    const missed = { key: "agent:main:missed", kind: "direct", updatedAt: timestamp - 1 };
+    const defaults = { contextTokens: null, model: null, modelProvider: null };
+    const result = (sessions: (typeof first)[], offset: number, hasMore: boolean) => ({
+      count: sessions.length,
+      defaults,
+      hasMore,
+      nextOffset: hasMore ? offset + sessions.length : null,
+      offset,
+      path: "",
+      sessions,
+      totalCount: 3,
+      ts: timestamp,
+    });
+    context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 800, width: 1200 },
+    });
+    page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      methodResponses: {
+        "sessions.list": result([first, moved], 0, true),
+        "sessions.search": {
+          results: [
+            {
+              messageId: "message-missed",
+              role: "assistant",
+              score: 1,
+              sessionId: "missed",
+              sessionKey: missed.key,
+              snippet: "the recovered launch code",
+              timestamp,
+            },
+          ],
+        },
+      },
+    });
+
+    await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    const input = page.getByRole("searchbox", { name: "Search session transcripts" });
+    await input.waitFor({ state: "visible", timeout: 10_000 });
+    await gateway.setMethodResponse("sessions.list", {
+      cases: [
+        { match: { offset: 2 }, response: result([moved], 2, false) },
+        { response: result([first, missed], 0, true) },
+      ],
+    });
+    await input.fill("launch code");
+    await input.press("Enter");
+
+    await page.getByText("the recovered launch code").waitFor({ state: "visible" });
+    await expect.poll(async () => gateway.getRequests("sessions.search")).toHaveLength(1);
+    expect((await gateway.getRequests("sessions.search"))[0]?.params).toEqual({
+      agentId: "main",
+      limit: 25,
+      query: "launch code",
+      sessionKeys: [first.key, missed.key, moved.key],
+    });
+  });
+
+  it.each([
+    {
+      label: "a later session page cannot be loaded",
+      response: null,
+      message: /Unable to load all sessions for transcript search\./,
+      proofFile: "05-incomplete-roster-error.png",
+    },
+    {
+      label: "the session pagination cursor stops advancing",
+      response: {
+        count: 0,
+        hasMore: true,
+        nextOffset: 50,
+        offset: 50,
+        sessions: [],
+      },
+      message: /Session pagination did not advance during transcript search\./,
+      proofFile: "06-stalled-roster-error.png",
+    },
+  ])("shows a retryable search error when $label", async (testCase) => {
+    const timestamp = Date.parse("2026-07-12T14:30:00.000Z");
+    context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 800, width: 1200 },
+    });
+    page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.search"],
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            { match: { offset: 50 }, response: testCase.response },
+            {
+              response: {
+                count: 1,
+                defaults: { contextTokens: null, model: null, modelProvider: null },
+                hasMore: true,
+                nextOffset: 50,
+                offset: 0,
+                path: "",
+                sessions: [
+                  {
+                    key: "agent:main:visible",
+                    kind: "direct",
+                    label: "Visible session",
+                    updatedAt: timestamp,
+                  },
+                ],
+                totalCount: 51,
+                ts: timestamp,
+              },
+            },
+          ],
+        },
+        "sessions.search": { results: [] },
+      },
+    });
+
+    await page.goto(`${server?.baseUrl ?? ""}sessions`);
+    const search = page.getByRole("search", { name: "Search transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
+    await input.waitFor({ state: "visible", timeout: 10_000 });
+    await input.fill("needle");
+    await input.press("Enter");
+
+    await page
+      .locator(".sessions-transcript-search__notice--danger")
+      .getByText(testCase.message)
+      .waitFor({ state: "visible", timeout: 10_000 });
+    await page.getByRole("button", { name: "Retry" }).waitFor({ state: "visible" });
+    await expect
+      .poll(async () =>
+        (await gateway.getRequests("sessions.list")).some(
+          (request) => (request.params as { offset?: number } | undefined)?.offset === 50,
+        ),
+      )
+      .toBe(true);
+    expect(await gateway.getRequests("sessions.search")).toHaveLength(0);
+    await captureUiProof(testCase.proofFile);
   });
 
   it("ignores stale results and exposes indexing and request errors", async () => {
@@ -218,7 +443,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     const submit = search.getByRole("button", { name: "Search" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await input.fill("   ");
@@ -286,6 +511,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
     });
     page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup"],
       methodResponses: {
         "sessions.list": {
           count: 0,
@@ -299,7 +525,7 @@ describeControlUiE2e("Control UI session transcript search", () => {
 
     await page.goto(`${server?.baseUrl ?? ""}sessions`);
     const search = page.getByRole("search", { name: "Search transcripts" });
-    const input = search.getByRole("searchbox", { name: "Search thread transcripts" });
+    const input = search.getByRole("searchbox", { name: "Search session transcripts" });
     await input.waitFor({ state: "visible", timeout: 10_000 });
     await expect.poll(() => input.isDisabled()).toBe(true);
     await page

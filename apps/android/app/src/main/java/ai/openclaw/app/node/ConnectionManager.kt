@@ -14,7 +14,7 @@ import android.os.Build
 /**
  * Builds gateway connect metadata from current Android permissions, settings, and device identity.
  */
-class ConnectionManager(
+class ConnectionManager internal constructor(
   private val prefs: SecurePrefs,
   private val cameraEnabled: () -> Boolean,
   private val locationMode: () -> LocationMode,
@@ -29,6 +29,7 @@ class ConnectionManager(
   private val voiceWakeAvailable: () -> Boolean,
   private val mobileUiAvailable: () -> Boolean,
   private val inlineWidgetsAvailable: () -> Boolean,
+  private val permissionSnapshot: () -> AndroidPermissionSnapshot,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
@@ -53,6 +54,7 @@ class ConnectionManager(
 
     internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
     internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
+    internal const val USAGE_REFRESHING_CLIENT_CAPABILITY = "usage-refreshing"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
       val normalized =
@@ -158,6 +160,9 @@ class ConnectionManager(
   /** Builds the gateway-advertised capability list from current permission and feature state. */
   fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
 
+  /** Builds the current independently grantable Android permission surface. */
+  fun buildPermissions(): Map<String, Boolean> = permissionSnapshot().gatewayPermissions()
+
   /**
    * Debug Android builds advertise a dev version so gateway logs do not look like release clients.
    */
@@ -213,7 +218,7 @@ class ConnectionManager(
       scopes = emptyList(),
       caps = buildCapabilities(),
       commands = buildInvokeCommands(),
-      permissions = emptyMap(),
+      permissions = buildPermissions(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
@@ -229,6 +234,7 @@ class ConnectionManager(
         buildList {
           add(AGENT_KIND_CLIENT_CAPABILITY)
           if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+          add(USAGE_REFRESHING_CLIENT_CAPABILITY)
         },
       commands = emptyList(),
       permissions = emptyMap(),

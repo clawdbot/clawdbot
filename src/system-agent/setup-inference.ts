@@ -1,10 +1,12 @@
 export {
   listSetupInferenceAuthOptions,
   listSetupInferenceManualProviders,
+  listSetupInferencePrepareOptions,
 } from "./setup-inference-auth-options.js";
 export type {
   SetupInferenceAuthOption,
   SetupInferenceManualProvider,
+  SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 export type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 export {

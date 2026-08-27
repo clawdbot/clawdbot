@@ -6,10 +6,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-
-function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(target, key);
-}
+import { hasOwnKey, visitChannelEntries } from "./legacy-config-record-shared.js";
 
 function cleanupEmptyRecord(parent: Record<string, unknown>, key: string): void {
   const value = getRecord(parent[key]);
@@ -257,31 +254,13 @@ function hasLegacyThreadBindingSpawnSplit(value: unknown): boolean {
   );
 }
 
-function hasLegacyThreadBindingTtlInAccounts(value: unknown): boolean {
-  const accounts = getRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((entry) =>
-    hasLegacyThreadBindingTtl(getRecord(entry)?.threadBindings),
-  );
-}
-
-function hasLegacyThreadBindingSpawnSplitInAccounts(value: unknown): boolean {
-  const accounts = getRecord(value);
-  if (!accounts) {
-    return false;
-  }
-  return Object.values(accounts).some((entry) =>
-    hasLegacyThreadBindingSpawnSplit(getRecord(entry)?.threadBindings),
-  );
-}
-
-function migrateThreadBindingsTtlHoursForPath(params: {
+type ThreadBindingMigrationParams = {
   owner: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
-}): boolean {
+};
+
+function migrateThreadBindingsTtlHoursForPath(params: ThreadBindingMigrationParams): boolean {
   const threadBindings = getRecord(params.owner.threadBindings);
   if (!threadBindings || !hasOwnKey(threadBindings, "ttlHours")) {
     return false;
@@ -322,11 +301,7 @@ function resolveMigratedSpawnSessions(
   return subagentBool && acpBool;
 }
 
-function migrateThreadBindingsSpawnSessionsForPath(params: {
-  owner: Record<string, unknown>;
-  pathPrefix: string;
-  changes: string[];
-}): boolean {
+function migrateThreadBindingsSpawnSessionsForPath(params: ThreadBindingMigrationParams): boolean {
   const threadBindings = getRecord(params.owner.threadBindings);
   if (!threadBindings || !hasLegacyThreadBindingSpawnSplit(threadBindings)) {
     return false;
@@ -363,24 +338,15 @@ function migrateThreadBindingsSpawnSessionsForPath(params: {
   return true;
 }
 
-function hasLegacyThreadBindingTtlInAnyChannel(value: unknown): boolean {
-  const channels = getRecord(value);
-  if (!channels) {
-    return false;
-  }
-  return Object.values(channels).some((entry) => {
-    const channel = getRecord(entry);
-    if (!channel) {
-      return false;
-    }
-    return (
-      hasLegacyThreadBindingTtl(channel.threadBindings) ||
-      hasLegacyThreadBindingTtlInAccounts(channel.accounts)
-    );
-  });
+function migrateThreadBindingsForPath(params: ThreadBindingMigrationParams): void {
+  migrateThreadBindingsTtlHoursForPath(params);
+  migrateThreadBindingsSpawnSessionsForPath(params);
 }
 
-function hasLegacyThreadBindingSpawnSplitInAnyChannel(value: unknown): boolean {
+function hasLegacyThreadBindingInAnyChannel(
+  value: unknown,
+  matcher: (value: unknown) => boolean,
+): boolean {
   const channels = getRecord(value);
   if (!channels) {
     return false;
@@ -391,8 +357,10 @@ function hasLegacyThreadBindingSpawnSplitInAnyChannel(value: unknown): boolean {
       return false;
     }
     return (
-      hasLegacyThreadBindingSpawnSplit(channel.threadBindings) ||
-      hasLegacyThreadBindingSpawnSplitInAccounts(channel.accounts)
+      matcher(channel.threadBindings) ||
+      Object.values(getRecord(channel.accounts) ?? {}).some((account) =>
+        matcher(getRecord(account)?.threadBindings),
+      )
     );
   });
 }
@@ -408,7 +376,7 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
     path: ["channels"],
     message:
       'channels.<id>.threadBindings.ttlHours was renamed to channels.<id>.threadBindings.idleHours. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyThreadBindingTtlInAnyChannel(value),
+    match: (value) => hasLegacyThreadBindingInAnyChannel(value, hasLegacyThreadBindingTtl),
   },
   {
     path: ["session", "threadBindings"],
@@ -420,7 +388,7 @@ const THREAD_BINDING_RULES: LegacyConfigRule[] = [
     path: ["channels"],
     message:
       'channels.<id>.threadBindings.spawnSubagentSessions/spawnAcpSessions were replaced by channels.<id>.threadBindings.spawnSessions. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyThreadBindingSpawnSplitInAnyChannel(value),
+    match: (value) => hasLegacyThreadBindingInAnyChannel(value, hasLegacyThreadBindingSpawnSplit),
   },
 ];
 
@@ -486,9 +454,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
     id: "channels.webchat-remove",
     describe: "Remove retired WebChat channel config",
     legacyRules: WEBCHAT_CHANNEL_RULES,
-    apply: (raw, changes) => {
-      migrateRetiredWebchatChannelConfig(raw, changes);
-    },
+    apply: migrateRetiredWebchatChannelConfig,
   }),
   defineLegacyConfigMigration({
     id: "legacy-group-routing->channel-groups",
@@ -505,9 +471,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
     id: "feishu.accounts.botName->name",
     describe: "Move legacy Feishu account botName config to account name",
     legacyRules: FEISHU_ACCOUNT_RULES,
-    apply: (raw, changes) => {
-      migrateFeishuAccountBotName(raw, changes);
-    },
+    apply: migrateFeishuAccountBotName,
   }),
   defineLegacyConfigMigration({
     id: "thread-bindings.ttlHours->idleHours",
@@ -517,17 +481,7 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
     apply: (raw, changes) => {
       const session = getRecord(raw.session);
       if (session) {
-        migrateThreadBindingsTtlHoursForPath({
-          owner: session,
-          pathPrefix: "session",
-          changes,
-        });
-        migrateThreadBindingsSpawnSessionsForPath({
-          owner: session,
-          pathPrefix: "session",
-          changes,
-        });
-        raw.session = session;
+        migrateThreadBindingsForPath({ owner: session, pathPrefix: "session", changes });
       }
 
       const channels = getRecord(raw.channels);
@@ -535,46 +489,11 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
         return;
       }
 
-      for (const [channelId, channelRaw] of Object.entries(channels)) {
-        const channel = getRecord(channelRaw);
-        if (!channel) {
-          continue;
-        }
-        migrateThreadBindingsTtlHoursForPath({
-          owner: channel,
-          pathPrefix: `channels.${channelId}`,
-          changes,
+      for (const channelId of Object.keys(channels)) {
+        visitChannelEntries(raw, channelId, (owner, pathPrefix) => {
+          migrateThreadBindingsForPath({ owner, pathPrefix, changes });
         });
-        migrateThreadBindingsSpawnSessionsForPath({
-          owner: channel,
-          pathPrefix: `channels.${channelId}`,
-          changes,
-        });
-
-        const accounts = getRecord(channel.accounts);
-        if (accounts) {
-          for (const [accountId, accountRaw] of Object.entries(accounts)) {
-            const account = getRecord(accountRaw);
-            if (!account) {
-              continue;
-            }
-            migrateThreadBindingsTtlHoursForPath({
-              owner: account,
-              pathPrefix: `channels.${channelId}.accounts.${accountId}`,
-              changes,
-            });
-            migrateThreadBindingsSpawnSessionsForPath({
-              owner: account,
-              pathPrefix: `channels.${channelId}.accounts.${accountId}`,
-              changes,
-            });
-            accounts[accountId] = account;
-          }
-          channel.accounts = accounts;
-        }
-        channels[channelId] = channel;
       }
-      raw.channels = channels;
     },
   }),
 ];

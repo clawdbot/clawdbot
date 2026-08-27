@@ -1,6 +1,6 @@
 // Generated file. Do not edit directly.
 // Source: src/infra/host-env-security-policy.json
-// Regenerate: node scripts/generate-host-env-security-policy-swift.mjs --write
+// Regenerate: node --import tsx scripts/generate-host-env-security-policy-swift.mts --write
 
 import Foundation
 
@@ -62,6 +62,7 @@ enum HostEnvSecurityPolicy {
         "CPP",
         "CURL_HOME",
         "CXX",
+        "CXXCPP",
         "C_INCLUDE_PATH",
         "DATABASE_URL",
         "DENO_DIR",
@@ -244,6 +245,7 @@ enum HostEnvSecurityPolicy {
         "CORECLR_PROFILER",
         "CPP",
         "CXX",
+        "CXXCPP",
         "DOTNET_ADDITIONAL_DEPS",
         "DOTNET_STARTUP_HOOKS",
         "ELIXIR_ERL_OPTIONS",

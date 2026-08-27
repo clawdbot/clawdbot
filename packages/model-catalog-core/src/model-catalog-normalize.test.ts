@@ -14,6 +14,7 @@ describe("model catalog normalization", () => {
             headers: {
               "x-provider": "openai",
             },
+            defaultModel: " gpt-5.4 ",
             defaultUtilityModel: " gpt-5.6-luna ",
             models: [
               {
@@ -27,6 +28,12 @@ describe("model catalog normalization", () => {
                 input: ["text", "image", "document", "audio"],
                 reasoning: true,
                 contextWindow: 256000,
+                contextWindows: [
+                  { id: "1m", label: " 1M ", contextWindow: 1_000_000 },
+                  { id: "invalid", label: "Invalid", contextWindow: 0 },
+                  { id: "200k", label: " 200K ", contextWindow: 200_000 },
+                ],
+                contextWindowDefault: " 1m ",
                 contextTokens: 200000,
                 maxTokens: 128000,
                 thinkingLevelMap: {
@@ -56,18 +63,23 @@ describe("model catalog normalization", () => {
                 },
                 compat: {
                   supportsTools: true,
+                  codeMode: " preferred ",
                   openRouterRouting: {
-                    only: ["anthropic", 1],
+                    only: [" anthropic ", "", 1],
                     allow_fallbacks: false,
                     require_parameters: "no",
                   },
-                  vercelGatewayRouting: { order: ["anthropic", 1], only: "openai" },
+                  vercelGatewayRouting: {
+                    order: [" anthropic ", "", 1],
+                    only: "openai",
+                  },
                   zaiToolStream: true,
                   cacheControlFormat: "anthropic",
                   sendSessionAffinityHeaders: true,
                   sendSessionIdHeader: false,
                   supportsEagerToolInputStreaming: false,
                   supportsLongCacheRetention: true,
+                  supportsJsonSchemaResponseFormat: true,
                   requiresReasoningContentOnAssistantMessages: true,
                   supportsStore: "yes",
                   thinkingFormat: "together",
@@ -75,9 +87,9 @@ describe("model catalog normalization", () => {
                 },
                 status: "preview",
                 statusReason: "rolling out",
-                replaces: ["gpt-5.3"],
+                replaces: [" gpt-5.3 ", ""],
                 replacedBy: "gpt-5.5",
-                tags: ["default"],
+                tags: [" default ", ""],
               },
               {
                 id: "",
@@ -126,6 +138,7 @@ describe("model catalog normalization", () => {
           headers: {
             "x-provider": "openai",
           },
+          defaultModel: "gpt-5.4",
           defaultUtilityModel: "gpt-5.6-luna",
           models: [
             {
@@ -139,6 +152,11 @@ describe("model catalog normalization", () => {
               input: ["text", "image", "document"],
               reasoning: true,
               contextWindow: 256000,
+              contextWindows: [
+                { id: "200k", label: "200K", contextWindow: 200_000 },
+                { id: "1m", label: "1M", contextWindow: 1_000_000 },
+              ],
+              contextWindowDefault: "1m",
               contextTokens: 200000,
               maxTokens: 128000,
               thinkingLevelMap: { off: null, minimal: "low", max: "max" },
@@ -158,6 +176,7 @@ describe("model catalog normalization", () => {
               },
               compat: {
                 supportsTools: true,
+                codeMode: "preferred",
                 openRouterRouting: { only: ["anthropic"], allow_fallbacks: false },
                 vercelGatewayRouting: { order: ["anthropic"] },
                 zaiToolStream: true,
@@ -166,6 +185,7 @@ describe("model catalog normalization", () => {
                 sendSessionIdHeader: false,
                 supportsEagerToolInputStreaming: false,
                 supportsLongCacheRetention: true,
+                supportsJsonSchemaResponseFormat: true,
                 requiresReasoningContentOnAssistantMessages: true,
                 thinkingFormat: "together",
               },
@@ -218,6 +238,12 @@ describe("model catalog normalization", () => {
               "x-model": "gpt-5.4",
             },
             input: ["image"],
+            contextTokens: 64_000,
+            maxTokens: 4096,
+            thinkingLevelMap: { off: null, high: " high " },
+            cost: { input: 0, output: 2 },
+            compat: { supportsTools: false },
+            upstreamModel: "other/gpt-5.4",
           },
         ],
       },
@@ -233,6 +259,11 @@ describe("model catalog normalization", () => {
         name: "GPT-5.4",
         source: "manifest",
         input: ["image"],
+        contextTokens: 64_000,
+        maxTokens: 4096,
+        thinkingLevelMap: { off: null, high: "high" },
+        cost: { input: 0, output: 2 },
+        compat: { supportsTools: false },
         reasoning: false,
         status: "available",
         api: "openai-responses",
@@ -245,5 +276,204 @@ describe("model catalog normalization", () => {
     ]);
     expect(buildModelCatalogRef("OpenAI", "GPT-5.4")).toBe("openai/GPT-5.4");
     expect(buildModelCatalogMergeKey("OpenAI", "GPT-5.4")).toBe("openai::gpt-5.4");
+  });
+
+  it("normalizes complete provider routing, pricing, reasoning, and image limits", () => {
+    const tier = { input: 0, output: 2, cacheRead: 0, cacheWrite: 1, range: [128] };
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          OpenAI: {
+            models: [
+              {
+                id: " gpt-5.4 ",
+                headers: Object.fromEntries([
+                  ["x-safe", " value "],
+                  ["__proto__", "polluted"],
+                  ["constructor", "polluted"],
+                  ["prototype", "polluted"],
+                ]),
+                cost: {
+                  input: 0,
+                  output: 2,
+                  cacheWrite: 1,
+                  tieredPricing: [tier, { ...tier, range: [-1] }, { input: 1, range: [0, 2] }],
+                },
+                mediaInput: {
+                  image: {
+                    maxBytes: 4096,
+                    maxPixels: 1024,
+                    maxSidePx: 64,
+                    preferredSidePx: 32,
+                    tokenMode: "tile",
+                  },
+                },
+                compat: {
+                  supportsPromptCacheKey: true,
+                  toolSchemaProfile: " strict ",
+                  toolCallArgumentsEncoding: " json ",
+                  visibleReasoningDetailTypes: [" summary ", ""],
+                  supportedReasoningEfforts: [" low ", " high "],
+                  unsupportedToolSchemaKeywords: [" pattern ", ""],
+                  reasoningEffortMap: { " low ": " minimal ", empty: "  " },
+                  maxTokensField: "max_completion_tokens",
+                  thinkingFormat: "openrouter",
+                  openRouterRouting: {
+                    allow_fallbacks: false,
+                    require_parameters: true,
+                    data_collection: "deny",
+                    zdr: true,
+                    enforce_distillable_text: true,
+                    order: [" openai ", ""],
+                    only: [" anthropic "],
+                    ignore: [" bad "],
+                    quantizations: [" fp8 "],
+                    sort: { by: " throughput ", partition: null },
+                    max_price: { prompt: " 0.5 ", completion: 2, image: 0, audio: 3, request: 4 },
+                    preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+                    preferred_max_latency: 1,
+                  },
+                  vercelGatewayRouting: { only: [" openai "], order: [" anthropic "] },
+                },
+              },
+            ],
+          },
+        },
+      },
+      { ownedProviders: new Set([" OpenAI "]) },
+    );
+
+    expect(catalog?.providers?.openai?.models).toEqual([
+      {
+        id: "gpt-5.4",
+        headers: { "x-safe": "value" },
+        cost: { input: 0, output: 2, cacheWrite: 1, tieredPricing: [tier] },
+        mediaInput: {
+          image: {
+            maxBytes: 4096,
+            maxPixels: 1024,
+            maxSidePx: 64,
+            preferredSidePx: 32,
+            tokenMode: "tile",
+          },
+        },
+        compat: {
+          supportsPromptCacheKey: true,
+          toolSchemaProfile: "strict",
+          toolCallArgumentsEncoding: "json",
+          visibleReasoningDetailTypes: ["summary"],
+          supportedReasoningEfforts: ["low", "high"],
+          unsupportedToolSchemaKeywords: ["pattern"],
+          reasoningEffortMap: { low: "minimal" },
+          maxTokensField: "max_completion_tokens",
+          thinkingFormat: "openrouter",
+          openRouterRouting: {
+            allow_fallbacks: false,
+            require_parameters: true,
+            data_collection: "deny",
+            zdr: true,
+            enforce_distillable_text: true,
+            order: ["openai"],
+            only: ["anthropic"],
+            ignore: ["bad"],
+            quantizations: ["fp8"],
+            sort: { by: "throughput", partition: null },
+            max_price: { prompt: "0.5", completion: 2, image: 0, audio: 3, request: 4 },
+            preferred_min_throughput: { p50: 10, p75: 20, p90: 30, p99: 40 },
+            preferred_max_latency: 1,
+          },
+          vercelGatewayRouting: { only: ["openai"], order: ["anthropic"] },
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    { name: "non-record catalog", value: null },
+    { name: "unowned provider", value: { providers: { anthropic: { models: [{ id: "x" }] } } } },
+    { name: "missing model id", value: { providers: { openai: { models: [{ id: "  " }] } } } },
+    { name: "unowned alias", value: { aliases: { alias: { provider: "anthropic" } } } },
+    { name: "invalid suppression", value: { suppressions: [{ provider: "openai" }] } },
+    { name: "unknown discovery", value: { discovery: { openai: "unknown" } } },
+  ])("rejects a $name instead of publishing an empty catalog", ({ value }) => {
+    expect(normalizeModelCatalog(value, { ownedProviders: new Set(["openai"]) })).toBeUndefined();
+  });
+
+  it("sorts provider rows and drops invalid models while preserving model overrides", () => {
+    expect(
+      normalizeModelCatalogProviderRows({
+        provider: " OpenAI ",
+        providerCatalog: {
+          headers: { "x-provider": " default ", "x-override": " old " },
+          models: [
+            { id: "z-model", headers: { "x-override": " new " } },
+            { id: "  " },
+            { id: "a-model", mediaInput: { image: { tokenMode: "detail", maxBytes: 1 } } },
+          ],
+        },
+        source: "runtime-refresh",
+      }),
+    ).toMatchObject([
+      {
+        id: "a-model",
+        provider: "openai",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+        mediaInput: { image: { tokenMode: "detail", maxBytes: 1 } },
+      },
+      { id: "z-model", headers: { "x-provider": "default", "x-override": "new" } },
+    ]);
+  });
+
+  it("bounds selectable context windows and keeps the default inside the cap", () => {
+    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
+      id: `window-${index}`,
+      label: `Window ${index}`,
+      contextWindow: 20 - index,
+    }));
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "example",
+      providerCatalog: {
+        models: [{ id: "model", contextWindows, contextWindowDefault: "window-3" }],
+      },
+      source: "manifest",
+    });
+
+    expect(row?.contextWindows).toHaveLength(16);
+    expect(row?.contextWindows?.map((option) => option.contextWindow)).toEqual([
+      5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    ]);
+    expect(row?.contextWindowDefault).toBe("window-3");
+  });
+
+  it.each([
+    { name: "an omitted default", contextWindowDefault: undefined },
+    { name: "an undeclared default", contextWindowDefault: "missing" },
+    { name: "a default dropped by the option cap", contextWindowDefault: "window-19" },
+  ])("drops the selection tuple with $name", ({ contextWindowDefault }) => {
+    const contextWindows = Array.from({ length: 20 }, (_, index) => ({
+      id: `window-${index}`,
+      label: `Window ${index}`,
+      contextWindow: 20 - index,
+    }));
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "example",
+      providerCatalog: {
+        models: [
+          {
+            id: "model",
+            contextWindows,
+            ...(contextWindowDefault ? { contextWindowDefault } : {}),
+          },
+        ],
+      },
+      source: "manifest",
+    });
+
+    // Options without a selectable default would render no picker control, so
+    // the normalized row must drop the whole tuple, not just the default.
+    expect(row?.contextWindows).toBeUndefined();
+    expect(row?.contextWindowDefault).toBeUndefined();
   });
 });

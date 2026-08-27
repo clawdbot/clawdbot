@@ -1,14 +1,15 @@
 import Foundation
+import OpenClawKit
 
-enum ExecSecurity: String, CaseIterable, Codable, Identifiable, Sendable {
-    case deny
-    case allowlist
-    case full
+typealias ExecSecurity = ExecApprovalsSecurity
+typealias ExecAsk = ExecApprovalsAsk
+typealias ExecAllowlistEntry = ExecApprovalsAllowlistEntry
+typealias ExecApprovalsDefaults = ExecApprovalsDefaultsDocument
+typealias ExecApprovalsAgent = ExecApprovalsAgentDocument
+typealias ExecApprovalsSocketConfig = ExecApprovalsSocketDocument
+typealias ExecApprovalsFile = ExecApprovalsDocument
 
-    var id: String {
-        rawValue
-    }
-
+extension ExecApprovalsSecurity {
     var title: String {
         switch self {
         case .deny: "Deny"
@@ -28,60 +29,7 @@ enum ExecSecurity: String, CaseIterable, Codable, Identifiable, Sendable {
     }
 }
 
-enum ExecApprovalQuickMode: String, CaseIterable, Identifiable {
-    case deny
-    case ask
-    case allow
-
-    var id: String {
-        rawValue
-    }
-
-    var title: String {
-        switch self {
-        case .deny: "Deny"
-        case .ask: "Always Ask"
-        case .allow: "Always Allow"
-        }
-    }
-
-    var security: ExecSecurity {
-        switch self {
-        case .deny: .deny
-        case .ask: .allowlist
-        case .allow: .full
-        }
-    }
-
-    var ask: ExecAsk {
-        switch self {
-        case .deny: .off
-        case .ask: .onMiss
-        case .allow: .off
-        }
-    }
-
-    static func from(security: ExecSecurity, ask _: ExecAsk) -> ExecApprovalQuickMode {
-        switch security {
-        case .deny:
-            .deny
-        case .full:
-            .allow
-        case .allowlist:
-            .ask
-        }
-    }
-}
-
-enum ExecAsk: String, CaseIterable, Codable, Identifiable, Sendable {
-    case off
-    case onMiss = "on-miss"
-    case always
-
-    var id: String {
-        rawValue
-    }
-
+extension ExecApprovalsAsk {
     var title: String {
         switch self {
         case .off: "Never Ask"
@@ -134,80 +82,6 @@ struct ExecAllowlistRejectedEntry: Equatable {
     let reason: ExecAllowlistPatternValidationReason
 }
 
-struct ExecAllowlistEntry: Codable, Hashable, Identifiable, Sendable {
-    var id: String
-    var pattern: String
-    var source: String?
-    var commandText: String?
-    var argPattern: String?
-    var lastUsedAt: Double?
-    var lastUsedCommand: String?
-    var lastResolvedPath: String?
-
-    init(
-        id: String = UUID().uuidString,
-        pattern: String,
-        source: String? = nil,
-        commandText: String? = nil,
-        argPattern: String? = nil,
-        lastUsedAt: Double? = nil,
-        lastUsedCommand: String? = nil,
-        lastResolvedPath: String? = nil)
-    {
-        self.id = id
-        self.pattern = pattern
-        self.source = source
-        self.commandText = commandText
-        self.argPattern = argPattern
-        self.lastUsedAt = lastUsedAt
-        self.lastUsedCommand = lastUsedCommand
-        self.lastResolvedPath = lastResolvedPath
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case pattern
-        case source
-        case commandText
-        case argPattern
-        case lastUsedAt
-        case lastUsedCommand
-        case lastResolvedPath
-    }
-
-    init(from decoder: Decoder) throws {
-        if let container = try? decoder.singleValueContainer(),
-           let legacyPattern = try? container.decode(String.self)
-        {
-            self.init(pattern: legacyPattern.trimmingCharacters(in: .whitespacesAndNewlines))
-            return
-        }
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedID = try container.decodeIfPresent(String.self, forKey: .id)
-        let id = decodedID.flatMap { $0.isEmpty ? nil : $0 } ?? UUID().uuidString
-        try self.init(
-            id: id,
-            pattern: container.decode(String.self, forKey: .pattern),
-            source: container.decodeIfPresent(String.self, forKey: .source),
-            commandText: container.decodeIfPresent(String.self, forKey: .commandText),
-            argPattern: container.decodeIfPresent(String.self, forKey: .argPattern),
-            lastUsedAt: container.decodeIfPresent(Double.self, forKey: .lastUsedAt),
-            lastUsedCommand: container.decodeIfPresent(String.self, forKey: .lastUsedCommand),
-            lastResolvedPath: container.decodeIfPresent(String.self, forKey: .lastResolvedPath))
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.id, forKey: .id)
-        try container.encode(self.pattern, forKey: .pattern)
-        try container.encodeIfPresent(self.source, forKey: .source)
-        try container.encodeIfPresent(self.argPattern, forKey: .argPattern)
-        try container.encodeIfPresent(self.lastUsedAt, forKey: .lastUsedAt)
-        try container.encodeIfPresent(self.lastUsedCommand, forKey: .lastUsedCommand)
-        try container.encodeIfPresent(self.lastResolvedPath, forKey: .lastResolvedPath)
-    }
-}
-
 struct ExecAllowlistUse: Sendable {
     let match: ExecAllowlistEntry
     let resolvedPath: String?
@@ -221,38 +95,6 @@ struct ExecAllowlistEntryMatchKey: Hashable, Sendable {
         self.pattern = Data(pattern.utf8)
         self.argPattern = Data((argPattern ?? "").utf8)
     }
-}
-
-struct ExecApprovalsDefaults: Codable, Sendable {
-    var security: ExecSecurity?
-    var ask: ExecAsk?
-    var askFallback: ExecSecurity?
-    var autoAllowSkills: Bool?
-}
-
-struct ExecApprovalsAgent: Codable, Sendable {
-    var security: ExecSecurity?
-    var ask: ExecAsk?
-    var askFallback: ExecSecurity?
-    var autoAllowSkills: Bool?
-    var allowlist: [ExecAllowlistEntry]?
-
-    var isEmpty: Bool {
-        self.security == nil && self.ask == nil && self.askFallback == nil && self
-            .autoAllowSkills == nil && (self.allowlist?.isEmpty ?? true)
-    }
-}
-
-struct ExecApprovalsSocketConfig: Codable, Sendable {
-    var path: String?
-    var token: String?
-}
-
-struct ExecApprovalsFile: Codable, Sendable {
-    var version: Int
-    var socket: ExecApprovalsSocketConfig?
-    var defaults: ExecApprovalsDefaults?
-    var agents: [String: ExecApprovalsAgent]?
 }
 
 struct ExecApprovalsSnapshot: Codable, Sendable {
@@ -288,7 +130,18 @@ enum ExecApprovalsMutationError: Error, Equatable, Sendable {
 }
 
 enum ExecApprovalsReadError: Error, Equatable, Sendable {
+    case migrationRequired(ExecApprovalsLegacyMigrationRequiredError)
     case unavailable
+
+    var message: String {
+        switch self {
+        case let .migrationRequired(error):
+            "Exec approvals need migration — run openclaw doctor --fix with " +
+                "OPENCLAW_STATE_DIR set to \(error.stateDirectoryURL.path)."
+        case .unavailable:
+            "Exec approvals unavailable. Retry to refresh."
+        }
+    }
 }
 
 struct ExecApprovalsResolved: Sendable {

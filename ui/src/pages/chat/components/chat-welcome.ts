@@ -26,9 +26,15 @@ type ChatWelcomeProps = {
   hint?: unknown;
   /** Rendered between the hero and the recents (the new-session draft composer). */
   composer?: unknown;
+  /** Hide recents and suggestions when the surrounding flow must stay ephemeral. */
+  hideSecondaryContent?: boolean;
+  /** Visually retire secondary content while the new-session draft is active. */
+  fadeSecondaryContent?: boolean;
   sessions?: SessionsListResult | null;
   sessionKey?: string;
   sessionHost?: UiSessionDefaultsHost | null;
+  modelSetupRequired?: boolean;
+  onModelSetup?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onOpenSession?: (sessionKey: string) => void;
@@ -155,20 +161,36 @@ function renderWelcomeHero(
   const avatar = resolveAssistantAvatarUrl(props);
   const avatarText = avatar ? null : resolveAssistantTextAvatar(props.assistantAvatar);
   return html`
-    ${avatar
-      ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
-      : avatarText
-        ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
-            ${avatarText}
-          </div>`
-        : renderWelcomeClawd()}
-    <h2>${name}</h2>
-    <p class="agent-chat__hint">${props.hint}</p>
+    <div class="agent-chat__welcome-identity">
+      ${avatar
+        ? html`<img class="agent-chat__welcome-avatar" src=${avatar} alt=${name} />`
+        : avatarText
+          ? html`<div class="agent-chat__avatar agent-chat__avatar--text" aria-label=${name}>
+              ${avatarText}
+            </div>`
+          : renderWelcomeClawd()}
+      <div class="agent-chat__welcome-identity-copy">
+        <h2>${name}</h2>
+        <p class="agent-chat__hint">${props.hint}</p>
+      </div>
+    </div>
   `;
 }
 
 /** The start-screen welcome block, shared by the empty chat and the new-session draft. */
 export function renderWelcomeState(props: ChatWelcomeProps) {
+  if (props.modelSetupRequired) {
+    return html`
+      <div class="agent-chat__welcome agent-chat__welcome--setup" role="alert">
+        ${renderWelcomeClawd()}
+        <h2>${t("modelSetup.required.title")}</h2>
+        <p class="agent-chat__hint">${t("modelSetup.required.body")}</p>
+        <button class="btn primary" type="button" @click=${props.onModelSetup}>
+          ${t("modelSetup.required.action")}
+        </button>
+      </div>
+    `;
+  }
   const recentSessions = selectWelcomeRecentSessions(props);
   let fileDragDepth = 0;
   const mascotFor = (event: DragEvent): WelcomeMascot | null => {
@@ -222,9 +244,21 @@ export function renderWelcomeState(props: ChatWelcomeProps) {
             )}`,
       })}
       ${props.composer ?? nothing}
-      ${recentSessions.length > 0
-        ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
-        : renderWelcomeSuggestions(props)}
+      ${props.hideSecondaryContent
+        ? nothing
+        : html`<div
+            class="agent-chat__welcome-secondary ${props.fadeSecondaryContent
+              ? "agent-chat__welcome-secondary--hidden"
+              : ""}"
+            aria-hidden=${props.fadeSecondaryContent ? "true" : "false"}
+            ?inert=${props.fadeSecondaryContent}
+          >
+            <div class="agent-chat__welcome-secondary-inner">
+              ${recentSessions.length > 0
+                ? renderWelcomeRecentSessions(recentSessions, props.onOpenSession)
+                : renderWelcomeSuggestions(props)}
+            </div>
+          </div>`}
     </div>
   `;
 }

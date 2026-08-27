@@ -28,6 +28,7 @@ public struct OpenClawChatWindowShell: View {
     private let talkControl: OpenClawChatTalkControl?
     private let voiceNoteControl: OpenClawChatVoiceNoteControl?
     private let speech: OpenClawChatSpeechController?
+    private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     /// `showsAssistantTrace` remains as a source-compatible convenience that sets both display options.
     public init(
@@ -39,7 +40,8 @@ public struct OpenClawChatWindowShell: View {
         emptyAssistantPrompts: [OpenClawChatView.StarterPrompt] = [],
         talkControl: OpenClawChatTalkControl? = nil,
         voiceNoteControl: OpenClawChatVoiceNoteControl? = nil,
-        speech: OpenClawChatSpeechController? = nil)
+        speech: OpenClawChatSpeechController? = nil,
+        mediaPlaybackAllowed: @escaping @MainActor @Sendable () -> Bool = { true })
     {
         _viewModel = State(initialValue: viewModel)
         self.userAccent = userAccent
@@ -49,6 +51,7 @@ public struct OpenClawChatWindowShell: View {
         self.talkControl = talkControl
         self.voiceNoteControl = voiceNoteControl
         self.speech = speech
+        self.mediaPlaybackAllowed = mediaPlaybackAllowed
     }
 
     public var body: some View {
@@ -68,7 +71,8 @@ public struct OpenClawChatWindowShell: View {
                 emptyAssistantPrompts: self.emptyAssistantPrompts,
                 talkControl: self.talkControl,
                 voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech)
+                speech: self.speech,
+                mediaPlaybackAllowed: self.mediaPlaybackAllowed)
                 .navigationTitle(self.activeSessionTitle)
                 .navigationSubtitle(self.subtitle)
                 .toolbar { self.detailToolbar }
@@ -386,7 +390,10 @@ public struct OpenClawChatWindowShell: View {
                 Task { await self.viewModel.forkSession(key: self.activeSessionKey) }
             } label: {
                 chatWindowActionLabel(
-                    LocalizedStringKey(String(localized: "Fork")),
+                    LocalizedStringKey(
+                        self.activeSessionEntry?.hasActiveRun == true
+                            ? String(localized: "Fork from last completed message")
+                            : String(localized: "Fork")),
                     systemImage: "arrow.triangle.branch")
             }
 
@@ -414,15 +421,17 @@ public struct OpenClawChatWindowShell: View {
                     systemImage: self.activeSessionEntry?.unread == true ? "envelope.open" : "envelope.badge")
             }
 
-            if self.activeSessionEntry?.isArchived == true || self.activeSessionEntry.map({
+            if self.activeSessionEntry.map({
                 ChatSessionSidebarModel.canArchiveSession(
                     $0,
                     mainSessionKey: self.viewModel.resolvedMainSessionKey)
             }) == true {
                 Button {
-                    self.viewModel.setSessionArchived(
-                        key: self.activeSessionKey,
-                        archived: self.activeSessionEntry?.isArchived != true)
+                    if let activeSessionEntry = self.activeSessionEntry {
+                        self.viewModel.setSessionArchived(
+                            activeSessionEntry,
+                            archived: !activeSessionEntry.isArchived)
+                    }
                 } label: {
                     chatWindowActionLabel(
                         LocalizedStringKey(self.activeSessionEntry?.isArchived == true

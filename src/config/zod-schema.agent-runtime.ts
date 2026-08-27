@@ -11,6 +11,7 @@ import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "./github-identity-profile-id.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
 import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
 import {
@@ -18,6 +19,7 @@ import {
   HumanDelaySchema,
   IdentitySchema,
   SecretInputSchema,
+  SsrFPolicyConfigSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
   TypingModeSchema,
@@ -92,17 +94,16 @@ export const HeartbeatSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (!val.every) {
-      return;
-    }
-    try {
-      parseDurationMs(val.every, { defaultUnit: "m" });
-    } catch {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["every"],
-        message: "invalid duration (use ms, s, m, h)",
-      });
+    if (val.every) {
+      try {
+        parseDurationMs(val.every, { defaultUnit: "m" });
+      } catch {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["every"],
+          message: "invalid duration (use ms, s, m, h)",
+        });
+      }
     }
 
     const active = val.activeHours;
@@ -279,8 +280,6 @@ const SandboxPruneSchema = z
 export const AgentContextLimitsSchema = z
   .object({
     memoryGetMaxChars: z.number().int().min(1).max(250_000).optional(),
-    memoryGetDefaultLines: z.number().int().min(1).max(5_000).optional(),
-    toolResultMaxChars: z.number().int().min(1).max(1_000_000).optional(),
     postCompactionMaxChars: z.number().int().min(1).max(50_000).optional(),
   })
   .strict()
@@ -429,15 +428,13 @@ const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    // Values are registered sensitive so exposed config redacts them. Names are
+    // validated at request time rather than here, because a fail-closed config
+    // error over one header typo would disable the whole surface.
+    headers: z.record(z.string(), z.string().register(sensitive)).optional(),
     readability: z.boolean().optional(),
     useTrustedEnvProxy: z.boolean().optional(),
-    ssrfPolicy: z
-      .object({
-        allowRfc2544BenchmarkRange: z.boolean().optional(),
-        allowIpv6UniqueLocalRange: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ssrfPolicy: SsrFPolicyConfigSchema.optional(),
   })
   .strict()
   .optional();
@@ -531,6 +528,8 @@ const ToolExecBaseShape = {
     .strict()
     .optional(),
   backgroundMs: z.number().int().positive().optional(),
+  // The documented global setting and per-agent override share one strict contract.
+  approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
   timeoutSeconds: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),
   notifyOnExit: z.boolean().optional(),
@@ -551,15 +550,6 @@ function addExecPolicyModeConflictIssue(
     message: "tools.exec.mode cannot be combined with tools.exec.security or tools.exec.ask",
   });
 }
-
-const AgentToolExecSchema = z
-  .object({
-    ...ToolExecBaseShape,
-    approvalRunningNoticeMs: z.number().int().nonnegative().optional(),
-  })
-  .strict()
-  .superRefine(addExecPolicyModeConflictIssue)
-  .optional();
 
 const ToolExecSchema = z
   .object(ToolExecBaseShape)
@@ -599,9 +589,10 @@ const ToolSearchSchema = z
 const CodeModeSchema = z
   .union([
     z.boolean(),
+    z.literal("auto"),
     z
       .object({
-        enabled: z.boolean().optional(),
+        enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
         runtime: z.literal("quickjs-wasi").optional(),
         mode: z.literal("only").optional(),
         languages: z.array(z.enum(["javascript", "typescript"])).optional(),
@@ -724,6 +715,21 @@ const MessageToolConfigSchema = z
   .strict()
   .optional();
 
+const GitHubToolIdentitySchema = z
+  .object({
+    profileId: z.string().regex(MANAGED_GITHUB_PROFILE_ID_PATTERN),
+    kind: z.literal("oauth").optional(),
+    gitAuthor: z
+      .object({
+        name: z.string().trim().min(1).optional(),
+        email: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
@@ -736,7 +742,8 @@ const AgentToolsSchema = z
       })
       .strict()
       .optional(),
-    exec: AgentToolExecSchema,
+    exec: ToolExecSchema,
+    github: GitHubToolIdentitySchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
@@ -762,22 +769,13 @@ export const MemorySearchSchema = z
     enabled: z.boolean().optional(),
     rememberAcrossConversations: z.boolean().optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
-    extraPaths: z.array(z.string()).optional(),
-    qmd: z
-      .object({
-        extraCollections: z
-          .array(
-            z
-              .object({
-                path: z.string(),
-                name: z.string().optional(),
-                pattern: z.string().optional(),
-              })
-              .strict(),
-          )
-          .optional(),
-      })
-      .strict()
+    extraPaths: z
+      .array(
+        z.union([
+          z.string(),
+          z.object({ path: z.string(), pattern: z.string().optional() }).strict(),
+        ]),
+      )
       .optional(),
     multimodal: z
       .object({
@@ -904,7 +902,6 @@ export const AgentModelPolicySchema = z
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
-    default: z.boolean().optional(),
     name: z.string().optional(),
     description: z.string().optional(),
     workspace: z.string().optional(),
@@ -940,11 +937,9 @@ export const AgentEntrySchema = z
       .optional(),
     humanDelay: HumanDelaySchema.optional(),
     typingMode: TypingModeSchema.optional(),
-    typingIntervalSeconds: z.number().int().positive().optional(),
     tts: AgentTtsConfigSchema,
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema.unwrap().omit({ visibleReplies: true }).optional(),
@@ -970,6 +965,7 @@ export const ToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     web: ToolsWebSchema,
+    github: GitHubToolIdentitySchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
     sessions: z
@@ -1026,12 +1022,7 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
-    experimental: z
-      .object({
-        planTool: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    updatePlan: z.boolean().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

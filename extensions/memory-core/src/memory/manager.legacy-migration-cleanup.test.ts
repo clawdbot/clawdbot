@@ -15,8 +15,7 @@ import {
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-runtime-mocks.js";
-import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
-import type { MemoryIndexManager } from "./manager.js";
+import { closeAllMemoryIndexManagers, MemoryIndexManager } from "./manager.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
@@ -35,7 +34,7 @@ describe("memory legacy migration cleanup", () => {
   afterEach(async () => {
     await manager?.close();
     manager = undefined;
-    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     if (originalStateDir === undefined) {
@@ -61,11 +60,15 @@ describe("memory legacy migration cleanup", () => {
           VALUES
             ('memory/deleted.md', 'memory', 'canonical-hash', 200, 20),
             ('sessions/excluded.jsonl', 'sessions', '', 200, 20);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
           'fts-only', 'obsolete saffronquasar', '[]', 200
         );
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
           'fts-only', 'obsolete ambercomet', '[]', 190
         );
@@ -156,11 +159,11 @@ describe("memory legacy migration cleanup", () => {
         },
       }) as OpenClawConfig;
     const cfg = createConfig({ provider: "none", vectorEnabled: false });
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
-    if (!result.manager) {
-      throw new Error(result.error ?? "memory manager missing");
+    const result = await MemoryIndexManager.get({ cfg, agentId: "main" });
+    if (!result) {
+      throw new Error("memory manager missing");
     }
-    manager = result.manager as unknown as MemoryIndexManager;
+    manager = result;
     expect(manager.status().fts?.available).toBe(true);
     expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
 
@@ -244,22 +247,25 @@ describe("memory legacy migration cleanup", () => {
     } finally {
       observerDb.close();
     }
-    await closeAllMemorySearchManagers();
-    manager = undefined;
-
-    const reloadResult = await getMemorySearchManager({
-      cfg: createConfig({
-        extensionPath: vectorExtensionPath,
-        provider: "openai",
-        vectorEnabled: true,
-      }),
-      agentId: "main",
+    // Exercise the later vector-enabled load directly. Recreating the public
+    // manager here also tests unrelated provider/cache retirement lifecycles.
+    const vectorState = Reflect.get(manager, "vector") as {
+      available: boolean | null;
+      enabled: boolean;
+      extensionPath?: string;
+    };
+    const vectorDb = new DatabaseSync(dbPath, { allowExtension: true });
+    const managerLoaded = await loadSqliteVecExtension({
+      db: vectorDb,
+      extensionPath: vectorExtensionPath,
     });
-    if (!reloadResult.manager) {
-      throw new Error(reloadResult.error ?? "reloaded memory manager missing");
-    }
-    manager = reloadResult.manager as unknown as MemoryIndexManager;
-    const reloadedDb = Reflect.get(manager, "db") as DatabaseSync;
+    expect(managerLoaded.ok, managerLoaded.error).toBe(true);
+    db.close();
+    Reflect.set(manager, "db", vectorDb);
+    vectorState.enabled = true;
+    vectorState.available = true;
+    vectorState.extensionPath = vectorExtensionPath;
+    Reflect.set(manager, "vectorReady", null);
     await expect(
       (
         manager as unknown as {
@@ -267,12 +273,14 @@ describe("memory legacy migration cleanup", () => {
         }
       ).loadVectorExtension(),
     ).resolves.toBe(false);
-    expect(reloadedDb.prepare("SELECT vec_version() AS version").get()).toEqual({
+    expect(vectorDb.prepare("SELECT vec_version() AS version").get()).toEqual({
       version: expect.any(String),
     });
-    expect(
-      reloadedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get(),
-    ).toEqual({ count: 2 });
+    expect(vectorDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual(
+      {
+        count: 2,
+      },
+    );
     expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 });

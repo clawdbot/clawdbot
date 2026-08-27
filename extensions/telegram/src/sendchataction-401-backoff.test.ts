@@ -125,7 +125,7 @@ describe("createTelegramSendChatActionHandler", () => {
 
     expect(handler.isSuspended()).toBe(true);
     expect(logger.mock.calls.at(-1)).toEqual([
-      "CRITICAL: sendChatAction suspended after 3 consecutive 401 errors. Bot token is likely invalid. Telegram may DELETE the bot if requests continue. Replace the token and restart: openclaw channels restart telegram",
+      "CRITICAL: sendChatAction suspended after 3 consecutive 401 errors. Bot token is likely invalid. Telegram may DELETE the bot if requests continue. Replace the Telegram token in config/env, then restart the Gateway.",
     ]);
 
     // Subsequent calls are silently skipped
@@ -354,7 +354,7 @@ describe("createTelegramSendChatActionHandler", () => {
 
     expect(handler.isSuspended()).toBe(true);
     expect(logger.mock.calls.at(-1)).toEqual([
-      "CRITICAL: sendChatAction suspended after 2 consecutive 401 errors. Bot token is likely invalid. Telegram may DELETE the bot if requests continue. Replace the token and restart: openclaw channels restart telegram",
+      "CRITICAL: sendChatAction suspended after 2 consecutive 401 errors. Bot token is likely invalid. Telegram may DELETE the bot if requests continue. Replace the Telegram token in config/env, then restart the Gateway.",
     ]);
   });
 

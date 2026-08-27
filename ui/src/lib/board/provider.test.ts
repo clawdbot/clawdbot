@@ -1,11 +1,14 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { GatewayBoardProvider } from "./gateway-provider.ts";
+import { registerBoardProviderLeaseCases } from "./provider.lease-cases.test-support.ts";
 import {
   acquireBoardProviderForSession,
   boardExists,
   boardProviderForSession,
   canvasWidgetNameForDocument,
-  GatewayBoardProvider,
+  hasLoadedBoardSnapshot,
   mcpAppWidgetNameForViewId,
   recordSessionBoardAvailability,
   sessionHasBoard,
@@ -68,44 +71,234 @@ describe("board providers", () => {
     });
   });
 
-  it("keeps older gateways without board methods on the null provider", () => {
+  registerBoardProviderLeaseCases(() => {
     mockLocation.search = "";
-    const provider = boardProviderForSession("agent:main:legacy", {} as never, false);
-
-    expect(provider.canPinWidgets).toBe(false);
-    expect(boardExists(provider.snapshot$.value)).toBe(false);
   });
 
-  it("updates pin capability independently from board availability", () => {
+  it("updates only the capabilities of the owning gateway board lease", async () => {
     mockLocation.search = "";
+    const sessionKey = "agent:main:lease-capability-update";
+    const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
     const client = {
-      request: vi.fn(),
+      request: vi.fn(async () => snapshot) as never,
       addEventListener: vi.fn(() => () => {}),
     };
-    const provider = boardProviderForSession(
-      "agent:main:pin-capability",
-      client as never,
+    const writable = acquireBoardProviderForSession(
+      sessionKey,
+      client,
       true,
+      true,
+      true,
+      true,
+      false,
+    );
+    const approver = acquireBoardProviderForSession(
+      sessionKey,
+      client,
+      true,
+      false,
+      false,
+      false,
+      true,
+    );
+
+    try {
+      await waitForFast(() => expect(writable.provider.snapshot$.value).toEqual(snapshot));
+
+      writable.update(client, true, {
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: false,
+      });
+
+      expect(writable.provider).toMatchObject({
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: false,
+      });
+      expect(approver.provider).toMatchObject({
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: true,
+      });
+      expect(client.request).toHaveBeenCalledOnce();
+      expect(client.addEventListener).toHaveBeenCalledOnce();
+
+      writable.update(client, true, {
+        canPinWidgets: true,
+        canPinMcpApps: true,
+        canMutate: true,
+        canGrant: false,
+      });
+
+      expect(writable.provider.canMutate).toBe(true);
+      expect(writable.provider.canPinWidgets).toBe(true);
+      expect(writable.provider.canPinMcpApps).toBe(true);
+      expect(writable.provider.canGrant).toBe(false);
+      expect(approver.provider.canGrant).toBe(true);
+      expect(approver.provider.canMutate).toBe(false);
+      expect(client.request).toHaveBeenCalledOnce();
+    } finally {
+      writable.release();
+      approver.release();
+    }
+  });
+
+  it("dispatches newly authorized board actions after upgrading a read-only lease", async () => {
+    mockLocation.search = "";
+    const sessionKey = "agent:main:lease-scope-upgrade";
+    const snapshot = {
+      sessionKey,
+      revision: 1,
+      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
+      widgets: [
+        {
+          name: "pending-widget",
+          tabId: "main",
+          contentKind: "html" as const,
+          sizeW: 6,
+          sizeH: 4,
+          position: 0,
+          grantState: "pending" as const,
+          revision: 1,
+        },
+      ],
+    };
+    const client = {
+      request: vi.fn(async () => snapshot) as never,
+      addEventListener: vi.fn(() => () => {}),
+    };
+    const lease = acquireBoardProviderForSession(
+      sessionKey,
+      client,
+      true,
+      false,
+      false,
       false,
       false,
     );
 
-    expect(provider.canPinWidgets).toBe(false);
-    expect(provider.canPinMcpApps).toBe(false);
-    expect(
-      boardProviderForSession(
-        "agent:main:pin-capability",
-        client as never,
-        true,
-        false,
-        true,
-        false,
-      ),
-    ).toBe(provider);
-    expect(provider.canPinWidgets).toBe(true);
-    expect(provider.canPinMcpApps).toBe(false);
-    boardProviderForSession("agent:main:pin-capability", client as never, true, false, true, true);
-    expect(provider.canPinMcpApps).toBe(true);
+    try {
+      await waitForFast(() => expect(lease.provider.snapshot$.value).toEqual(snapshot));
+      await expect(lease.provider.applyOps([])).rejects.toThrow();
+      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
+      expect(client.request).toHaveBeenCalledOnce();
+
+      lease.update(client, true, {
+        canPinWidgets: true,
+        canPinMcpApps: true,
+        canMutate: true,
+        canGrant: true,
+      });
+
+      await expect(lease.provider.applyOps([])).resolves.toBeUndefined();
+      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).resolves.toBeUndefined();
+      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).resolves.toBeUndefined();
+      await expect(lease.provider.grant("pending-widget", "granted")).resolves.toBeUndefined();
+      expect(client.request).toHaveBeenCalledTimes(5);
+      expect(client.request).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
+      expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+        sessionKey,
+        name: "canvas-cv-upgraded",
+        content: { kind: "canvas-doc", docId: "cv-upgraded" },
+      });
+      expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+        sessionKey,
+        name: mcpAppWidgetNameForViewId("app-upgraded"),
+        content: { kind: "mcp-app", viewId: "app-upgraded" },
+      });
+      expect(client.request).toHaveBeenCalledWith("board.widget.grant", {
+        sessionKey,
+        name: "pending-widget",
+        decision: "granted",
+        revision: 1,
+      });
+      expect(client.addEventListener).toHaveBeenCalledOnce();
+
+      lease.update(client, true, {
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: false,
+      });
+
+      await expect(lease.provider.applyOps([])).rejects.toThrow();
+      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
+      await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
+      expect(client.request).toHaveBeenCalledTimes(5);
+    } finally {
+      lease.release();
+    }
+  });
+
+  it("reconnects concurrent board leases through the same cached gateway transport", async () => {
+    mockLocation.search = "";
+    const sessionKey = "agent:main:shared-lease-reconnect";
+    const previousSnapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
+    const nextSnapshot = { ...previousSnapshot, revision: 2 };
+    const removePreviousListener = vi.fn();
+    const removeNextListener = vi.fn();
+    const previousClient = {
+      request: vi.fn(async () => previousSnapshot) as never,
+      addEventListener: vi.fn(() => removePreviousListener),
+    };
+    const nextClient = {
+      request: vi.fn(async () => nextSnapshot) as never,
+      addEventListener: vi.fn(() => removeNextListener),
+    };
+    const writer = acquireBoardProviderForSession(
+      sessionKey,
+      previousClient,
+      true,
+      true,
+      true,
+      true,
+      false,
+    );
+    const approver = acquireBoardProviderForSession(
+      sessionKey,
+      previousClient,
+      true,
+      false,
+      false,
+      false,
+      true,
+    );
+    const cached = boardProviderForSession(sessionKey);
+
+    try {
+      await waitForFast(() => expect(writer.provider.snapshot$.value).toEqual(previousSnapshot));
+
+      writer.update(nextClient, true, {
+        canPinWidgets: true,
+        canPinMcpApps: true,
+        canMutate: true,
+        canGrant: false,
+      });
+
+      await waitForFast(() => expect(writer.provider.snapshot$.value).toEqual(nextSnapshot));
+      expect(approver.provider.snapshot$.value).toEqual(nextSnapshot);
+      expect(boardProviderForSession(sessionKey)).toBe(cached);
+      expect(removePreviousListener).toHaveBeenCalledOnce();
+      expect(nextClient.addEventListener).toHaveBeenCalledOnce();
+      expect(nextClient.request).toHaveBeenCalledOnce();
+      expect(approver.provider.canGrant).toBe(true);
+      expect(approver.provider.canMutate).toBe(false);
+
+      writer.release();
+      expect(removeNextListener).not.toHaveBeenCalled();
+      approver.release();
+      expect(removeNextListener).toHaveBeenCalledOnce();
+    } finally {
+      writer.release();
+      approver.release();
+    }
   });
 
   it("disposes a released gateway provider and creates a fresh provider on reacquire", async () => {
@@ -126,7 +319,7 @@ describe("board providers", () => {
       },
     };
     const first = acquireBoardProviderForSession(snapshot.sessionKey, client as never);
-    await vi.waitFor(() => expect(first.provider.snapshot$.value).toEqual(snapshot));
+    await waitForFast(() => expect(first.provider.snapshot$.value).toEqual(snapshot));
     const command = vi.fn();
     first.provider.events.subscribe(command);
 
@@ -150,10 +343,42 @@ describe("board providers", () => {
 
     const second = acquireBoardProviderForSession(snapshot.sessionKey, client as never);
     expect(second.provider).not.toBe(first.provider);
-    await vi.waitFor(() => expect(second.provider.snapshot$.value).toEqual(snapshot));
+    await waitForFast(() => expect(second.provider.snapshot$.value).toEqual(snapshot));
     expect(listeners.size).toBe(1);
     second.release();
     expect(listeners.size).toBe(0);
+  });
+
+  it("preserves known board availability until the first gateway snapshot loads", async () => {
+    mockLocation.search = "";
+    const sessionKey = "agent:main:loading-board-availability";
+    const emptySnapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
+    let resolveSnapshot: ((snapshot: typeof emptySnapshot) => void) | undefined;
+    recordSessionBoardAvailability(sessionKey, true);
+    const lease = acquireBoardProviderForSession(sessionKey, {
+      request: vi.fn(
+        () =>
+          new Promise<typeof emptySnapshot>((resolve) => {
+            resolveSnapshot = resolve;
+          }),
+      ) as never,
+      addEventListener: () => () => {},
+    });
+
+    try {
+      expect(boardProviderForSession(sessionKey)).toBeInstanceOf(GatewayBoardProvider);
+      expect(hasLoadedBoardSnapshot(lease.provider)).toBe(false);
+      expect(sessionHasBoard(sessionKey)).toBe(true);
+
+      resolveSnapshot?.(emptySnapshot);
+      await waitForFast(() => expect(lease.provider.snapshot$.value).toEqual(emptySnapshot));
+
+      expect(hasLoadedBoardSnapshot(lease.provider)).toBe(true);
+      expect(sessionHasBoard(sessionKey)).toBe(false);
+    } finally {
+      resolveSnapshot?.(emptySnapshot);
+      lease.release();
+    }
   });
 
   it("preserves known availability when a provider is released before its first load", () => {
@@ -386,7 +611,7 @@ describe("board providers", () => {
         return () => {};
       },
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
+    await waitForFast(() => expect(provider.snapshot$.value.revision).toBe(1));
 
     listener?.({
       event: "board.changed",
@@ -455,7 +680,7 @@ describe("board providers", () => {
         return () => {};
       },
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+    await waitForFast(() => expect(provider.snapshot$.value).toEqual(initial));
 
     listener?.({
       event: "board.changed",
@@ -542,7 +767,7 @@ describe("board providers", () => {
         return () => {};
       },
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+    await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     listener?.({
       event: "board.changed",
@@ -597,7 +822,7 @@ describe("board providers", () => {
         return () => {};
       },
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+    await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     listener?.({
       event: "board.changed",
@@ -649,7 +874,7 @@ describe("board providers", () => {
       request: request as never,
       addEventListener: () => () => {},
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+    await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     const olderMutation = provider.applyOps([{ kind: "tab_delete", tabId: "main" }]);
     const newerMutation = provider.applyOps([
@@ -701,7 +926,7 @@ describe("board providers", () => {
       request: request as never,
       addEventListener: () => () => {},
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(populated));
+    await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     const refresh = provider.activate();
     await vi.waitFor(() => expect(getCount).toBe(2));
@@ -764,7 +989,7 @@ describe("board providers", () => {
       request: request as never,
       addEventListener: () => () => {},
     });
-    await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(initial));
+    await waitForFast(() => expect(provider.snapshot$.value).toEqual(initial));
 
     const refresh = provider.refreshWidgetFrame("alpha");
     await vi.waitFor(() => expect(getCount).toBe(2));

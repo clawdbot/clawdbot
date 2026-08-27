@@ -49,14 +49,9 @@ export function setCompactionSafeguardCancelReason(
   const current = getCompactionSafeguardRuntime(sessionManager);
   const trimmed = reason?.trim();
 
-  if (!current) {
-    if (!trimmed) {
-      return;
-    }
-    setCompactionSafeguardRuntime(sessionManager, { cancelReason: trimmed });
+  if (!current && !trimmed) {
     return;
   }
-
   const next = { ...current };
   if (trimmed) {
     next.cancelReason = trimmed;

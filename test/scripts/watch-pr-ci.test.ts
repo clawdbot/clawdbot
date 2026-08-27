@@ -1,15 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { chmodSync, writeFileSync } from "node:fs";
+import { delimiter, join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFindRunArgs,
+  classifyAttachedCiRun,
   classifyRollup,
   classifyRunAttachment,
+  collectRollupContexts,
   parseArgs,
   pollUntilDeadline,
   sanitizeCheckName,
   selectRunAfter,
-} from "../../scripts/watch-pr-ci.mjs";
+} from "../../scripts/watch-pr-ci.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const sha = "a".repeat(40);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("watch-pr-ci", () => {
   it("parses defaults and overrides", () => {
@@ -20,6 +27,7 @@ describe("watch-pr-ci", () => {
       attachTimeout: 900,
       timeout: 3600,
       interval: 120,
+      completion: "rollup",
     });
     expect(
       parseArgs([
@@ -35,6 +43,8 @@ describe("watch-pr-ci", () => {
         "90",
         "--interval",
         "5",
+        "--completion",
+        "ci-run",
       ]),
     ).toMatchObject({
       repo: "fork/project",
@@ -42,6 +52,7 @@ describe("watch-pr-ci", () => {
       attachTimeout: 30,
       timeout: 90,
       interval: 5,
+      completion: "ci-run",
     });
     expect(parseArgs(["1", sha.toUpperCase()]).headSha).toBe(sha);
   });
@@ -55,34 +66,103 @@ describe("watch-pr-ci", () => {
     expect(() => parseArgs(["1", sha, "--after", "0"])).toThrow(
       "--after must be a positive integer",
     );
+    expect(() => parseArgs(["1", sha, "--completion", "required"])).toThrow(
+      "--completion must be rollup or ci-run",
+    );
   });
 
   it("builds a pull-request-only run attachment query", () => {
     expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual([
-      "run",
-      "list",
-      "--repo",
-      "openclaw/openclaw",
-      "--commit",
-      sha,
-      "--workflow",
-      "ci.yml",
-      "--event",
-      "pull_request",
-      "--limit",
-      "1",
-      "--json",
-      "createdAt,databaseId",
+      "api",
+      "--method",
+      "GET",
+      "repos/openclaw/openclaw/actions/workflows/ci.yml/runs",
+      "-f",
+      "event=pull_request",
+      "-f",
+      `head_sha=${sha}`,
+      "-f",
+      "per_page=20",
     ]);
   });
 
   it("filters run ids at and before --after", () => {
-    const newer = { databaseId: 102, createdAt: "2026-07-23T02:00:00Z" };
-    const runs = [newer, { databaseId: 101, createdAt: "2026-07-23T01:00:00Z" }];
+    const newer = { id: 102, created_at: "2026-07-23T02:00:00Z" };
+    const runs = [newer, { id: 101, created_at: "2026-07-23T01:00:00Z" }];
     expect(selectRunAfter(runs, 101)).toBe(newer);
     expect(selectRunAfter(runs, 102)).toBeUndefined();
     expect(selectRunAfter(runs)).toBe(newer);
   });
+
+  it("skips newer draft runs without weakening the --after boundary", () => {
+    const skipped = { id: 103, conclusion: "skipped" };
+    const successful = { id: 102, conclusion: "success" };
+
+    expect(selectRunAfter([skipped, successful])).toBe(successful);
+    expect(selectRunAfter([skipped, successful], 101)).toBe(successful);
+    expect(selectRunAfter([skipped, successful], 102)).toBeUndefined();
+    expect(selectRunAfter([skipped])).toBeUndefined();
+    for (const conclusion of [null, "failure", "cancelled"]) {
+      const attachable = { id: 102, conclusion };
+      expect(selectRunAfter([skipped, attachable])).toBe(attachable);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "attaches to real CI when a newer draft workflow was skipped",
+    () => {
+      const binDir = tempDirs.make("openclaw-watch-pr-ci-");
+      const ghPath = join(binDir, "gh");
+      writeFileSync(
+        ghPath,
+        `#!/usr/bin/env bash
+case "$1 $2" in
+  "pr view") printf '{"state":"OPEN","mergeable":true,"headRefOid":"${sha}"}\\n' ;;
+  "api --method")
+    case " $* " in
+      *" per_page=1 "*) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"}]}\\n' ;;
+      *) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"},{"id":201,"conclusion":"success"}]}\\n' ;;
+    esac
+    ;;
+  "run view")
+    if [ "$3" = "202" ]; then
+      printf '{"status":"completed","conclusion":"skipped"}\\n'
+    else
+      printf '{"status":"completed","conclusion":"success"}\\n'
+    fi
+    ;;
+  *) printf 'unexpected gh invocation: %s\\n' "$*" >&2; exit 2 ;;
+esac
+`,
+      );
+      chmodSync(ghPath, 0o755);
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/watch-pr-ci.mjs",
+          "42",
+          sha,
+          "--completion",
+          "ci-run",
+          "--attach-timeout",
+          "1",
+          "--timeout",
+          "1",
+          "--interval",
+          "1",
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+        },
+      );
+
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(result.stdout).toContain("ATTACHED run=201");
+      expect(result.stdout).toContain("GREEN");
+    },
+  );
 
   it("sanitizes untrusted check names for terminal output", () => {
     expect(sanitizeCheckName("plain ASCII / check (1)")).toBe("plain ASCII / check (1)");
@@ -178,7 +258,7 @@ describe("watch-pr-ci", () => {
           nodes: [{ kind: "CheckRun", name: "unit", status: "COMPLETED", conclusion: "SUCCESS" }],
         },
       }),
-    ).toEqual({ verdict: "PENDING", pendingCount: 0, failingNames: [] });
+    ).toEqual({ verdict: "PENDING", pendingCount: 0, failingNames: [], supersededCount: 0 });
   });
 
   it("counts pending contexts without deriving the verdict from them", () => {
@@ -189,11 +269,27 @@ describe("watch-pr-ci", () => {
           nodes: [{ kind: "CheckRun", name: "unit", status: "IN_PROGRESS", conclusion: null }],
         },
       }),
-    ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [] });
+    ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 0 });
+  });
+
+  it("lets an attached successful CI run finish while an optional context remains pending", () => {
+    expect(
+      classifyRollup({
+        state: "PENDING",
+        contexts: {
+          nodes: [
+            { kind: "CheckRun", name: "optional proof", status: "IN_PROGRESS", conclusion: null },
+          ],
+        },
+      }).verdict,
+    ).toBe("PENDING");
+    expect(classifyAttachedCiRun({ status: "completed", conclusion: "success" })).toEqual({
+      verdict: "GREEN",
+    });
   });
 
   it.each(["FAILURE", "ERROR"])(
-    "classifies stale same-name cancellations for aggregate %s",
+    "keeps identity-less same-name cancellations failing for aggregate %s",
     (state) => {
       expect(
         classifyRollup({
@@ -212,11 +308,16 @@ describe("watch-pr-ci", () => {
             ],
           },
         }),
-      ).toEqual({ verdict: "STALE-CANCELLED", pendingCount: 0, failingNames: ["unit"] });
+      ).toEqual({
+        verdict: "FAILING",
+        pendingCount: 0,
+        failingNames: ["unit"],
+        supersededCount: 0,
+      });
     },
   );
 
-  it("does not soften a truncated failing rollup to stale-cancelled", () => {
+  it("keeps a truncated failing rollup failing", () => {
     expect(
       classifyRollup({
         state: "FAILURE",
@@ -232,6 +333,7 @@ describe("watch-pr-ci", () => {
       verdict: "FAILING",
       pendingCount: 0,
       failingNames: ["unit", "+2 more contexts not shown"],
+      supersededCount: 0,
     });
   });
 
@@ -248,6 +350,477 @@ describe("watch-pr-ci", () => {
           ],
         },
       }),
-    ).toEqual({ verdict: "FAILING", pendingCount: 0, failingNames: ["lint", "unit"] });
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["lint", "unit"],
+      supersededCount: 0,
+    });
+  });
+
+  it("ignores superseded workflow runs while replacements are in progress", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "Real behavior proof",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: {
+                workflowRun: { databaseId: 100, workflow: { databaseId: 10 } },
+              },
+            },
+            {
+              kind: "CheckRun",
+              name: "Real behavior proof",
+              status: "IN_PROGRESS",
+              conclusion: null,
+              checkSuite: {
+                workflowRun: { databaseId: 200, workflow: { databaseId: 10 } },
+              },
+            },
+            {
+              kind: "CheckRun",
+              name: "CI",
+              status: "IN_PROGRESS",
+              conclusion: null,
+              checkSuite: { workflowRun: { databaseId: 150, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({ verdict: "PENDING", pendingCount: 2, failingNames: [], supersededCount: 1 });
+  });
+
+  it.each<{
+    label: string;
+    name?: string;
+    conclusion?: string;
+    event?: string | null;
+    workflowId?: number | null;
+    newerRunId?: number;
+    newerWorkflowId?: number | null;
+    ciStatus?: string;
+    verdict?: string;
+  }>([
+    { label: "pending CI", ciStatus: "IN_PROGRESS", verdict: "PENDING" },
+    { label: "successful CI with a different check name", name: "target guard", verdict: "GREEN" },
+    { label: "latest target cancellation", newerRunId: 100 },
+    { label: "real target failure", conclusion: "FAILURE" },
+    { label: "another event's cancellation", event: "pull_request" },
+    { label: "another workflow", newerWorkflowId: 20 },
+    { label: "unknown event", event: null },
+    { label: "unknown visible workflow identity", workflowId: null },
+    { label: "unknown replacement workflow identity", newerWorkflowId: null },
+  ])(
+    "uses newer same-workflow target-run identity without hiding $label",
+    ({
+      name = "dispatch",
+      conclusion = "CANCELLED",
+      event = "pull_request_target",
+      workflowId = 10,
+      newerRunId = 200,
+      newerWorkflowId = 10,
+      ciStatus = "COMPLETED",
+      verdict = "FAILING",
+    }) => {
+      expect(
+        classifyRollup(
+          {
+            state: "FAILURE",
+            contexts: {
+              nodes: [
+                {
+                  kind: "CheckRun",
+                  name,
+                  status: "COMPLETED",
+                  conclusion,
+                  checkSuite: {
+                    workflowRun: {
+                      databaseId: 100,
+                      event: event ?? undefined,
+                      workflow: { databaseId: workflowId ?? undefined },
+                    },
+                  },
+                },
+                {
+                  kind: "CheckRun",
+                  name: "CI",
+                  status: ciStatus,
+                  conclusion: ciStatus === "COMPLETED" ? "SUCCESS" : null,
+                  checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
+                },
+              ],
+            },
+          },
+          [{ id: newerRunId, workflow_id: newerWorkflowId ?? undefined }],
+        ),
+      ).toEqual({
+        verdict,
+        pendingCount: ciStatus === "IN_PROGRESS" ? 1 : 0,
+        failingNames: verdict === "FAILING" ? [name] : [],
+        supersededCount: verdict === "FAILING" ? 0 : 1,
+      });
+    },
+  );
+
+  it("keeps only the newest same-run check attempt while its replacement is pending", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              databaseId: 1_000,
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              databaseId: 2_000,
+              name: "unit",
+              status: "IN_PROGRESS",
+              conclusion: null,
+              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({ verdict: "PENDING", pendingCount: 1, failingNames: [], supersededCount: 1 });
+  });
+
+  it("accepts a successful newest check attempt when the aggregate remains failed", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              databaseId: 1_000,
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              databaseId: 2_000,
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: { workflowRun: { databaseId: 500, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 });
+  });
+
+  it("accepts newest successful runs when the aggregate remains failed", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "old proof",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: {
+                workflowRun: { databaseId: 100, workflow: { databaseId: 10 } },
+              },
+            },
+            {
+              kind: "CheckRun",
+              name: "proof",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: {
+                workflowRun: { databaseId: 200, workflow: { databaseId: 10 } },
+              },
+            },
+            {
+              kind: "CheckRun",
+              name: "old CI",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: { workflowRun: { databaseId: 150, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              name: "CI",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: { workflowRun: { databaseId: 250, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 2 });
+  });
+
+  it("preserves a genuine failure from the newest workflow run", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "superseded cancellation",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["unit"],
+      supersededCount: 1,
+    });
+  });
+
+  it("preserves failures across interleaved distinct workflow identities", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "old deploy",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              checkSuite: { workflowRun: { databaseId: 300, workflow: { databaseId: 10 } } },
+            },
+            {
+              kind: "CheckRun",
+              name: "deploy",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["unit"],
+      supersededCount: 1,
+    });
+  });
+
+  it("keeps an older run's unique failing job visible", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              databaseId: 1_000,
+              name: "nightly-special",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              checkSuite: { workflowRun: { databaseId: 300, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              databaseId: 2_000,
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["nightly-special"],
+      supersededCount: 0,
+    });
+  });
+
+  it("supersedes same-name checks across runs of the same workflow", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          nodes: [
+            {
+              kind: "CheckRun",
+              databaseId: 1_000,
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "FAILURE",
+              checkSuite: { workflowRun: { databaseId: 300, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              databaseId: 2_000,
+              name: "unit",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: { workflowRun: { databaseId: 400, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({ verdict: "GREEN", pendingCount: 0, failingNames: [], supersededCount: 1 });
+  });
+
+  it("fails conservatively when unseen contexts may explain aggregate failure", () => {
+    expect(
+      classifyRollup({
+        state: "FAILURE",
+        contexts: {
+          totalCount: 3,
+          nodes: [
+            {
+              kind: "CheckRun",
+              name: "old CI",
+              status: "COMPLETED",
+              conclusion: "CANCELLED",
+              checkSuite: { workflowRun: { databaseId: 100, workflow: { databaseId: 20 } } },
+            },
+            {
+              kind: "CheckRun",
+              name: "CI",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              checkSuite: { workflowRun: { databaseId: 200, workflow: { databaseId: 20 } } },
+            },
+          ],
+        },
+      }),
+    ).toEqual({
+      verdict: "FAILING",
+      pendingCount: 0,
+      failingNames: ["status rollup", "+1 more contexts not shown"],
+      supersededCount: 1,
+    });
+  });
+
+  it("collects rollup contexts across pages", () => {
+    const cursors: Array<string | null> = [];
+    const result = collectRollupContexts((cursor) => {
+      cursors.push(cursor);
+      if (cursor === null) {
+        return {
+          statusCheckRollup: {
+            state: "PENDING",
+            contexts: {
+              totalCount: 2,
+              nodes: [{ kind: "CheckRun", name: "first" }],
+              pageInfo: { hasNextPage: true, endCursor: "next" },
+            },
+          },
+        };
+      }
+      return {
+        statusCheckRollup: {
+          state: "PENDING",
+          contexts: {
+            totalCount: 2,
+            nodes: [{ kind: "CheckRun", name: "second" }],
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      };
+    });
+
+    expect(cursors).toEqual([null, "next"]);
+    expect(result?.statusCheckRollup?.contexts?.totalCount).toBe(2);
+    expect(result?.statusCheckRollup?.contexts?.nodes?.map((node) => node.name)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("rejects rollup pages from a changed snapshot", () => {
+    expect(() =>
+      collectRollupContexts((cursor) => ({
+        headRefOid: "a".repeat(40),
+        statusCheckRollup: {
+          state: "PENDING",
+          contexts: {
+            totalCount: cursor === null ? 2 : 3,
+            nodes: [{ kind: "CheckRun", name: cursor === null ? "first" : "second" }],
+            pageInfo:
+              cursor === null
+                ? { hasNextPage: true, endCursor: "next" }
+                : { hasNextPage: false, endCursor: null },
+          },
+        },
+      })),
+    ).toThrow("rollup snapshot changed during pagination");
+  });
+
+  it("rejects a pagination read that loses an advertised page", () => {
+    expect(() =>
+      collectRollupContexts((cursor) =>
+        cursor === null
+          ? {
+              headRefOid: "a".repeat(40),
+              statusCheckRollup: {
+                state: "SUCCESS",
+                contexts: {
+                  totalCount: 2,
+                  nodes: [{ kind: "CheckRun", name: "first" }],
+                  pageInfo: { hasNextPage: true, endCursor: "next" },
+                },
+              },
+            }
+          : { headRefOid: "b".repeat(40), statusCheckRollup: null },
+      ),
+    ).toThrow("rollup snapshot changed during pagination");
+  });
+
+  it("caps rollup context collection at ten pages", () => {
+    let calls = 0;
+    const result = collectRollupContexts(() => {
+      calls += 1;
+      return {
+        statusCheckRollup: {
+          state: "FAILURE",
+          contexts: {
+            totalCount: 11,
+            nodes: [{ kind: "CheckRun", name: `page-${calls}` }],
+            pageInfo: { hasNextPage: true, endCursor: `cursor-${calls}` },
+          },
+        },
+      };
+    });
+
+    expect(calls).toBe(10);
+    expect(result?.statusCheckRollup?.contexts?.nodes).toHaveLength(10);
   });
 });

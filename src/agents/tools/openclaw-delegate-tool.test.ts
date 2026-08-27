@@ -32,6 +32,8 @@ describe("openclaw delegation tool", () => {
     if (!tool) {
       throw new Error("expected OpenClaw delegation tool");
     }
+    expect(tool.description).toContain("Gateway restart");
+    expect(tool.description).toContain("human approval");
 
     const result = await tool.execute("call-1", { message: "Add channel." });
 

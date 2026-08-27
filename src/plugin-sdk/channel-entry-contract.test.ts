@@ -104,6 +104,7 @@ function createBundledChannelEntry(params: {
   pluginId: string;
   registerCliMetadata?: (api: OpenClawPluginApi) => void;
   registerFull?: (api: OpenClawPluginApi) => void;
+  registerCapabilities?: (api: OpenClawPluginApi) => void;
 }) {
   return defineBundledChannelEntry({
     id: params.pluginId,
@@ -114,10 +115,31 @@ function createBundledChannelEntry(params: {
     runtime: { specifier: "./runtime.cjs", exportName: "setRuntime" },
     registerCliMetadata: params.registerCliMetadata,
     registerFull: params.registerFull,
+    registerCapabilities: params.registerCapabilities,
   });
 }
 
 describe("defineBundledChannelEntry", () => {
+  it("defers and memoizes config schema factories", () => {
+    const configSchema = {
+      schema: { type: "object" as const, additionalProperties: false },
+    };
+    const createConfigSchema = vi.fn(() => configSchema);
+    const entry = defineBundledChannelEntry({
+      id: "lazy-config-schema",
+      name: "Lazy Config Schema",
+      description: "lazy config schema test",
+      importMetaUrl: import.meta.url,
+      plugin: { specifier: "./unused.js" },
+      configSchema: createConfigSchema,
+    });
+
+    expect(createConfigSchema).not.toHaveBeenCalled();
+    expect(entry.configSchema).toBe(configSchema);
+    expect(entry.configSchema).toBe(configSchema);
+    expect(createConfigSchema).toHaveBeenCalledTimes(1);
+  });
+
   it("runs tool registrations without channel sidecar hydration during tool discovery", () => {
     const tempRoot = tempDirs.make("openclaw-bundled-entry-tools-");
     const runtimeMarker = path.join(tempRoot, "runtime-loaded");
@@ -128,6 +150,7 @@ describe("defineBundledChannelEntry", () => {
       runtimeMarker,
     });
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
       api.registerTool(
         {
@@ -145,6 +168,7 @@ describe("defineBundledChannelEntry", () => {
       pluginId,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("tool-discovery");
@@ -153,6 +177,7 @@ describe("defineBundledChannelEntry", () => {
     expect(api.registerChannel).not.toHaveBeenCalled();
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).toHaveBeenCalledWith(api);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
     expect(api.registerTool).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(runtimeMarker)).toBe(false);
   });
@@ -168,11 +193,13 @@ describe("defineBundledChannelEntry", () => {
     });
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = createBundledChannelEntry({
       importerPath,
       pluginId,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
 
     const api = createApi("discovery");
@@ -181,6 +208,7 @@ describe("defineBundledChannelEntry", () => {
     expect(api.registerChannel).toHaveBeenCalledTimes(1);
     expect(registerCliMetadata).toHaveBeenCalledWith(api);
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(api);
     expect(fs.existsSync(runtimeMarker)).toBe(true);
   });
 
@@ -195,17 +223,31 @@ describe("defineBundledChannelEntry", () => {
     });
     const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
     const registerFull = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerCapabilities = vi.fn<(api: OpenClawPluginApi) => void>();
     const entry = createBundledChannelEntry({
       importerPath,
       pluginId,
       registerCliMetadata,
       registerFull,
+      registerCapabilities,
     });
+
+    const cliApi = createApi("cli-metadata");
+    entry.register(cliApi);
+    expect(registerCliMetadata).toHaveBeenCalledWith(cliApi);
+    expect(registerCapabilities).not.toHaveBeenCalled();
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+    registerCliMetadata.mockClear();
+
+    entry.register(createApi("setup-only"));
+    expect(registerCapabilities).not.toHaveBeenCalled();
+    fs.rmSync(runtimeMarker, { force: true });
 
     entry.register(createApi("setup-runtime"));
     expect(fs.existsSync(runtimeMarker)).toBe(true);
     expect(registerCliMetadata).not.toHaveBeenCalled();
     expect(registerFull).not.toHaveBeenCalled();
+    expect(registerCapabilities).not.toHaveBeenCalled();
 
     fs.rmSync(runtimeMarker, { force: true });
     const fullApi = createApi("full");
@@ -213,6 +255,7 @@ describe("defineBundledChannelEntry", () => {
     expect(fs.existsSync(runtimeMarker)).toBe(true);
     expect(registerCliMetadata).toHaveBeenCalledWith(fullApi);
     expect(registerFull).toHaveBeenCalledWith(fullApi);
+    expect(registerCapabilities).toHaveBeenCalledExactlyOnceWith(fullApi);
   });
 });
 
@@ -457,7 +500,7 @@ describe("loadBundledEntryExportSync", () => {
     const channelEntryContract = await importFreshModule<
       typeof import("./channel-entry-contract.js")
     >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
-    const tempRoot = fs.realpathSync(tempDirs.make("openclaw-channel-entry-contract-"));
+    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
     fs.mkdirSync(pluginRoot, { recursive: true });
     const importerPath = path.join(pluginRoot, "setup-entry.js");
@@ -596,7 +639,7 @@ describe("loadBundledEntryExportSync", () => {
     expect(result.stderr).toMatch(/sourceLoaderCallMs=0(?:\.0+)?(?:\s|$)/u);
   });
 
-  it("can disable source-tree fallback for dist bundled entry checks", () => {
+  it("preserves presence-based source fallback disable semantics and cache modes", () => {
     stubPluginModuleLoaderJitiFactory(
       vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
     );
@@ -616,20 +659,29 @@ describe("loadBundledEntryExportSync", () => {
       "utf8",
     );
 
-    expect(
+    const loadSecretContract = () =>
       loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
         specifier: "./src/secret-contract.js",
         exportName: "sentinel",
-      }),
-    ).toBe(42);
+      });
 
-    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", "1");
+    expect(loadSecretContract()).toBe(42);
 
-    expect(() =>
-      loadBundledEntryExportSync<number>(pathToFileURL(importerPath).href, {
-        specifier: "./src/secret-contract.js",
-        exportName: "sentinel",
-      }),
-    ).toThrow(`resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", "enabled");
+    expect(loadSecretContract).toThrow(
+      `resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`,
+    );
+
+    for (const value of ["", "   ", "off", "no", " ON ", "arbitrary"]) {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", value);
+      expect(loadSecretContract).toThrow(
+        `resolved "${path.join(pluginRoot, "src", "secret-contract.js")}"`,
+      );
+    }
+
+    for (const value of ["0", " 0 ", "false", " FALSE "]) {
+      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK", value);
+      expect(loadSecretContract()).toBe(42);
+    }
   });
 });

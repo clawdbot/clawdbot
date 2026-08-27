@@ -2,13 +2,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
   embeddedAgentLog,
   formatToolAggregate,
   inferToolMetaFromArgs,
   resetAgentEventsForTest,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -20,10 +21,11 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
+
+export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 
 export {
   CodexAppServerEventProjector,
@@ -39,11 +41,9 @@ export {
   initializeGlobalHookRunner,
   it,
   onInternalDiagnosticEvent,
-  os,
   path,
   SessionManager,
   vi,
-  withTempDir,
 };
 export type { EmbeddedRunAttemptParams, DiagnosticEventPayload };
 
@@ -91,7 +91,9 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile).appendMessage(assistantMessage("history", Date.now()));
+  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+    assistantMessage("history", Date.now()),
+  );
   return {
     prompt: "hello",
     sessionId: "session-1",
@@ -104,10 +106,6 @@ export async function createParams(): Promise<EmbeddedRunAttemptParams> {
     thinkLevel: "medium",
     observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
-}
-
-export function trackTempDir(tempDir: string): void {
-  tempDirs.add(tempDir);
 }
 
 export async function createProjector(
@@ -285,11 +283,12 @@ export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNot
 export function appServerError(params: {
   message: string;
   willRetry: boolean;
+  codexErrorInfo?: string;
 }): ProjectorNotification {
   return forCurrentTurn("error", {
     error: {
       message: params.message,
-      codexErrorInfo: null,
+      codexErrorInfo: params.codexErrorInfo ?? null,
       additionalDetails: null,
     },
     willRetry: params.willRetry,

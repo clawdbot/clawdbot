@@ -10,8 +10,8 @@ type BoardPinPlacement = {
   after?: string;
 };
 
-type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
-type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
+export type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
+export type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
 
 export type BoardProvider = {
   readonly sessionKey: string;
@@ -19,6 +19,7 @@ export type BoardProvider = {
   readonly canGrant: boolean;
   readonly canPinWidgets: boolean;
   readonly canPinMcpApps: boolean;
+  readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   applyOps(ops: BoardOp[]): Promise<void>;
   grant(name: string, decision: "granted" | "rejected"): Promise<void>;

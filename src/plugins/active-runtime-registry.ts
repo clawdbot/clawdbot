@@ -1,16 +1,9 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
-import {
-  collectLivePluginRegistries,
-  getActivePluginChannelRegistry,
-  getActivePluginHttpRouteRegistry,
-  getActivePluginRegistry,
-  getActivePluginRegistryWorkspaceDir,
-} from "./runtime.js";
-
-export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
+import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
@@ -20,22 +13,16 @@ function isRuntimePluginRecordLoaded(plugin: PluginRecord): boolean {
   return plugin.status === "loaded" && (plugin.format === "bundle" || plugin.imported !== false);
 }
 
-// Plugin ids confirmed loaded across every live runtime registry surface
-// (active plus any pinned http-route/channel/session-extension registry), via
-// the canonical collectLivePluginRegistries() set. A plugin can stay live via a
-// pinned surface that diverged from the active registry, so reading "loaded"
-// from the active registry alone would mislabel it. No-op when the surfaces are
-// synced to the active registry (the common case).
-export function listLoadedRuntimePluginIdsAcrossSurfaces(): string[] {
-  const loaded: string[] = [];
-  for (const registry of collectLivePluginRegistries()) {
-    for (const plugin of registry.plugins ?? []) {
-      if (isRuntimePluginRecordLoaded(plugin)) {
-        loaded.push(plugin.id);
-      }
-    }
-  }
-  return normalizeSortedUniqueStringEntries(loaded);
+/** Lists runtime-loaded plugin ids from an immutable/request-scoped registry handle. */
+export function listRuntimePluginIdsFromRegistry(registry: PluginRegistry): string[] {
+  return normalizeSortedUniqueStringEntries(
+    registry.plugins.filter(isRuntimePluginRecordLoaded).map((plugin) => plugin.id),
+  );
+}
+
+export function listLoadedRuntimePluginIds(): string[] {
+  const registry = getActivePluginRegistry();
+  return registry ? listRuntimePluginIdsFromRegistry(registry) : [];
 }
 
 function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefined {
@@ -93,18 +80,27 @@ export function registryContainsRuntimePluginIds(
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
 
-function resolveSurfaceRegistry(
-  surface: ActiveRuntimePluginRegistrySurface,
-): PluginRegistry | null {
-  switch (surface) {
-    case "active":
-      return getActivePluginRegistry();
-    case "channel":
-      return getActivePluginChannelRegistry();
-    case "http-route":
-      return getActivePluginHttpRouteRegistry();
+export function registryMatchesManifestPluginIds(
+  registry: PluginRegistry,
+  manifestPlugins: readonly PluginManifestRecord[] | undefined,
+  pluginIds: readonly string[],
+): boolean {
+  if (!manifestPlugins) {
+    return false;
   }
-  return null;
+  const records = new Map(registry.plugins.map((plugin) => [plugin.id, plugin]));
+  const manifests = new Map(manifestPlugins.map((plugin) => [plugin.id, plugin]));
+  return pluginIds.every((pluginId) => {
+    const record = records.get(pluginId);
+    const manifest = manifests.get(pluginId);
+    return Boolean(
+      record &&
+      manifest &&
+      record.origin === manifest.origin &&
+      (record.origin === "bundled" ||
+        (record.rootDir === manifest.rootDir && record.source === manifest.source)),
+    );
+  });
 }
 
 export function getLoadedRuntimePluginRegistry(
@@ -113,19 +109,25 @@ export function getLoadedRuntimePluginRegistry(
     loadOptions?: PluginLoadOptions;
     workspaceDir?: string;
     requiredPluginIds?: readonly string[];
-    surface?: ActiveRuntimePluginRegistrySurface;
   } = {},
 ): PluginRegistry | undefined {
-  const surface = params.surface ?? "active";
   const requiredPluginIds = normalizeRequiredPluginIds(
     params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
   );
-  if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
+  if (params.loadOptions && requiredPluginIds?.length !== 0) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
+    if (compatible && registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
+      return compatible;
+    }
+    // Exact cache-key reuse fails for every caller whose options differ from the
+    // composition root's load (scoped ids, derived config, no gateway bindings),
+    // which used to force a cold scoped load even when the active registry already
+    // holds the requested runtime plugins. An explicit id list proves what the
+    // caller needs, so fall through to the containment check below; unscoped
+    // requests keep exact-key semantics because no id list bounds their intent.
+    if (requiredPluginIds === undefined) {
       return undefined;
     }
-    return compatible;
   }
 
   const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
@@ -133,7 +135,7 @@ export function getLoadedRuntimePluginRegistry(
   if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
     return undefined;
   }
-  const registry = resolveSurfaceRegistry(surface);
+  const registry = getActivePluginRegistry();
   if (!registry) {
     return undefined;
   }

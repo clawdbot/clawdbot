@@ -1,6 +1,12 @@
+import AVFoundation
 import Foundation
+import ImageIO
 import OpenClawKit
 import UniformTypeIdentifiers
+
+private enum ChatVideoAttachmentReadError: Error {
+    case tooLarge
+}
 
 #if canImport(AppKit)
 import AppKit
@@ -9,6 +15,10 @@ import UIKit
 #endif
 
 extension OpenClawChatViewModel {
+    nonisolated static var maxVideoAttachmentBytes: Int {
+        20 * 1024 * 1024
+    }
+
     public func addAttachments(urls: [URL]) {
         self.beginAttachmentStaging()
         Task {
@@ -54,6 +64,23 @@ extension OpenClawChatViewModel {
     public func removeAttachment(_ id: OpenClawPendingAttachment.ID) {
         attachments.removeAll { $0.id == id }
         applyDeferredExternalStateIfReady()
+    }
+
+    func restoreEditorAttachments(_ editorAttachments: [OpenClawChatEditorAttachment]?) {
+        self.attachments = (editorAttachments ?? []).enumerated().compactMap { index, attachment in
+            guard let data = Data(base64Encoded: attachment.data),
+                  data.count <= Self.maxAttachmentBytes,
+                  let contentType = UTType(mimeType: attachment.mimeType),
+                  contentType.conforms(to: .image)
+            else { return nil }
+            let fileExtension = contentType.preferredFilenameExtension ?? "img"
+            return OpenClawPendingAttachment(
+                url: nil,
+                data: data,
+                fileName: "image-\(index + 1).\(fileExtension)",
+                mimeType: attachment.mimeType,
+                preview: Self.previewImage(data: data))
+        }
     }
 
     /// True while replacing this model could move an attachment across chats.
@@ -142,13 +169,24 @@ extension OpenClawChatViewModel {
                 }
             }
             do {
-                let data = try await Task.detached { try Data(contentsOf: url) }.value
-                await self.addImageAttachment(
-                    url: url,
-                    data: data,
-                    fileName: url.lastPathComponent,
-                    mimeType: Self.mimeType(for: url) ?? "application/octet-stream",
-                    expectedSession: expectedSession)
+                let contentType = UTType(filenameExtension: url.pathExtension) ?? .data
+                if Self.isVideoType(contentType) {
+                    await self.addVideoAttachment(
+                        url: url,
+                        fileName: url.lastPathComponent,
+                        mimeType: contentType.preferredMIMEType ?? "application/octet-stream",
+                        expectedSession: expectedSession)
+                } else if contentType.conforms(to: .image) {
+                    let data = try await Task.detached { try Data(contentsOf: url) }.value
+                    await self.addImageAttachment(
+                        url: url,
+                        data: data,
+                        fileName: url.lastPathComponent,
+                        mimeType: Self.mimeType(for: url) ?? "application/octet-stream",
+                        expectedSession: expectedSession)
+                } else {
+                    self.errorText = String(localized: "Only image and video attachments are supported right now")
+                }
             } catch {
                 guard self.ownsAttachmentSession(expectedSession) else { return }
                 self.errorText = error.localizedDescription
@@ -220,6 +258,69 @@ extension OpenClawChatViewModel {
                 preview: preview))
     }
 
+    func addVideoAttachment(
+        url: URL,
+        fileName: String,
+        mimeType: String,
+        expectedSession: SessionSnapshot? = nil) async
+    {
+        guard self.ownsAttachmentSession(expectedSession) else { return }
+        do {
+            let data = try await Self.readVideoData(from: url)
+            guard self.ownsAttachmentSession(expectedSession) else { return }
+            await self.addVideoAttachment(
+                data: data,
+                fileName: fileName,
+                mimeType: mimeType,
+                contentType: UTType(filenameExtension: url.pathExtension) ?? .data,
+                expectedSession: expectedSession)
+        } catch ChatVideoAttachmentReadError.tooLarge {
+            guard self.ownsAttachmentSession(expectedSession) else { return }
+            self.errorText = String(
+                format: String(localized: "Attachment %@ exceeds the 20 MB video limit"),
+                fileName)
+        } catch {
+            guard self.ownsAttachmentSession(expectedSession) else { return }
+            self.errorText = error.localizedDescription
+        }
+    }
+
+    private func addVideoAttachment(
+        data: Data,
+        fileName: String,
+        mimeType: String,
+        contentType: UTType,
+        expectedSession: SessionSnapshot?) async
+    {
+        guard self.ownsAttachmentSession(expectedSession) else { return }
+        guard Self.isVideoType(contentType) else {
+            self.errorText = String(localized: "Only image and video attachments are supported right now")
+            return
+        }
+        guard data.count <= Self.maxVideoAttachmentBytes else {
+            self.errorText = String(
+                format: String(localized: "Attachment %@ exceeds the 20 MB video limit"),
+                fileName)
+            return
+        }
+
+        let normalizedMIME = contentType.preferredMIMEType ?? mimeType
+        guard normalizedMIME.lowercased().hasPrefix("video/") else {
+            self.errorText = String(localized: "Only image and video attachments are supported right now")
+            return
+        }
+        let thumbnailData = await Self.videoThumbnailData(
+            data: data,
+            fileExtension: contentType.preferredFilenameExtension ?? "mp4")
+        guard self.ownsAttachmentSession(expectedSession) else { return }
+        self.attachments.append(OpenClawPendingAttachment(
+            url: nil,
+            data: data,
+            fileName: fileName,
+            mimeType: normalizedMIME,
+            preview: thumbnailData.flatMap { Self.previewImage(data: $0) }))
+    }
+
     private func ownsAttachmentSession(_ expectedSession: SessionSnapshot?) -> Bool {
         expectedSession.map(self.isCurrentSession) ?? true
     }
@@ -232,5 +333,61 @@ extension OpenClawChatViewModel {
         #else
         nil
         #endif
+    }
+
+    private nonisolated static func isVideoType(_ contentType: UTType) -> Bool {
+        contentType.conforms(to: .movie) ||
+            (contentType.conforms(to: .audiovisualContent) && !contentType.conforms(to: .audio))
+    }
+
+    private nonisolated static func readVideoData(from url: URL) async throws -> Data {
+        try await Task.detached(priority: .userInitiated) {
+            let maximumBytes = Self.maxVideoAttachmentBytes
+            let values = try url.resourceValues(forKeys: [.fileSizeKey])
+            if let fileSize = values.fileSize, fileSize > maximumBytes {
+                throw ChatVideoAttachmentReadError.tooLarge
+            }
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            let data = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+            guard data.count <= maximumBytes else {
+                throw ChatVideoAttachmentReadError.tooLarge
+            }
+            return data
+        }.value
+    }
+
+    private nonisolated static func videoThumbnailData(
+        data: Data,
+        fileExtension: String) async -> Data?
+    {
+        await Task.detached(priority: .userInitiated) {
+            let fileURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("openclaw-upload-preview-\(UUID().uuidString)")
+                .appendingPathExtension(fileExtension)
+            defer { try? FileManager.default.removeItem(at: fileURL) }
+            do {
+                try data.write(to: fileURL, options: [.atomic])
+                let generator = AVAssetImageGenerator(asset: AVURLAsset(url: fileURL))
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 640, height: 640)
+                let image = try await generator.image(at: .zero).image
+                let encoded = NSMutableData()
+                guard let destination = CGImageDestinationCreateWithData(
+                    encoded,
+                    UTType.jpeg.identifier as CFString,
+                    1,
+                    nil)
+                else { return nil }
+                CGImageDestinationAddImage(
+                    destination,
+                    image,
+                    [kCGImageDestinationLossyCompressionQuality: 0.82] as CFDictionary)
+                guard CGImageDestinationFinalize(destination) else { return nil }
+                return encoded as Data
+            } catch {
+                return nil
+            }
+        }.value
     }
 }

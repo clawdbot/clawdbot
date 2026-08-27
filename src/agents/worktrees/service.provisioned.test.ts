@@ -6,12 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
-  deleteRegistryWorktree,
-  getRegistryWorktree,
-  getRegistryWorktreeProvisionedPaths,
-  insertRegistryWorktree,
-} from "./registry.js";
+import { insertRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
@@ -88,7 +83,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.writeFile(path.join(repo, "large.local"), source);
     await addRemote(root, repo);
 
-    const created = await service.create({ repoRoot: repo, name: "large-local" });
+    const created = await service.create({ repoRoot: repo, name: "large-local", baseRef: "HEAD" });
     await service.acquire(created.id);
     const copyPath = path.join(created.path, "large.local");
     const copy = Buffer.from(source);
@@ -110,9 +105,21 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.writeFile(path.join(repo, "settings.local"), "theme=source\n");
     await addRemote(root, repo);
 
-    const manifestRemoved = await service.create({ repoRoot: repo, name: "manifest-removed" });
-    const patternRemoved = await service.create({ repoRoot: repo, name: "pattern-removed" });
-    const restorable = await service.create({ repoRoot: repo, name: "manifest-restorable" });
+    const manifestRemoved = await service.create({
+      repoRoot: repo,
+      name: "manifest-removed",
+      baseRef: "HEAD",
+    });
+    const patternRemoved = await service.create({
+      repoRoot: repo,
+      name: "pattern-removed",
+      baseRef: "HEAD",
+    });
+    const restorable = await service.create({
+      repoRoot: repo,
+      name: "manifest-restorable",
+      baseRef: "HEAD",
+    });
     await service.acquire(manifestRemoved.id);
     await service.acquire(patternRemoved.id);
     await service.acquire(restorable.id);
@@ -182,7 +189,11 @@ describe("ManagedWorktreeService provisioned state", () => {
     await git(repo, "commit", "-m", "configure worktree provisioning");
     await fs.writeFile(path.join(repo, ".env.local"), "value=source\n");
 
-    const tracked = await service.create({ repoRoot: repo, name: "tracked-provisioned" });
+    const tracked = await service.create({
+      repoRoot: repo,
+      name: "tracked-provisioned",
+      baseRef: "HEAD",
+    });
     await git(tracked.path, "add", "-f", ".env.local");
     await git(tracked.path, "commit", "-m", "track provisioned file");
     await expect(service.remove({ id: tracked.id, reason: "manual" })).rejects.toThrow(
@@ -193,7 +204,11 @@ describe("ManagedWorktreeService provisioned state", () => {
       "provisioned path is tracked at HEAD",
     );
 
-    const unignored = await service.create({ repoRoot: repo, name: "unignored-provisioned" });
+    const unignored = await service.create({
+      repoRoot: repo,
+      name: "unignored-provisioned",
+      baseRef: "HEAD",
+    });
     await fs.writeFile(path.join(unignored.path, ".gitignore"), "");
     await expect(service.remove({ id: unignored.id, reason: "manual" })).rejects.toThrow(
       "provisioned path is no longer ignored",
@@ -217,7 +232,11 @@ describe("ManagedWorktreeService provisioned state", () => {
       await fs.writeFile(path.join(repo, wildcardName), "wildcard source\n");
       await fs.writeFile(path.join(repo, backslashName), "backslash source\n");
 
-      const created = await service.create({ repoRoot: repo, name: "literal-paths" });
+      const created = await service.create({
+        repoRoot: repo,
+        name: "literal-paths",
+        baseRef: "HEAD",
+      });
       await fs.writeFile(path.join(created.path, wildcardName), "wildcard local\n");
       await fs.writeFile(path.join(created.path, backslashName), "backslash local\n");
       await service.remove({ id: created.id, reason: "test" });
@@ -232,32 +251,12 @@ describe("ManagedWorktreeService provisioned state", () => {
     },
   );
 
-  it("upgrades the provisioned ledger when restoring a pre-ledger snapshot", async () => {
-    await fs.writeFile(path.join(repo, ".gitignore"), ".env.local\n");
-    await fs.writeFile(path.join(repo, ".worktreeinclude"), ".env.local\n");
-    await git(repo, "add", ".gitignore", ".worktreeinclude");
-    await git(repo, "commit", "-m", "configure worktree provisioning");
-    await fs.writeFile(path.join(repo, ".env.local"), "value=source\n");
-    await addRemote(root, repo);
-
-    const created = await service.create({ repoRoot: repo, name: "legacy-restore" });
-    await service.remove({ id: created.id, reason: "test" });
-    const removed = getRegistryWorktree(env, created.id)!;
-    deleteRegistryWorktree(env, created.id);
-    insertRegistryWorktree(env, removed);
-
-    const restored = await service.restore({ id: created.id });
-    expect(getRegistryWorktreeProvisionedPaths(env, created.id)).toEqual([".env.local"]);
-    await fs.writeFile(path.join(restored.path, ".env.local"), "value=restored-local\n");
-    expect(await service.removeIfLossless(created.id)).toBe(true);
-    const roundTripped = await service.restore({ id: created.id });
-    expect(await fs.readFile(path.join(roundTripped.path, ".env.local"), "utf8")).toBe(
-      "value=restored-local\n",
-    );
-  });
-
   it("snapshots deleted skip-worktree files still included by sparse rules", async () => {
-    const created = await service.create({ repoRoot: repo, name: "stale-sparse-bit" });
+    const created = await service.create({
+      repoRoot: repo,
+      name: "stale-sparse-bit",
+      baseRef: "HEAD",
+    });
     await git(created.path, "sparse-checkout", "set", "--no-cone", "/*");
     await git(created.path, "update-index", "--skip-worktree", "README.md");
     await fs.rm(path.join(created.path, "README.md"));
@@ -279,7 +278,7 @@ describe("ManagedWorktreeService provisioned state", () => {
       await git(repo, "add", "-A");
       await git(repo, "commit", "-m", "add raw path");
 
-      const created = await service.create({ repoRoot: repo, name: "raw-path" });
+      const created = await service.create({ repoRoot: repo, name: "raw-path", baseRef: "HEAD" });
       const worktreePath = Buffer.concat([
         Buffer.from(created.path),
         Buffer.from(path.sep),

@@ -1,12 +1,12 @@
 // QA Lab Slack credentials, instrumentation, and channel config.
-import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNonArrayRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type SlackQaRuntimeEnv,
   type SlackQaConfigOverrides,
   SLACK_QA_ENV_KEYS,
   slackQaCredentialPayloadSchema,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 
 function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof SLACK_QA_ENV_KEYS)[number]) {
@@ -52,9 +52,7 @@ export function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeE
 }
 
 export function asPlainRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  return asNonArrayRecord(value);
 }
 
 type SlackQaPostMessageAttempt = {
@@ -62,6 +60,7 @@ type SlackQaPostMessageAttempt = {
   formattingDisabled: boolean;
   nativeDataBlockCount: number;
   status: "failed" | "sent";
+  text: string;
 };
 
 export function countSlackNativeDataBlocks(value: unknown) {
@@ -85,10 +84,11 @@ export function instrumentSlackPostMessage(client: WebClient) {
   const originalPostMessage = client.chat.postMessage;
   const attempts: SlackQaPostMessageAttempt[] = [];
   client.chat.postMessage = (async (payload) => {
-    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean };
+    const payloadRecord = payload as { blocks?: unknown; mrkdwn?: boolean; text?: unknown };
     const attempt = {
       formattingDisabled: payloadRecord.mrkdwn === false,
       nativeDataBlockCount: countSlackNativeDataBlocks(payloadRecord.blocks),
+      text: typeof payloadRecord.text === "string" ? payloadRecord.text : "",
     };
     try {
       const response = await originalPostMessage.call(client.chat, payload);
@@ -282,22 +282,34 @@ export function buildSlackQaConfig(
             allowFrom: params.overrides?.allowFrom ?? [params.driverBotUserId],
             groupPolicy: "allowlist",
             allowBots: true,
-            replyToMode: params.overrides?.replyToMode ?? "off",
-            ...(progressOverrides
-              ? {
-                  streaming: {
-                    mode: "progress" as const,
-                    progress: {
-                      label: false,
-                      maxLines: 4,
-                      toolProgress: progressOverrides.toolProgress,
-                      ...(progressOverrides.commentary === undefined
-                        ? {}
-                        : { commentary: progressOverrides.commentary }),
-                    },
-                  },
-                }
+            ...(params.overrides?.groupDmEnabled
+              ? { dm: { enabled: true, groupEnabled: true } }
               : {}),
+            replyToMode: params.overrides?.replyToMode ?? "off",
+            ...(params.overrides?.streamingMode
+              ? { streaming: { mode: params.overrides.streamingMode } }
+              : progressOverrides
+                ? {
+                    streaming: {
+                      mode: "progress" as const,
+                      // These scenarios assert the portable draft compositor and
+                      // chat.update identity. Native task streams have their own
+                      // transport proof and do not expose that draft contract.
+                      nativeTransport: false,
+                      progress: {
+                        // The per-run command marker is the tool-line correlation
+                        // key; the product default intentionally hides raw commands.
+                        commandText: "raw" as const,
+                        label: false,
+                        maxLines: 4,
+                        toolProgress: progressOverrides.toolProgress,
+                        ...(progressOverrides.commentary === undefined
+                          ? {}
+                          : { commentary: progressOverrides.commentary }),
+                      },
+                    },
+                  }
+                : {}),
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {

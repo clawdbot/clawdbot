@@ -11,9 +11,11 @@ import {
   normalizeLegacyTalkConfig,
   seedMissingDefaultAccountsFromSingleAccountBase,
 } from "./legacy-config-core-normalizers.js";
-import { migrateLegacyWebFetchConfig } from "./legacy-web-fetch-migrate.js";
-import { migrateLegacyWebSearchConfig } from "./legacy-web-search-migrate.js";
-import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
+import {
+  migrateLegacyWebFetchConfig,
+  migrateLegacyWebSearchConfig,
+  migrateLegacyXSearchConfig,
+} from "./legacy-web-tools-migrate.js";
 
 /** Run common compatibility migrations before caller-specific setup/channel passes. */
 export function normalizeBaseCompatibilityConfigValues(

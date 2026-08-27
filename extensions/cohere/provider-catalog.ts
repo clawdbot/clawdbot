@@ -1,6 +1,5 @@
 import type { OpenAICompatibleModelDiscoveryOptions } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildCohereCatalogModels, COHERE_BASE_URL } from "./models.js";
+import { COHERE_BASE_URL } from "./models.js";
 
 export const COHERE_LIVE_MODEL_DISCOVERY: OpenAICompatibleModelDiscoveryOptions = {
   endpointUrl: {
@@ -25,11 +24,3 @@ export const COHERE_LIVE_MODEL_DISCOVERY: OpenAICompatibleModelDiscoveryOptions 
     });
   },
 };
-
-export function buildCohereProvider(): ModelProviderConfig {
-  return {
-    baseUrl: COHERE_BASE_URL,
-    api: "openai-completions",
-    models: buildCohereCatalogModels(),
-  };
-}

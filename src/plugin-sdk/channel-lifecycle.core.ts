@@ -65,7 +65,7 @@ function createTrackedRunState(params: ChannelRunQueueParams) {
     isActive: () => runState.isActive(),
     deactivate: runState.deactivate,
     onRunStart() {
-      const handle = Symbol();
+      const handle = Symbol("channel-run");
       runStarts.set(handle, Date.now());
       runState.onRunStart();
       return handle;

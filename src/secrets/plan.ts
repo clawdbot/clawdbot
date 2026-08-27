@@ -4,8 +4,11 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import {
+  parseConcreteConfigPathTokens,
+  type ConcreteConfigPathSegment,
+} from "../shared/dot-path.js";
 import { isValidSecretProviderAlias, isValidSecretRef } from "./ref-contract.js";
-import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
 /** Registry target id accepted by a secrets apply plan. */
@@ -82,11 +85,26 @@ export function resolveValidatedPlanTarget(candidate: {
   if (!path) {
     return null;
   }
-  const segments =
-    Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0
+  let parsedTokens: ConcreteConfigPathSegment[];
+  let segments: string[];
+  const hasPathSegments =
+    Array.isArray(candidate.pathSegments) && candidate.pathSegments.length > 0;
+  try {
+    parsedTokens = parseConcreteConfigPathTokens(path);
+    segments = hasPathSegments
       ? normalizeStringEntries(candidate.pathSegments)
-      : parseDotPath(path);
-  if (segments.length === 0 || segments.some(isBlockedObjectKey) || path !== toDotPath(segments)) {
+      : parsedTokens.map(String);
+  } catch {
+    return null;
+  }
+  const parsedPathMatches =
+    segments.length === parsedTokens.length &&
+    segments.every((segment, index) => segment === String(parsedTokens[index]));
+  if (
+    segments.length === 0 ||
+    segments.some(isBlockedObjectKey) ||
+    (!parsedPathMatches && path !== segments.join("."))
+  ) {
     return null;
   }
   // Registry resolution is the ownership gate; caller-provided paths must map to a known
@@ -94,6 +112,9 @@ export function resolveValidatedPlanTarget(candidate: {
   return resolvePlanTargetAgainstRegistry({
     type: candidate.type,
     pathSegments: segments,
+    pathTokens: parsedPathMatches ? parsedTokens : segments,
+    // Only an authored array pattern can disambiguate indices in shipped v1 dotted plans.
+    allowLegacyArrayString: path === segments.join("."),
     providerId: candidate.providerId,
     accountId: candidate.accountId,
   });
@@ -130,7 +151,10 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
       !resolved ||
       !ref ||
       typeof ref !== "object" ||
-      (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
+      (ref.source !== "env" &&
+        ref.source !== "file" &&
+        ref.source !== "exec" &&
+        ref.source !== "store") ||
       typeof ref.provider !== "string" ||
       ref.provider.trim().length === 0 ||
       typeof ref.id !== "string" ||
@@ -139,7 +163,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     ) {
       return false;
     }
-    if (resolved.entry.configFile === "auth-profiles.json") {
+    if (resolved.entry.configFile === "auth-profile-store") {
       if (typeof candidate.agentId !== "string" || candidate.agentId.trim().length === 0) {
         return false;
       }
@@ -186,6 +210,8 @@ export function normalizeSecretsPlanOptions(
   return {
     scrubEnv: options?.scrubEnv ?? true,
     scrubAuthProfilesForProviderTargets: options?.scrubAuthProfilesForProviderTargets ?? true,
-    scrubLegacyAuthJson: options?.scrubLegacyAuthJson ?? true,
+    // Deprecated plan input retained for protocol compatibility. Doctor owns
+    // legacy auth.json migration; secrets apply never reads or rewrites it.
+    scrubLegacyAuthJson: false,
   };
 }

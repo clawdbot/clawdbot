@@ -1,7 +1,7 @@
 // Coverage for Tool Search control planning and allowlist accounting.
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../../plugins/tools.js";
-import { buildToolSearchRunPlan } from "./attempt.tool-search-run-plan.js";
+import { buildToolSearchRunPlan } from "./attempt-tool-search-run-plan.js";
 
 describe("buildToolSearchRunPlan", () => {
   it("keeps compact visible names separate from replay-safe names", () => {

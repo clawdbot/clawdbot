@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   asDateTimestampMs,
@@ -18,6 +19,11 @@ import {
 
 let lastActiveRecallCacheSweepAt = 0;
 const activeRecallCache = new Map<string, CachedActiveRecallResult>();
+type ActiveRecallRunEntry = {
+  promise: Promise<ActiveRecallResult>;
+  timeoutCleanup?: Promise<void>;
+};
+const activeRecallRuns = new Map<string, ActiveRecallRunEntry>();
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
 
 function buildCircuitBreakerKey(agentId: string, provider?: string, model?: string): string {
@@ -37,13 +43,25 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string): void {
+function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
+  const now = Date.now();
+  for (const [entryKey, entry] of timeoutCircuitBreaker) {
+    if (now - entry.lastTimeoutAt >= cooldownMs) {
+      timeoutCircuitBreaker.delete(entryKey);
+    }
+  }
   const entry = timeoutCircuitBreaker.get(key);
-  if (entry) {
-    entry.consecutiveTimeouts++;
-    entry.lastTimeoutAt = Date.now();
-  } else {
-    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+  // Reinsertion keeps refreshed keys newer than peers when capacity eviction runs.
+  timeoutCircuitBreaker.delete(key);
+  timeoutCircuitBreaker.set(key, {
+    consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
+    lastTimeoutAt: now,
+  });
+  if (timeoutCircuitBreaker.size > DEFAULT_MAX_CACHE_ENTRIES) {
+    const oldestKey = timeoutCircuitBreaker.keys().next().value;
+    if (oldestKey !== undefined) {
+      timeoutCircuitBreaker.delete(oldestKey);
+    }
   }
 }
 
@@ -55,22 +73,76 @@ function scheduleMemorySearchCleanupAfterTimeout(
   api: OpenClawPluginApi,
   logPrefix: string,
   agentId: string,
-): void {
-  const cfg = resolveActiveMemoryCleanupConfig(api);
-  setTimeout(() => {
-    void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
-      .then(() => {
-        api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
-      })
-      .catch((error: unknown) => {
-        const message = toSingleLineLogValue(
-          error instanceof Error ? error.message : String(error),
-        );
-        api.logger.warn?.(
-          `${logPrefix} failed to release memory search managers after timeout: ${message}`,
-        );
-      });
-  }, 0);
+): Promise<void> {
+  return new Promise((resolve) => {
+    const cfg = resolveActiveMemoryCleanupConfig(api);
+    setTimeout(() => {
+      void closeActiveMemorySearchManager({ cfg: cfg ?? api.config, agentId })
+        .then(() => {
+          api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
+        })
+        .catch((error: unknown) => {
+          const message = toSingleLineErrorMessage(error);
+          api.logger.warn?.(
+            `${logPrefix} failed to release memory search managers after timeout: ${message}`,
+          );
+        })
+        .finally(resolve);
+    }, 0);
+  });
+}
+
+async function resolveActiveRecallForRun(
+  runId: string,
+  start: (onTimeoutCleanup: (cleanup: Promise<void>) => void) => Promise<ActiveRecallResult>,
+): Promise<ActiveRecallResult> {
+  const existing = activeRecallRuns.get(runId);
+  if (existing?.timeoutCleanup) {
+    // A replacement must not reuse managers while the timed-out recall or its
+    // cleanup is still settling; concurrent callers then join the replacement.
+    await Promise.allSettled([existing.promise, existing.timeoutCleanup]);
+    if (activeRecallRuns.get(runId) === existing) {
+      activeRecallRuns.delete(runId);
+    }
+    return await resolveActiveRecallForRun(runId, start);
+  }
+  if (existing) {
+    return await existing.promise;
+  }
+
+  const entry: ActiveRecallRunEntry = {
+    promise: Promise.resolve().then(() =>
+      start((cleanup) => {
+        entry.timeoutCleanup = cleanup;
+        void Promise.allSettled([entry.promise, cleanup]).then(() => {
+          if (activeRecallRuns.get(runId) === entry) {
+            activeRecallRuns.delete(runId);
+          }
+        });
+      }),
+    ),
+  };
+  activeRecallRuns.set(runId, entry);
+  void entry.promise.catch(() => {
+    // Failures before timeout cleanup starts must not poison this run;
+    // timeout-backed entries stay registered until manager cleanup settles.
+    if (!entry.timeoutCleanup && activeRecallRuns.get(runId) === entry) {
+      activeRecallRuns.delete(runId);
+    }
+  });
+  // Fulfilled results remain stable through agent_end, including `failed`;
+  // rerunning them would recreate the redundant same-turn recalls this registry prevents.
+  return await entry.promise;
+}
+
+function forgetActiveRecallRun(runId: string | undefined): void {
+  if (runId) {
+    for (const key of activeRecallRuns.keys()) {
+      if (key === runId || key.startsWith(`${runId}:`)) {
+        activeRecallRuns.delete(key);
+      }
+    }
+  }
 }
 
 function buildCacheKey(params: {
@@ -78,8 +150,29 @@ function buildCacheKey(params: {
   sessionKey?: string;
   sessionId?: string;
   query: string;
+  authorityFingerprint: string;
+  memorySlot?: string;
+  activeProjectKeys?: string[];
+  modelProviderId?: string;
+  modelId?: string;
+  recallToolNames: string[];
+  resourceScope?: string;
 }): string {
-  const hash = crypto.createHash("sha1").update(params.query).digest("hex");
+  const hash = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        query: params.query,
+        authorityFingerprint: params.authorityFingerprint,
+        memorySlot: params.memorySlot,
+        activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
+        modelProviderId: params.modelProviderId,
+        modelId: params.modelId,
+        recallToolNames: [...params.recallToolNames].toSorted(),
+        resourceScope: params.resourceScope,
+      }),
+    )
+    .digest("hex");
   return `${params.agentId}:${params.sessionKey ?? params.sessionId ?? "none"}:${hash}`;
 }
 
@@ -166,12 +259,17 @@ function toSingleLineLogValue(value: unknown): string {
     : singleLine;
 }
 
+function toSingleLineErrorMessage(error: unknown): string {
+  return toSingleLineLogValue(coerceErrorMessage(error));
+}
+
 function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
 }
 
 function resetActiveRecallStateForTests(): void {
   activeRecallCache.clear();
+  activeRecallRuns.clear();
   timeoutCircuitBreaker.clear();
   lastActiveRecallCacheSweepAt = 0;
 }
@@ -186,11 +284,14 @@ export {
   getCachedResult,
   getCircuitBreakerEntry,
   isCircuitBreakerOpen,
+  forgetActiveRecallRun,
   recordCircuitBreakerTimeout,
   resetActiveRecallStateForTests,
   resetCircuitBreaker,
+  resolveActiveRecallForRun,
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
+  toSingleLineErrorMessage,
   toSingleLineLogValue,
 };

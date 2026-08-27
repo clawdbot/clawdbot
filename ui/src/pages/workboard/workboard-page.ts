@@ -4,15 +4,16 @@ import { property } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, pathForWorkboardBoard } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import {
-  hasOperatorAdminAccess,
-  hasOperatorApprovalsAccess,
-  hasOperatorWriteAccess,
-} from "../../app/operator-access.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { icons } from "../../components/icons.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
+import { t } from "../../i18n/index.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
@@ -23,14 +24,33 @@ import {
   stopWorkboardLifecycleRefresh,
   stopWorkboardLiveRefresh,
   syncWorkboardLifecycle,
+  type WorkboardCard,
+  type WorkboardUiState,
   WORKBOARD_CHANGED_EVENT,
 } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
-import { WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import type { WorkboardRouteData } from "./route.ts";
 import { renderWorkboard } from "./view.ts";
+
+function reconcileCardOverlays(
+  state: WorkboardUiState,
+  isVisible: (card: WorkboardCard) => boolean,
+) {
+  const remainsVisible = (cardId: string) => {
+    const card = state.cards.find((entry) => entry.id === cardId);
+    return Boolean(card && isVisible(card));
+  };
+  if (state.detailCardId && !remainsVisible(state.detailCardId)) {
+    state.detailCardId = null;
+    state.detailCommentBody = "";
+  }
+  if (state.editingCardId && !remainsVisible(state.editingCardId)) {
+    resetDraftState(state);
+  }
+}
 
 class WorkboardPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -89,6 +109,9 @@ class WorkboardPage extends OpenClawLightDomElement {
       () => this.context?.gateway,
       (gateway) => {
         const handleSnapshot = (snapshot: ApplicationContext["gateway"]["snapshot"]) => {
+          if (this.context?.gateway !== gateway) {
+            return;
+          }
           if (snapshot.phase === "connected" && snapshot.client) {
             this.ensureInitialData();
           } else if (this.context?.workboard) {
@@ -109,6 +132,7 @@ class WorkboardPage extends OpenClawLightDomElement {
           const workboard = this.context?.workboard;
           if (
             workboard &&
+            this.context?.gateway === gateway &&
             gateway.snapshot.phase === "connected" &&
             event.event === WORKBOARD_CHANGED_EVENT
           ) {
@@ -185,6 +209,7 @@ class WorkboardPage extends OpenClawLightDomElement {
       return;
     }
     const state = context.workboard.state;
+    const access = readGatewayOperatorAccess(gateway);
     const requiresCanonicalReload = configureWorkboardLiveRefresh({
       host: context.workboard,
       client: gateway.client,
@@ -195,14 +220,12 @@ class WorkboardPage extends OpenClawLightDomElement {
       client: gateway.client,
       requestUpdate: this.requestPageUpdate,
       force: requiresCanonicalReload,
-      refreshDiagnostics: hasOperatorWriteAccess(gateway.hello?.auth ?? null),
+      refreshDiagnostics: access.canWrite,
     });
     if (!state.dispatching) {
       void syncWorkboardLifecycle({
         host: context.workboard,
         client: gateway.client,
-        sessions: context.sessions.state.result?.sessions ?? [],
-        canWrite: hasOperatorWriteAccess(gateway.hello?.auth ?? null),
         requestUpdate: this.requestPageUpdate,
       });
     }
@@ -226,20 +249,10 @@ class WorkboardPage extends OpenClawLightDomElement {
       this.observedAgentScopeId = nextScopeId;
       const state = context.workboard.state;
       const agentsList = context.agents.state.agentsList;
-      const remainsVisible = (cardId: string) => {
-        const card = state.cards.find((entry) => entry.id === cardId);
-        return Boolean(card && matchesAgentScope(card, agentsList, nextScopeId));
-      };
       // The board's richer agent filter is a secondary control available only
       // in all-agent scope; a chip switch must not retain a hidden subfilter.
       state.agentFilter = "all";
-      if (state.detailCardId && !remainsVisible(state.detailCardId)) {
-        state.detailCardId = null;
-        state.detailCommentBody = "";
-      }
-      if (state.editingCardId && !remainsVisible(state.editingCardId)) {
-        resetDraftState(state);
-      }
+      reconcileCardOverlays(state, (card) => matchesAgentScope(card, agentsList, nextScopeId));
       context.workboard.notify();
     }
   }
@@ -250,7 +263,9 @@ class WorkboardPage extends OpenClawLightDomElement {
     if (!context || !boardFilter || context.workboard.state.boardFilter === boardFilter) {
       return;
     }
-    context.workboard.state.boardFilter = boardFilter;
+    const state = context.workboard.state;
+    reconcileCardOverlays(state, (card) => matchesBoardFilter(card, boardFilter));
+    state.boardFilter = boardFilter;
     context.workboard.notify();
   }
 
@@ -338,7 +353,7 @@ class WorkboardPage extends OpenClawLightDomElement {
     }
     const gateway = context.gateway.snapshot;
     const config = context.runtimeConfig.state;
-    const auth = gateway.hello?.auth ?? null;
+    const access = readGatewayOperatorAccess(gateway);
     const pluginEnabled = this.pluginEnabled();
     const selectedBoard = this.selectedBoard();
     return html`
@@ -353,6 +368,16 @@ class WorkboardPage extends OpenClawLightDomElement {
                 ? workboardBoardName(selectedBoard)
                 : titleForRoute("workboard")}</span
             >
+            ${selectedBoard?.automationJobId
+              ? html`<a
+                  class="chip workboard-automation-chip"
+                  href=${pathForRoute("cron", context.basePath)}
+                  title=${t("workboard.automationAttachedTitle")}
+                  aria-label=${t("workboard.automationAttachedTitle")}
+                >
+                  ${icons.calendarClock}<span>${t("workboard.automationAttached")}</span>
+                </a>`
+              : nothing}
           </div>
           ${selectedBoard
             ? html`<div class="page-subtitle">${titleForRoute("workboard")}</div>`
@@ -367,18 +392,28 @@ class WorkboardPage extends OpenClawLightDomElement {
         host: context.workboard,
         client: gateway.client,
         connected: gateway.phase === "connected",
-        canWrite: hasOperatorWriteAccess(auth),
-        canGrant: hasOperatorApprovalsAccess(auth),
-        canModelOverride: hasOperatorAdminAccess(auth),
+        canWrite: access.canWrite,
+        canGrant: access.canGrantApprovals,
+        canModelOverride: access.canAdmin,
         pluginEnabled,
         pluginEnablementError:
           !config.configSnapshot && !config.configLoading ? config.lastError : null,
         agentsList: context.agents.state.agentsList,
+        defaultAgentId: gateway.assistantAgentId,
         sessions: context.sessions.state.result?.sessions ?? [],
         scopeAgentId: context.agentSelection.state.scopeId,
         showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
-          context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
+          const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+          context.navigate(face, {
+            ...sessionNavigationTarget({
+              context,
+              face,
+              sessionKey,
+              preferenceDerivedFace: true,
+            }).options,
+            hash: "",
+          });
         },
         onReloadConfig: () => this.reloadConfig(),
         onBoardFilterChange: (boardFilter) => this.setWorkboardBoardFilter(boardFilter),

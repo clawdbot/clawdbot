@@ -131,7 +131,7 @@ struct ExecHostRequest: Codable {
     var policySnapshot: OpenClawSystemRunApprovalPolicySnapshot?
 }
 
-private struct ExecHostRunResult: Codable {
+struct ExecHostRunResult: Codable {
     var exitCode: Int?
     var timedOut: Bool
     var success: Bool
@@ -165,7 +165,7 @@ struct ExecHostError: Codable, Error {
     var reason: String?
 }
 
-private struct ExecHostResponse: Codable {
+struct ExecHostResponse: Codable {
     var type: String
     var id: String
     var ok: Bool
@@ -351,6 +351,7 @@ final class ExecApprovalsPromptServer {
     static let shared = ExecApprovalsPromptServer()
 
     private let retryDelay: Duration
+    private let maximumRetryDelay: Duration
     private let resolveSocketCredentials: @Sendable () -> (socketPath: String, token: String)
     private let onPrompt: @Sendable (ExecApprovalPromptRequest) async -> ExecApprovalDecision?
     private var server: ExecApprovalsSocketServer?
@@ -360,6 +361,7 @@ final class ExecApprovalsPromptServer {
 
     init(
         retryDelay: Duration = .seconds(1),
+        maximumRetryDelay: Duration = .seconds(30),
         resolveSocketCredentials: @escaping @Sendable () -> (socketPath: String, token: String) = {
             let approvals = ExecApprovalsStore.resolve(agentId: nil)
             return (approvals.socketPath, approvals.token)
@@ -371,6 +373,7 @@ final class ExecApprovalsPromptServer {
         })
     {
         self.retryDelay = retryDelay
+        self.maximumRetryDelay = maximumRetryDelay
         self.resolveSocketCredentials = resolveSocketCredentials
         self.onPrompt = onPrompt
     }
@@ -380,6 +383,7 @@ final class ExecApprovalsPromptServer {
         self.startupGeneration &+= 1
         let generation = self.startupGeneration
         let retryDelay = self.retryDelay
+        let maximumRetryDelay = self.maximumRetryDelay
         let resolveSocketCredentials = self.resolveSocketCredentials
         let onPrompt = self.onPrompt
         let previousStartupTask = self.previousStartupTask
@@ -394,12 +398,15 @@ final class ExecApprovalsPromptServer {
             guard !Task.isCancelled, self?.startupGeneration == generation else { return }
 
             var isFirstAttempt = true
+            var retryBackoff = ExecApprovalsPromptRetryBackoff(
+                initialDelay: retryDelay,
+                maximumDelay: maximumRetryDelay)
             while !Task.isCancelled {
                 if isFirstAttempt {
                     isFirstAttempt = false
                 } else {
                     do {
-                        try await Task.sleep(for: retryDelay)
+                        try await Task.sleep(for: retryBackoff.nextDelay())
                     } catch {
                         return
                     }
@@ -730,7 +737,7 @@ enum ExecApprovalsPromptPresenter {
         case .allowOnce:
             "Allow Once"
         case .allowAlways:
-            "Always Allow"
+            "Always Allow Here"
         case .deny:
             "Don't Allow"
         }
@@ -874,7 +881,7 @@ extension ExecApprovalsPromptPresenter {
 #endif
 
 @MainActor
-private enum ExecHostExecutor {
+enum ExecHostExecutor {
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
         let validatedRequest: ExecHostValidatedRequest
         switch ExecHostRequestEvaluator.validateRequest(request) {
@@ -883,12 +890,21 @@ private enum ExecHostExecutor {
         case let .failure(error):
             return self.errorResponse(error)
         }
+        let effectiveCwd = ExecCommandResolution.canonicalApprovalCwd(request.cwd)
+        guard let approvedCwdSnapshot = ExecCommandResolution.captureApprovalCwdSnapshot(effectiveCwd)
+        else {
+            return self.errorResponse(
+                code: "UNAVAILABLE",
+                message: "SYSTEM_RUN_DENIED: approval requires an existing canonical cwd",
+                reason: "approval-required")
+        }
 
         let context = await self.buildContext(
             request: request,
             command: validatedRequest.command,
             rawCommand: validatedRequest.evaluationRawCommand,
-            displayCommand: validatedRequest.displayCommand)
+            displayCommand: validatedRequest.displayCommand,
+            cwd: effectiveCwd)
         let approvalSource = validatedRequest.approvalSource
         let security = ExecHostRequestEvaluator.effectiveSecurity(
             context: context,
@@ -911,7 +927,7 @@ private enum ExecHostExecutor {
             guard let decision = await ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
-                    cwd: request.cwd,
+                    cwd: effectiveCwd,
                     host: "node",
                     security: context.security.rawValue,
                     ask: context.ask.rawValue,
@@ -989,7 +1005,7 @@ private enum ExecHostExecutor {
             persistAllowlist: persistAllowlist,
             delayedPolicySnapshot: validatedRequest.delayedPolicySnapshot)
         let timeoutSec = request.timeoutMs.flatMap { Double($0) / 1000.0 }
-        let cwd = request.cwd
+        let cwd = effectiveCwd
         let env = context.env
         if case .failure = ExecApprovalsStore.commitExecution(executionCommit) {
             return self.approvalStoreErrorResponse()
@@ -1002,7 +1018,12 @@ private enum ExecHostExecutor {
                 command: executionCommand,
                 cwd: cwd,
                 env: env,
-                timeout: timeoutSec)
+                timeout: timeoutSec,
+                beforeSpawn: {
+                    ExecCommandResolution.revalidateApprovalCwdSnapshot(approvedCwdSnapshot)
+                        ? nil
+                        : ExecCommandResolution.approvalCwdDriftDeniedMessage
+                })
         }
         return await self.commandResponse(execution: execution)
     }
@@ -1011,13 +1032,14 @@ private enum ExecHostExecutor {
         request: ExecHostRequest,
         command: [String],
         rawCommand: String?,
-        displayCommand: String) async -> ExecApprovalEvaluation
+        displayCommand: String,
+        cwd: String) async -> ExecApprovalEvaluation
     {
         await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: rawCommand,
             displayCommand: displayCommand,
-            cwd: request.cwd,
+            cwd: cwd,
             envOverrides: request.env,
             agentId: request.agentId)
     }
@@ -1040,53 +1062,6 @@ private enum ExecHostExecutor {
             code: "UNAVAILABLE",
             message: "PERMISSION_MISSING: screenRecording",
             reason: "permission:screenRecording")
-    }
-
-    private static func commandResponse(
-        execution: Task<ShellExecutor.ShellResult, Never>) async -> ExecHostResponse
-    {
-        let result = await execution.value
-        let payload = ExecHostRunResult(
-            exitCode: result.exitCode,
-            timedOut: result.timedOut,
-            success: result.success,
-            stdout: ExecHostOutputLimiter.truncate(result.stdout),
-            stderr: ExecHostOutputLimiter.truncate(result.stderr),
-            error: result.errorMessage)
-        return self.successResponse(payload)
-    }
-
-    private static func errorResponse(
-        _ error: ExecHostError) -> ExecHostResponse
-    {
-        ExecHostResponse(
-            type: "response",
-            id: UUID().uuidString,
-            ok: false,
-            payload: nil,
-            error: error)
-    }
-
-    private static func errorResponse(
-        code: String,
-        message: String,
-        reason: String?) -> ExecHostResponse
-    {
-        ExecHostResponse(
-            type: "exec-res",
-            id: UUID().uuidString,
-            ok: false,
-            payload: nil,
-            error: ExecHostError(code: code, message: message, reason: reason))
-    }
-
-    private static func successResponse(_ payload: ExecHostRunResult) -> ExecHostResponse {
-        ExecHostResponse(
-            type: "exec-res",
-            id: UUID().uuidString,
-            ok: true,
-            payload: payload,
-            error: nil)
     }
 }
 
@@ -1178,6 +1153,24 @@ private final class ExecApprovalsSocketLifecycleLease: @unchecked Sendable {
         _ = self.processLock.withLock {
             self.reservedPaths.remove(path)
         }
+    }
+}
+
+struct ExecApprovalsPromptRetryBackoff {
+    private var currentDelay: Duration
+    private let maximumDelay: Duration
+
+    init(initialDelay: Duration, maximumDelay: Duration) {
+        self.currentDelay = initialDelay
+        self.maximumDelay = max(initialDelay, maximumDelay)
+    }
+
+    mutating func nextDelay() -> Duration {
+        let delay = self.currentDelay
+        // A second app can hold the lifecycle lease indefinitely. Back off the
+        // SQLite credential read and bind attempt instead of polling every second.
+        self.currentDelay = min(self.currentDelay * 2, self.maximumDelay)
+        return delay
     }
 }
 

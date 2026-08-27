@@ -36,6 +36,7 @@ import {
 } from "./inbound-context.js";
 import { buildDirectLabel, buildGuildLabel } from "./reply-context.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { buildDiscordConversationRouteContext } from "./route-resolution.js";
 
 const loadConversationRuntime = createLazyRuntimeModule(
   () => import("./agent-components.runtime.js"),
@@ -202,6 +203,14 @@ export async function dispatchDiscordComponentEvent(params: {
     SessionKey: sessionKey,
     AccountId: accountId,
     ChatType: chatType,
+    ...buildDiscordConversationRouteContext({
+      isDirectMessage: interactionCtx.isDirectMessage,
+      isGroupDm: interactionCtx.isGroupDm,
+      directUserId: interactionCtx.userId,
+      conversationId: interactionCtx.channelId,
+      isThread: channelCtx.isThread,
+      parentConversationId: channelCtx.parentId,
+    }),
     ConversationLabel: fromLabel,
     SenderName: senderName,
     SenderId: interactionCtx.userId,
@@ -273,6 +282,8 @@ export async function dispatchDiscordComponentEvent(params: {
         accountId,
         route: { agentId, sessionKey },
         ctxPayload,
+        // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+        dispatchReplyFromConfig: ctx.channelRuntime?.reply?.dispatchReplyFromConfig,
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
@@ -301,9 +312,9 @@ export async function dispatchDiscordComponentEvent(params: {
           },
         },
         delivery: {
-          deliver: async (payload, info) => {
+          deliverWithProviderMessageSending: async (payload, info) => {
             const replyToId = replyReference.use();
-            await deliverDiscordReply({
+            const result = await deliverDiscordReply({
               cfg: ctx.cfg,
               replies: [payload],
               target: deliverTarget,
@@ -323,8 +334,13 @@ export async function dispatchDiscordComponentEvent(params: {
               chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
               mediaLocalRoots,
               kind: info.kind,
+              bindPendingFinalDelivery: info.bindPendingFinalDelivery,
+              onPlatformSendDispatch: info.onPlatformSendDispatch,
             });
-            replyReference.markSent();
+            if (result.visibleReplySent) {
+              replyReference.markSent();
+            }
+            return result;
           },
           onError: (err) => {
             logError(`discord component dispatch failed: ${String(err)}`);

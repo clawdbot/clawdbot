@@ -1,11 +1,12 @@
 /**
  * Canonical mapping for terminal OpenAI Responses events.
  *
- * `response.completed` and `response.incomplete` are both terminal and both carry usage, so every
- * Responses path — the package-side stream processor and the agent-side transport — finalizes
- * through the helpers here. Keeping one owner prevents the two from drifting on token buckets,
- * service-tier pricing, or future terminal-event semantics.
+ * `response.completed`, `response.incomplete`, and `response.failed` are terminal and can carry
+ * usage, so every Responses path finalizes through the helpers here. Keeping one owner prevents
+ * package and managed transports from drifting on token buckets, service-tier pricing, or future
+ * terminal-event semantics.
  */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type OpenAI from "openai";
 import type { StopReason, Usage } from "../types.js";
 
@@ -53,10 +54,7 @@ export function mapResponsesTerminalUsage(
 export function readResponsesReasoningTokens(
   usage: ResponsesTerminalUsagePayload | undefined | null,
 ): number | undefined {
-  const reasoningTokens = usage?.output_tokens_details?.reasoning_tokens;
-  return typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
-    ? reasoningTokens
-    : undefined;
+  return asFiniteNumber(usage?.output_tokens_details?.reasoning_tokens);
 }
 
 function mapResponsesTerminalStopReason(
@@ -91,13 +89,19 @@ function mapResponsesTerminalStopReason(
  */
 export function resolveResponsesTerminalStopReason(params: {
   status: OpenAI.Responses.ResponseStatus | undefined;
+  terminalEventType?: "response.completed" | "response.incomplete";
   incompleteReason?: string;
   hasToolCall: boolean;
 }): { stopReason: StopReason; errorMessage?: string } {
-  if (params.status === "incomplete" && params.incompleteReason === "content_filter") {
+  // Compatible endpoints can omit response.status; the terminal SSE event still
+  // identifies incomplete turns and must retain filtered-output protection.
+  const status =
+    params.status ??
+    (params.terminalEventType === "response.incomplete" ? "incomplete" : undefined);
+  if (status === "incomplete" && params.incompleteReason === "content_filter") {
     return { stopReason: "error", errorMessage: "Provider incomplete_reason: content_filter" };
   }
-  const stopReason = mapResponsesTerminalStopReason(params.status);
+  const stopReason = mapResponsesTerminalStopReason(status);
   if (stopReason === "stop" && params.hasToolCall) {
     return { stopReason: "toolUse" };
   }

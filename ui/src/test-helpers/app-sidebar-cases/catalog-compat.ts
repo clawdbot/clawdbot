@@ -22,7 +22,7 @@ describe("AppSidebar session catalog pagination", () => {
         {
           defaultId: "main",
           mainKey: "main",
-          scope: "agent",
+          scope: "per-sender",
           agents: [{ id: "main" }, { id: "research" }],
         },
       );
@@ -44,7 +44,7 @@ describe("AppSidebar session catalog pagination", () => {
       selection.scopeId = "research";
       sidebar.requestUpdate();
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
         agentId: "research",

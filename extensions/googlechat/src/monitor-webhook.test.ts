@@ -18,6 +18,11 @@ vi.mock("openclaw/plugin-sdk/webhook-request-guards", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/webhook-targets", () => ({
+  canonicalizeWebhookRouteKey: (raw: string) =>
+    raw
+      .replace(/\/{2,}/g, "/")
+      .replace(/\/+$/, "")
+      .toLowerCase(),
   normalizeWebhookPath: (raw: string) => raw,
   resolveWebhookTargetWithAuthOrReject,
   withResolvedWebhookRequestPipeline,
@@ -169,7 +174,7 @@ describe("googlechat monitor webhook", () => {
       processEvent,
     });
     const req = createRequest({
-      url: "/googlechat?ignored=1",
+      url: "/GoogleChat//?ignored=1",
       headers: {
         "x-forwarded-for": "198.51.100.7, 10.0.0.1",
       },
@@ -305,6 +310,7 @@ describe("googlechat monitor webhook", () => {
     expect(processEvent).not.toHaveBeenCalled();
     expect(runDetachedWebhookWork).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBe("durable");
     expect(res.headers["Content-Type"]).toBe("application/json");
     expect(res.body).toBe("{}");
   });
@@ -383,6 +389,7 @@ describe("googlechat monitor webhook", () => {
       target,
     );
     expect(res.statusCode).toBe(200);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
     expect(res.headers["Content-Type"]).toBe("application/json");
     expect(res.body).toBe("{}");
   });
@@ -426,9 +433,11 @@ describe("googlechat monitor webhook", () => {
 
     await vi.waitFor(() => expect(ingressReceive).toHaveBeenCalledWith(raw));
     expect(res.statusCode).toBe(0);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
     releaseAdmission({ kind: "durable" });
     await expect(handling).resolves.toBe(true);
     expect(res.statusCode).toBe(200);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBe("durable");
   });
 
   it("returns 503 instead of acknowledging when durable admission fails", async () => {
@@ -455,6 +464,7 @@ describe("googlechat monitor webhook", () => {
     const { processEvent, res } = await runWebhookHandler({ authorization: "Bearer valid" });
 
     expect(res.statusCode).toBe(503);
+    expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
     expect(res.body).toBe("failed to persist event");
     expect(processEvent).not.toHaveBeenCalled();
   });

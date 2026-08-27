@@ -4,7 +4,7 @@ import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
   type DiscordMessageDispatchData,
@@ -14,12 +14,12 @@ import {
   MessageCreateListener,
   PresenceUpdateListener,
   ReadyListener,
+  ThreadDeleteListener,
   ThreadUpdateListener,
 } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
-import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
-export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
+import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
 import {
@@ -34,7 +34,9 @@ import {
 } from "./presence-events.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { getThreadBindingManager } from "./thread-bindings.manager.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
+export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
@@ -371,8 +373,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         return;
       }
 
-      const queued = enqueueSystemEvent(presenceEvent.text, {
-        sessionKey: route.sessionKey,
+      const queued = enqueueRoutedSystemEvent(presenceEvent.text, route, {
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
           channel: "discord",
@@ -474,7 +475,6 @@ type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   constructor(
     private cfg: OpenClawConfig,
-    private accountId: string,
     private logger?: Logger,
   ) {
     super();
@@ -499,7 +499,6 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
         const logger = this.logger ?? discordEventQueueLog;
         const count = await closeDiscordThreadSessions({
           cfg: this.cfg,
-          accountId: this.accountId,
           threadId,
         });
         if (count > 0) {
@@ -509,6 +508,46 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
       onError: (err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
+      },
+    });
+  }
+}
+
+type ThreadDeleteEvent = Parameters<ThreadDeleteListener["handle"]>[0];
+
+export class DiscordThreadDeleteListener extends ThreadDeleteListener {
+  constructor(
+    private cfg: OpenClawConfig,
+    private accountId: string,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: ThreadDeleteEvent) {
+    await runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: async () => {
+        const threadId = data.id;
+        getThreadBindingManager(this.accountId)?.unbindThread({
+          threadId,
+          reason: "thread-delete",
+          sendFarewell: false,
+        });
+        const count = await closeDiscordThreadSessions({
+          cfg: this.cfg,
+          threadId,
+        });
+        if (count > 0) {
+          const logger = this.logger ?? discordEventQueueLog;
+          logger.info("Discord thread deleted — reset sessions", { threadId, count });
+        }
+      },
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord thread-delete handler failed: ${String(err)}`));
       },
     });
   }

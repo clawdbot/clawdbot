@@ -1,23 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 
 function readMigratedEntry(value: unknown): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     try {
-      const parsed: unknown = JSON.parse(value);
-      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : undefined;
+      return asOptionalRecord(JSON.parse(value));
     } catch {
       return undefined;
     }
   }
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function normalizedText(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  return asOptionalRecord(value);
 }
 
 export function addSessionProvenanceColumns(
@@ -72,16 +65,15 @@ export function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion
     WHERE session_id = ?;
   `);
   for (const row of rows) {
-    const sessionId = normalizedText(row.session_id);
+    const sessionId = normalizeNullableString(row.session_id);
     const entry = readMigratedEntry(row.entry_json);
     if (!sessionId || !entry) {
       continue;
     }
-    const hookSource = normalizedText(entry.hookExternalContentSource);
-    const acp = entry.acp;
+    const hookSource = normalizeNullableString(entry.hookExternalContentSource);
     update.run(
-      acp && typeof acp === "object" && !Array.isArray(acp) ? 1 : 0,
-      normalizedText(entry.pluginOwnerId),
+      isRecord(entry.acp) ? 1 : 0,
+      normalizeNullableString(entry.pluginOwnerId),
       hookSource === "gmail" || hookSource === "webhook" ? hookSource : null,
       sessionId,
     );

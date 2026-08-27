@@ -13,6 +13,10 @@ wa-tab-group.hub-tabs::part(tabs) {
   gap: var(--space-2);
 }
 
+wa-tab-group.hub-tabs--sub::part(tabs) {
+  gap: var(--space-1);
+}
+
 wa-tab.hub-tab {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
@@ -26,6 +30,33 @@ wa-tab.hub-tab::part(base) {
   gap: 6px;
   font: inherit;
   color: inherit;
+}
+
+.hub-tabs--sub wa-tab.hub-tab {
+  font-size: var(--control-ui-text-xs);
+  font-weight: 550;
+}
+
+.hub-tabs--sub wa-tab.hub-tab::part(base) {
+  padding: 3px var(--space-2) var(--space-1);
+}
+
+.hub-tab__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+wa-tab.hub-tab[active] .hub-tab__badge {
+  background: var(--accent-subtle);
+  color: var(--accent);
 }
 
 wa-tab.hub-tab:hover {
@@ -48,24 +79,24 @@ wa-tab.hub-tab:focus-visible::part(base) {
   outline: none;
 }
 
-/* Equal outer columns keep the Sessions hub tabs centered when the Threads
-   route adds its trailing agent selector and Worktrees leaves that slot empty. */
-.content-header.sessions-hub-header {
+/* Equal outer columns keep hub tabs centered whether or not the active route
+   fills its trailing actions slot. */
+.content-header.hub-page-header {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
 }
 
-.sessions-hub-header__title,
-.sessions-hub-header__actions {
+.hub-page-header__title,
+.hub-page-header__actions {
   min-width: 0;
 }
 
-.sessions-hub-header__actions {
+.hub-page-header__actions {
   justify-self: end;
 }
 
-@media (min-width: 769px) and (max-width: 1024px) {
-  .content-header.sessions-hub-header {
+@media (min-width: 769px) and (max-width: 1100px) {
+  .content-header.hub-page-header {
     grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
       "title actions"
@@ -74,22 +105,44 @@ wa-tab.hub-tab:focus-visible::part(base) {
     max-height: none;
   }
 
-  .sessions-hub-header__title {
+  .hub-page-header__title {
     grid-area: title;
   }
 
-  .sessions-hub-tabs {
+  .hub-page-header__tabs {
     grid-area: tabs;
     justify-self: center;
   }
 
-  .sessions-hub-header__actions {
+  .hub-page-header__actions {
     grid-area: actions;
   }
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .content-header.sessions-hub-header {
-    display: none;
+  .content-header.hub-page-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "intro"
+      "tabs"
+      "actions";
+    justify-items: center;
+    row-gap: var(--space-2);
+    max-height: none;
+  }
+
+  .hub-page-header .hub-page-header__title {
+    grid-area: intro;
+    justify-self: stretch;
+  }
+
+  .hub-page-header .hub-page-header__tabs {
+    grid-area: tabs;
+  }
+
+  .hub-page-header .hub-page-header__actions {
+    grid-area: actions;
+    justify-self: center;
   }
 }

@@ -2,6 +2,11 @@
 // Classifies local/remote auth inputs before SecretRef resolution.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { containsEnvVarReference } from "../config/env-substitution.js";
+import {
+  getAuthoredConfigSecretRef,
+  getConfigResolutionFacts,
+  hasUnresolvedConfigPath,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 
@@ -64,22 +69,33 @@ export function trimCredentialToUndefined(value: unknown): string | undefined {
   return trimmed;
 }
 
-/** True when the process env supplies a nonempty Gateway token candidate. */
-export function hasGatewayTokenEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN));
-}
-
-/** True when the process env supplies a nonempty Gateway password candidate. */
-export function hasGatewayPasswordEnvCandidate(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD));
-}
-
 /** Classify one configured credential input without resolving secret refs. */
 function resolveConfiguredGatewayCredentialInput(params: {
+  config: OpenClawConfig;
   value: unknown;
   defaults?: GatewaySecretDefaults;
   path: GatewayCredentialInputPath;
 }): GatewayConfiguredCredentialInput {
+  const resolutionFacts = getConfigResolutionFacts(params.config);
+  if (
+    hasUnresolvedConfigPath(params.config, params.path) ||
+    getAuthoredConfigSecretRef(params.config, params.path)
+  ) {
+    return {
+      path: params.path,
+      configured: true,
+      refPath: params.path,
+      hasSecretRef: false,
+    };
+  }
+  if (resolutionFacts !== null && typeof params.value === "string") {
+    return {
+      path: params.path,
+      configured: Boolean(trimToUndefined(params.value)),
+      value: trimToUndefined(params.value),
+      hasSecretRef: false,
+    };
+  }
   const ref = resolveSecretInputRef({
     value: params.value,
     defaults: params.defaults,
@@ -108,21 +124,25 @@ export function createGatewayCredentialPlan(params: {
   const envPassword = trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD);
 
   const localToken = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: gateway?.auth?.token,
     defaults,
     path: "gateway.auth.token",
   });
   const localPassword = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: gateway?.auth?.password,
     defaults,
     path: "gateway.auth.password",
   });
   const remoteToken = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: remote?.token,
     defaults,
     path: "gateway.remote.token",
   });
   const remotePassword = resolveConfiguredGatewayCredentialInput({
+    config: params.config,
     value: remote?.password,
     defaults,
     path: "gateway.remote.password",
@@ -139,7 +159,6 @@ export function createGatewayCredentialPlan(params: {
     (authMode !== "token" && authMode !== "none" && !tokenCanWin);
   const localTokenSurfaceActive =
     localTokenCanWin &&
-    !envToken &&
     (authMode === "token" ||
       (authMode === undefined && !(envPassword || localPassword.configured)));
 

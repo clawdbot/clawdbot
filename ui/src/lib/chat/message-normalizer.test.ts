@@ -1,14 +1,16 @@
 // @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
   isStandaloneToolMessageForDisplay,
   isToolResultMessage,
   normalizeMessage,
 } from "./message-normalizer.ts";
 
-const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+// Inbound context blocks are stamped with the provenance marker; strippers key
+// on the marker, so display fixtures must carry it to be recognized.
+const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 describe("message-normalizer", () => {
   // Regression: gateway/transcript events can carry a null/undefined or
@@ -34,6 +36,33 @@ describe("message-normalizer", () => {
         expect(isStandaloneToolMessageForDisplay(input)).toBe(false);
       },
     );
+
+    it.each([undefined, null, "malformed block", 42, true, []])(
+      "preserves valid assistant text after the malformed content block %o",
+      (block) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: [block, { type: "output_text", text: "The valid answer remains visible." }],
+          }),
+        ).toMatchObject({
+          role: "assistant",
+          content: [{ type: "text", text: "The valid answer remains visible." }],
+        });
+      },
+    );
+
+    it("preserves valid tool blocks after malformed content", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: [null, { type: "tool_use", name: "read", args: { path: "notes.md" } }],
+        }),
+      ).toMatchObject({
+        role: "toolResult",
+        content: [{ type: "tool_use", name: "read", args: { path: "notes.md" } }],
+      });
+    });
   });
 
   describe("normalizeMessage", () => {
@@ -213,6 +242,42 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves managed media playback and artifact metadata", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "audio",
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            fileName: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_audio",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/audio/full",
+            kind: "audio",
+            label: "voice.caf",
+            mimeType: "audio/x-caf",
+            playback: "transcode",
+            sizeBytes: 4096,
+            durationMs: 2_345,
+            isVoiceNote: true,
+          },
+        },
+      ]);
+    });
+
     it("does not normalize non-assistant structured audio blocks as attachments", () => {
       const result = normalizeMessage({
         role: "user",
@@ -282,7 +347,7 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("preserves a canvas preview sandbox ceiling from history", () => {
+    it("preserves canvas dashboard identity and sandbox ceiling from history", () => {
       const result = normalizeMessage({
         role: "assistant",
         content: [
@@ -294,6 +359,7 @@ describe("message-normalizer", () => {
               render: "url",
               url: "/__openclaw__/canvas/documents/cv_widget/index.html",
               sandbox: "scripts",
+              boardWidgetName: "release-status",
             },
           },
         ],
@@ -301,8 +367,29 @@ describe("message-normalizer", () => {
 
       expect(result.content[0]).toMatchObject({
         type: "canvas",
-        preview: { sandbox: "scripts" },
+        preview: { sandbox: "scripts", boardWidgetName: "release-status" },
       });
+    });
+
+    it("drops invalid canvas dashboard identity from history", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+              boardWidgetName: "Invalid widget name",
+            },
+          },
+        ],
+      });
+
+      expect(result.content[0]).toMatchObject({ type: "canvas" });
+      expect(result.content[0]).not.toHaveProperty("preview.boardWidgetName");
     });
 
     it("ignores [embed] shortcodes inside fenced code blocks", () => {
@@ -333,11 +420,12 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("extracts MEDIA attachments and reply metadata from assistant text", () => {
+    it("extracts MEDIA attachments and reads persisted delivery facts", () => {
       const result = normalizeMessage({
         role: "assistant",
         content:
-          "[[reply_to:thread-123]]Intro\nMEDIA:https://example.com/image.png\nOutro\nMEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+          "Intro\nMEDIA:https://example.com/image.png\nOutro\nMEDIA:https://example.com/voice.ogg",
+        openclawDelivery: { audioAsVoice: true, replyToId: "thread-123" },
       });
 
       expect(result.replyTarget).toEqual({ kind: "id", id: "thread-123" });
@@ -367,10 +455,92 @@ describe("message-normalizer", () => {
       ]);
     });
 
-    it("marks media-only audio attachments as voice notes when audio_as_voice is present", () => {
+    it("preserves paragraph breaks and code indentation before an assistant attachment", () => {
+      const text = [
+        "Here is the code.",
+        "",
+        "```python",
+        "def run():",
+        "    if ready:",
+        "        return True",
+        "```",
+        "",
+        "The attachment is ready.",
+      ].join("\n");
+
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `${text}\nMEDIA:https://example.com/image.png`,
+        }).content,
+      ).toEqual([
+        { type: "text", text },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
+    });
+
+    it.each(["", " ", "\t"])(
+      "preserves a %j paragraph separator around an assistant attachment",
+      (whitespace) => {
+        expect(
+          normalizeMessage({
+            role: "assistant",
+            content: `First paragraph\n${whitespace}\nMEDIA:https://example.com/image.png\n${whitespace}\nSecond paragraph`,
+          }).content,
+        ).toEqual([
+          { type: "text", text: "First paragraph\n" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://example.com/image.png",
+              kind: "image",
+              label: "image.png",
+              mimeType: "image/png",
+            },
+          },
+          { type: "text", text: "Second paragraph" },
+        ]);
+      },
+    );
+
+    it("preserves canonical code fences with structured delivery facts", () => {
+      const code = ["```python", "value = 'a  b'", "``` not a close", "other = 'c  d'", "```"].join(
+        "\n",
+      );
+
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content: `${code}\nMEDIA:https://example.com/image.png`,
+          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
+        }).content,
+      ).toEqual([
+        { type: "text", text: code },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/image.png",
+            kind: "image",
+            label: "image.png",
+            mimeType: "image/png",
+          },
+        },
+      ]);
+    });
+
+    it("marks media-only audio attachments as voice notes from delivery facts", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "MEDIA:https://example.com/voice.ogg\n[[audio_as_voice]]",
+        content: "MEDIA:https://example.com/voice.ogg",
+        openclawDelivery: { audioAsVoice: true },
       });
 
       expect(result.audioAsVoice).toBe(true);
@@ -432,6 +602,36 @@ describe("message-normalizer", () => {
             kind: "video",
             label: "clip%2Emp4",
             mimeType: "video/mp4",
+          },
+        },
+      ]);
+    });
+
+    it("classifies signed same-origin MEDIA image and audio routes", () => {
+      const imageUrl = "/media/inbound/photo.png?mediaTicket=signed#preview";
+      const audioUrl = "/__openclaw__/media/voice%2Eogg?mediaTicket=signed";
+      const result = normalizeMessage({
+        role: "assistant",
+        content: `MEDIA:${imageUrl}\nMEDIA:${audioUrl}`,
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: imageUrl,
+            kind: "image",
+            label: "photo.png?mediaTicket=signed#preview",
+            mimeType: "image/png",
+          },
+        },
+        {
+          type: "attachment",
+          attachment: {
+            url: audioUrl,
+            kind: "audio",
+            label: "voice%2Eogg?mediaTicket=signed",
+            mimeType: "audio/ogg",
           },
         },
       ]);
@@ -505,24 +705,93 @@ describe("message-normalizer", () => {
       expect(result.content).toEqual([{ type: "text", text: "MEDIA:chart.png" }]);
     });
 
-    it("strips reply_to_current without rendering a quoted preview", () => {
+    it.each([
+      ["bare image", "Generated image\nMEDIA:image.png", "Generated image\nMEDIA:image.png"],
+      ["bare audio", "Generated audio\nMEDIA:voice.ogg", "Generated audio\nMEDIA:voice.ogg"],
+      [
+        "bare document",
+        "Generated document\nMEDIA:report.pdf",
+        "Generated document\nMEDIA:report.pdf",
+      ],
+      [
+        "caption after bare filename",
+        "MEDIA:image.png\nGenerated image",
+        "MEDIA:image.png\nGenerated image",
+      ],
+      [
+        "quoted bare filename",
+        'Generated image\nMEDIA:"image.png"',
+        "Generated image\nMEDIA:image.png",
+      ],
+      [
+        "quoted bare filename with spaces",
+        'Generated image\nMEDIA:"render final.png"',
+        "Generated image\nMEDIA:render final.png",
+      ],
+      [
+        "explicit relative sibling",
+        "Generated image\nMEDIA:./image.png",
+        "Generated image\nMEDIA:./image.png",
+      ],
+    ] as const)(
+      "preserves relative assistant media beside its caption: %s",
+      (_name, input, text) => {
+        expect(normalizeMessage({ role: "assistant", content: input }).content).toEqual([
+          { type: "text", text },
+        ]);
+      },
+    );
+
+    it("preserves bare assistant media references around a renderable attachment", () => {
+      expect(
+        normalizeMessage({
+          role: "assistant",
+          content:
+            "Generated artifacts\nMEDIA:image.png\nMEDIA:https://example.com/remote.png\nMEDIA:voice.ogg",
+        }).content,
+      ).toEqual([
+        { type: "text", text: "Generated artifacts\nMEDIA:image.png" },
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://example.com/remote.png",
+            kind: "image",
+            label: "remote.png",
+            mimeType: "image/png",
+          },
+        },
+        { type: "text", text: "MEDIA:voice.ogg" },
+      ]);
+    });
+
+    it("uses persisted delivery facts for the current-message reply target", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "[[reply_to_current]]\nReply body",
+        content: "Reply body",
+        openclawDelivery: { replyToCurrent: true },
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
       expect(result.content).toEqual([{ type: "text", text: "Reply body" }]);
     });
 
-    it("does not restore stripped reply tags when no visible text remains", () => {
+    it("keeps a fact-only current-message reply target", () => {
       const result = normalizeMessage({
         role: "assistant",
-        content: "[[reply_to_current]]",
+        content: "",
+        openclawDelivery: { replyToCurrent: true },
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
       expect(result.content).toStrictEqual([]);
+    });
+
+    it("renders quoted delivery and TTS markers verbatim", () => {
+      const text = "Use `[[reply_to_current]]` and `[[tts]]` literally.";
+      const result = normalizeMessage({ role: "assistant", content: text });
+
+      expect(result.replyTarget).toBeUndefined();
+      expect(result.content).toEqual([{ type: "text", text }]);
     });
 
     it("preserves structured attachment content items", () => {
@@ -536,6 +805,8 @@ describe("message-normalizer", () => {
               kind: "image",
               label: "test image.png",
               mimeType: "image/png",
+              width: 1280,
+              height: 720,
             },
           },
         ],
@@ -549,6 +820,8 @@ describe("message-normalizer", () => {
             kind: "image",
             label: "test image.png",
             mimeType: "image/png",
+            width: 1280,
+            height: 720,
           },
         },
       ]);

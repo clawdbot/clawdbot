@@ -12,6 +12,7 @@ import {
   pruneOrphanedDeliveryQueueMedia,
 } from "./delivery-queue-media-spool.js";
 import { ackDelivery, loadPendingDeliveries } from "./delivery-queue-storage.js";
+import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
 const CHILD_SCRIPT = fileURLToPath(
   new URL("./delivery-queue-media-spool.crash-child.test-support.ts", import.meta.url),
@@ -89,9 +90,16 @@ describe("delivery queue media crash boundary", () => {
 
     const pendingBeforeGc = await loadPendingDeliveries(stateDir);
     expect(pendingBeforeGc.map((entry) => entry.id)).toEqual([id]);
-    expect(collectEntrySpoolPaths(pendingBeforeGc[0]?.payloads ?? [], stateDir)).toEqual([
-      artifact,
-    ]);
+    expect(
+      collectEntrySpoolPaths(
+        pendingBeforeGc[0]
+          ? acceptedPreparedOutboundEntries(pendingBeforeGc[0].preparedBatch).map(
+              (prepared) => prepared.payload,
+            )
+          : [],
+        stateDir,
+      ),
+    ).toEqual([artifact]);
 
     // Even beyond the orphan grace, the pending row keeps its exact artifact.
     await pruneOrphanedDeliveryQueueMedia({

@@ -39,7 +39,7 @@ vi.mock("./abort.js", () => ({
   formatAbortReplyText: formatAbortReplyTextMock,
   isAbortTrigger: vi.fn((raw: string) => raw === "stop"),
   setAbortMemory: setAbortMemoryMock,
-  stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
+  stopSubagentsForRequester: vi.fn(async () => ({ stopped: 0, failed: 0 })),
 }));
 
 vi.mock("./commands-session-store.js", () => ({

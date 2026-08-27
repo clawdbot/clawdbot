@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import type { BoardSnapshot } from "../../lib/board/types.ts";
 import "../../styles/base.css";
 import "./board-view.ts";
 
@@ -8,7 +8,7 @@ type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 
-const source: BoardViewSnapshot = {
+const source: BoardSnapshot = {
   sessionKey: "agent:main:browser-board",
   revision: 1,
   tabs: [
@@ -127,23 +127,100 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
   it("reveals widget chrome while the widget has focus", async () => {
     const view = await mount();
+    view.style.width = "1200px";
     const sink = focusSink();
     const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
     const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
 
     widget!.focus();
     expect(getComputedStyle(bar!).visibility).toBe("visible");
-    // The revealed strip must not steal clicks from widget content under it;
-    // only real controls (drag handle, kebab) stay interactive.
-    expect(getComputedStyle(bar!).pointerEvents).toBe("none");
-    const handle = bar!.querySelector<HTMLElement>(".board-widget__drag-handle");
-    const trigger = bar!.querySelector<HTMLElement>(".board-widget__menu-trigger");
-    expect(getComputedStyle(handle!).pointerEvents).toBe("auto");
-    expect(getComputedStyle(trigger!).pointerEvents).toBe("auto");
+    // Chrome is a compact centered pill, not a full-width strip: it must not
+    // stretch across the card, so widget-owned corner actions stay clear.
+    const barBounds = bar!.getBoundingClientRect();
+    const widgetBounds = widget!.getBoundingClientRect();
+    expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
+    expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
+      widgetBounds.left + widgetBounds.width / 2,
+      0,
+    );
 
     sink.focus();
     expect(widget!.matches(":focus-within")).toBe(false);
     await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+  });
+
+  it("compacts centered chrome at intermediate widths", async () => {
+    const view = await mount();
+    view.style.width = "700px";
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        {
+          ...source.widgets[0]!,
+          sizeW: 6,
+          title: "An extremely long widget title that wants the whole bar",
+          grantState: "granted",
+        },
+      ],
+    };
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    await cell?.updateComplete;
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+    const widgetBounds = widget!.getBoundingClientRect();
+    const barBounds = bar!.getBoundingClientRect();
+    expect(widgetBounds.width).toBeGreaterThan(264);
+    expect(widgetBounds.width).toBeLessThanOrEqual(376);
+    expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
+      widgetBounds.left + widgetBounds.width / 2,
+      0,
+    );
+    expect(barBounds.left - widgetBounds.left).toBeGreaterThanOrEqual(88);
+    expect(widgetBounds.right - barBounds.right).toBeGreaterThanOrEqual(88);
+    for (const selector of [".board-widget__title", ".board-widget__kind"]) {
+      expect(getComputedStyle(bar!.querySelector<HTMLElement>(selector)!).display).toBe("none");
+    }
+    for (const child of bar!.children) {
+      expect(child.getBoundingClientRect().right).toBeLessThanOrEqual(
+        bar!.getBoundingClientRect().right + 1,
+      );
+    }
+  });
+
+  it("strips the pill to move + menu on widgets too narrow for the reservation", async () => {
+    const view = await mount();
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        {
+          ...source.widgets[0]!,
+          sizeW: 3,
+          title: "An extremely long widget title that wants the whole bar",
+          grantState: "granted",
+        },
+      ],
+    };
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    await cell?.updateComplete;
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // Very narrow cards keep the irreducible move + menu pair while the rest of
+    // the card stays widget-owned.
+    expect(widget!.getBoundingClientRect().width).toBeLessThan(184);
+    const title = bar!.querySelector<HTMLElement>(".board-widget__title");
+    const kind = bar!.querySelector<HTMLElement>(".board-widget__kind");
+    expect(getComputedStyle(title!).display).toBe("none");
+    expect(getComputedStyle(kind!).display).toBe("none");
+    const widgetBounds = widget!.getBoundingClientRect();
+    const barBounds = bar!.getBoundingClientRect();
+    expect(barBounds.width).toBeLessThanOrEqual(76);
+    expect(barBounds.left - widgetBounds.left).toBeLessThan(widgetBounds.right - barBounds.right);
   });
 
   it("keeps widget chrome visible while its menu is open", async () => {
@@ -272,11 +349,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         data: { type: "openclaw:widget-size", height: 300 },
       }),
     );
-    await vi.waitFor(() =>
-      expect(Math.round(first.getBoundingClientRect().height)).toBe(
-        BOARD_GRID_ROW_HEIGHT * 5 + BOARD_GRID_GAP * 4,
-      ),
-    );
+    // The card hugs its exact content height (300px + 2x12px card inset); the
+    // ceil-to-row slack stays outside the card as grid background.
+    await vi.waitFor(() => expect(Math.round(first.getBoundingClientRect().height)).toBe(324));
     expect(second.getBoundingClientRect().top).toBeGreaterThan(secondTopBefore);
 
     const cardBody = first.querySelector<HTMLElement>(".board-widget__body");

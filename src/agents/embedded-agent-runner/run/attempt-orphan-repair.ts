@@ -3,6 +3,7 @@ import type {
   SessionEntry as SessionManagerEntry,
   SessionMessageEntry,
 } from "../../sessions/index.js";
+import { isSessionContextMetadataEntry } from "../../sessions/session-manager-codec.js";
 import {
   resolveMessageMergeStrategy,
   type MessageMergeStrategy,
@@ -24,23 +25,13 @@ type OrphanRepairCandidate = {
   trailingEntries: SessionManagerEntry[];
 };
 
-function canSkipTrailingEntryForOrphanRepair(entry: SessionManagerEntry): boolean {
-  return (
-    entry.type === "thinking_level_change" ||
-    entry.type === "model_change" ||
-    entry.type === "custom" ||
-    entry.type === "label" ||
-    entry.type === "session_info"
-  );
-}
-
 function findTrailingMessageEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
 ): OrphanRepairCandidate | undefined {
   const visited = new Set<string>();
   const trailingEntries: SessionManagerEntry[] = [];
   let entry = sessionManager.getLeafEntry();
-  while (entry && entry.type !== "message" && canSkipTrailingEntryForOrphanRepair(entry)) {
+  while (entry && isSessionContextMetadataEntry(entry)) {
     if (visited.has(entry.id)) {
       return undefined;
     }

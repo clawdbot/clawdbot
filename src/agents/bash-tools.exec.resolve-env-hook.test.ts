@@ -115,7 +115,7 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 let toToolDefinitions: typeof import("./agent-tool-definition-adapter.js").toToolDefinitions;
 let createOpenClawCodingTools: typeof import("./agent-tools.js").createOpenClawCodingTools;
 const testExtensionContext = {} as ExtensionContext;
@@ -129,7 +129,7 @@ function installResolveExecEnvHook(result: Record<string, string>) {
 
 describe("exec resolve_exec_env hook wiring", () => {
   beforeAll(async () => {
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ createExecTool } = await import("./bash-tools.exec-run.js"));
     ({ toToolDefinitions } = await import("./agent-tool-definition-adapter.js"));
     ({ createOpenClawCodingTools } = await import("./agent-tools.js"));
   });

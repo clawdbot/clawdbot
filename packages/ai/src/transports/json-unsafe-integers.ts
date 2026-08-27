@@ -2,6 +2,8 @@
  * JSON parsing helpers that preserve integer literals larger than
  * Number.MAX_SAFE_INTEGER as strings before JSON.parse can round them.
  */
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+
 const MAX_SAFE_INTEGER_ABS_STR = String(Number.MAX_SAFE_INTEGER);
 
 function isAsciiDigit(ch: string | undefined): boolean {
@@ -134,17 +136,10 @@ export function parseJsonObjectPreservingUnsafeIntegers(
 ): Record<string, unknown> | null {
   if (typeof value === "string") {
     try {
-      const parsed = parseJsonPreservingUnsafeIntegers(value);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
+      return asNullableRecord(parseJsonPreservingUnsafeIntegers(value));
     } catch {
       return null;
     }
-    return null;
   }
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return null;
+  return asNullableRecord(value);
 }

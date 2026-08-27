@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 
+export const WORKER_PUBLIC_INGRESS_PATH = "/__openclaw__/worker";
 export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
 export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;
 export const WORKER_PROTOCOL_MAX_PAYLOAD_BYTES = 64 * 1024;
@@ -32,6 +33,7 @@ export const WorkerAdmissionFailureReasonSchema = Type.Union([
 
 export const WorkerProtocolCloseReasonSchema = Type.Union([
   WorkerAdmissionFailureReasonSchema,
+  Type.Literal("admission-rejected"),
   Type.Literal("invalid-handshake"),
   Type.Literal("protocol-mismatch"),
   Type.Literal("gateway-unavailable"),

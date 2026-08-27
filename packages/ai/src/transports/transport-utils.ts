@@ -4,6 +4,7 @@ import {
   asFiniteNumberInRange,
   parseStrictFiniteNumber,
   parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -17,11 +18,18 @@ const NON_LATIN_RE =
   /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
 const CJK_SURROGATE_HIGH_RE = /[\uD840-\uD87E][\uDC00-\uDFFF]/g;
 
+export function parsePositiveInteger(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
+}
+
 export function sha256Hex(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function sha256HexPrefix(value: string | Uint8Array, length: number): string {
+function sha256HexPrefix(value: string | Uint8Array, length: number): string {
   return sha256Hex(value).slice(0, length);
 }
 
@@ -83,8 +91,11 @@ export function supportsModelTools(model: { compat?: unknown }): boolean {
   return compat?.supportsTools !== false;
 }
 
-export function isCodeModeModelVisibleToolName(name: string): boolean {
-  return name === "exec" || name === "wait" || name === "computer" || name === "image";
+export function isCodeModeModelVisibleToolName(
+  name: string,
+  visibleToolNames: ReadonlySet<string>,
+): boolean {
+  return visibleToolNames.has(name);
 }
 
 function isGoogleGemini3Model(modelId: string, family: "flash" | "pro"): boolean {

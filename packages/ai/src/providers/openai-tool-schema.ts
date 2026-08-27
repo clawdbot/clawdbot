@@ -25,7 +25,7 @@ type ToolSchemaCompatInput = {
 };
 
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-let strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
+const strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
 
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
@@ -71,10 +71,6 @@ function rememberStrictOpenAISchema(schema: object, key: string, value: unknown)
     ),
   );
   return value;
-}
-
-export function clearOpenAIToolSchemaCacheForTest(): void {
-  strictOpenAISchemaCache = new WeakMap();
 }
 
 /** Normalizes a tool parameter schema into the OpenAI strict JSON-schema subset. */

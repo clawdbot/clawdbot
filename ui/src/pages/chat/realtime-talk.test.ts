@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import * as gatewayRelayTransport from "./realtime-talk-gateway-relay.ts";
 import * as googleLiveTransport from "./realtime-talk-google-live.ts";
 import type {
@@ -20,11 +21,11 @@ const {
   googleSwitchCamera,
   webRtcSwitchCamera,
 } = {
-  googleStart: vi.fn(async () => undefined),
+  googleStart: vi.fn(async () => "ready" as const),
   googleStop: vi.fn(),
-  relayStart: vi.fn(async () => undefined),
+  relayStart: vi.fn(async () => "ready" as const),
   relayStop: vi.fn(),
-  webRtcStart: vi.fn(async () => undefined),
+  webRtcStart: vi.fn(async () => "ready" as const),
   webRtcStop: vi.fn(),
   googleSetVideoEnabled: vi.fn(async () => undefined),
   webRtcSetVideoEnabled: vi.fn(async () => undefined),
@@ -39,6 +40,7 @@ type MockTransport = RealtimeTalkTransport & { ctx: RealtimeTalkTransportContext
 const googleInstances: MockTransport[] = [];
 const relayInstances: MockTransport[] = [];
 const webRtcInstances: MockTransport[] = [];
+const requestTimeoutOptions = { timeoutMs: 30_000 };
 
 function transportContext(transport: object | undefined): RealtimeTalkTransportContext {
   if (!transport) {
@@ -121,10 +123,14 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenCalledWith("talk.client.create", {
-      sessionKey: "main",
-      capabilities: ["voice-transcript"],
-    });
+    expect(request).toHaveBeenCalledWith(
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        capabilities: ["voice-transcript"],
+      },
+      requestTimeoutOptions,
+    );
     expect(googleInstances).toHaveLength(1);
     expect(googleStart).toHaveBeenCalledTimes(1);
     expect(webRtcInstances).toHaveLength(0);
@@ -154,7 +160,8 @@ describe("RealtimeTalkSession", () => {
       transport: "webrtc-sdp",
       clientSecret: "secret",
     }));
-    const session = new RealtimeTalkSession({ request } as never, "main");
+    const client = { request } as never;
+    const session = new RealtimeTalkSession(client, "main");
 
     await session.start();
 
@@ -209,6 +216,118 @@ describe("RealtimeTalkSession", () => {
     expect(webRtcInstances).toHaveLength(0);
   });
 
+  it("closes a Gateway relay allocated after the session stops", async () => {
+    const create = createDeferred<{
+      provider: string;
+      transport: "gateway-relay";
+      relaySessionId: string;
+      audio: {
+        inputEncoding: "pcm16";
+        inputSampleRateHz: number;
+        outputEncoding: "pcm16";
+        outputSampleRateHz: number;
+      };
+    }>();
+    const request = vi.fn((method: string) => {
+      if (method === "talk.client.create") {
+        return create.promise;
+      }
+      if (method === "talk.session.close") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const session = new RealtimeTalkSession({ request } as never, "main");
+
+    const starting = session.start();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "talk.client.create",
+        expect.anything(),
+        requestTimeoutOptions,
+      ),
+    );
+    session.stop();
+    create.resolve({
+      provider: "openai",
+      transport: "gateway-relay",
+      relaySessionId: "relay-stale",
+      audio: {
+        inputEncoding: "pcm16",
+        inputSampleRateHz: 24_000,
+        outputEncoding: "pcm16",
+        outputSampleRateHz: 24_000,
+      },
+    });
+    await starting;
+
+    expect(request).toHaveBeenCalledWith(
+      "talk.session.close",
+      { sessionId: "relay-stale" },
+      { timeoutMs: 30_000 },
+    );
+    expect(relayInstances).toHaveLength(0);
+  });
+
+  it("closes a superseded client-owned allocation without replacing the active call", async () => {
+    const creates: Array<ReturnType<typeof createDeferred<unknown>>> = [];
+    const request = vi.fn((method: string) => {
+      if (method === "talk.client.create") {
+        const create = createDeferred<unknown>();
+        creates.push(create);
+        return create.promise;
+      }
+      if (method === "talk.client.close") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as never;
+    const session = new RealtimeTalkSession(client, "main");
+
+    const firstStart = session.start();
+    await vi.waitFor(() => expect(creates).toHaveLength(1));
+    session.stop();
+    const secondStart = session.start();
+    await vi.waitFor(() => expect(creates).toHaveLength(2));
+    creates[1]!.resolve({
+      provider: "openai",
+      transport: "webrtc",
+      voiceSessionId: "voice-current",
+      clientSecret: "secret",
+    });
+    await secondStart;
+    const blocked = new RealtimeTalkSession(client, "main");
+    await expect(blocked.start()).rejects.toThrow(
+      "Too many active or closing realtime Talk voice sessions",
+    );
+    expect(creates).toHaveLength(2);
+    creates[0]!.resolve({
+      provider: "openai",
+      transport: "webrtc",
+      voiceSessionId: "voice-stale",
+      clientSecret: "secret",
+    });
+    await firstStart;
+
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "talk.client.close",
+        {
+          sessionKey: "main",
+          voiceSessionId: "voice-stale",
+        },
+        {
+          signal: expect.any(AbortSignal),
+          timeoutMs: 30_000,
+        },
+      ),
+    );
+    expect(webRtcInstances).toHaveLength(1);
+    expect(webRtcStart).toHaveBeenCalledTimes(1);
+    session.stop();
+  });
+
   it("falls back to talk.session.create when gateway-relay is rejected by talk.client.create", async () => {
     const request = vi
       .fn()
@@ -235,19 +354,29 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(1, "talk.client.create", {
-      sessionKey: "main",
-      provider: "xai",
-      transport: "gateway-relay",
-      capabilities: ["voice-transcript"],
-    });
-    expect(request).toHaveBeenNthCalledWith(2, "talk.session.create", {
-      sessionKey: "main",
-      provider: "xai",
-      transport: "gateway-relay",
-      mode: "realtime",
-      brain: "agent-consult",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        provider: "xai",
+        transport: "gateway-relay",
+        capabilities: ["voice-transcript"],
+      },
+      requestTimeoutOptions,
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "talk.session.create",
+      {
+        sessionKey: "main",
+        provider: "xai",
+        transport: "gateway-relay",
+        mode: "realtime",
+        brain: "agent-consult",
+      },
+      requestTimeoutOptions,
+    );
     expect(relayInstances).toHaveLength(1);
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
@@ -290,19 +419,29 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(2, "talk.client.create", {
-      sessionKey: "main",
-      provider: "openai",
-      transport: "gateway-relay",
-      capabilities: ["voice-transcript", "camera-frame"],
-    });
-    expect(request).toHaveBeenNthCalledWith(3, "talk.session.create", {
-      sessionKey: "main",
-      provider: "openai",
-      transport: "gateway-relay",
-      mode: "realtime",
-      brain: "agent-consult",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        provider: "openai",
+        transport: "gateway-relay",
+        capabilities: ["voice-transcript", "camera-frame"],
+      },
+      requestTimeoutOptions,
+    );
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "talk.session.create",
+      {
+        sessionKey: "main",
+        provider: "openai",
+        transport: "gateway-relay",
+        mode: "realtime",
+        brain: "agent-consult",
+      },
+      requestTimeoutOptions,
+    );
     expect(onVideoCapability).toHaveBeenCalledOnce();
     expect(onVideoCapability).toHaveBeenCalledWith(false);
     expect(relayInstances).toHaveLength(1);
@@ -353,18 +492,22 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenCalledWith("talk.client.create", {
-      sessionKey: "main",
-      provider: "openai",
-      model: "gpt-realtime-2",
-      voice: "marin",
-      transport: "webrtc",
-      vadThreshold: 0.45,
-      silenceDurationMs: 650,
-      prefixPaddingMs: 250,
-      reasoningEffort: "low",
-      capabilities: ["voice-transcript"],
-    });
+    expect(request).toHaveBeenCalledWith(
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        provider: "openai",
+        model: "gpt-realtime-2",
+        voice: "marin",
+        transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
+        capabilities: ["voice-transcript"],
+      },
+      requestTimeoutOptions,
+    );
     expect(transportContext(webRtcInstances[0])).toEqual(
       expect.objectContaining({ inputDeviceId: "usb-mic", videoDeviceId: "desk-camera" }),
     );
@@ -394,11 +537,16 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(1, "talk.catalog", {});
-    expect(request).toHaveBeenNthCalledWith(2, "talk.client.create", {
-      sessionKey: "main",
-      capabilities: ["voice-transcript", "camera-frame"],
-    });
+    expect(request).toHaveBeenNthCalledWith(1, "talk.catalog", {}, requestTimeoutOptions);
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        capabilities: ["voice-transcript", "camera-frame"],
+      },
+      requestTimeoutOptions,
+    );
     expect(onVideoCapability).toHaveBeenCalledWith(true);
     expect(transportContext(webRtcInstances[0])).toEqual(
       expect.not.objectContaining({ videoEnabled: expect.anything() }),
@@ -505,10 +653,15 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(2, "talk.client.create", {
-      sessionKey: "main",
-      capabilities: ["voice-transcript"],
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      2,
+      "talk.client.create",
+      {
+        sessionKey: "main",
+        capabilities: ["voice-transcript"],
+      },
+      requestTimeoutOptions,
+    );
     expect(onVideoCapability).toHaveBeenCalledWith(false);
   });
 
@@ -534,8 +687,12 @@ describe("RealtimeTalkSession", () => {
     await expect(session.start()).rejects.toBe(clientError);
 
     expect(request.mock.calls).toEqual([
-      ["talk.client.create", { sessionKey: "main", capabilities: ["voice-transcript"] }],
-      ["talk.config", {}],
+      [
+        "talk.client.create",
+        { sessionKey: "main", capabilities: ["voice-transcript"] },
+        requestTimeoutOptions,
+      ],
+      ["talk.config", {}, requestTimeoutOptions],
     ]);
     expect(relayInstances).toHaveLength(0);
   });
@@ -573,12 +730,17 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(3, "talk.session.create", {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "talk.session.create",
+      {
+        sessionKey: "main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      requestTimeoutOptions,
+    );
     expect(relayInstances).toHaveLength(1);
     expect(relayStart).toHaveBeenCalledTimes(1);
   });
@@ -610,12 +772,17 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenNthCalledWith(3, "talk.session.create", {
-      sessionKey: "main",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-    });
+    expect(request).toHaveBeenNthCalledWith(
+      3,
+      "talk.session.create",
+      {
+        sessionKey: "main",
+        mode: "realtime",
+        transport: "gateway-relay",
+        brain: "agent-consult",
+      },
+      requestTimeoutOptions,
+    );
     expect(relayInstances).toHaveLength(1);
   });
 
@@ -635,8 +802,12 @@ describe("RealtimeTalkSession", () => {
     await expect(session.start()).rejects.toBe(clientError);
 
     expect(request.mock.calls).toEqual([
-      ["talk.client.create", { sessionKey: "main", capabilities: ["voice-transcript"] }],
-      ["talk.config", {}],
+      [
+        "talk.client.create",
+        { sessionKey: "main", capabilities: ["voice-transcript"] },
+        requestTimeoutOptions,
+      ],
+      ["talk.config", {}, requestTimeoutOptions],
     ]);
     expect(relayInstances).toHaveLength(0);
   });
@@ -657,338 +828,13 @@ describe("RealtimeTalkSession", () => {
     await expect(session.start()).rejects.toBe(clientError);
 
     expect(request.mock.calls).toEqual([
-      ["talk.client.create", { sessionKey: "main", capabilities: ["voice-transcript"] }],
-      ["talk.config", {}],
-    ]);
-    expect(relayInstances).toHaveLength(0);
-  });
-
-  it("retries finalized transcript writes in order", async () => {
-    vi.useFakeTimers();
-    try {
-      const transcriptEntryIds: string[] = [];
-      let firstAttempt = true;
-      const request = vi.fn(async (method: string, params?: { entryId?: string }) => {
-        if (method === "talk.client.create") {
-          return {
-            provider: "openai",
-            transport: "webrtc",
-            voiceSessionId: "voice-queue",
-            clientSecret: "secret",
-          };
-        }
-        if (method === "talk.client.transcript") {
-          transcriptEntryIds.push(String(params?.entryId));
-          if (params?.entryId === "1" && firstAttempt) {
-            firstAttempt = false;
-            throw new Error("temporary failure");
-          }
-          return { ok: true };
-        }
-        return { ok: true };
-      });
-      const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
-      await session.start();
-      const context = transportContext(webRtcInstances[0]) as {
-        callbacks: {
-          onTranscript?: (entry: {
-            role: "user" | "assistant";
-            text: string;
-            final: boolean;
-          }) => void;
-        };
-      };
-      context.callbacks.onTranscript?.({ role: "user", text: "first", final: true });
-      context.callbacks.onTranscript?.({ role: "assistant", text: "second", final: true });
-
-      await vi.advanceTimersByTimeAsync(500);
-      await vi.waitFor(() => expect(transcriptEntryIds).toEqual(["1", "1", "2"]));
-      session.stop();
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("continues entry ids when the same voice session replaces its transport", async () => {
-    const transcriptEntryIds: string[] = [];
-    const request = vi.fn(async (method: string, params?: { entryId?: string }) => {
-      if (method === "talk.client.create") {
-        return {
-          provider: "openai",
-          transport: "webrtc",
-          voiceSessionId: "voice-resume",
-          clientSecret: "secret",
-        };
-      }
-      if (method === "talk.client.transcript") {
-        transcriptEntryIds.push(String(params?.entryId));
-      }
-      return { ok: true };
-    });
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {});
-
-    await session.start();
-    const firstContext = transportContext(webRtcInstances[0]) as {
-      callbacks: {
-        onTranscript?: (entry: {
-          role: "user" | "assistant";
-          text: string;
-          final: boolean;
-        }) => void;
-      };
-      flushTranscriptWrites?: () => Promise<void>;
-    };
-    firstContext.callbacks.onTranscript?.({ role: "user", text: "first", final: true });
-    await firstContext.flushTranscriptWrites?.();
-
-    await session.start();
-    const secondContext = transportContext(webRtcInstances[1]) as typeof firstContext;
-    secondContext.callbacks.onTranscript?.({ role: "assistant", text: "second", final: true });
-    await secondContext.flushTranscriptWrites?.();
-
-    expect(transcriptEntryIds).toEqual(["1", "2"]);
-    expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toEqual([
-      ["talk.client.create", { sessionKey: "agent:main:main", capabilities: ["voice-transcript"] }],
       [
         "talk.client.create",
-        {
-          sessionKey: "agent:main:main",
-          voiceSessionId: "voice-resume",
-          capabilities: ["voice-transcript"],
-        },
+        { sessionKey: "main", capabilities: ["voice-transcript"] },
+        requestTimeoutOptions,
       ],
+      ["talk.config", {}, requestTimeoutOptions],
     ]);
-    session.stop();
-    await Promise.resolve();
-  });
-
-  it("surfaces transcript failure after three attempts", async () => {
-    vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      const request = vi.fn(async (method: string) => {
-        if (method === "talk.client.create") {
-          return {
-            provider: "openai",
-            transport: "webrtc",
-            voiceSessionId: "voice-failure",
-            clientSecret: "secret",
-          };
-        }
-        if (method === "talk.client.transcript") {
-          throw new Error("still unavailable");
-        }
-        return { ok: true };
-      });
-      const onStatus = vi.fn();
-      const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
-        onStatus,
-      });
-      await session.start();
-      const context = transportContext(webRtcInstances[0]) as {
-        callbacks: {
-          onTranscript?: (entry: {
-            role: "user" | "assistant";
-            text: string;
-            final: boolean;
-          }) => void;
-        };
-      };
-      context.callbacks.onTranscript?.({ role: "user", text: "save me", final: true });
-
-      await vi.advanceTimersByTimeAsync(2_500);
-      await vi.waitFor(() =>
-        expect(onStatus).toHaveBeenCalledWith(
-          "error",
-          expect.stringContaining("Voice transcript could not be saved"),
-        ),
-      );
-      expect(
-        request.mock.calls.filter(([method]) => method === "talk.client.transcript"),
-      ).toHaveLength(3);
-      expect(warn).toHaveBeenCalled();
-      session.stop();
-      await vi.runAllTimersAsync();
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it("retries logical voice-session close after transient failures", async () => {
-    vi.useFakeTimers();
-    try {
-      let closeAttempts = 0;
-      const request = vi.fn(async (method: string) => {
-        if (method === "talk.client.create") {
-          return {
-            provider: "openai",
-            transport: "webrtc",
-            voiceSessionId: "voice-close-retry",
-            clientSecret: "secret",
-          };
-        }
-        if (method === "talk.client.close" && ++closeAttempts < 3) {
-          throw new Error("temporary close failure");
-        }
-        return { ok: true };
-      });
-      const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
-      await session.start();
-
-      session.stop();
-      await vi.runAllTimersAsync();
-
-      expect(closeAttempts).toBe(3);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("starts a new call without resuming the voice session being closed", async () => {
-    let createCount = 0;
-    let finishClose: (() => void) | undefined;
-    const closing = new Promise<void>((resolve) => {
-      finishClose = resolve;
-    });
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        createCount += 1;
-        return {
-          provider: "openai",
-          transport: "webrtc",
-          voiceSessionId: `voice-${createCount}`,
-          clientSecret: "secret",
-        };
-      }
-      if (method === "talk.client.close") {
-        await closing;
-      }
-      return { ok: true };
-    });
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
-    await session.start();
-
-    session.stop();
-    await session.start();
-
-    const creates = request.mock.calls.filter(([method]) => method === "talk.client.create");
-    expect(creates).toEqual([
-      ["talk.client.create", { sessionKey: "agent:main:main", capabilities: ["voice-transcript"] }],
-      ["talk.client.create", { sessionKey: "agent:main:main", capabilities: ["voice-transcript"] }],
-    ]);
-    finishClose?.();
-    await Promise.resolve();
-  });
-
-  it("ignores final transcript callbacks emitted after shutdown begins", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        return {
-          provider: "openai",
-          transport: "webrtc",
-          voiceSessionId: "voice-shutdown",
-          clientSecret: "secret",
-        };
-      }
-      return { ok: true };
-    });
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
-    await session.start();
-    const context = transportContext(webRtcInstances[0]) as {
-      callbacks: {
-        onTranscript?: (entry: {
-          role: "user" | "assistant";
-          text: string;
-          final: boolean;
-        }) => void;
-      };
-    };
-
-    session.stop();
-    context.callbacks.onTranscript?.({ role: "user", text: "too late", final: true });
-    await Promise.resolve();
-
-    expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(false);
-  });
-
-  it("drops a previous transport's delayed transcript after stop and restart", async () => {
-    let createCount = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        createCount += 1;
-        return {
-          provider: "openai",
-          transport: "webrtc",
-          voiceSessionId: `voice-${createCount}`,
-          clientSecret: "secret",
-        };
-      }
-      return { ok: true };
-    });
-    const onTranscript = vi.fn();
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main", {
-      onTranscript,
-    });
-    await session.start();
-    const previousContext = transportContext(webRtcInstances[0]) as {
-      callbacks: {
-        onTranscript?: (entry: {
-          role: "user" | "assistant";
-          text: string;
-          final: boolean;
-        }) => void;
-      };
-    };
-
-    session.stop();
-    await session.start();
-    previousContext.callbacks.onTranscript?.({
-      role: "user",
-      text: "stale transcript",
-      final: true,
-    });
-    await Promise.resolve();
-
-    expect(onTranscript).not.toHaveBeenCalled();
-    expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(false);
-  });
-
-  it("does not report Gateway relay transcripts through the client RPC", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "talk.client.create") {
-        return {
-          provider: "openai",
-          transport: "gateway-relay",
-          relaySessionId: "relay-voice",
-          audio: {
-            inputEncoding: "pcm16",
-            inputSampleRateHz: 24_000,
-            outputEncoding: "pcm16",
-            outputSampleRateHz: 24_000,
-          },
-        };
-      }
-      return { ok: true };
-    });
-    const session = new RealtimeTalkSession({ request } as never, "agent:main:main");
-    await session.start();
-    const context = transportContext(relayInstances[0]) as {
-      callbacks: {
-        onTranscript?: (entry: {
-          role: "user" | "assistant";
-          text: string;
-          final: boolean;
-        }) => void;
-      };
-    };
-    context.callbacks.onTranscript?.({ role: "user", text: "server owns this", final: true });
-    await Promise.resolve();
-
-    expect(request.mock.calls.some(([method]) => method === "talk.client.transcript")).toBe(false);
-    session.stop();
-    await Promise.resolve();
-    expect(request.mock.calls.some(([method]) => method === "talk.client.close")).toBe(false);
+    expect(relayInstances).toHaveLength(0);
   });
 });

@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
+import { stableStringify } from "@openclaw/normalization-core";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { stableStringify } from "../../agents/stable-stringify.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import {
   loadSessionEntry,
@@ -15,6 +15,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import {
+  attachSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "../../sessions/transcript-events.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { resolveWorkerSessionTarget, type ResolvedWorkerSessionTarget } from "./session-target.js";
 import {
@@ -46,6 +50,8 @@ type ApplyTranscriptCommitResult =
 type PersistedCommitResolution =
   | { kind: "ambiguous" | "missing" }
   | { kind: "found"; messages: AppliedTranscriptMessage[] };
+
+const WORKER_TRANSCRIPT_SESSION_CONFLICT = new Error("worker transcript session changed");
 
 function cloneContentPart(
   part: WorkerTranscriptMessage["content"][number],
@@ -111,6 +117,7 @@ function buildCommittedMessage(
     model: message.model,
     ...(message.responseModel ? { responseModel: message.responseModel } : {}),
     ...(message.responseId ? { responseId: message.responseId } : {}),
+    ...(message.providerReplay ? { providerReplay: structuredClone(message.providerReplay) } : {}),
     ...(message.diagnostics
       ? {
           diagnostics: message.diagnostics.map((diagnostic) => ({
@@ -313,74 +320,98 @@ async function applyWorkerTranscriptCommit(params: {
   messages: readonly CommittedAgentMessage[];
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
+  runId: string | null;
   sessionId: string;
   target: ResolvedWorkerSessionTarget;
 }): Promise<ApplyTranscriptCommitResult> {
-  const redactedMessages = params.messages.map(
-    (message) => redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+  const redactedMessages = params.messages.map((message) =>
+    attachSessionTranscriptRunId(
+      redactTranscriptMessage(message, params.config) as CommittedAgentMessage,
+      params.runId,
+    ),
   );
-  const applied = await withTranscriptWriteTransaction(params.target, ({ sessionFile }) => {
-    const currentEntry = loadSessionEntry(params.target);
-    if (!currentEntry || currentEntry.sessionId !== params.sessionId) {
-      return { ok: false as const, reason: "session-not-attached" as const };
-    }
+  const expectedState = {
+    sessionId: params.sessionId,
+    lifecycleRevision: params.target.sessionEntry.lifecycleRevision,
+  };
+  let applied: ApplyTranscriptCommitResult;
+  try {
+    applied = await withTranscriptWriteTransaction(params.target, (transcriptTarget) => {
+      const currentEntry = loadSessionEntry(params.target);
+      if (!currentEntry || currentEntry.sessionId !== expectedState.sessionId) {
+        return { ok: false as const, reason: "session-not-attached" as const };
+      }
+      if (currentEntry.lifecycleRevision !== expectedState.lifecycleRevision) {
+        return { ok: false as const, reason: "invalid-batch" as const };
+      }
 
-    const manager = SessionManager.open(sessionFile);
-    if (params.recoverPersistedBatch) {
-      // Only a pending ledger row may prove an off-branch batch: the agent DB
-      // can commit before the shared replay ledger records its terminal result.
-      const recovered = resolvePersistedCommitAcrossDag({
+      const manager = SessionManager.open(transcriptTarget);
+      if (params.recoverPersistedBatch) {
+        // Only a pending ledger row may prove an off-branch batch: the agent DB
+        // can commit before the shared replay ledger records its terminal result.
+        const recovered = resolvePersistedCommitAcrossDag({
+          baseLeafId: params.requestedBaseLeafId,
+          manager,
+          messages: redactedMessages,
+        });
+        if (recovered.kind === "found") {
+          return { ok: true as const, messages: recovered.messages };
+        }
+        if (recovered.kind === "ambiguous") {
+          return { ok: false as const, reason: "invalid-batch" as const };
+        }
+      }
+      const prefix = resolveActiveCommitPrefix({
         baseLeafId: params.requestedBaseLeafId,
         manager,
         messages: redactedMessages,
       });
-      if (recovered.kind === "found") {
-        return { ok: true as const, messages: recovered.messages };
+      if (!prefix.ok) {
+        return { ok: false as const, reason: "stale-base-leaf" as const };
       }
-      if (recovered.kind === "ambiguous") {
-        return { ok: false as const, reason: "invalid-batch" as const };
+
+      const messages = [...prefix.recoveredMessages];
+      let nextMessageSeq = prefix.activeVisibleEntryCount;
+      for (const message of redactedMessages.slice(prefix.recoveredMessages.length)) {
+        const messageId = manager.appendMessage(message, {
+          config: params.config,
+          // Active-path recovery owns dedupe. A global key scan could reuse an
+          // id from an abandoned branch while SessionManager advances another id.
+          idempotencyLookup: "caller-checked",
+        });
+        nextMessageSeq += 1;
+        messages.push({
+          appended: true,
+          message,
+          messageId,
+          messageSeq: nextMessageSeq,
+        });
       }
-    }
-    const prefix = resolveActiveCommitPrefix({
-      baseLeafId: params.requestedBaseLeafId,
-      manager,
-      messages: redactedMessages,
+
+      const freshEntry = loadSessionEntry(params.target);
+      if (
+        !freshEntry ||
+        freshEntry.sessionId !== expectedState.sessionId ||
+        freshEntry.lifecycleRevision !== expectedState.lifecycleRevision
+      ) {
+        throw WORKER_TRANSCRIPT_SESSION_CONFLICT;
+      }
+      const appendedCount = messages.filter((message) => message.appended).length;
+      const nextEntry = {
+        ...freshEntry,
+        ...(appendedCount > 0
+          ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) }
+          : {}),
+      };
+      replaceSessionEntrySync(params.target, nextEntry);
+      return { ok: true as const, messages };
     });
-    if (!prefix.ok) {
-      return { ok: false as const, reason: "stale-base-leaf" as const };
+  } catch (error) {
+    if (error === WORKER_TRANSCRIPT_SESSION_CONFLICT) {
+      return { ok: false, reason: "invalid-batch" };
     }
-
-    const messages = [...prefix.recoveredMessages];
-    let nextMessageSeq = prefix.activeVisibleEntryCount;
-    for (const message of redactedMessages.slice(prefix.recoveredMessages.length)) {
-      const messageId = manager.appendMessage(message, {
-        config: params.config,
-        // Active-path recovery owns dedupe. A global key scan could reuse an
-        // id from an abandoned branch while SessionManager advances another id.
-        idempotencyLookup: "caller-checked",
-      });
-      nextMessageSeq += 1;
-      messages.push({
-        appended: true,
-        message,
-        messageId,
-        messageSeq: nextMessageSeq,
-      });
-    }
-
-    const freshEntry = loadSessionEntry(params.target);
-    if (!freshEntry || freshEntry.sessionId !== params.sessionId) {
-      return { ok: false as const, reason: "session-not-attached" as const };
-    }
-    const appendedCount = messages.filter((message) => message.appended).length;
-    const nextEntry = {
-      ...freshEntry,
-      sessionFile,
-      ...(appendedCount > 0 ? { updatedAt: Math.max(freshEntry.updatedAt ?? 0, Date.now()) } : {}),
-    };
-    replaceSessionEntrySync(params.target, nextEntry);
-    return { ok: true as const, messages };
-  });
+    throw error;
+  }
   if (!applied.ok) {
     return applied;
   }
@@ -389,10 +420,12 @@ async function applyWorkerTranscriptCommit(params: {
     if (!message.appended) {
       continue;
     }
+    const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
     await publishTranscriptUpdate(params.target, {
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
+      ...(runId ? { runId } : {}),
     });
   }
   return applied;
@@ -454,6 +487,7 @@ export function createWorkerTranscriptCommitter(options: WorkerTranscriptCommitt
         messages,
         recoverPersistedBatch: started.kind === "recover",
         requestedBaseLeafId: params.request.baseLeafId,
+        runId: params.identity.runId,
         sessionId,
         target,
       });

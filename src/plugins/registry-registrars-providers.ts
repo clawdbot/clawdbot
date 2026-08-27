@@ -1,33 +1,12 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  getRegisteredAgentHarness,
-  registerAgentHarness as registerGlobalAgentHarness,
-} from "../agents/harness/registry.js";
-import type { AgentHarness } from "../agents/harness/types.js";
-import {
-  getRegisteredEmbeddingProvider,
-  registerEmbeddingProvider as registerGlobalEmbeddingProvider,
-  type EmbeddingProviderAdapter,
-} from "./embedding-providers.js";
+import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
+import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
+import { canClaimReservedCommandOwnership } from "./registry-registrars-operations.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginTextTransformsRegistration } from "./registry-types.js";
-import type {
-  CliBackendPlugin,
-  ImageGenerationProviderPlugin,
-  MediaUnderstandingProviderPlugin,
-  MigrationProviderPlugin,
-  MusicGenerationProviderPlugin,
-  ProviderPlugin,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeVoiceProviderPlugin,
-  SpeechProviderPlugin,
-  TranscriptSourceProvider,
-  VideoGenerationProviderPlugin,
-  WebFetchProviderPlugin,
-  WebSearchProviderPlugin,
-  WorkerProvider,
-} from "./types.js";
+import type { CliBackendPlugin, ProviderPlugin, WorkerProvider } from "./types.js";
 import { validateWorkerProviderContract } from "./worker-provider-registry.js";
 
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
@@ -41,7 +20,6 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
 export function createProviderRegistrars(state: PluginRegistryState) {
   const {
     registry,
-    registryParams,
     pushDiagnostic,
     registerSynthesizedTextModelCatalogProvider,
     registerSynthesizedMediaModelCatalogProvider,
@@ -82,7 +60,11 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerSynthesizedTextModelCatalogProvider({ record, provider: normalizedProvider });
   };
 
-  const registerAgentHarness = (record: PluginRecord, harness: AgentHarness) => {
+  const registerAgentHarness = (
+    record: PluginRecord,
+    harness: AgentHarness,
+    options?: AgentHarnessRegistrationOptions,
+  ) => {
     const id = normalizeOptionalString((harness as Partial<AgentHarness> | undefined)?.id) ?? "";
     if (!id) {
       pushDiagnostic({
@@ -90,6 +72,15 @@ export function createProviderRegistrars(state: PluginRegistryState) {
         pluginId: record.id,
         source: record.source,
         message: "agent harness registration missing id",
+      });
+      return;
+    }
+    if (id === "openclaw") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: 'agent harness id "openclaw" is reserved for the built-in runtime',
       });
       return;
     }
@@ -102,17 +93,23 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const existing =
-      registryParams.activateGlobalSideEffects === false
-        ? registry.agentHarnesses.find((entry) => entry.harness.id === id)
-        : getRegisteredAgentHarness(id);
+    if (
+      options?.nativeCompaction &&
+      (!canClaimReservedCommandOwnership(record) ||
+        id !== "codex" ||
+        typeof options.nativeCompaction !== "function")
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: 'native compaction requires the registry-owned "codex" harness',
+      });
+      return;
+    }
+    const existing = registry.agentHarnesses.find((entry) => entry.harness.id === id);
     if (existing) {
-      const ownerPluginId =
-        "ownerPluginId" in existing
-          ? existing.ownerPluginId
-          : "pluginId" in existing
-            ? existing.pluginId
-            : undefined;
+      const ownerPluginId = "pluginId" in existing ? existing.pluginId : undefined;
       const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
       pushDiagnostic({
         level: "error",
@@ -123,14 +120,12 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       return;
     }
     const normalizedHarness = { ...harness, id, pluginId: harness.pluginId ?? record.id };
-    if (registryParams.activateGlobalSideEffects !== false) {
-      registerGlobalAgentHarness(normalizedHarness, { ownerPluginId: record.id });
-    }
     record.agentHarnessIds.push(id);
     registry.agentHarnesses.push({
       pluginId: record.id,
       pluginName: record.name,
       harness: normalizedHarness,
+      ...(options?.nativeCompaction ? { nativeCompaction: options.nativeCompaction } : {}),
       source: record.source,
       rootDir: record.rootDir,
     });
@@ -160,6 +155,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registry.cliBackends.push({
       pluginId: record.id,
       pluginName: record.name,
+      builtWithOpenClawVersion: record.builtWithOpenClawVersion,
       backend: { ...backend, id },
       source: record.source,
       rootDir: record.rootDir,
@@ -212,10 +208,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
+    const coreEntry = getCoreEmbeddingProvider(id);
     const existing =
-      registryParams.activateGlobalSideEffects === false
-        ? registry.embeddingProviders.find((entry) => entry.provider.id === id)
-        : getRegisteredEmbeddingProvider(id);
+      coreEntry ?? registry.embeddingProviders.find((entry) => entry.provider.id === id);
     if (existing) {
       const ownerPluginId =
         "ownerPluginId" in existing
@@ -232,9 +227,6 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    if (registryParams.activateGlobalSideEffects !== false) {
-      registerGlobalEmbeddingProvider(adapter, { ownerPluginId: record.id });
-    }
     registry.embeddingProviders.push({
       pluginId: record.id,
       pluginName: record.name,
@@ -247,46 +239,52 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     }
   };
 
-  const registerUniqueProviderLike = <T extends { id: string }>(params: {
-    record: PluginRecord;
-    provider: T;
-    kindLabel: string;
-    registrations: Array<PluginOwnedProviderRegistration<T>>;
-    ownedIds: string[];
-  }): boolean => {
-    const id = params.provider.id.trim();
-    const { record, kindLabel } = params;
-    if (!id) {
-      pushDiagnostic({
-        level: "error",
+  const createProviderLikeRegistrar =
+    <T extends { id: string }>(params: {
+      kindLabel: string;
+      registrations: Array<PluginOwnedProviderRegistration<T>>;
+      ownedIds: (record: PluginRecord) => string[];
+      onRegister?: (record: PluginRecord, provider: T) => void;
+    }) =>
+    (record: PluginRecord, provider: T): boolean | void => {
+      const id = provider.id.trim();
+      const { kindLabel } = params;
+      if (!id) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `${kindLabel} registration missing id`,
+        });
+        return params.onRegister ? undefined : false;
+      }
+      const existing = params.registrations.find((entry) => entry.provider.id === id);
+      if (existing) {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: `${kindLabel} already registered: ${id} (${existing.pluginId})`,
+        });
+        return params.onRegister ? undefined : false;
+      }
+      const ownedIds = params.ownedIds(record);
+      if (!ownedIds.includes(id)) {
+        ownedIds.push(id);
+      }
+      params.registrations.push({
         pluginId: record.id,
+        pluginName: record.name,
+        provider,
         source: record.source,
-        message: `${kindLabel} registration missing id`,
+        rootDir: record.rootDir,
       });
-      return false;
-    }
-    const existing = params.registrations.find((entry) => entry.provider.id === id);
-    if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `${kindLabel} already registered: ${id} (${existing.pluginId})`,
-      });
-      return false;
-    }
-    if (!params.ownedIds.includes(id)) {
-      params.ownedIds.push(id);
-    }
-    params.registrations.push({
-      pluginId: record.id,
-      pluginName: record.name,
-      provider: params.provider,
-      source: record.source,
-      rootDir: record.rootDir,
-    });
-    return true;
-  };
+      if (params.onRegister) {
+        params.onRegister(record, provider);
+        return;
+      }
+      return true;
+    };
 
   const registerWorkerProvider = (record: PluginRecord, provider: WorkerProvider) => {
     const reject = (message: string) =>
@@ -314,170 +312,98 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerSpeechProvider = (record: PluginRecord, provider: SpeechProviderPlugin) => {
-    if (
-      registerUniqueProviderLike({
-        record,
-        provider,
-        kindLabel: "speech provider",
-        registrations: registry.speechProviders,
-        ownedIds: record.speechProviderIds,
-      })
-    ) {
+  const registerSpeechProvider = createProviderLikeRegistrar({
+    kindLabel: "speech provider",
+    registrations: registry.speechProviders,
+    ownedIds: (record) => record.speechProviderIds,
+    onRegister: (record, provider) =>
       registerSynthesizedVoiceModelCatalogProvider({
         record,
         provider,
         capabilities: { tts: true },
         modes: ["tts"],
-      });
-    }
-  };
+      }),
+  });
 
-  const registerRealtimeTranscriptionProvider = (
-    record: PluginRecord,
-    provider: RealtimeTranscriptionProviderPlugin,
-  ) => {
-    if (
-      registerUniqueProviderLike({
-        record,
-        provider,
-        kindLabel: "realtime transcription provider",
-        registrations: registry.realtimeTranscriptionProviders,
-        ownedIds: record.realtimeTranscriptionProviderIds,
-      })
-    ) {
+  const registerRealtimeTranscriptionProvider = createProviderLikeRegistrar({
+    kindLabel: "realtime transcription provider",
+    registrations: registry.realtimeTranscriptionProviders,
+    ownedIds: (record) => record.realtimeTranscriptionProviderIds,
+    onRegister: (record, provider) =>
       registerSynthesizedVoiceModelCatalogProvider({
         record,
         provider,
         capabilities: { realtime_transcription: true },
         modes: ["realtime_transcription"],
-      });
-    }
-  };
+      }),
+  });
 
-  const registerRealtimeVoiceProvider = (
-    record: PluginRecord,
-    provider: RealtimeVoiceProviderPlugin,
-  ) => {
-    if (
-      registerUniqueProviderLike({
-        record,
-        provider,
-        kindLabel: "realtime voice provider",
-        registrations: registry.realtimeVoiceProviders,
-        ownedIds: record.realtimeVoiceProviderIds,
-      })
-    ) {
+  const registerRealtimeVoiceProvider = createProviderLikeRegistrar({
+    kindLabel: "realtime voice provider",
+    registrations: registry.realtimeVoiceProviders,
+    ownedIds: (record) => record.realtimeVoiceProviderIds,
+    onRegister: (record, provider) =>
       registerSynthesizedVoiceModelCatalogProvider({
         record,
         provider,
         capabilities: { realtime_voice: true },
         modes: ["realtime_voice"],
-      });
-    }
-  };
+      }),
+  });
 
-  const registerMediaUnderstandingProvider = (
-    record: PluginRecord,
-    provider: MediaUnderstandingProviderPlugin,
-  ) =>
-    registerUniqueProviderLike({
-      record,
-      provider,
-      kindLabel: "media provider",
-      registrations: registry.mediaUnderstandingProviders,
-      ownedIds: record.mediaUnderstandingProviderIds,
-    });
+  const registerMediaUnderstandingProvider = createProviderLikeRegistrar({
+    kindLabel: "media provider",
+    registrations: registry.mediaUnderstandingProviders,
+    ownedIds: (record) => record.mediaUnderstandingProviderIds,
+  });
 
-  const registerTranscriptSourceProvider = (
-    record: PluginRecord,
-    provider: TranscriptSourceProvider,
-  ) =>
-    registerUniqueProviderLike({
-      record,
-      provider,
-      kindLabel: "transcripts source provider",
-      registrations: registry.transcriptSourceProviders,
-      ownedIds: record.transcriptSourceProviderIds,
-    });
+  const registerTranscriptSourceProvider = createProviderLikeRegistrar({
+    kindLabel: "transcripts source provider",
+    registrations: registry.transcriptSourceProviders,
+    ownedIds: (record) => record.transcriptSourceProviderIds,
+  });
 
-  const registerImageGenerationProvider = (
-    record: PluginRecord,
-    provider: ImageGenerationProviderPlugin,
-  ) => {
-    if (
-      registerUniqueProviderLike({
-        record,
-        provider,
-        kindLabel: "image-generation provider",
-        registrations: registry.imageGenerationProviders,
-        ownedIds: record.imageGenerationProviderIds,
-      })
-    ) {
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "image_generation", provider });
-    }
-  };
+  const registerImageGenerationProvider = createProviderLikeRegistrar({
+    kindLabel: "image-generation provider",
+    registrations: registry.imageGenerationProviders,
+    ownedIds: (record) => record.imageGenerationProviderIds,
+    onRegister: (record, provider) =>
+      registerSynthesizedMediaModelCatalogProvider({ record, kind: "image_generation", provider }),
+  });
 
-  const registerVideoGenerationProvider = (
-    record: PluginRecord,
-    provider: VideoGenerationProviderPlugin,
-  ) => {
-    if (
-      registerUniqueProviderLike({
-        record,
-        provider,
-        kindLabel: "video-generation provider",
-        registrations: registry.videoGenerationProviders,
-        ownedIds: record.videoGenerationProviderIds,
-      })
-    ) {
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "video_generation", provider });
-    }
-  };
+  const registerVideoGenerationProvider = createProviderLikeRegistrar({
+    kindLabel: "video-generation provider",
+    registrations: registry.videoGenerationProviders,
+    ownedIds: (record) => record.videoGenerationProviderIds,
+    onRegister: (record, provider) =>
+      registerSynthesizedMediaModelCatalogProvider({ record, kind: "video_generation", provider }),
+  });
 
-  const registerMusicGenerationProvider = (
-    record: PluginRecord,
-    provider: MusicGenerationProviderPlugin,
-  ) => {
-    if (
-      registerUniqueProviderLike({
-        record,
-        provider,
-        kindLabel: "music-generation provider",
-        registrations: registry.musicGenerationProviders,
-        ownedIds: record.musicGenerationProviderIds,
-      })
-    ) {
-      registerSynthesizedMediaModelCatalogProvider({ record, kind: "music_generation", provider });
-    }
-  };
+  const registerMusicGenerationProvider = createProviderLikeRegistrar({
+    kindLabel: "music-generation provider",
+    registrations: registry.musicGenerationProviders,
+    ownedIds: (record) => record.musicGenerationProviderIds,
+    onRegister: (record, provider) =>
+      registerSynthesizedMediaModelCatalogProvider({ record, kind: "music_generation", provider }),
+  });
 
-  const registerWebFetchProvider = (record: PluginRecord, provider: WebFetchProviderPlugin) =>
-    registerUniqueProviderLike({
-      record,
-      provider,
-      kindLabel: "web fetch provider",
-      registrations: registry.webFetchProviders,
-      ownedIds: record.webFetchProviderIds,
-    });
+  const registerWebFetchProvider = createProviderLikeRegistrar({
+    kindLabel: "web fetch provider",
+    registrations: registry.webFetchProviders,
+    ownedIds: (record) => record.webFetchProviderIds,
+  });
 
-  const registerWebSearchProvider = (record: PluginRecord, provider: WebSearchProviderPlugin) =>
-    registerUniqueProviderLike({
-      record,
-      provider,
-      kindLabel: "web search provider",
-      registrations: registry.webSearchProviders,
-      ownedIds: record.webSearchProviderIds,
-    });
+  const registerWebSearchProvider = createProviderLikeRegistrar({
+    kindLabel: "web search provider",
+    registrations: registry.webSearchProviders,
+    ownedIds: (record) => record.webSearchProviderIds,
+  });
 
-  const registerMigrationProvider = (record: PluginRecord, provider: MigrationProviderPlugin) =>
-    registerUniqueProviderLike({
-      record,
-      provider,
-      kindLabel: "migration provider",
-      registrations: registry.migrationProviders,
-      ownedIds: record.migrationProviderIds,
-    });
+  const registerMigrationProvider = createProviderLikeRegistrar({
+    kindLabel: "migration provider",
+    registrations: registry.migrationProviders,
+    ownedIds: (record) => record.migrationProviderIds,
+  });
 
   return {
     registerProvider,

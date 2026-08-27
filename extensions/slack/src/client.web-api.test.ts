@@ -2,9 +2,11 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackLookupClient,
+  createSlackReadClient,
+  createSlackStartupAuthClient,
   createSlackWebClient,
   getSlackListenerUploadCompletionClient,
 } from "./client.js";
@@ -154,38 +156,73 @@ async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]): P
   };
 }
 
-async function startRateLimitedSlackApiServer(requests: SlackApiRequest[]): Promise<{
-  baseUrl: string;
-  close(): Promise<void>;
-}> {
-  const server = createServer((request, response) => {
-    requests.push({
-      authorization: request.headers.authorization,
-      method: request.method,
-      url: request.url,
-    });
-    request.resume();
-    response.writeHead(429, {
-      "content-type": "application/json",
-      "retry-after": "2",
-    });
-    response.end(`${JSON.stringify({ ok: false, error: "ratelimited" })}\n`);
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  return {
-    baseUrl: `http://127.0.0.1:${address.port}`,
-    close: () => closeServer(server),
-  };
-}
-
 afterEach(() => {
   restoreTestEnv();
 });
 
 describe("Slack Web API routing", () => {
+  it("retries two transient startup auth failures", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("request timed out"))
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
+          status: 200,
+        }),
+      );
+    const client = createSlackStartupAuthClient("startup-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).resolves.toMatchObject({
+      ok: true,
+      team_id: "TMOCK",
+      user_id: "UMOCK",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not retry a permanent startup auth error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: "invalid_auth" }), {
+        status: 200,
+      }),
+    );
+    const client = createSlackStartupAuthClient("invalid-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).rejects.toThrow("invalid_auth");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries startup auth after a rate limit", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
+          status: 429,
+          headers: { "retry-after": "0" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ ok: true, team_id: "TMOCK", user_id: "UMOCK" }), {
+          status: 200,
+        }),
+      );
+    const client = createSlackStartupAuthClient("rate-limited-fixture", {
+      fetch: fetchMock as never,
+    });
+
+    await expect(client.auth.test()).resolves.toMatchObject({
+      ok: true,
+      team_id: "TMOCK",
+      user_id: "UMOCK",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts a stalled-header lookup after one request", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];
@@ -209,25 +246,24 @@ describe("Slack Web API routing", () => {
   });
 
   it("rejects rate limits without sleeping through Retry-After", async () => {
-    for (const key of TEST_ENV_KEYS) {
-      delete process.env[key];
-    }
-    const requests: SlackApiRequest[] = [];
-    const server = await startRateLimitedSlackApiServer(requests);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: "ratelimited" }), {
+        status: 429,
+        headers: { "retry-after": "2" },
+      }),
+    );
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const client = createSlackLookupClient("lookup-fixture", {
-        slackApiUrl: `${server.baseUrl}/api/`,
-        timeout: 1000,
+        fetch: fetchMock as never,
       });
-      const startedAt = Date.now();
 
       await expect(client.auth.test()).rejects.toThrow();
 
-      expect(Date.now() - startedAt).toBeLessThan(1000);
-      expect(requests).toHaveLength(1);
-      expect(requests[0]).toMatchObject({ method: "POST", url: "/api/auth.test" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy).not.toHaveBeenCalledWith(expect.any(Function), 2000);
     } finally {
-      await server.close();
+      timeoutSpy.mockRestore();
     }
   });
 
@@ -321,6 +357,34 @@ describe("Slack Web API routing", () => {
 
       expect(result.ok).toBe(true);
       expect(requests).toHaveLength(1);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("bounds dedicated reads without timing out shared clients", async () => {
+    for (const key of TEST_ENV_KEYS) {
+      delete process.env[key];
+    }
+    const requests: SlackApiRequest[] = [];
+    const server = await startSlackApiServer(requests, 80);
+    try {
+      const options = {
+        retryConfig: { retries: 0 },
+        slackApiUrl: `${server.baseUrl}/api/`,
+      };
+      const readClient = createSlackReadClient("xoxb-read", { ...options, timeout: 20 });
+      const sharedClient = createSlackWebClient("xoxb-shared", options);
+
+      await expect(readClient.auth.test()).rejects.toThrow();
+      await expect(sharedClient.auth.test()).resolves.toMatchObject({ ok: true });
+
+      // The read client aborts at 20ms, so whether its request reaches the
+      // server before the abort is a race on a loaded runner. The bound itself
+      // is asserted above; here only the shared client's arrival is certain,
+      // and its token proves the dedicated client did not carry the call.
+      expect(requests.length).toBeGreaterThanOrEqual(1);
+      expect(requests.at(-1)?.authorization).toBe("Bearer xoxb-shared");
     } finally {
       await server.close();
     }

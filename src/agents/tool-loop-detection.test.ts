@@ -13,6 +13,7 @@ const isMessagingToolSendActionMock = vi.hoisted(() =>
 vi.mock("./embedded-agent-messaging.js", () => ({
   isMessagingToolSendAction: isMessagingToolSendActionMock,
 }));
+import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   UNKNOWN_TOOL_THRESHOLD,
   detectToolCallLoop,
@@ -77,6 +78,24 @@ function recordFailedCall(
     toolCallId,
     error,
   });
+}
+
+function createExecLoopResult(params: {
+  status: "completed" | "failed";
+  exitCode: number | null;
+  output: string;
+  aggregated?: string;
+  timedOut?: boolean;
+}) {
+  return {
+    content: [{ type: "text", text: params.output }],
+    details: {
+      status: params.status,
+      exitCode: params.exitCode,
+      aggregated: params.aggregated ?? params.output,
+      ...(params.timedOut === undefined ? {} : { timedOut: params.timedOut }),
+    },
+  };
 }
 
 function recordRepeatedSuccessfulCalls(params: {
@@ -490,6 +509,710 @@ describe("tool-loop-detection", () => {
         expect(loopResult.detector).toBe("global_circuit_breaker");
         expect(loopResult.message).toContain("global circuit breaker");
       }
+    });
+
+    it("warns on repeated stable argument churn without vetoing the next call", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("argument_churn");
+        expect(loopResult.livenessSignal).toBe("argument_churn");
+        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+        expect(loopResult.message).toContain("tool call remains allowed");
+      }
+
+      const escapeResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+      expect(escapeResult.stuck).toBe(false);
+    });
+
+    it("normalizes built-in write no-ops that only differ by echoed path", () => {
+      const state = createState();
+      const content = "same content";
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+
+      for (const [index, targetPath] of paths.entries()) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `No changes made to ${targetPath}. The file already has identical content.`,
+              },
+            ],
+            details: { changed: false },
+          },
+          index,
+        );
+      }
+
+      const hashes = state.toolCallHistory?.map((record) => record.resultHash);
+      expect(hashes?.[0]).toBeTypeOf("string");
+      expect(hashes?.[0]).toBe(hashes?.[1]);
+      expect(state.toolCallHistory?.every((record) => record.noProgress === true)).toBe(true);
+    });
+
+    it("preserves target identity for successful write outcomes", () => {
+      const state = createState();
+      const content = "same content";
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+
+      for (const [index, targetPath] of paths.entries()) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${targetPath}`,
+              },
+            ],
+            details: {
+              changed: true,
+              created: true,
+              diff: "+same content",
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+same content`,
+            },
+          },
+          index,
+        );
+      }
+
+      const history = state.toolCallHistory ?? [];
+      expect(history[0]?.resultHash).not.toBe(history[1]?.resultHash);
+      expect(history.every((record) => record.noProgress === undefined)).toBe(true);
+    });
+
+    it("uses the supplied warning threshold when reconciling rewritten calls", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md"];
+      for (let index = 0; index < 6; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { changed: false },
+          },
+          index,
+        );
+      }
+      recordToolCall(
+        state,
+        "write",
+        { path: "/tmp/original.md", content: "same content" },
+        "rewritten-call",
+      );
+
+      const reconciled = reconcileToolCallExecutionParams(state, {
+        toolName: "write",
+        toolParams: { path: "/tmp/a.md", content: "same content" },
+        toolCallId: "rewritten-call",
+        warningThreshold: 6,
+      });
+
+      expect(reconciled).toEqual({ active: true, count: 6, variantCount: 2 });
+    });
+
+    it("does not reconcile a completed loop veto as a pending call", () => {
+      const state = createState();
+      state.toolCallHistory = [
+        {
+          toolName: "write",
+          argsHash: "pending-args",
+          timestamp: 1,
+        },
+        {
+          toolName: "write",
+          argsHash: "vetoed-args",
+          outcomeKind: "tool-loop-veto",
+          timestamp: 2,
+        },
+      ];
+
+      expect(
+        reconcileToolCallExecutionParams(state, {
+          toolName: "write",
+          toolParams: { path: "/tmp/rewritten.md", content: "same content" },
+          warningThreshold: 6,
+        }),
+      ).toEqual({ active: false, count: 0, variantCount: 0 });
+      expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
+      expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
+    });
+
+    it("keeps completed churn evidence across a pending same-tool sibling", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
+          },
+          index,
+        );
+      }
+      recordToolCall(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        "pending-sibling",
+      );
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/b.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+      });
+    });
+
+    it("does not treat generic stable successes as semantic no-progress", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "side_effect",
+          { path: targetPath },
+          {
+            content: [{ type: "text", text: "done" }],
+            details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "side_effect",
+        { path: "/tmp/a.md" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+      if (loopResult.stuck) {
+        expect(loopResult.livenessSignal).toBeUndefined();
+      }
+    });
+
+    it("keeps repeated stable errors eligible for argument-churn liveness", () => {
+      const state = createState();
+      const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        const toolCallId = `failed-${index}`;
+        const params = { path: targetPath };
+        recordToolCall(state, "side_effect", params, toolCallId, enabledLoopDetectionConfig);
+        recordToolCallOutcome(state, {
+          toolName: "side_effect",
+          toolParams: params,
+          toolCallId,
+          error: new Error("permission denied"),
+          config: enabledLoopDetectionConfig,
+        });
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "side_effect",
+        { path: "/tmp/a.md" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "argument_churn",
+        livenessSignal: "argument_churn",
+      });
+    });
+
+    it("keeps generic critical repeats ahead of warning-only argument churn", () => {
+      const state = createState();
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: "/tmp/a.md", content: "same content" },
+          {
+            content: [{ type: "text", text: "wrote /tmp/a.md" }],
+            details: { ok: true, path: "/tmp/a.md" },
+          },
+          index,
+        );
+      }
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: "/tmp/b.md", content: "same content" },
+          {
+            content: [{ type: "text", text: "wrote /tmp/b.md" }],
+            details: { ok: true, path: "/tmp/b.md" },
+          },
+          CRITICAL_THRESHOLD + index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+      expect(loopResult).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+      });
+    });
+
+    it("preserves churn liveness when strict alternation owns the primary warning", () => {
+      const state = createState();
+
+      for (let index = 0; index < WARNING_THRESHOLD; index += 1) {
+        const targetPath = index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md";
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: "write made no changes" }],
+            details: { ok: true, changed: false },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("warning");
+        expect(loopResult.detector).toBe("ping_pong");
+        expect(loopResult.livenessSignal).toBe("argument_churn");
+      }
+    });
+
+    it("does not carry argument-churn liveness across singleton probes", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath =
+          index === 8 || index === 19 ? `/tmp/probe-${index}.md` : `/tmp/${index % 2}.md`;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/a.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block a one-shot batch of distinct arguments", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: `/tmp/file-${index}.md`, content: "same content" },
+          {
+            content: [{ type: "text", text: "write complete" }],
+            details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block a legitimate two-pass batch", () => {
+      const state = createState();
+      const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
+      const content = "same content";
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content },
+          {
+            content: [
+              {
+                type: "text",
+                text: `Successfully wrote ${Buffer.byteLength(content, "utf8")} bytes to ${targetPath}`,
+              },
+            ],
+            details: {
+              changed: true,
+              created: true,
+              diff: "+same content",
+              patch: `--- ${targetPath}\n+++ ${targetPath}\n+same content`,
+            },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next.md", content },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block argument churn when a repeated variant makes progress", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = index % 2 === 0 ? "/tmp/a.md" : "/tmp/b.md";
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `write ${targetPath} revision ${index}` }],
+            details: { ok: true, revision: index },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/c.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it.each([
+      {
+        label: "completed normal process failures",
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      },
+      {
+        label: "failed non-executable commands",
+        status: "failed",
+        exitCode: 126,
+        output: "Command not executable (permission denied)",
+        aggregated: "",
+      },
+      {
+        label: "failed missing commands",
+        status: "failed",
+        exitCode: 127,
+        output: "Command not found",
+        aggregated: "",
+      },
+    ] as const)("blocks repeated $label across changing exec arguments", (testCase) => {
+      const state = createState();
+      const result = createExecLoopResult(testCase);
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+
+      expect(
+        state.toolCallHistory?.every((record) => record.outcomeKind === "terminal-exec-failure"),
+      ).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, result, index);
+      }
+      for (let index = CRITICAL_THRESHOLD; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "critical",
+            detector: "generic_repeat",
+            count: index,
+          },
+        );
+        expect(
+          recordToolCallOutcome(state, {
+            toolName: "exec",
+            toolParams: params,
+            toolCallId: `exec-veto-${index}`,
+            result: {
+              content: [{ type: "text", text: "blocked" }],
+              details: { status: "blocked", deniedReason: "tool-loop" },
+            },
+            config: enabledLoopDetectionConfig,
+          }),
+        ).toMatchObject({ outcomeKind: "tool-loop-veto", resultHash: undefined });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python final-job.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "synthetic exit-code-only output",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "successful command batches",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "timed-out executions",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "non-finite exit codes",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: Number.POSITIVE_INFINITY,
+          output: "process failed",
+        }),
+      },
+      {
+        label: "failures without an exit code",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: null,
+          output: "process failed before spawning",
+        }),
+      },
+    ])("does not semantically block $label", ({ result }) => {
+      const state = createState();
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `grep target-${index}` }, result, index);
+      }
+
+      expect(state.toolCallHistory?.every((record) => record.outcomeKind === undefined)).toBe(true);
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "grep next-target" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it.each([
+      {
+        label: "a distinct terminal failure",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "completed",
+          exitCode: 1,
+          output: "Traceback: different package\n\n(Command exited with code 1)",
+        }),
+      },
+      {
+        label: "a successful execution",
+        toolName: "exec",
+        result: createExecLoopResult({ status: "completed", exitCode: 0, output: "done" }),
+      },
+      {
+        label: "a timed-out execution",
+        toolName: "exec",
+        result: createExecLoopResult({
+          status: "failed",
+          exitCode: 1,
+          output: "Command timed out",
+          timedOut: true,
+        }),
+      },
+      {
+        label: "another tool",
+        toolName: "read",
+        result: { content: [{ type: "text", text: "read complete" }], details: { ok: true } },
+      },
+    ])("resets the semantic exec failure tail after $label", ({ toolName, result }) => {
+      const state = createState();
+      const failure = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(state, "exec", { command: `python job-${index}.py` }, failure, index);
+      }
+      recordSuccessfulCall(state, toolName, { command: "interruption" }, result, 19);
+      recordSuccessfulCall(state, "exec", { command: "python latest.py" }, failure, 20);
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+        ),
+      ).toEqual({ stuck: false });
+    });
+
+    it("does not carry semantic exec failures into another run", () => {
+      const state = createState();
+      const result = createExecLoopResult({
+        status: "completed",
+        exitCode: 1,
+        output: "Traceback: missing package\n\n(Command exited with code 1)",
+      });
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        const params = { command: `python job-${index}.py` };
+        const toolCallId = `exec-old-run-${index}`;
+        recordToolCall(state, "exec", params, toolCallId, enabledLoopDetectionConfig, {
+          runId: "old-run",
+        });
+        recordToolCallOutcome(state, {
+          toolName: "exec",
+          toolParams: params,
+          toolCallId,
+          result,
+          config: enabledLoopDetectionConfig,
+          runId: "old-run",
+        });
+      }
+
+      expect(
+        detectToolCallLoop(
+          state,
+          "exec",
+          { command: "python next.py" },
+          enabledLoopDetectionConfig,
+          { runId: "new-run" },
+        ),
+      ).toEqual({ stuck: false });
     });
 
     it("blocks repeated completed exec calls despite volatile runtime details", () => {
@@ -1081,33 +1804,92 @@ describe("tool-loop-detection", () => {
       expect(hashes?.[0]).not.toBe(hashes?.[1]);
     });
 
-    it("keeps a critical send block sticky after the veto result is recorded", () => {
+    it("counts loop vetoes until the global circuit breaker becomes reachable", () => {
       const state = createState();
       const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
       for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
         recordSend(state, "message", params, sendPayload(i), i);
       }
-      expect(detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig).stuck).toBe(
-        true,
-      );
-      // The loop veto records a blocked result (buildBlockedToolResult, deniedReason "tool-loop");
-      // it must not reset the no-progress streak, so the next identical send is still blocked.
-      recordToolCall(state, "message", params, "message-veto", enabledLoopDetectionConfig);
-      recordToolCallOutcome(state, {
-        toolName: "message",
-        toolParams: params,
-        toolCallId: "message-veto",
-        result: {
-          content: [{ type: "text", text: "blocked" }],
-          details: { status: "blocked", deniedReason: "tool-loop" },
-        },
-        config: enabledLoopDetectionConfig,
-      });
-      const after = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
-      expect(after.stuck).toBe(true);
-      if (after.stuck) {
-        expect(after.level).toBe("critical");
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        const before = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+        expect(before).toMatchObject({
+          stuck: true,
+          level: "critical",
+          detector: "generic_repeat",
+          count: i,
+        });
+        const recorded = recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `message-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+        expect(recorded).toMatchObject({
+          toolCallId: `message-veto-${i}`,
+          outcomeKind: "tool-loop-veto",
+          resultHash: undefined,
+        });
       }
+      const after = detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig);
+      expect(after).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "global_circuit_breaker",
+        count: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+      });
+    });
+
+    it("does not count unrelated hashless calls as no-progress outcomes", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      for (let i = CRITICAL_THRESHOLD; i < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; i += 1) {
+        recordToolCall(state, "message", params, `pending-${i}`, enabledLoopDetectionConfig);
+      }
+
+      expect(
+        detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it("does not carry older loop vetoes across a later progressing outcome", () => {
+      const state = createState();
+      const params = { action: "send", target: "feishu:oc_chat", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "message", params, sendPayload(i), i);
+      }
+      for (let i = 0; i < 5; i += 1) {
+        recordToolCallOutcome(state, {
+          toolName: "message",
+          toolParams: params,
+          toolCallId: `old-veto-${i}`,
+          result: {
+            content: [{ type: "text", text: "blocked" }],
+            details: { status: "blocked", deniedReason: "tool-loop" },
+          },
+          config: enabledLoopDetectionConfig,
+        });
+      }
+      recordSend(state, "message", params, { ...sendPayload(25), route: { id: "new-route" } }, 25);
+
+      expect(
+        detectToolCallLoop(state, "message", params, enabledLoopDetectionConfig),
+      ).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+        count: 26,
+      });
     });
 
     it("still escalates repeated plugin/approval vetoes to a critical loop", () => {

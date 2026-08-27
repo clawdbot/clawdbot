@@ -4,12 +4,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
@@ -26,8 +20,14 @@ import {
   resolveRuntimeWebSearchProviders,
 } from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+} from "../web/provider-runtime-shared.js";
 import { executeWebSearchCandidates } from "./runtime-execution.js";
 import type {
   ResolveWebSearchDefinitionParams,
@@ -137,9 +137,10 @@ export function isWebSearchProviderConfigured(params: {
     | "requiresCredential"
   >;
   config?: OpenClawConfig;
+  agentDir?: string;
 }): boolean {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
-  return hasEntryCredential(params.provider, config, resolveSearchConfig(config));
+  return hasEntryCredential(params.provider, config, resolveSearchConfig(config), params.agentDir);
 }
 
 /** Lists runtime web_search providers after applying runtime config snapshots. */
@@ -313,7 +314,8 @@ function resolveWebSearchRequestContext(
   return {
     config,
     search: resolveSearchConfig(config),
-    runtimeWebSearch: options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search,
+    runtimeWebSearch:
+      options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
   };
 }
 
@@ -453,7 +455,8 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     preferInputConfig: params.preferInputConfig,
   });
   const search = resolveSearchConfig(config);
-  const runtimeWebSearch = params.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
+  const runtimeWebSearch =
+    params.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search;
   const candidates = resolveWebSearchCandidates({
     ...params,
     config,

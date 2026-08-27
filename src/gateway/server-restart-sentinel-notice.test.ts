@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
-import { loadPendingDelivery } from "../infra/outbound/delivery-queue-storage.js";
-import { markDeliveryPlatformSendAttemptStarted } from "../infra/outbound/delivery-queue.js";
+import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-media-staging.js";
+import {
+  loadPendingDelivery,
+  markDeliveryPlatformSendAttemptStarted,
+} from "../infra/outbound/delivery-queue-storage.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
@@ -13,10 +16,15 @@ const mocks = vi.hoisted(() => ({
   recoveryDeliver: vi.fn(),
   resolveOutboundChannelMessageAdapter: vi.fn(() => undefined),
   sleep: vi.fn(async () => {}),
+  hookRunner: {
+    hasHooks: vi.fn((name?: string) => name === "message_sent"),
+    runMessageSending: vi.fn(async () => undefined),
+    runMessageSent: vi.fn(async () => undefined),
+  },
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: mocks.sendDurableMessageBatch,
+  sendDurableMessageBatchCore: mocks.sendDurableMessageBatch,
 }));
 
 vi.mock("../infra/outbound/deliver.js", () => ({
@@ -28,11 +36,21 @@ vi.mock("../infra/outbound/channel-resolution.js", () => ({
 }));
 
 vi.mock("../utils/sleep.js", () => ({ sleep: mocks.sleep }));
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => mocks.hookRunner,
+}));
 
 const { deliverRestartSentinelNotice, enqueueRestartSentinelNotice } =
   await import("./server-restart-sentinel-notice.js");
 
-type DeliveryRequest = { deliveryQueueId?: string; deliveryQueueStateDir?: string };
+type DeliveryRequest = {
+  deliveryQueueId?: string;
+  deliveryQueueStateDir?: string;
+  onMessageSentEvent?: (
+    event: { success: boolean; content: string; messageId?: string },
+    sourceIndex: number,
+  ) => void;
+};
 
 describe("restart sentinel notice recovery", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -55,10 +73,16 @@ describe("restart sentinel notice recovery", () => {
     mocks.recoveryDeliver.mockReset();
     mocks.resolveOutboundChannelMessageAdapter.mockClear();
     mocks.sleep.mockClear();
+    mocks.hookRunner.hasHooks.mockClear();
+    mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+    mocks.hookRunner.runMessageSending.mockReset();
+    mocks.hookRunner.runMessageSending.mockResolvedValue(undefined);
+    mocks.hookRunner.runMessageSent.mockClear();
   });
 
   async function enqueueNotice(): Promise<string> {
     const queued = await enqueueRestartSentinelNotice({
+      cfg: {},
       channel: "whatsapp",
       to: "+15550002",
       message: "restart complete",
@@ -90,8 +114,98 @@ describe("restart sentinel notice recovery", () => {
   }
 
   function queueStatus(queueId: string): string | undefined {
-    return getDeliveryQueueEntryStatus("outbound", queueId, stateDir);
+    return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, queueId, stateDir);
   }
+
+  it("reuses an existing stable notice without preparing another owner", async () => {
+    const first = await enqueueRestartSentinelNotice({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+15550002",
+      message: "restart complete",
+      sessionKey: "agent:main:main",
+      revision: 123,
+    });
+    const second = await enqueueRestartSentinelNotice({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+15550002",
+      message: "restart complete",
+      sessionKey: "agent:main:main",
+      revision: 123,
+    });
+
+    expect(first.created).toBe(true);
+    expect(second).toEqual({ id: first.id, created: false });
+  });
+
+  it("serializes stable notice preparation before modifiers can run twice", async () => {
+    mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
+    let releaseModifier: (() => void) | undefined;
+    mocks.hookRunner.runMessageSending.mockImplementationOnce(
+      async () =>
+        await new Promise<undefined>((resolve) => {
+          releaseModifier = () => resolve(undefined);
+        }),
+    );
+    const request = {
+      cfg: {},
+      channel: "whatsapp",
+      to: "+15550002",
+      message: "restart complete",
+      sessionKey: "agent:main:main",
+      revision: 123,
+    };
+
+    const first = enqueueRestartSentinelNotice(request);
+    await vi.waitFor(() => expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce());
+    let secondSettled = false;
+    const second = enqueueRestartSentinelNotice(request).finally(() => {
+      secondSettled = true;
+    });
+    await Promise.resolve();
+    expect(secondSettled).toBe(false);
+    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+    releaseModifier?.();
+    await expect(first).resolves.toEqual({
+      id: "restart-sentinel-notice:agent:main:main:123",
+      created: true,
+    });
+    await expect(second).resolves.toEqual({
+      id: "restart-sentinel-notice:agent:main:main:123",
+      created: false,
+    });
+    expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
+  });
+
+  it("emits message_sent only after the durable notice terminal is committed", async () => {
+    const queueId = await enqueueNotice();
+    const statusesAtHook: Array<string | undefined> = [];
+    mocks.hookRunner.runMessageSent.mockImplementationOnce(async () => {
+      statusesAtHook.push(queueStatus(queueId));
+    });
+    mocks.sendDurableMessageBatch.mockImplementationOnce(async (request: DeliveryRequest) => {
+      await markAttempt(request);
+      request.onMessageSentEvent?.(
+        {
+          success: true,
+          content: "restart complete",
+          messageId: "notice-1",
+        },
+        0,
+      );
+      return {
+        status: "sent",
+        results: [{ channel: "whatsapp", messageId: "notice-1" }],
+      };
+    });
+
+    await deliverNotice(queueId);
+    await vi.waitFor(() => expect(mocks.hookRunner.runMessageSent).toHaveBeenCalledOnce());
+
+    expect(statusesAtHook).toEqual(["completed"]);
+    expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
+  });
 
   it("replays a retryable provider-not-dispatched failure after the startup scan", async () => {
     const queueId = await enqueueNotice();

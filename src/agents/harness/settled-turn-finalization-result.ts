@@ -1,5 +1,7 @@
 import { isSilentReplyText } from "../../auto-reply/tokens.js";
+import { normalizeAgentRunAttemptTerminal } from "../agent-run-terminal-outcome.js";
 import { resolveFinalAssistantVisibleText } from "../embedded-agent-runner/run/helpers.js";
+import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import type {
   AgentHarnessAttemptResult,
   AgentHarnessSettledTurnFinalizationResult,
@@ -60,7 +62,10 @@ export function resolveSettledTurnFinalizationText(
   result: AgentHarnessSettledTurnFinalizationResult,
 ): string {
   const text = resolveFinalAssistantVisibleText(result.assistant);
-  if (!text || isSilentReplyText(text)) {
+  if (!text) {
+    throw new EmptySettledTurnFinalizationError(result);
+  }
+  if (isSilentReplyText(text)) {
     throw new Error("Settled-turn finalization completed without a visible answer");
   }
   return text;
@@ -73,16 +78,11 @@ export function resolveSettledTurnFinalizationText(
 export function projectSettledTurnFinalizationAttemptResult(
   result: AgentHarnessAttemptResult,
 ): AgentHarnessSettledTurnFinalizationResult {
+  const terminal =
+    "terminal" in result ? result.terminal : normalizeAgentRunAttemptTerminal(result);
   if (
-    result.promptError != null ||
-    result.aborted ||
-    result.externalAbort ||
-    result.timedOut ||
-    result.idleTimedOut ||
-    result.timedOutDuringCompaction ||
+    terminal.kind !== "ok" ||
     (result.compactionCount ?? 0) > 0 ||
-    result.timedOutDuringToolExecution ||
-    result.timedOutByRunBudget ||
     result.promptTimeoutOutcome ||
     result.preflightRecovery ||
     result.beforeAgentFinalizeRevisionReason ||

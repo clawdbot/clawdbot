@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { Response as UndiciResponse } from "undici";
+import { describe, expect, it, vi } from "vitest";
 import {
   appendSlackNativeDataFallbackText,
   buildSlackNativeDataAccessibilityText,
   hasSlackNativeDataBlock,
   isSlackInvalidBlocksError,
+  isSlackInvalidBlocksResponse,
+  isSlackNativeResponseUrlRejection,
 } from "./native-data-blocks.js";
 
 const chart = {
@@ -50,6 +53,77 @@ describe("Slack native data blocks", () => {
     expect(isSlackInvalidBlocksError({ response: { data: "invalid_blocks" } })).toBe(true);
     expect(isSlackInvalidBlocksError({ error: "INVALID_BLOCKS" })).toBe(true);
     expect(isSlackInvalidBlocksError(new Error("invalid_blocks"))).toBe(false);
+  });
+
+  it("matches Bolt 5 response_url responses and contextual RespondError failures", async () => {
+    const response = new Response(JSON.stringify({ error: "invalid_blocks" }), { status: 200 });
+    await expect(isSlackInvalidBlocksResponse(response)).resolves.toBe(true);
+    await expect(
+      isSlackInvalidBlocksResponse(
+        new UndiciResponse(JSON.stringify({ error: "invalid_blocks" }), { status: 200 }),
+      ),
+    ).resolves.toBe(true);
+    await expect(isSlackInvalidBlocksResponse(new Response("ok"))).resolves.toBe(false);
+    expect(
+      isSlackNativeResponseUrlRejection({
+        code: "slack_bolt_respond_error",
+        statusCode: 400,
+      }),
+    ).toBe(true);
+    expect(
+      isSlackNativeResponseUrlRejection({
+        code: "slack_bolt_respond_error",
+        statusCode: 500,
+      }),
+    ).toBe(false);
+  });
+
+  it("bounds stalled response_url body inspection and cancels its reader", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn(async () => undefined);
+      const releaseLock = vi.fn();
+      const response = {
+        status: 200,
+        body: {
+          getReader: () => ({
+            read: async () => await new Promise<never>(() => {}),
+            cancel,
+            releaseLock,
+          }),
+        },
+      };
+
+      const inspection = isSlackInvalidBlocksResponse(response);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(inspection).resolves.toBe(false);
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds oversized response_url bodies and cancels after the prefix", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = {
+      status: 200,
+      body: {
+        getReader: () => ({
+          read: async () => ({
+            done: false,
+            value: new TextEncoder().encode("x".repeat(32 * 1024)),
+          }),
+          cancel,
+          releaseLock,
+        }),
+      },
+    };
+
+    await expect(isSlackInvalidBlocksResponse(response)).resolves.toBe(false);
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("appends mixed native data in block order without collapsing repeated blocks", () => {

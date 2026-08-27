@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "./infra/tmp-openclaw-dir.js";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 
 export const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -15,7 +16,10 @@ export type DockerSetupSandbox = {
   binDir: string;
 };
 
-const sandboxRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-docker-setup-" });
+const sandboxRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-docker-setup-",
+  parentDir: resolvePreferredOpenClawTmpDir(),
+});
 
 export async function setupDockerSetupSandboxRoot(): Promise<void> {
   await sandboxRootTracker.setup();
@@ -66,6 +70,21 @@ if [[ "\${1:-}" == "build" ]]; then
     exit 1
   fi
   echo "build DOCKER_BUILDKIT=\${DOCKER_BUILDKIT:-} $*" >>"$log"
+  exit 0
+fi
+if [[ "\${1:-}" == "run" ]]; then
+  echo "run $*" >>"$log"
+  args=("$@")
+  for ((i = 0; i + 3 < \${#args[@]}; i++)); do
+    if [[ "\${args[$i]}" == "--entrypoint" && "\${args[$((i + 1))]}" == "node" ]]; then
+      for ((j = i + 2; j + 1 < \${#args[@]}; j++)); do
+        if [[ "\${args[$j]}" == "-e" ]]; then
+          node -e "\${args[$((j + 1))]}" "\${args[@]:$((j + 2))}"
+          exit $?
+        fi
+      done
+    fi
+  done
   exit 0
 fi
 if [[ "\${1:-}" == "compose" ]]; then
@@ -161,6 +180,10 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   await copyFile(
     join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
+  );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
   );
   await copyFile(
     join(repoRoot, "scripts", "lib", "host-timeout.sh"),

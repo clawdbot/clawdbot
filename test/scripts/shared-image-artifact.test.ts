@@ -85,9 +85,13 @@ function createFixture() {
   const artifactDir = join(root, "artifact");
   const dockerLog = join(root, "docker.log");
   const ghLog = join(root, "gh.log");
+  const ghState = join(root, "gh-state");
+  const sleepLog = join(root, "sleep.log");
   mkdirSync(bin);
+  mkdirSync(ghState);
   writeFileSync(dockerLog, "");
   writeFileSync(ghLog, "");
+  writeFileSync(sleepLog, "");
 
   writeExecutable(
     join(bin, "docker"),
@@ -185,14 +189,57 @@ printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
   echo "unexpected gh invocation: $*" >&2
   exit 2
 }
-path="$2"
+shift
+method=""
+path=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --method)
+      method="\${2:?method required}"
+      shift 2
+      ;;
+    *)
+      [[ -z "$path" ]] || {
+        echo "unexpected gh api argument: $1" >&2
+        exit 2
+      }
+      path="$1"
+      shift
+      ;;
+  esac
+done
+[[ "$method" == "GET" ]] || {
+  echo "unexpected gh api method: $method" >&2
+  exit 2
+}
+
 case "$path" in
   "repos/\${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")
+    count_file="$FAKE_GH_STATE/artifact"
+    count="$(( $(cat "$count_file" 2>/dev/null || printf 0) + 1 ))"
+    printf '%s\\n' "$count" > "$count_file"
+    if [[ "$count" -le "\${FAKE_GH_ARTIFACT_FAILURES:-0}" ]]; then
+      printf 'partial artifact response\\n'
+      printf '%s\\n' "\${FAKE_GH_ARTIFACT_ERROR:-gh: request failed}" >&2
+      exit 1
+    fi
+    if [[ -n "\${FAKE_ARTIFACT_JSON:-}" ]]; then
+      printf '%s\\n' "$FAKE_ARTIFACT_JSON"
+      exit 0
+    fi
     printf '{"id":%s,"name":"%s","expired":%s,"digest":"sha256:%s","workflow_run":{"id":%s}}\\n' \
       "$FAKE_ARTIFACT_ID" "$FAKE_ARTIFACT_NAME" "$FAKE_ARTIFACT_EXPIRED" \
       "$FAKE_ARTIFACT_DIGEST" "$FAKE_ARTIFACT_RUN_ID"
     ;;
   "repos/\${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}")
+    count_file="$FAKE_GH_STATE/attempt"
+    count="$(( $(cat "$count_file" 2>/dev/null || printf 0) + 1 ))"
+    printf '%s\\n' "$count" > "$count_file"
+    if [[ "$count" -le "\${FAKE_GH_ATTEMPT_FAILURES:-0}" ]]; then
+      printf 'partial attempt response\\n'
+      printf '%s\\n' "\${FAKE_GH_ATTEMPT_ERROR:-gh: request failed}" >&2
+      exit 1
+    fi
     printf '{"id":%s,"run_attempt":%s}\\n' \
       "$FAKE_ATTEMPT_RUN_ID" "$FAKE_ARTIFACT_RUN_ATTEMPT"
     ;;
@@ -201,6 +248,14 @@ case "$path" in
     exit 2
     ;;
 esac
+`,
+  );
+
+  writeExecutable(
+    join(bin, "sleep"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$FAKE_SLEEP_LOG"
 `,
   );
 
@@ -215,6 +270,8 @@ esac
     FAKE_ATTEMPT_RUN_ID: ARTIFACT_RUN_ID,
     FAKE_DOCKER_LOG: dockerLog,
     FAKE_GH_LOG: ghLog,
+    FAKE_GH_STATE: ghState,
+    FAKE_SLEEP_LOG: sleepLog,
     GH_TOKEN: "test-token",
     GITHUB_REPOSITORY: "openclaw/openclaw",
     GITHUB_RUN_ATTEMPT: "2",
@@ -223,7 +280,7 @@ esac
     RUNNER_TEMP: root,
     OPENCLAW_SHARED_IMAGE_PACKAGE_SHA256: PACKAGE_SHA256,
   };
-  return { artifactDir, dockerLog, env, ghLog, root };
+  return { artifactDir, dockerLog, env, ghLog, root, sleepLog };
 }
 
 function expectedArchiveEnv(fixture: ReturnType<typeof createFixture>): NodeJS.ProcessEnv {
@@ -245,12 +302,13 @@ describe("shared Docker image artifacts", () => {
       const verified = verifyUploadedArtifact(fixture);
       expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
       expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-        `api repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
+        `api --method GET repos/openclaw/openclaw/actions/artifacts/${ARTIFACT_ID}`,
       );
       expect(readFileSync(fixture.ghLog, "utf8")).toContain(
-        `api repos/openclaw/openclaw/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}`,
+        `api --method GET repos/openclaw/openclaw/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}`,
       );
 
+      writeFileSync(fixture.ghLog, "");
       const digestMismatch = verifyUploadedArtifact(fixture, {
         artifactDigest: "e".repeat(64),
       });
@@ -258,7 +316,21 @@ describe("shared Docker image artifacts", () => {
       expect(digestMismatch.stderr).toContain(
         "artifact identity does not match the immutable producer tuple",
       );
+      expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(digestMismatch.stderr).not.toContain("retrying");
 
+      writeFileSync(fixture.ghLog, "");
+      const invalidJson = verifyUploadedArtifact(fixture, {
+        env: { FAKE_ARTIFACT_JSON: "not-json" },
+      });
+      expect(invalidJson.status).not.toBe(0);
+      expect(invalidJson.stderr).toContain(
+        "artifact identity does not match the immutable producer tuple",
+      );
+      expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(1);
+      expect(invalidJson.stderr).not.toContain("retrying");
+
+      writeFileSync(fixture.ghLog, "");
       const attemptMismatch = verifyUploadedArtifact(fixture, {
         env: { FAKE_ARTIFACT_RUN_ATTEMPT: "3" },
       });
@@ -266,8 +338,177 @@ describe("shared Docker image artifacts", () => {
       expect(attemptMismatch.stderr).toContain(
         "producer run attempt does not match the immutable tuple",
       );
+      expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(2);
+      expect(attemptMismatch.stderr).not.toContain("retrying");
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries an exact i/o timeout without leaking partial output", () => {
+    const fixture = createFixture();
+    try {
+      const verified = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "Get https://api.github.com: dial tcp: i/o timeout",
+          FAKE_GH_ARTIFACT_FAILURES: "1",
+        },
+      });
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stdout).not.toContain("partial artifact response");
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries a fresh artifact metadata 404 and then succeeds", () => {
+    const fixture = createFixture();
+    try {
+      const verified = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "gh: Not Found (HTTP 404)",
+          FAKE_GH_ARTIFACT_FAILURES: "1",
+        },
+      });
+      expect(verified.status, `${verified.stdout}\n${verified.stderr}`).toBe(0);
+      expect(verified.stderr).toContain(
+        "artifact metadata GitHub API GET failed transiently on attempt 1/3; retrying in 2s",
+      );
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(2);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails after three fresh artifact metadata 404 responses", () => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "gh: Not Found (HTTP 404)",
+          FAKE_GH_ARTIFACT_FAILURES: "3",
+        },
+      });
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("2\n4\n");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
+      expect(calls).not.toContain("actions/runs");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("fails immediately when producer run-attempt metadata returns 404", () => {
+    const fixture = createFixture();
+    try {
+      const failed = verifyUploadedArtifact(fixture, {
+        env: {
+          FAKE_GH_ATTEMPT_ERROR: "gh: Not Found (HTTP 404)",
+          FAKE_GH_ATTEMPT_FAILURES: "3",
+        },
+      });
+      expect(failed.status).not.toBe(0);
+      expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
+      expect(failed.stderr).not.toContain("retrying");
+      expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
+      const calls = readFileSync(fixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(1);
+      expect(calls.match(/actions\/runs/g)).toHaveLength(1);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("recovers on the third attempt and fails cleanly when all attempts are exhausted", () => {
+    const recoveredFixture = createFixture();
+    try {
+      const recovered = verifyUploadedArtifact(recoveredFixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "gh: upstream unavailable (HTTP 503)",
+          FAKE_GH_ARTIFACT_FAILURES: "2",
+        },
+      });
+      expect(recovered.status, `${recovered.stdout}\n${recovered.stderr}`).toBe(0);
+      expect(readFileSync(recoveredFixture.sleepLog, "utf8")).toBe("2\n4\n");
+      expect(
+        readFileSync(recoveredFixture.ghLog, "utf8").match(/actions\/artifacts/g),
+      ).toHaveLength(3);
+    } finally {
+      rmSync(recoveredFixture.root, { force: true, recursive: true });
+    }
+
+    const exhaustedFixture = createFixture();
+    try {
+      const exhausted = verifyUploadedArtifact(exhaustedFixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "Get https://api.github.com: dial tcp: i/o timeout",
+          FAKE_GH_ARTIFACT_FAILURES: "3",
+        },
+      });
+      expect(exhausted.status).not.toBe(0);
+      expect(exhausted.stdout).not.toContain("partial artifact response");
+      expect(exhausted.stderr).toContain("i/o timeout");
+      expect(exhausted.stderr).toContain("GitHub API GET failed after 3 attempt(s)");
+      expect(readFileSync(exhaustedFixture.sleepLog, "utf8")).toBe("2\n4\n");
+      const calls = readFileSync(exhaustedFixture.ghLog, "utf8");
+      expect(calls.match(/actions\/artifacts/g)).toHaveLength(3);
+      expect(calls).not.toContain("actions/runs");
+    } finally {
+      rmSync(exhaustedFixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("retries explicit rate limiting but fails fast on permanent HTTP and credential errors", () => {
+    const rateLimitFixture = createFixture();
+    try {
+      const rateLimited = verifyUploadedArtifact(rateLimitFixture, {
+        env: {
+          FAKE_GH_ARTIFACT_ERROR: "gh: API rate limit exceeded (HTTP 429)",
+          FAKE_GH_ARTIFACT_FAILURES: "1",
+        },
+      });
+      expect(rateLimited.status, `${rateLimited.stdout}\n${rateLimited.stderr}`).toBe(0);
+      expect(readFileSync(rateLimitFixture.sleepLog, "utf8")).toBe("2\n");
+    } finally {
+      rmSync(rateLimitFixture.root, { force: true, recursive: true });
+    }
+
+    for (const error of [
+      "gh: Unauthorized (HTTP 401)",
+      "gh: Forbidden (HTTP 403)",
+      "gh: Unprocessable Entity (HTTP 422)",
+      "gh: Bad credentials (HTTP 500)",
+      "gh: authentication failed (HTTP 500)",
+    ]) {
+      const fixture = createFixture();
+      try {
+        const failed = verifyUploadedArtifact(fixture, {
+          env: {
+            FAKE_GH_ARTIFACT_ERROR: error,
+            FAKE_GH_ARTIFACT_FAILURES: "3",
+          },
+        });
+        expect(failed.status, error).not.toBe(0);
+        expect(failed.stderr).toContain(error);
+        expect(failed.stderr).toContain("GitHub API GET failed after 1 attempt(s)");
+        expect(failed.stderr).not.toContain("retrying");
+        expect(readFileSync(fixture.ghLog, "utf8").trim().split("\n")).toHaveLength(1);
+        expect(readFileSync(fixture.sleepLog, "utf8")).toBe("");
+      } finally {
+        rmSync(fixture.root, { force: true, recursive: true });
+      }
     }
   });
 

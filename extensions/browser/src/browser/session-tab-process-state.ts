@@ -1,17 +1,46 @@
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserTabOwnership } from "./client.types.js";
+import { clearVolatileTabAliases } from "./session-tab-ephemeral-aliases.js";
+import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
+
 export type SessionTabInteractionIdentity = {
   sessionKey: string;
   targetId: string;
-  baseUrl?: string;
+  route: BrowserSessionTabRoute;
   profile?: string;
 };
 
 export type VolatileSessionTab = SessionTabInteractionIdentity & {
   kind: "volatile";
+  ownership?: BrowserTabOwnership;
   trackedAt: number;
   lastUsedAt: number;
 };
 
+export function normalizeBrowserSessionKey(value: string | undefined): string | undefined {
+  return normalizeOptionalLowercaseString(value);
+}
+
+export function volatileSessionTabTargetKey(
+  identity: Pick<SessionTabInteractionIdentity, "targetId" | "route" | "profile">,
+): string {
+  return `${identity.targetId}\u0000${browserSessionTabRouteKey(identity.route)}\u0000${identity.profile ?? ""}`;
+}
+
+export function sameVolatileSessionTab(
+  left: VolatileSessionTab,
+  right: VolatileSessionTab,
+): boolean {
+  return (
+    volatileSessionTabTargetKey(left) === volatileSessionTabTargetKey(right) &&
+    left.sessionKey === right.sessionKey &&
+    left.trackedAt === right.trackedAt &&
+    left.lastUsedAt === right.lastUsedAt
+  );
+}
+
 const volatileStateSymbol = Symbol.for("openclaw.browser.session-tabs.volatile");
+const volatileCleanupStateSymbol = Symbol.for("openclaw.browser.session-tabs.volatile-cleanup");
 const activeDurableStateSymbol = Symbol.for("openclaw.browser.session-tabs.active-durable-keys");
 const coldNativeActivityStateSymbol = Symbol.for(
   "openclaw.browser.session-tabs.cold-native-activity",
@@ -31,6 +60,15 @@ export function volatileTabsBySession(): Map<string, Map<string, VolatileSession
   };
   state[volatileStateSymbol] ??= new Map();
   return state[volatileStateSymbol];
+}
+
+/** Keeps one in-flight volatile target close shared across Browser plugin bundles. */
+export function volatileTabCleanupByTarget(): Map<string, Promise<number>> {
+  const state = globalThis as typeof globalThis & {
+    [volatileCleanupStateSymbol]?: Map<string, Promise<number>>;
+  };
+  state[volatileCleanupStateSymbol] ??= new Map();
+  return state[volatileCleanupStateSymbol];
 }
 
 export function deleteVolatileSessionTab(sessionKey: string, tabKey: string): void {
@@ -62,4 +100,3 @@ export function forgetColdNativeActivity(identity: string): void {
 export function readColdNativeActivity(identity: string): number | undefined {
   return coldNativeActivity().get(identity);
 }
-import { clearVolatileTabAliases } from "./session-tab-ephemeral-aliases.js";

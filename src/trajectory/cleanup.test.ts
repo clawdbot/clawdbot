@@ -3,8 +3,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import {
   removeRemovedSessionTrajectoryArtifacts,
   removeSessionTrajectoryArtifacts,
@@ -46,7 +46,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 describe("trajectory cleanup", () => {
   it("removes adjacent trajectory sidecars for a deleted session", async () => {
-    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-1";
       const storePath = path.join(dir, "sessions.json");
       const sessionFile = path.join(dir, `${sessionId}.jsonl`);
@@ -69,7 +69,7 @@ describe("trajectory cleanup", () => {
   });
 
   it("removes legacy runtime sidecars for SQLite marker sessions", async () => {
-    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-1";
       const storePath = path.join(dir, "sessions.json");
       const sessionFile = formatSqliteSessionFileMarker({
@@ -94,7 +94,7 @@ describe("trajectory cleanup", () => {
   });
 
   it("skips removed sessions still referenced by surviving store rows", async () => {
-    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "shared-session";
       const storePath = path.join(dir, "sessions.json");
       const sessionFile = path.join(dir, `${sessionId}.jsonl`);
@@ -117,7 +117,7 @@ describe("trajectory cleanup", () => {
   });
 
   it("only removes external pointer targets that prove they belong to the session", async () => {
-    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-2";
       const sessionsDir = path.join(dir, "sessions");
       const storePath = path.join(sessionsDir, "sessions.json");
@@ -172,7 +172,7 @@ describe("trajectory cleanup", () => {
   });
 
   it("ignores oversized trajectory pointers while still removing the sidecar", async () => {
-    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+    await withTestDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
       const sessionId = "session-oversized-pointer";
       const sessionsDir = path.join(dir, "sessions");
       const storePath = path.join(sessionsDir, "sessions.json");

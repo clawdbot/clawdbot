@@ -6,11 +6,11 @@ import { registerMemoryWikiGatewayMethods } from "./gateway.js";
 import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
-import { listMemoryWikiPalace } from "./memory-palace.js";
 import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
 
@@ -39,8 +39,8 @@ vi.mock("./lint.js", () => ({
   lintMemoryWikiVault: vi.fn(),
 }));
 
-vi.mock("./memory-palace.js", () => ({
-  listMemoryWikiPalace: vi.fn(),
+vi.mock("./wiki-overview.js", () => ({
+  listMemoryWikiOverview: vi.fn(),
 }));
 
 vi.mock("./obsidian.js", () => ({
@@ -108,7 +108,7 @@ const VAULT_BACKED_GATEWAY_CASES = [
   ["wiki.status", {}],
   ["wiki.importRuns", {}],
   ["wiki.importInsights", {}],
-  ["wiki.palace", {}],
+  ["wiki.overview", {}],
   ["wiki.init", {}],
   ["wiki.doctor", {}],
   ["wiki.compile", {}],
@@ -164,7 +164,7 @@ describe("memory-wiki gateway methods", () => {
       totalClusters: 0,
       clusters: [],
     } as never);
-    vi.mocked(listMemoryWikiPalace).mockResolvedValue({
+    vi.mocked(listMemoryWikiOverview).mockResolvedValue({
       totalItems: 0,
       totalClaims: 0,
       totalQuestions: 0,
@@ -540,10 +540,10 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
-  it("returns memory palace overview over the gateway", async () => {
+  it("returns the wiki overview over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
-    vi.mocked(listMemoryWikiPalace).mockResolvedValue({
+    vi.mocked(listMemoryWikiOverview).mockResolvedValue({
       totalItems: 1,
       totalPages: 3,
       pageCounts: {
@@ -582,9 +582,9 @@ describe("memory-wiki gateway methods", () => {
     } as never);
 
     registerMemoryWikiGatewayMethods({ api, config });
-    const handler = findGatewayHandler(registerGatewayMethod, "wiki.palace");
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.overview");
     if (!handler) {
-      throw new Error("wiki.palace handler missing");
+      throw new Error("wiki.overview handler missing");
     }
     const respond = vi.fn();
 
@@ -594,7 +594,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
-    expect(listMemoryWikiPalace).toHaveBeenCalledWith(config);
+    expect(listMemoryWikiOverview).toHaveBeenCalledWith(config);
     expect(readRespondPayload(respond)).toEqual({
       totalItems: 1,
       totalPages: 3,

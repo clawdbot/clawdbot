@@ -1,57 +1,114 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  type ControlUiSessionPullRequest,
+} from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+function pullRequest(
+  number: number,
+  state: ControlUiSessionPullRequest["state"],
+): ControlUiSessionPullRequest {
+  return {
+    number,
+    owner: "openclaw",
+    repo: "openclaw",
+    branch: "feature/demo",
+    title: `Pull request ${number}`,
+    url: `https://github.com/openclaw/openclaw/pull/${number}`,
+    state,
+  };
+}
 
-describe("chat pane pull request refresh", () => {
-  it("forwards an explicit refresh and publishes live PR state", async () => {
-    const request = vi.fn().mockResolvedValue({
-      pullRequests: [
-        {
-          number: 111772,
-          owner: "openclaw",
-          repo: "openclaw",
-          branch: "claude/pr-detection",
-          title: "Detect pull requests",
-          url: "https://github.com/openclaw/openclaw/pull/111772",
-          state: "draft",
-        },
-        {
-          number: 111751,
-          owner: "openclaw",
-          repo: "openclaw",
-          branch: "claude/pr-detection",
-          title: "Earlier pull request",
-          url: "https://github.com/openclaw/openclaw/pull/111751",
-          state: "closed",
-        },
-      ],
+function createPullRequestPane(sessions: SessionCapability) {
+  const request = vi.fn().mockResolvedValue({ subscribed: true });
+  const partialSessions = sessions as Partial<SessionCapability>;
+  const sessionCapability = {
+    ...sessions,
+    pullRequestSummary: partialSessions.pullRequestSummary ?? vi.fn(() => undefined),
+  } as SessionCapability;
+  const harness = createTestChatPane({
+    client: { request } as unknown as GatewayBrowserClient,
+    sessions: sessionCapability,
+  });
+  harness.pane.context.gateway.snapshot.hello = {
+    features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
+  } as never;
+  return { ...harness, request };
+}
+
+function emitSnapshot(
+  emitGatewayEvent: (event: string, payload: unknown) => void,
+  sessionKey: string,
+  snapshot: {
+    branch?: {
+      owner: string;
+      repo: string;
+      branch: string;
+      createUrl?: string;
+    };
+    pullRequests: ControlUiSessionPullRequest[];
+    rateLimited: boolean;
+    status: "ready" | "rate-limited" | "unavailable";
+  },
+) {
+  emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+    sessions: { [sessionKey]: snapshot },
+  });
+}
+
+describe("chat pane pushed pull request state", () => {
+  it("does not let a previous session delta clobber the current PR state", async () => {
+    const { pane, state, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => ({})),
+      setPullRequestSummary: vi.fn(),
+    } as unknown as SessionCapability);
+
+    await pane.refreshSessionPullRequests();
+    state.sessionKey = "agent:main:current-2";
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      pullRequests: [pullRequest(1, "open")],
       rateLimited: false,
+      status: "ready",
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const epoch = Symbol("pr-refresh");
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current-2", {
+      pullRequests: [pullRequest(2, "open")],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pane.refreshSessionPullRequests();
+
+    expect(pane.sessionPullRequests).toEqual([expect.objectContaining({ number: 2 })]);
+  });
+
+  it("subscribes and publishes pushed live PR state", async () => {
+    const epoch = {};
     const setPullRequestSummary = vi.fn();
-    const sessions = {
+    const { pane, request, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => epoch),
       setPullRequestSummary,
-    } as unknown as SessionCapability;
-    const { pane } = createTestChatPane({ client, sessions });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["controlUi.sessionPullRequests"] },
-    } as never;
+    } as unknown as SessionCapability);
 
     await pane.refreshSessionPullRequests({ refresh: true });
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledWith(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+      sessionKeys: ["agent:main:current"],
+      refreshSessionKeys: ["agent:main:current"],
+    });
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      pullRequests: [pullRequest(111772, "draft"), pullRequest(111751, "closed")],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pane.refreshSessionPullRequests();
 
-    expect(request).toHaveBeenCalledWith(
-      "controlUi.sessionPullRequests",
-      expect.objectContaining({ sessionKey: "agent:main:current", refresh: true }),
-    );
     expect(setPullRequestSummary).toHaveBeenCalledWith(
       "agent:main:current",
       { numbers: [111751, 111772], state: "draft" },
@@ -59,40 +116,21 @@ describe("chat pane pull request refresh", () => {
     );
   });
 
-  it("retains the current PR when a live summary is truncated", async () => {
-    const current = {
-      number: 999,
-      owner: "openclaw",
-      repo: "openclaw",
-      branch: "claude/pr-detection",
-      title: "Current pull request",
-      url: "https://github.com/openclaw/openclaw/pull/999",
-      state: "draft" as const,
-    };
-    const older = Array.from({ length: 20 }, (_value, index) => ({
-      ...current,
-      number: index + 1,
-      title: `Earlier pull request ${index + 1}`,
-      url: `https://github.com/openclaw/openclaw/pull/${index + 1}`,
-      state: "closed" as const,
-    }));
-    const request = vi.fn().mockResolvedValue({
+  it("retains the current PR when a pushed summary is truncated", async () => {
+    const current = pullRequest(999, "draft");
+    const older = Array.from({ length: 20 }, (_value, index) => pullRequest(index + 1, "closed"));
+    const epoch = {};
+    const setPullRequestSummary = vi.fn();
+    const { pane, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
+    } as unknown as SessionCapability);
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
       pullRequests: [current, ...older],
       rateLimited: false,
+      status: "ready",
     });
-    const epoch = Symbol("pr-refresh");
-    const setPullRequestSummary = vi.fn();
-    const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {
-        capturePullRequestEpoch: vi.fn(() => epoch),
-        setPullRequestSummary,
-      } as unknown as SessionCapability,
-    });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["controlUi.sessionPullRequests"] },
-    } as never;
-
     await pane.refreshSessionPullRequests();
 
     expect(setPullRequestSummary).toHaveBeenCalledWith(
@@ -106,19 +144,8 @@ describe("chat pane pull request refresh", () => {
   });
 
   it("clears the pane snapshot when the Gateway source disconnects", () => {
-    const client = {} as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    pane.sessionPullRequests = [
-      {
-        number: 111532,
-        owner: "openclaw",
-        repo: "openclaw",
-        branch: "claude/pr-detection",
-        title: "Detect pull requests",
-        url: "https://github.com/openclaw/openclaw/pull/111532",
-        state: "open",
-      },
-    ];
+    const { pane } = createPullRequestPane({} as SessionCapability);
+    pane.sessionPullRequests = [pullRequest(111532, "open")];
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -128,53 +155,70 @@ describe("chat pane pull request refresh", () => {
     expect(pane.sessionPullRequests).toEqual([]);
   });
 
-  it("preserves shared PR state for an empty rate-limited snapshot", async () => {
-    const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
+  it("clears the pane snapshot while a structural replacement is pending", async () => {
+    const epoch = {};
     const setPullRequestSummary = vi.fn();
-    const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {
-        capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
-        setPullRequestSummary,
-      } as unknown as SessionCapability,
+    const { pane, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
+    } as unknown as SessionCapability);
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      branch: {
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "feature/demo",
+        createUrl: "https://github.com/openclaw/openclaw/pull/new/feature/demo",
+      },
+      pullRequests: [pullRequest(111532, "open")],
+      rateLimited: false,
+      status: "ready",
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["controlUi.sessionPullRequests"] },
-    } as never;
+    await pane.refreshSessionPullRequests();
+    expect(pane.sessionPullRequests).toHaveLength(1);
 
+    emitGatewayEvent("sessions.changed", {
+      sessionKey: "agent:main:current",
+      agentId: "main",
+      reason: "branch-switch",
+    });
+    await pane.refreshSessionPullRequests();
+
+    expect(pane.sessionPullRequests).toEqual([]);
+    expect(pane.sessionPullRequestsBranch).toBeUndefined();
+    expect(setPullRequestSummary).toHaveBeenLastCalledWith("agent:main:current", undefined, epoch);
+  });
+
+  it("preserves shared PR state for an empty rate-limited snapshot", async () => {
+    const setPullRequestSummary = vi.fn();
+    const { pane, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => ({})),
+      setPullRequestSummary,
+    } as unknown as SessionCapability);
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      pullRequests: [],
+      rateLimited: true,
+      status: "rate-limited",
+    });
     await pane.refreshSessionPullRequests();
 
     expect(setPullRequestSummary).not.toHaveBeenCalled();
   });
 
   it("publishes merged PR state after the PR settles", async () => {
-    const request = vi.fn().mockResolvedValue({
-      pullRequests: [
-        {
-          number: 111532,
-          owner: "openclaw",
-          repo: "openclaw",
-          branch: "claude/pr-detection",
-          title: "Detect pull requests",
-          url: "https://github.com/openclaw/openclaw/pull/111532",
-          state: "merged",
-        },
-      ],
-      rateLimited: false,
-    });
-    const epoch = Symbol("pr-refresh");
+    const epoch = {};
     const setPullRequestSummary = vi.fn();
-    const { pane } = createTestChatPane({
-      client: { request } as unknown as GatewayBrowserClient,
-      sessions: {
-        capturePullRequestEpoch: vi.fn(() => epoch),
-        setPullRequestSummary,
-      } as unknown as SessionCapability,
+    const { pane, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
+    } as unknown as SessionCapability);
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      pullRequests: [pullRequest(111532, "merged")],
+      rateLimited: false,
+      status: "ready",
     });
-    pane.context.gateway.snapshot.hello = {
-      features: { methods: ["controlUi.sessionPullRequests"] },
-    } as never;
-
     await pane.refreshSessionPullRequests();
 
     expect(setPullRequestSummary).toHaveBeenCalledWith(

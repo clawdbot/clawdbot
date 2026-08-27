@@ -7,6 +7,8 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
@@ -50,6 +52,9 @@ type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
 
 export const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
 export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
+const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
+const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
+const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
 
 const EMPTY_STATE: MemoryWikiImportedSourceState = {
   version: 1,
@@ -310,6 +315,121 @@ export async function shouldSkipImportedSourceWrite(params: {
     .catch(() => false);
 }
 
+function removeImportedSourceStateEntry(
+  state: MemoryWikiImportedSourceState,
+  syncKey: string,
+): void {
+  delete state.entries[syncKey];
+  const changes = sourceSyncStateChanges.get(state);
+  changes?.upsertKeys.delete(syncKey);
+  changes?.deleteKeys.add(syncKey);
+}
+
+async function readImportedSourcePageForNotes(
+  vault: Awaited<ReturnType<typeof fsRoot>>,
+  pagePath: string,
+): Promise<string> {
+  try {
+    return await vault.readText(pagePath, {
+      maxBytes: MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES,
+    });
+  } catch (error) {
+    if (!(error instanceof FsSafeError && error.code === "too-large")) {
+      throw error;
+    }
+  }
+
+  // Pin the same safe file while reading only its source header and trailing
+  // Notes; large generated source content must not prevent safe pruning.
+  const opened = await vault.open(pagePath);
+  try {
+    const readSlice = async (position: number, length: number): Promise<string> => {
+      const buffer = Buffer.alloc(length);
+      let totalBytesRead = 0;
+      while (totalBytesRead < length) {
+        const { bytesRead } = await opened.handle.read(
+          buffer,
+          totalBytesRead,
+          length - totalBytesRead,
+          position + totalBytesRead,
+        );
+        if (bytesRead === 0) {
+          throw new Error("Memory Wiki source page changed during bounded Notes recovery");
+        }
+        totalBytesRead += bytesRead;
+      }
+      return buffer.toString("utf8");
+    };
+
+    const headerBytes = Math.min(MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES, opened.stat.size);
+    const header = await readSlice(0, headerBytes);
+
+    const contentFence = /(?:^|\r?\n)## Content\r?\n(`+)[^\r\n]*(?=\r?\n|$)/u.exec(header);
+    if (!contentFence) {
+      throw new Error("Memory Wiki source content fence is missing from the recovery header");
+    }
+    const fence = contentFence[1];
+    // Scan from the pinned descriptor so the first complete producer-owned
+    // boundary wins; a similar fence inside later human Notes cannot qualify.
+    const notesBoundary = new RegExp(
+      `\\r?\\n${fence}\\r?\\n(?:[\\t ]*\\r?\\n)*## Notes\\r?\\n<!-- openclaw:human:start -->(?=\\r?\\n|$)`,
+      "u",
+    );
+    const decoder = new TextDecoder();
+    let pending = "";
+    let notes = "";
+    let notesBytes = 0;
+    let scannedBytes = headerBytes;
+    let foundNotesBoundary = false;
+
+    const consume = (text: string): void => {
+      if (!text) {
+        return;
+      }
+      let notesText = text;
+      if (!foundNotesBoundary) {
+        pending += text;
+        const boundary = notesBoundary.exec(pending);
+        if (!boundary) {
+          pending = pending.slice(-MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES);
+          return;
+        }
+        foundNotesBoundary = true;
+        notesText = pending.slice(boundary.index);
+        pending = "";
+      }
+      notesBytes += Buffer.byteLength(notesText, "utf8");
+      if (headerBytes + notesBytes > MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES) {
+        throw new Error("Memory Wiki human Notes exceed the bounded recovery limit");
+      }
+      notes += notesText;
+    };
+
+    consume(header);
+    const stream = opened.handle.createReadStream({
+      autoClose: false,
+      highWaterMark: MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES,
+      start: headerBytes,
+    });
+    for await (const chunk of stream) {
+      scannedBytes += chunk.byteLength;
+      if (scannedBytes > MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES) {
+        throw new Error("Memory Wiki source page exceeds the bounded recovery scan limit");
+      }
+      consume(decoder.decode(chunk, { stream: true }));
+    }
+    consume(decoder.decode());
+
+    if (!foundNotesBoundary) {
+      throw new Error("Memory Wiki source Notes boundary exceeds the bounded recovery limit");
+    }
+
+    return `${header}\n${notes}`;
+  } finally {
+    await opened.handle.close();
+  }
+}
+
 export async function pruneImportedSourceEntries(params: {
   vaultRoot: string;
   group: MemoryWikiImportedSourceGroup;
@@ -317,16 +437,78 @@ export async function pruneImportedSourceEntries(params: {
   state: MemoryWikiImportedSourceState;
 }): Promise<number> {
   let removedCount = 0;
+  let vault: Awaited<ReturnType<typeof fsRoot>> | undefined;
   for (const [syncKey, entry] of Object.entries(params.state.entries)) {
     if (entry.group !== params.group || params.activeKeys.has(syncKey)) {
       continue;
     }
-    const pageAbsPath = path.join(params.vaultRoot, entry.pagePath);
-    await fs.rm(pageAbsPath, { force: true }).catch(() => undefined);
-    delete params.state.entries[syncKey];
-    const changes = sourceSyncStateChanges.get(params.state);
-    changes?.upsertKeys.delete(syncKey);
-    changes?.deleteKeys.add(syncKey);
+    try {
+      vault ??= await fsRoot(params.vaultRoot);
+    } catch (error) {
+      if (!(error instanceof FsSafeError && error.code === "not-found")) {
+        throw error;
+      }
+      removeImportedSourceStateEntry(params.state, syncKey);
+      removedCount += 1;
+      continue;
+    }
+    // Recover durable Notes before removing an imported source page. The root
+    // handle applies containment and no-follow checks to each operation.
+    let pageContent: string | undefined;
+    try {
+      pageContent = await readImportedSourcePageForNotes(vault, entry.pagePath);
+    } catch (error) {
+      if (!(error instanceof FsSafeError && error.code === "not-found")) {
+        continue;
+      }
+    }
+    const notesBlock = pageContent === undefined ? null : extractHumanNotesBlock(pageContent);
+    if (notesBlock) {
+      const salvageStem = entry.pagePath.replace(/\//g, "_");
+      const contentHash = createHash("sha256").update(notesBlock).digest("hex").slice(0, 16);
+      const salvagePaths = [
+        path.join(".salvage", createWikiPageFilename(salvageStem, ".notes.md")),
+        path.join(".salvage", createWikiPageFilename(`${salvageStem}.${contentHash}`, ".notes.md")),
+      ];
+      let notesSalvaged = false;
+      // Content-addressed retries preserve prior recoveries without growing on failed removes.
+      for (const salvagePath of salvagePaths) {
+        try {
+          await vault.create(salvagePath, notesBlock, { mkdir: true });
+          notesSalvaged = true;
+          break;
+        } catch (error) {
+          if (!(error instanceof FsSafeError && error.code === "already-exists")) {
+            break;
+          }
+          try {
+            if (
+              (await vault.readText(salvagePath, {
+                maxBytes: MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES,
+              })) === notesBlock
+            ) {
+              notesSalvaged = true;
+              break;
+            }
+          } catch {
+            break;
+          }
+        }
+      }
+      if (!notesSalvaged) {
+        continue;
+      }
+    }
+    if (pageContent !== undefined) {
+      try {
+        await vault.remove(entry.pagePath);
+      } catch (error) {
+        if (!(error instanceof FsSafeError && error.code === "not-found")) {
+          continue;
+        }
+      }
+    }
+    removeImportedSourceStateEntry(params.state, syncKey);
     removedCount += 1;
   }
   return removedCount;

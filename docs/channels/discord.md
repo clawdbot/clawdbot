@@ -34,7 +34,7 @@ Create a Discord application with a bot, add the bot to your server, and pair it
   <Step title="Enable privileged intents">
     Still on the **Bot** page, under **Privileged Gateway Intents** enable:
 
-    - **Message Content Intent** (required)
+    - **Message Content Intent** (required for normal guild messages)
     - **Server Members Intent** (recommended; required for role allowlists, name-to-ID matching, and channel-audience access groups)
     - **Presence Intent** (optional; only for presence updates)
 
@@ -150,7 +150,7 @@ openclaw gateway
 DISCORD_BOT_TOKEN=...
 ```
 
-        For scripted or remote setup, write the same JSON5 block with `openclaw config patch --file ./discord.patch.json5 --dry-run`, then rerun without `--dry-run`. Plaintext `token` strings work too, and SecretRef values are supported for `channels.discord.token` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
+        For scripted or remote setup, write the same JSON5 block with `openclaw config patch --file ./discord.patch.json5 --dry-run`, then rerun without `--dry-run`. Plaintext `token` strings work too, and SecretRef values are supported for `channels.discord.token` across env/file/exec/store providers. See [Secrets Management](/gateway/secrets).
 
         For multiple Discord bots, keep each bot token and application ID under its account. A top-level `channels.discord.applicationId` is inherited by accounts, so only set it there when every account uses the same application ID.
 
@@ -202,6 +202,12 @@ openclaw pairing approve discord <CODE>
 
   </Step>
 </Steps>
+
+If Discord cannot grant Message Content Intent, OpenClaw can still operate in DMs and in
+guild channels where users explicitly mention the bot. Set
+`channels.discord.intents.messageContent: false` so the Gateway does not request the
+unavailable privileged intent, and keep `requireMention: true` on every configured guild
+channel. Discord omits user-authored content from other guild messages in this mode.
 
 <Note>
 Token resolution is account-aware. Config token values win over the env fallback, and `DISCORD_BOT_TOKEN` is only used for the default account.
@@ -564,7 +570,7 @@ Example:
 
     The legacy per-channel `allow` key is migrated to `enabled` by `openclaw doctor --fix`.
 
-    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="allowlist"` (with a warning in logs), even if `channels.defaults.groupPolicy` is `open`.
+    Without a `channels.discord` block, the Gateway does not auto-start Discord from `DISCORD_BOT_TOKEN`. Once the block exists, `DISCORD_BOT_TOKEN` remains the default-account token fallback. Passing `--ambient-channels` opts into env-only auto-configuration; that path uses `groupPolicy="allowlist"` and logs a warning, even if `channels.defaults.groupPolicy` is `open`.
 
   </Tab>
 
@@ -589,6 +595,35 @@ Example:
 
   </Tab>
 </Tabs>
+
+### Guild channel maps are allowlists
+
+A guild entry with no `channels` map lets the bot work in every channel it can see, subject to the guild's `requireMention` and `users` rules. **Adding even one channel entry turns the map into an allowlist**: any channel not matched by an entry is denied, not merely left at guild defaults.
+
+This surprises people who add one channel to give it special settings and find the bot has gone silent everywhere else. Use the `"*"` wildcard key to keep the rest of the guild reachable:
+
+```json5
+{
+  channels: {
+    discord: {
+      guilds: {
+        YOUR_SERVER_ID: {
+          requireMention: true,
+          users: ["YOUR_USER_ID"],
+          channels: {
+            // always-on room: everyone in it can talk to the bot, no mention needed
+            YOUR_CHANNEL_ID: { enabled: true, requireMention: false, users: ["*"] },
+            // every other channel keeps the guild defaults
+            "*": { enabled: true, requireMention: true },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
 
 ### Role-based agent routing
 
@@ -665,7 +700,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming.mode` takes `off` | `partial` | `block` | `progress` (default when no `streaming`/legacy `streamMode` key is set). `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
+    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. Discord preview streaming defaults to `off`; set `channels.discord.streaming.mode` to `partial`, `block`, or `progress` to opt in. `streamMode` is a legacy alias; run `openclaw doctor --fix` to rewrite persisted config to the canonical nested `streaming` shape.
 
 ```json5
 {
@@ -687,14 +722,13 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
-    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. When block streaming is explicitly enabled, OpenClaw skips the preview stream to avoid double-streaming.
-    - `progress` keeps one editable status draft until final delivery. By default it shows one line of the agent's latest preamble or narration, with no generated label, spacer, or tool rows.
+    - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
+    - `progress` keeps one editable status draft until final delivery. It shows the agent's latest preamble or narration as a status headline, with the compact tool rows underneath and no generated label.
     - Media, error, and explicit-reply finals cancel pending preview edits.
-    - `streaming.preview.toolProgress` defaults to `true` in `partial`/`block` mode. Discord progress mode defaults to no tool rows; set `streaming.progress.toolProgress: true` to opt in.
-    - Set `streaming.progress.toolProgress: true` to add compact tool/progress rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"`. For compatibility, an existing `progress.label` or `progress.labels` configuration retains the prior tool-row default; set `toolProgress: false` for a custom label without rows.
+    - `streaming.preview.toolProgress` and `streaming.progress.toolProgress` both default to `true` when preview streaming is active. Tool rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` need no additional progress config; set either key to `false` to keep the status headline only.
     - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
-    - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `raw` (default) or `status` (tool label only).
+    - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `status` (default, tool label only) or `raw` (explicit command text).
 
     Hide raw command/exec text while keeping compact progress lines:
 
@@ -778,25 +812,6 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - If thread bindings are disabled, `/focus` and related operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
-
-  </Accordion>
-
-  <Accordion title="Subagent progress on the source message">
-    Set `channels.discord.subagentProgress: true` to show background child activity on the Discord message that started the parent run.
-
-```json5
-{
-  channels: {
-    discord: {
-      subagentProgress: true,
-    },
-  },
-}
-```
-
-    While child runs are active, OpenClaw keeps Discord typing active for up to one hour and replaces one count reaction (`1️⃣` through `🔟`) as the concurrent count changes; `🔟` also represents 10 or more. The count reaction is removed after the final child ends. A failed, timed-out, or killed child leaves a `🔴` reaction.
-
-    This is opt-in and uses fixed internal timing and emoji defaults. The bot needs **Add Reactions** permission for reaction feedback. Account-level `channels.discord.accounts.<id>.subagentProgress` overrides the top-level value.
 
   </Accordion>
 
@@ -1084,18 +1099,13 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
         enabled: true,
         intervalMs: 30000,
         minUpdateIntervalMs: 15000,
-        exhaustedText: "token exhausted",
       },
     },
   },
 }
 ```
 
-    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Defaults: `intervalMs` 30000, `minUpdateIntervalMs` 15000 (must be less than or equal to `intervalMs`). Optional text overrides:
-
-    - `autoPresence.healthyText`
-    - `autoPresence.degradedText`
-    - `autoPresence.exhaustedText` (supports `{reason}` placeholder)
+    Auto presence maps runtime availability to Discord status: healthy => online, degraded or unknown => idle, exhausted or unavailable => dnd. Defaults: `intervalMs` 30000, `minUpdateIntervalMs` 15000 (must be less than or equal to `intervalMs`).
 
   </Accordion>
 
@@ -1131,9 +1141,29 @@ Discord message actions cover messaging, channel admin, moderation, presence, an
 Core examples:
 
 - messaging: `sendMessage`, `readMessages`, `editMessage`, `deleteMessage`, `threadReply`
-- reactions: `react`, `reactions`, `emojiList`
+- reactions: `react`, `reactions`, `emoji-list`
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
+
+Use `emoji-list` to discover the current server's custom emoji:
+
+```json
+{ "action": "emoji-list", "channel": "discord", "limit": 25 }
+```
+
+`guildId` defaults to the current conversation's server; provide it explicitly to query another server. Results are sorted by name, and `limit` defaults to and cannot exceed 100:
+
+```json
+{
+  "ok": true,
+  "emojis": [
+    { "name": "dance", "identifier": "dance:456", "animated": true },
+    { "name": "party", "identifier": "party:123" }
+  ]
+}
+```
+
+Pass `identifier` directly to `react`. Discord accepts Unicode emoji, custom `name:id` identifiers, and the `<:name:id>` or `<a:name:id>` forms. `emoji-list`, `react`, and `reactions` are all controlled by `channels.discord.actions.reactions`.
 
 The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
 
@@ -1152,26 +1182,9 @@ Default gate behavior:
 
 OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires constructing a component payload via the discord tool), while legacy `embeds` remain available but are not recommended.
 
-- `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex). Per account: `channels.discord.accounts.<id>.ui.components.accentColor`.
 - `channels.discord.agentComponents.ttlMs` controls how long sent Discord component callbacks remain registered (default `1800000`, maximum `86400000`). Per account: `channels.discord.accounts.<id>.agentComponents.ttlMs`.
 - `embeds` are ignored when components v2 are present.
 - Plain URL previews are suppressed by default. Set `suppressEmbeds: false` on a message action when a single outbound link should expand.
-
-Example:
-
-```json5
-{
-  channels: {
-    discord: {
-      ui: {
-        components: {
-          accentColor: "#5865F2",
-        },
-      },
-    },
-  },
-}
-```
 
 ## Voice
 
@@ -1215,6 +1228,7 @@ Auto-join example:
           {
             guildId: "123456789012345678",
             channelId: "234567890123456789",
+            whenOccupied: true,
           },
         ],
         allowedChannels: [
@@ -1246,7 +1260,9 @@ Notes:
 - `voice.model` overrides the OpenClaw agent brain for Discord voice responses and realtime consults. Leave it unset to inherit the routed agent model. It is separate from `voice.realtime.model`.
 - `voice.followUsers` lets the bot join, move, and leave Discord voice with selected users. See [Follow users in voice](#follow-users-in-voice).
 - `agent-proxy` routes speech through `discord-voice`, which preserves normal owner/tool authorization for the speaker and target session but hides the agent `tts` tool because Discord voice owns playback. By default, `agent-proxy` gives the consult full owner-equivalent tool access for owner speakers (`voice.realtime.toolPolicy: "owner"`) and strongly prefers consulting the OpenClaw agent before substantive answers (`voice.realtime.consultPolicy: "always"`). In that default `always` mode, the realtime layer does not auto-speak filler before the consult answer; it captures and transcribes speech, then speaks the routed OpenClaw answer. If multiple forced consult answers finish while Discord is still playing the first answer, later exact-speech answers are queued until playback idles instead of replacing speech mid-sentence.
+- Realtime voice buffers generated audio when Discord playback temporarily falls behind and tolerates brief provider or network gaps. Normal backpressure does not cancel the response, and queued answers wait until Discord finishes playing the previous answer, even if its provider response or audio encoder has already finished.
 - In `stt-tts` mode, STT uses `tools.media.audio`; `voice.model` does not affect transcription.
+- `stt-tts` replies remain active until Discord finishes playing them; long responses are not cut off by a fixed one-minute playback deadline.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.6-sol"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. Only those profile files are supported; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
 - In OpenAI `agent-proxy` realtime mode, wake-name gating adapts to the room by default: one human can talk naturally without a wake name, while two or more humans must start or end a turn with one. Other bots do not count as people. Set `voice.realtime.requireWakeName: true` to always require a wake name or `false` to never require one. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. An active wake-name gate disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when a leading wake name is recognized from partial transcription before the final transcript arrives. The policy follows live joins and leaves without reconnecting voice.
@@ -1258,6 +1274,8 @@ Notes:
 - When OpenClaw joins a voice channel, the routed agent session receives a silent system event with the current participant roster. Later participant joins and leaves update that session without triggering an unsolicited spoken reply; Discord display names are treated as untrusted labels. Authorized voice turns also receive a fresh roster snapshot.
 - Voice transcript turns and `/vc` commands use Discord entries in `commands.ownerAllowFrom` for owner status. When no Discord command owner is configured, the selected Discord account's `allowFrom` (or legacy `dm.allowFrom`) can still authorize voice access without granting owner status. Agent tool visibility follows the configured tool policy for the routed session.
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
+- `voice.autoJoin[].whenOccupied` defaults to `false`. Set it to `true` for an auto-managed room that should contain the bot only while at least one human is present. OpenClaw joins on the first human arrival and leaves after the last human departs; the OpenClaw bot and other bots do not count. Startup, fresh gateway sessions, and resumed gateway sessions reconcile from Discord's voice-state roster.
+- Occupancy management owns only sessions that it joined. A manual `/vc join`, transcript capture, follow-user session, active session in another channel, or other ad-hoc join is not moved or disconnected when the configured room empties.
 - `voice.allowedChannels` is an optional residency allowlist. Leave it unset to allow `/vc join` into any authorized Discord voice channel. When set, `/vc join`, startup auto-join, and bot voice-state moves are restricted to the listed `{ guildId, channelId }` entries. Set it to an empty array to deny all Discord voice joins. If Discord moves the bot outside the allowlist, OpenClaw leaves that channel and rejoins the configured auto-join target when one is available.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options; the upstream defaults are `daveEncryption=true` and `decryptionFailureTolerance=24`.
 - OpenClaw uses the bundled `libopus-wasm` codec for Discord voice receive and realtime raw PCM playback. It ships a pinned libopus WebAssembly build and does not require native opus addons.
@@ -1312,7 +1330,7 @@ Behavior:
 Choose between the join modes:
 
 - Use `followUsers` for personal or operator setups where the bot should automatically be in voice when you are.
-- Use `autoJoin` for fixed-room bots that should be present even when no tracked user is in voice.
+- Use `autoJoin` for fixed rooms. Add `whenOccupied: true` when the bot should be present only while humans are in that room; omit it for always-on voice presence.
 - Use `/vc join` for one-off joins or rooms where automatic voice presence would be surprising.
 
 Discord voice codec:
@@ -1473,7 +1491,8 @@ Expected voice logs:
 - On realtime start: `discord voice: realtime bridge starting ... autoRespond=false interruptResponse=false bargeIn=false minBargeInAudioEndMs=...`
 - On speaker audio: `discord voice: realtime speaker turn opened ...`, `discord voice: realtime input audio started ... outputAudioMs=... outputActive=...`, and `discord voice: realtime speaker turn closed ... chunks=... discordBytes=... realtimeBytes=... interruptedPlayback=...`
 - On skipped stale speech: `discord voice: realtime forced agent consult skipped reason=incomplete-transcript ...` or `reason=non-actionable-closing ...`
-- On realtime response completion: `discord voice: realtime audio playback finishing reason=response.done ... audioMs=... chunks=...`
+- On realtime response completion: `discord voice: realtime audio playback finishing reason=completed ... audioMs=... chunks=...`; buffered audio can still be playing after this line.
+- On ordinary playback backpressure: `discord voice: realtime audio playback buffering ... bufferedBytes=...`; playback continues when Discord drains the buffered audio.
 - On playback stop/reset: `discord voice: realtime audio playback stopped reason=... audioMs=... elapsedMs=... chunks=...`
 - On realtime consult: `discord voice: realtime consult requested ... voiceSession=... supervisorSession=... question=...`
 - On agent answer: `discord voice: agent turn answer ...`
@@ -1491,7 +1510,7 @@ To debug cut-off audio, read the realtime voice logs as a timeline:
 3. `realtime input audio started` marks the first actual audio frame received for that speaker turn. `outputActive=true` or a nonzero `outputAudioMs` here means the mic is sending input while assistant playback is still active.
 4. `barge-in detected source=active-speaker-audio` means OpenClaw saw live speaker audio while assistant playback was active. This is useful for distinguishing a real interruption from a Discord speaker-start event with no useful audio.
 5. `barge-in requested reason=...` means OpenClaw asked the realtime provider to cancel or truncate the active response. It includes `outputAudioMs`, `outputActive`, and `playbackChunks` so you can see how much assistant audio had actually played before the interruption.
-6. `realtime audio playback stopped reason=...` is the local Discord playback reset point. The reason says who stopped playback: `barge-in`, `player-idle`, `provider-clear-audio`, `forced-agent-consult`, `stream-close`, or `session-close`.
+6. `realtime audio playback stopped reason=...` is the local Discord playback reset point. `player-idle` means Discord finished consuming the audio; provider `response.done` and encoder completion alone do not mean playback is finished. Other reasons include `barge-in`, `provider-clear-audio`, `forced-agent-consult`, `stream-close`, `output-audio-overflow`, and `session-close`.
 7. `realtime speaker turn closed` summarizes the captured input turn. `chunks=0` or `hasAudio=false` means the speaker turn opened but no usable audio reached the realtime bridge. `interruptedPlayback=true` means that input turn overlapped assistant output and triggered barge-in logic.
 
 Useful fields:
@@ -1508,6 +1527,7 @@ Common patterns:
 
 - Immediate cut-off with `source=active-speaker-audio`, small `outputAudioMs`, and the same user nearby usually points to speaker echo entering the mic. Raise `voice.realtime.minBargeInAudioEndMs`, lower speaker volume, use headphones, or set `voice.realtime.providers.openai.interruptResponseOnInputAudio: false`.
 - `source=speaker-start` followed by `speaker turn closed ... hasAudio=false` means Discord reported a speaker start but no audio reached OpenClaw. That can be a transient Discord voice event, noise gate behavior, or a client briefly keying the mic.
+- `audio playback stopped reason=output-audio-overflow` means sustained delivery problems exceeded the bounded pending-audio queue. Check the associated `Discord realtime audio playback overflow` error and preceding provider or Discord connection diagnostics; ordinary playback backpressure should not produce this error.
 - `audio playback stopped reason=stream-close` without a nearby barge-in or `provider-clear-audio` means the local Discord playback stream ended unexpectedly. Check the preceding provider and Discord player logs.
 - `capture ignored during playback (barge-in disabled)` means OpenClaw intentionally dropped input while assistant audio was active. Enable `voice.realtime.bargeIn` if you want speech to interrupt playback.
 - `barge-in ignored ... outputActive=false` means Discord or provider VAD reported speech, but OpenClaw had no active playback to interrupt. This should not cut off audio.
@@ -1690,7 +1710,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 
 - startup/auth: `enabled`, `token`, `applicationId`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dmPolicy`, `allowFrom`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
-- command: `commands.native`, `commands.useAccessGroups` (global), `configWrites`, `slashCommand.ephemeral`
+- command: `commands.native`, `commands.allowFrom` (global), `configWrites`, `slashCommand.ephemeral`
 - gateway: `proxy`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit` (default `2000`), `maxLinesPerMessage` (default `17`)
@@ -1698,14 +1718,13 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - media: `mediaMaxMb` (caps outbound Discord uploads, default `100`)
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`, `autoPresence.*`
-- UI: `ui.components.accentColor`
-- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeat`, `responsePrefix`
+- features: `threadBindings`, top-level `bindings[]` (`type: "acp"`), `pluralkit`, `execApprovals`, `intents`, `agentComponents.enabled`, `agentComponents.ttlMs`, `activities`, `heartbeatVisibility`, `responsePrefix`
 
 </Accordion>
 
 ### Discord Activities
 
-Set `channels.discord.activities` to let agents post self-contained HTML widgets that open inside Discord. The block is opt-in; when absent, OpenClaw registers no Activity routes, tool, or interaction handler. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
+Set `channels.discord.activities` to let the core `show_widget` tool post self-contained HTML widgets that open inside Discord. The block is opt-in. Discord registers the Activity plumbing statically, but the current-channel presenter stays unavailable and `/discord/activity` remains externally hidden behind the normal 404 until an enabled account has an available bot token, resolved client secret, and application ID. See [Discord Activities](/channels/discord-activities) for the Developer Portal, tunnel, security, and troubleshooting setup.
 
 - `activities.clientSecret`: OAuth2 client secret for the Discord application; falls back to `DISCORD_CLIENT_SECRET`
 - `activities.applicationId`: optional Activity application ID; defaults to the bot application ID learned at gateway startup

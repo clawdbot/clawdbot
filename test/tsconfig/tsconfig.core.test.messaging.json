@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.core.test.shard.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-messaging.tsbuildinfo"
+  },
+  "include": [
+    "../../src/auto-reply/**/*.test.ts",
+    "../../src/auto-reply/**/*.test.tsx",
+    "../../src/channels/**/*.test.ts",
+    "../../src/channels/**/*.test.tsx"
+  ]
+}

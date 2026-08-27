@@ -1,6 +1,6 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveConfigWidePluginManifestRegistry } from "../../config/io.plugin-metadata.js";
 import {
   fingerprintPluginAutoEnableConfig,
   fingerprintPluginAutoEnableEnv,
@@ -10,19 +10,17 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  isReusableCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../current-plugin-metadata-snapshot.js";
+import { resolvePluginControlPlaneWorkspace } from "../control-plane-workspace.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugin-metadata-lifecycle.js";
 import {
   isPluginMetadataSnapshotCompatible,
+  rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -73,23 +71,37 @@ function applyCurrentPluginAutoEnable(params: {
       discovery: params.snapshot?.discovery,
     });
   }
-  // Gateway plugin metadata and config are replacement snapshots. Reuse only while
-  // mutable config/env content still matches; reload/close lifecycle clears the slot.
   const workspaceDir = params.snapshot.workspaceDir ?? params.workspaceDir;
-  const autoEnableConfigFingerprint = fingerprintPluginAutoEnableConfig(params.config);
-  const autoEnableEnvFingerprint = fingerprintPluginAutoEnableEnv(params.env);
   const cached = currentAutoEnableCache;
-  if (
-    cached?.config === params.config &&
-    cached.env === params.env &&
-    cached.autoEnableConfigFingerprint === autoEnableConfigFingerprint &&
-    cached.autoEnableEnvFingerprint === autoEnableEnvFingerprint &&
+  const metadataMatches =
+    cached !== undefined &&
     cached.metadataConfigFingerprint === params.snapshot.configFingerprint &&
     cached.policyHash === params.snapshot.policyHash &&
     cached.workspaceDir === workspaceDir &&
-    samePluginIds(cached.pluginIds, params.snapshot.pluginIds)
-  ) {
-    return cached.result;
+    samePluginIds(cached.pluginIds, params.snapshot.pluginIds);
+  if (metadataMatches) {
+    if (cached.config === params.config && cached.env === params.env) {
+      return cached.result;
+    }
+    const autoEnableConfigFingerprint =
+      cached.config === params.config
+        ? cached.autoEnableConfigFingerprint
+        : fingerprintPluginAutoEnableConfig(params.config);
+    const autoEnableEnvFingerprint =
+      cached.env === params.env
+        ? cached.autoEnableEnvFingerprint
+        : fingerprintPluginAutoEnableEnv(params.env);
+    if (
+      cached.autoEnableConfigFingerprint === autoEnableConfigFingerprint &&
+      cached.autoEnableEnvFingerprint === autoEnableEnvFingerprint
+    ) {
+      currentAutoEnableCache = {
+        ...cached,
+        config: params.config,
+        env: params.env,
+      };
+      return cached.result;
+    }
   }
   const result = applyPluginAutoEnable({
     config: params.config,
@@ -97,6 +109,8 @@ function applyCurrentPluginAutoEnable(params: {
     manifestRegistry: params.manifestRegistry,
     discovery: params.snapshot.discovery,
   });
+  const autoEnableConfigFingerprint = fingerprintPluginAutoEnableConfig(params.config);
+  const autoEnableEnvFingerprint = fingerprintPluginAutoEnableEnv(params.env);
   currentAutoEnableCache = {
     config: params.config,
     env: params.env,
@@ -121,7 +135,9 @@ export type PluginRuntimeLoadContext = {
   env: NodeJS.ProcessEnv;
   logger: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
+  preferBuiltPluginArtifacts?: boolean;
 };
 
 /** Runtime load option values that can be passed directly to plugin loading. */
@@ -135,6 +151,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "logger"
   | "manifestRegistry"
   | "installRecords"
+  | "preferBuiltPluginArtifacts"
 >;
 
 /** Options accepted while resolving plugin runtime load context. */
@@ -143,8 +160,11 @@ type PluginRuntimeLoadContextOptions = {
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  onlyPluginIds?: readonly string[];
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  preferBuiltPluginArtifacts?: boolean;
 };
 
 /** Creates the default plugin runtime loader logger. */
@@ -163,17 +183,40 @@ export function resolvePluginRuntimeLoadContext(
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
-  const rawWorkspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+  const rawWorkspaceDir = resolvePluginControlPlaneWorkspace({
+    config: rawConfig,
+    env,
+    workspaceDir: options?.workspaceDir,
+  }).workspaceDir;
+  const resolveMetadataSnapshot = (params: {
+    config: OpenClawConfig;
+    index?: PluginMetadataSnapshot["index"];
+  }): PluginMetadataSnapshot => {
+    const snapshot = resolvePluginMetadataSnapshot({
+      config: params.config,
+      env,
+      workspaceDir: rawWorkspaceDir,
+      allowWorkspaceScopedCurrent: true,
+      ...(params.index ? { index: params.index } : {}),
+      ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+    });
+    if (options?.workspaceDir !== undefined) {
+      return snapshot;
+    }
+    return rebasePluginMetadataSnapshotManifestRegistry(
+      snapshot,
+      resolveConfigWidePluginManifestRegistry({
+        config: params.config,
+        env,
+        ...(options?.onlyPluginIds !== undefined ? { pluginIds: options.onlyPluginIds } : {}),
+      }),
+    );
+  };
   const initialMetadataSnapshot =
-    options?.manifestRegistry === undefined
-      ? resolvePluginMetadataSnapshot({
-          config: rawConfig,
-          env,
-          workspaceDir: rawWorkspaceDir,
-          allowWorkspaceScopedCurrent: true,
-        })
-      : undefined;
+    options?.metadataSnapshot ??
+    (options?.manifestRegistry === undefined
+      ? resolveMetadataSnapshot({ config: rawConfig })
+      : undefined);
   const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
@@ -187,8 +230,11 @@ export function resolvePluginRuntimeLoadContext(
     snapshot: initialMetadataSnapshot,
   });
   const config = autoEnabled.config;
-  const workspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const workspaceDir = resolvePluginControlPlaneWorkspace({
+    config,
+    env,
+    workspaceDir: options?.workspaceDir,
+  }).workspaceDir;
   const metadataSnapshot =
     options?.manifestRegistry !== undefined
       ? undefined
@@ -200,30 +246,14 @@ export function resolvePluginRuntimeLoadContext(
             workspaceDir,
           })
         ? initialMetadataSnapshot
-        : resolvePluginMetadataSnapshot({
+        : resolveMetadataSnapshot({
             config,
-            env,
-            workspaceDir,
-            allowWorkspaceScopedCurrent: true,
             ...(initialMetadataSnapshot ? { index: initialMetadataSnapshot.index } : {}),
           });
   const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
-  if (metadataSnapshot) {
-    // Reusable snapshots stay available to later manifest-policy lookups for this runtime load.
-    if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
-      setCurrentPluginMetadataSnapshot(metadataSnapshot, {
-        config: rawConfig,
-        compatibleConfigs: [config, activationSourceConfig],
-        env,
-        workspaceDir,
-      });
-    } else {
-      clearCurrentPluginMetadataSnapshot();
-    }
-  }
   return {
     rawConfig,
     config,
@@ -233,7 +263,9 @@ export function resolvePluginRuntimeLoadContext(
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
     ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
+    ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
+    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts === true,
   };
 }
 
@@ -259,6 +291,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
+    preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     ...overrides,
   };
 }

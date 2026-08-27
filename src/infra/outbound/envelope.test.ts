@@ -11,7 +11,7 @@ describe("buildOutboundResultEnvelope", () => {
     to: "123",
     messageId: "m1",
     mediaUrl: null,
-    chatId: "c1",
+    target: { kind: "chat", id: "c1" },
   };
   const payloads = [{ text: "hi", mediaUrl: null, mediaUrls: undefined }];
 

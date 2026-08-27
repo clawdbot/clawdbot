@@ -25,6 +25,47 @@ export function hasSessionAutoModelFallbackProvenance(
   );
 }
 
+/** Resolves override source while normalizing entries written before source tracking. */
+export function resolveSessionModelOverrideSource(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "providerOverride"
+        | "modelOverride"
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | undefined,
+): "auto" | "user" | null {
+  if (!normalizeOptionalString(entry?.modelOverride)) {
+    return null;
+  }
+  if (entry?.modelOverrideSource) {
+    return entry.modelOverrideSource;
+  }
+  return hasSessionAutoModelFallbackProvenance(entry) ? "auto" : "user";
+}
+
+/** Resolves persisted route provenance, including fallback pins from before the marker existed. */
+export function resolveSessionModelOverrideRouteResolution(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "providerOverride"
+        | "modelOverride"
+        | "modelOverrideRouteResolution"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | undefined,
+): "raw" | "resolved" {
+  return (
+    entry?.modelOverrideRouteResolution ??
+    (hasSessionAutoModelFallbackProvenance(entry) ? "resolved" : "raw")
+  );
+}
+
 /** Detects an active automatic fallback rather than a self-origin configured selection. */
 export function hasSessionActiveAutoModelFallback(
   entry:

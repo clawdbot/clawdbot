@@ -357,6 +357,11 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       ) {
         return false;
       }
+      // Keep the public prefix indistinguishable from an unregistered route until
+      // at least one current account enables Activities.
+      if (!deps.runtime.hasEnabledAccounts()) {
+        return false;
+      }
       const relative = url.pathname.slice(DISCORD_ACTIVITY_ROUTE_PREFIX.length) || "/";
       if (req.method === "GET" && (relative === "/" || relative === "/index.html")) {
         return respond(res, 200, DISCORD_ACTIVITY_SHELL_HTML, "text/html; charset=utf-8", {

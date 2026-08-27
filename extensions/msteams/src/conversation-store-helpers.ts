@@ -1,4 +1,5 @@
 // Msteams helper module supports conversation store helpers behavior.
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   MSTeamsConversationStoreEntry,
@@ -10,14 +11,7 @@ export function normalizeStoredConversationId(raw: string): string {
 }
 
 export function parseStoredConversationTimestamp(value: string | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return parsed;
+  return parseDateStringTimestampMs(value) ?? null;
 }
 
 export function toConversationStoreEntries(

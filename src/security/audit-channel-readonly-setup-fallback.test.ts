@@ -64,7 +64,7 @@ vi.mock("./audit.nondeep.runtime.js", () => ({
   readConfigSnapshotForAudit: vi.fn(async () => null),
 }));
 
-const { runSecurityAudit } = await import("./audit.js");
+const { runSecurityAuditCore } = await import("./audit.js");
 
 describe("security audit channel read-only setup fallback", () => {
   it("passes setup fallback plugins to channel security collection", async () => {
@@ -96,6 +96,7 @@ describe("security audit channel read-only setup fallback", () => {
       },
     } satisfies ChannelPlugin;
     const cfg = {
+      agents: { list: [{ id: "main", default: true }] },
       session: { dmScope: "main" },
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
@@ -103,7 +104,7 @@ describe("security audit channel read-only setup fallback", () => {
     hasConfiguredChannelsForReadOnlyScopeMock.mockReturnValue(true);
     listReadOnlyChannelPluginsForConfigMock.mockReturnValue([plugin]);
 
-    const report = await runSecurityAudit({
+    const report = await runSecurityAuditCore({
       config: cfg,
       sourceConfig: cfg,
       includeFilesystem: false,

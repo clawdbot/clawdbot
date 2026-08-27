@@ -1,7 +1,7 @@
 // Windows Gateway firewall diagnostics classify LAN reachability risks.
 import { describe, expect, it, vi } from "vitest";
 import { inspectWindowsGatewayFirewall } from "./windows-gateway-firewall-diagnostics.js";
-import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
+import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 
 type InspectOptions = Parameters<typeof inspectWindowsGatewayFirewall>[0];
 type FirewallCommandRunner = NonNullable<InspectOptions["runCommandWithTimeout"]>;
@@ -102,8 +102,8 @@ function ruleJson(params?: {
 
 function quickPayloadJson(params?: {
   state?: string;
-  activeRules?: Array<Record<string, unknown>>;
-  localRules?: Array<Record<string, unknown>>;
+  activeRules?: unknown[];
+  localRules?: unknown[];
 }) {
   return JSON.stringify({
     State: JSON.parse(params?.state ?? stateJson({ localAllowRules: "True" })),
@@ -139,7 +139,7 @@ function ruleRow(params?: {
   };
 }
 
-async function classify(params: { stateJson: string; rulesJson: string; netshOutput?: string }) {
+async function classify(params: { stateJson: string; rulesJson: string }) {
   const parsedRules = JSON.parse(params.rulesJson) as unknown;
   const rulePayload =
     parsedRules && typeof parsedRules === "object" && !Array.isArray(parsedRules)
@@ -151,25 +151,10 @@ async function classify(params: { stateJson: string; rulesJson: string; netshOut
     : Array.isArray(parsedRules)
       ? parsedRules
       : [];
-  const runner: FirewallCommandRunner = async (argv) => {
-    const command = argv.join(" ");
-    if (command.includes("Get-NetConnectionProfile")) {
-      return { code: 0, stdout: params.stateJson };
-    }
-    if (command.includes("HNetCfg.FwPolicy2")) {
-      return { code: 0, stdout: JSON.stringify(localRules) };
-    }
-    if (command.includes("PolicyStore ActiveStore")) {
-      return { code: 0, stdout: JSON.stringify(activeRules) };
-    }
-    if (command.includes("PolicyStore PersistentStore")) {
-      return { code: 0, stdout: JSON.stringify(localRules) };
-    }
-    if (command.includes("advfirewall")) {
-      return { code: 0, stdout: params.netshOutput ?? "" };
-    }
-    throw new Error(`unexpected command: ${command}`);
-  };
+  const runner: FirewallCommandRunner = async () => ({
+    code: 0,
+    stdout: quickPayloadJson({ state: params.stateJson, activeRules, localRules }),
+  });
   return await inspectWindowsGatewayFirewall({
     bind: "lan",
     port: 18789,
@@ -214,7 +199,6 @@ describe("Windows Gateway firewall diagnostics", () => {
         localAllowRules: "NotConfigured",
       }),
       rulesJson: ruleJson(),
-      netshOutput: "LocalFirewallRules N/A (GPO-store only)",
     });
 
     expect(diagnostic).toMatchObject({
@@ -222,7 +206,9 @@ describe("Windows Gateway firewall diagnostics", () => {
       severity: "warning",
       code: "windows_firewall_local_rules_ignored",
     });
-    expect(diagnostic.details.join("\n")).toContain("GPO-store only");
+    expect(diagnostic.details.join("\n")).toContain(
+      "Local firewall rules are disabled for the active profile.",
+    );
   });
 
   it("detects ignored local rules even when they are absent from ActiveStore", async () => {
@@ -235,7 +221,6 @@ describe("Windows Gateway firewall diagnostics", () => {
         active: [],
         local: [ruleRow()],
       }),
-      netshOutput: "LocalFirewallRules N/A (GPO-store only)",
     });
 
     expect(diagnostic).toMatchObject({
@@ -267,7 +252,6 @@ describe("Windows Gateway firewall diagnostics", () => {
       classify({
         stateJson: stateJson({ localAllowRules: "NotConfigured" }),
         rulesJson: ruleJson(),
-        netshOutput: "LocalFirewallRules N/A (GPO-store only)",
       }),
     ).resolves.toMatchObject({
       applies: true,
@@ -381,19 +365,10 @@ describe("Windows Gateway firewall diagnostics", () => {
   });
 
   it("classifies empty successful rule output as no allow rule", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
-      const command = argv.join(" ");
-      if (command.includes("Get-NetConnectionProfile")) {
-        return { code: 0, stdout: stateJson() };
-      }
-      if (command.includes("HNetCfg.FwPolicy2")) {
-        return { code: 0, stdout: "" };
-      }
-      if (command.includes("advfirewall")) {
-        return { code: 0, stdout: "" };
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
+    const runner = vi.fn<FirewallCommandRunner>(async () => ({
+      code: 0,
+      stdout: quickPayloadJson({ state: stateJson(), activeRules: [], localRules: [] }),
+    }));
 
     await expect(
       inspectWindowsGatewayFirewall({
@@ -405,56 +380,75 @@ describe("Windows Gateway firewall diagnostics", () => {
     ).resolves.toMatchObject({
       code: "windows_firewall_no_allow_rule",
     });
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed when firewall rule output is truncated", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
-      const command = argv.join(" ");
-      if (command.includes("Get-NetConnectionProfile")) {
-        return { code: 0, stdout: stateJson() };
-      }
-      if (command.includes("HNetCfg.FwPolicy2")) {
-        return { code: 0, stdout: ruleJson(), stdoutTruncatedBytes: 1 };
-      }
-      if (command.includes("advfirewall")) {
-        return { code: 0, stdout: "" };
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
+  it.each([
+    [
+      "a nonzero exit",
+      async () => ({ code: 1, stdout: quickPayloadJson() }),
+      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+    ],
+    [
+      "truncated stdout",
+      async () => ({ code: 0, stdout: quickPayloadJson(), stdoutTruncatedBytes: 1 }),
+      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+    ],
+    [
+      "truncated stderr",
+      async () => ({ code: 0, stdout: quickPayloadJson(), stderrTruncatedBytes: 1 }),
+      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+    ],
+    [
+      "malformed JSON",
+      async () => ({ code: 0, stdout: "{" }),
+      "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
+    ],
+    [
+      "a runner exception",
+      async () => {
+        throw new Error("probe failed");
+      },
+      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+    ],
+  ] satisfies Array<[string, FirewallCommandRunner, string]>)(
+    "fails closed after %s",
+    async (_label, run, message) => {
+      const runner = vi.fn<FirewallCommandRunner>(run);
 
-    await expect(
-      inspectWindowsGatewayFirewall({
-        bind: "lan",
-        port: 18789,
-        platform: "win32",
-        runCommandWithTimeout: runner,
+      await expect(
+        inspectWindowsGatewayFirewall({
+          bind: "lan",
+          port: 18789,
+          platform: "win32",
+          runCommandWithTimeout: runner,
+        }),
+      ).resolves.toEqual({
+        applies: true,
+        severity: "warning",
+        code: "windows_firewall_inspection_failed",
+        message,
+        details: [
+          "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
+        ],
+      });
+      expect(runner).toHaveBeenCalledTimes(1);
+      expect(runner.mock.calls[0]?.[1]).toEqual({
+        timeoutMs: 5_000,
+        maxOutputBytes: 2 * 1024 * 1024,
+      });
+    },
+  );
+
+  it("reports disabled local-rule policy without follow-up probes", async () => {
+    const runner = vi.fn<FirewallCommandRunner>(async () => ({
+      code: 0,
+      stdout: quickPayloadJson({
+        state: stateJson({ activeAllowLocalRules: "False" }),
+        activeRules: [],
+        localRules: [],
       }),
-    ).resolves.toMatchObject({
-      code: "windows_firewall_inspection_failed",
-    });
-  });
-
-  it("reports local-rule policy when the persistent detail probe is unavailable", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async (argv, opts) => {
-      const command = argv.join(" ");
-      if (command.includes("Get-NetConnectionProfile")) {
-        return { code: 0, stdout: stateJson({ activeAllowLocalRules: "False" }) };
-      }
-      if (command.includes("HNetCfg.FwPolicy2")) {
-        return { code: 0, stdout: "" };
-      }
-      if (command.includes("PolicyStore ActiveStore")) {
-        return { code: 0, stdout: "" };
-      }
-      if (command.includes("PolicyStore PersistentStore")) {
-        expect(opts.timeoutMs).toBeGreaterThanOrEqual(10_000);
-        return { code: null, stdout: "" };
-      }
-      if (command.includes("advfirewall")) {
-        return { code: 0, stdout: "LocalFirewallRules N/A (GPO-store only)" };
-      }
-      throw new Error(`unexpected command: ${command}`);
-    });
+    }));
 
     await expect(
       inspectWindowsGatewayFirewall({
@@ -466,35 +460,30 @@ describe("Windows Gateway firewall diagnostics", () => {
     ).resolves.toMatchObject({
       code: "windows_firewall_local_rules_ignored",
     });
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("preserves managed ActiveStore allow rules when local rules are disabled", async () => {
+  it("preserves managed ActiveStore allow rules by default", async () => {
     const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
       const command = argv.join(" ");
-      if (command.includes("Get-NetConnectionProfile")) {
-        return { code: 0, stdout: stateJson({ activeAllowLocalRules: "False" }) };
-      }
-      if (command.includes("HNetCfg.FwPolicy2")) {
-        return { code: 0, stdout: ruleJson({ displayName: "Ignored local allow" }) };
-      }
-      if (command.includes("PolicyStore ActiveStore")) {
-        expect(command).toContain("requestedPolicyStoreSourceTypes");
-        expect(command).toContain("-ieq");
-        expect(command).toContain("GroupPolicy");
-        expect(command).toContain("MDM");
-        return {
-          code: 0,
-          stdout: ruleJson({
-            displayName: "MDM-managed Gateway allow",
-            policyStoreSource: "Intune",
-            policyStoreSourceType: "MDM",
-          }),
-        };
-      }
-      if (command.includes("advfirewall")) {
-        return { code: 0, stdout: "" };
-      }
-      throw new Error(`unexpected command: ${command}`);
+      expect(command).toContain("requestedPolicyStoreSourceTypes");
+      expect(command).toContain("-ieq");
+      expect(command).toContain("GroupPolicy");
+      expect(command).toContain("MDM");
+      return {
+        code: 0,
+        stdout: quickPayloadJson({
+          state: stateJson({ activeAllowLocalRules: "False" }),
+          activeRules: [
+            ruleRow({
+              displayName: "MDM-managed Gateway allow",
+              policyStoreSource: "Intune",
+              policyStoreSourceType: "MDM",
+            }),
+          ],
+          localRules: [ruleRow({ displayName: "Ignored local allow" })],
+        }),
+      };
     });
 
     await expect(
@@ -508,9 +497,7 @@ describe("Windows Gateway firewall diagnostics", () => {
       severity: "info",
       code: "windows_firewall_rule_present",
     });
-    expect(
-      runner.mock.calls.some(([argv]) => argv.join(" ").includes("PolicyStore PersistentStore")),
-    ).toBe(false);
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 
   it("keeps broad any-port rules from structured Windows rule output", async () => {
@@ -635,64 +622,41 @@ describe("Windows Gateway firewall diagnostics", () => {
     expect(runner).toHaveBeenCalledTimes(1);
   });
 
-  it("runs bounded read-only full Windows probes for LAN binding", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
-      const command = argv.join(" ");
-      if (command.includes("Get-NetConnectionProfile")) {
-        return { code: 0, stdout: stateJson({ localAllowRules: "True" }) };
-      }
-      if (command.includes("HNetCfg.FwPolicy2")) {
-        expect(command).toContain("$targetPort = 18789");
-        expect(command).not.toContain("Grouping");
-        expect(command).not.toContain("Description");
-        expect(command).toContain("System.Collections.ArrayList");
-        expect(command).toContain("$matchingRules.Add");
-        expect(command).toContain("[string]$rule.LocalAddresses");
-        expect(command).toContain("[string]$rule.RemoteAddresses");
-        return { code: 0, stdout: ruleJson() };
-      }
-      if (command.includes("advfirewall")) {
-        return { code: 0, stdout: "" };
-      }
-      throw new Error(`unexpected command: ${command}`);
+  it("uses the quick probe by default and honors an explicit timeout", async () => {
+    const createRunner = () =>
+      vi.fn<FirewallCommandRunner>(async () => ({ code: 0, stdout: quickPayloadJson() }));
+    const defaultRunner = createRunner();
+    const explicitQuickRunner = createRunner();
+    const overrideRunner = createRunner();
+
+    const defaultResult = await inspectWindowsGatewayFirewall({
+      bind: "lan",
+      port: 18789,
+      platform: "win32",
+      runCommandWithTimeout: defaultRunner,
+    });
+    const explicitQuickResult = await inspectWindowsGatewayFirewall({
+      bind: "lan",
+      mode: "quick",
+      port: 18789,
+      platform: "win32",
+      runCommandWithTimeout: explicitQuickRunner,
+    });
+    await inspectWindowsGatewayFirewall({
+      bind: "lan",
+      port: 18789,
+      platform: "win32",
+      runCommandWithTimeout: overrideRunner,
+      timeoutMs: 1234,
     });
 
-    await expect(
-      inspectWindowsGatewayFirewall({
-        bind: "lan",
-        port: 18789,
-        platform: "win32",
-        runCommandWithTimeout: runner,
-        timeoutMs: 1234,
-      }),
-    ).resolves.toMatchObject({
-      code: "windows_firewall_rule_present",
-    });
-    expect(runner).toHaveBeenCalledTimes(3);
-    expect(runner.mock.calls.map(([argv]) => argv[0])).toEqual(
-      expect.arrayContaining([
-        getWindowsPowerShellExePath(),
-        getWindowsSystem32ExePath("netsh.exe"),
-      ]),
-    );
-    for (const [, opts] of runner.mock.calls) {
-      expect(opts).toMatchObject({ timeoutMs: 1234 });
-    }
-
-    runner.mockClear();
-    await expect(
-      inspectWindowsGatewayFirewall({
-        bind: "lan",
-        port: 18789,
-        platform: "win32",
-        runCommandWithTimeout: runner,
-      }),
-    ).resolves.toMatchObject({
-      code: "windows_firewall_rule_present",
-    });
-    expect(runner).toHaveBeenCalledTimes(3);
-    for (const [, opts] of runner.mock.calls) {
-      expect(opts).toMatchObject({ timeoutMs: 5_000 });
-    }
+    expect(defaultResult).toEqual(explicitQuickResult);
+    expect(defaultRunner).toHaveBeenCalledTimes(1);
+    expect(explicitQuickRunner).toHaveBeenCalledTimes(1);
+    expect(overrideRunner).toHaveBeenCalledTimes(1);
+    expect(defaultRunner.mock.calls[0]?.[0]).toEqual(explicitQuickRunner.mock.calls[0]?.[0]);
+    expect(defaultRunner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 5_000 });
+    expect(explicitQuickRunner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 5_000 });
+    expect(overrideRunner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 1234 });
   });
 });

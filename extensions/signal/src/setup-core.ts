@@ -1,5 +1,7 @@
 // Signal plugin module implements setup core behavior.
 import { normalizeAccountId, resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
+import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import {
   createCliPathTextInput,
@@ -8,9 +10,6 @@ import {
   createPatchedAccountSetupAdapter,
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
-  mergeAllowFromEntries,
-  parseSetupEntriesAllowingWildcard,
-  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
@@ -115,7 +114,7 @@ function isUuidLike(value: string): boolean {
 }
 
 function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseSetupEntriesAllowingWildcard(raw, (entry) => {
+  return parseAllowFromEntries(raw, (entry) => {
     if (normalizeLowercaseStringOrEmpty(entry).startsWith("uuid:")) {
       const id = entry.slice("uuid:".length).trim();
       if (!id) {
@@ -135,6 +134,7 @@ function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: 
 }
 
 export function buildSignalSetupPatch(input: SignalSetupInput) {
+  const account = normalizeSignalAccountInput(input.signalNumber);
   const transport = input.httpUrl
     ? {
         // Bare --http-url is classified once by prepareAccountConfigInput. Keep the historical
@@ -151,7 +151,7 @@ export function buildSignalSetupPatch(input: SignalSetupInput) {
         }
       : undefined;
   return {
-    ...(input.signalNumber ? { account: input.signalNumber } : {}),
+    ...(account ? { account } : {}),
     ...(transport ? { transport } : {}),
   };
 }
@@ -249,50 +249,14 @@ async function promptSignalAllowFrom(params: {
   });
 }
 
-export const signalDmPolicy = {
+export const signalDmPolicy = createChannelDmPolicy({
   label: "Signal",
   channel,
-  policyKey: "channels.signal.dmPolicy",
-  allowFromKey: "channels.signal.allowFrom",
-  resolveConfigKeys: (cfg: OpenClawConfig, accountId?: string) =>
-    (accountId ?? resolveDefaultSignalAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.signal.accounts.${accountId ?? resolveDefaultSignalAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.signal.dmPolicy",
-          allowFromKey: "channels.signal.allowFrom",
-        },
-  getCurrent: (cfg: OpenClawConfig, accountId?: string) =>
-    resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }).config
-      .dmPolicy ?? "pairing",
-  setPolicy: (
-    cfg: OpenClawConfig,
-    policy: "pairing" | "allowlist" | "open" | "disabled",
-    accountId?: string,
-  ) =>
-    patchChannelConfigForAccount({
-      cfg,
-      channel,
-      accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
-      patch:
-        policy === "open"
-          ? {
-              dmPolicy: "open",
-              allowFrom: mergeAllowFromEntries(
-                resolveSignalAccount({
-                  cfg,
-                  accountId: accountId ?? resolveDefaultSignalAccountId(cfg),
-                }).config.allowFrom,
-                ["*"],
-              ),
-            }
-          : { dmPolicy: policy },
-      setupSurface: signalSetupAdapter,
-    }),
+  resolveAccount: (cfg, accountId) =>
+    resolveSignalAccount({ cfg, accountId: accountId ?? resolveDefaultSignalAccountId(cfg) }),
+  setupSurface: () => signalSetupAdapter,
   promptAllowFrom: promptSignalAllowFrom,
-};
+});
 
 function resolveSignalCliPath(params: {
   cfg: OpenClawConfig;
@@ -368,6 +332,9 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
         } catch {
           return "Signal --http-host must be a hostname or IP address.";
         }
+      }
+      if (input.signalNumber !== undefined && !normalizeSignalAccountInput(input.signalNumber)) {
+        return INVALID_SIGNAL_ACCOUNT_ERROR;
       }
       if (
         input.signalTransport === "container" &&

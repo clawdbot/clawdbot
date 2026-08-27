@@ -1,6 +1,7 @@
 // Migration selection tests cover skill/plugin filtering, defaults, shortcuts, and skipped-item reasons.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { applyMigrationItemSelection } from "./item-selection.js";
@@ -154,12 +155,7 @@ function expectItemStatus(
   }
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 function requireCodexPluginConfigPlugins(item: MigrationItem): Record<string, unknown> {
   const details = requireRecord(item.details, "config details");

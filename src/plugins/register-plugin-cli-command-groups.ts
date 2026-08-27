@@ -1,5 +1,6 @@
 // Registers plugin-provided CLI command groups.
 import type { Command } from "commander";
+import { setCommandJsonMode } from "../cli/program/json-mode.js";
 import {
   findCommandGroupEntry,
   getCommandGroupNames,
@@ -7,11 +8,12 @@ import {
   removeCommandGroupNames,
   type CommandGroupEntry,
 } from "../cli/program/register-command-groups.js";
-import type { OpenClawPluginCliCommandDescriptor, PluginLogger } from "./types.js";
+import type { OpenClawPluginCliRootCommandDescriptor, PluginLogger } from "./types.js";
 
 type PluginCliCommandGroupEntry = CommandGroupEntry & {
   pluginId: string;
   parentPath?: readonly string[];
+  placeholders: readonly OpenClawPluginCliRootCommandDescriptor[];
 };
 
 type PluginCliCommandGroupMode = "eager" | "lazy";
@@ -21,7 +23,7 @@ function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean 
     return false;
   }
   const descriptorNames = new Set(
-    (entry.placeholders as readonly OpenClawPluginCliCommandDescriptor[]).map(
+    (entry.placeholders as readonly OpenClawPluginCliRootCommandDescriptor[]).map(
       (descriptor) => descriptor.name,
     ),
   );
@@ -44,6 +46,24 @@ function findCommandByPath(program: Command, path: readonly string[]): Command |
 
 function commandNamesFor(program: Command): Set<string> {
   return new Set(program.commands.flatMap((command) => [command.name(), ...command.aliases()]));
+}
+
+function applyMachineOutputMode(
+  program: Command,
+  descriptor: OpenClawPluginCliRootCommandDescriptor,
+): void {
+  if (!descriptor.machineOutput) {
+    return;
+  }
+  const command = program.commands.find((candidate) => candidate.name() === descriptor.name);
+  if (!command) {
+    return;
+  }
+  setCommandJsonMode(
+    command,
+    "output",
+    ({ argv, stdoutIsTTY }) => descriptor.machineOutput?.({ argv, stdoutIsTTY }) === true,
+  );
 }
 
 export async function registerPluginCliCommandGroups(
@@ -71,6 +91,9 @@ export async function registerPluginCliCommandGroups(
       parentPath.length === 0 ? params.existingCommands : commandNamesFor(targetProgram);
     const registerEntry = async () => {
       await entry.register(targetProgram);
+      for (const descriptor of entry.placeholders) {
+        applyMachineOutputMode(targetProgram, descriptor);
+      }
       for (const command of getCommandGroupNames(entry)) {
         existingCommands.add(command);
       }
@@ -98,7 +121,12 @@ export async function registerPluginCliCommandGroups(
     try {
       if (params.mode === "lazy" && canRegisterPluginCliLazily(entry)) {
         for (const placeholder of entry.placeholders) {
-          registerLazyCommandGroup(targetProgram, entry, placeholder);
+          registerLazyCommandGroup(
+            targetProgram,
+            { ...entry, register: registerEntry },
+            placeholder,
+          );
+          applyMachineOutputMode(targetProgram, placeholder);
         }
         continue;
       }

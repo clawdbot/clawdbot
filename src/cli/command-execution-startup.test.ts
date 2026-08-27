@@ -44,7 +44,6 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "status", "--json"],
         jsonOutputMode: true,
         env: {},
-        routeMode: true,
       }),
     ).toEqual({
       invocation: {
@@ -57,8 +56,8 @@ describe("command-execution-startup", () => {
       commandPath: ["status"],
       startupPolicy: {
         suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: false,
+        hideBanner: true,
+        skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },
       },
@@ -92,6 +91,18 @@ describe("command-execution-startup", () => {
     }
   });
 
+  it("keeps plain machine stdout clean without treating the command as JSON", () => {
+    const startupPolicy = mod.resolveCliExecutionStartupContext({
+      argv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      jsonOutputMode: false,
+      machineOutputMode: true,
+      env: {},
+    }).startupPolicy;
+
+    expect(startupPolicy.suppressDoctorStdout).toBe(true);
+    expect(startupPolicy.hideBanner).toBe(true);
+  });
+
   it("skips local plugin bootstrap for JSON gateway agent calls", () => {
     expect(
       mod.resolveCliExecutionStartupContext({
@@ -120,14 +131,24 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "agent", "--agent", "main", "--message", "hi"],
         jsonOutputMode: false,
       }).startupPolicy.loadPlugins,
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("uses the resolved action command path for protocol startup policy", () => {
+  it("uses the resolved action command path for every execution startup decision", () => {
+    const context = mod.resolveCliExecutionStartupContext({
+      argv: ["node", "openclaw", "gateway", "--token", "secret", "call", "health"],
+      commandPath: ["gateway", "call"],
+      jsonOutputMode: false,
+      env: {},
+    });
+
+    expect(context.invocation.commandPath).toEqual(["gateway", "secret"]);
+    expect(context.commandPath).toEqual(["gateway", "call"]);
+
     expect(
       mod.resolveCliExecutionStartupContext({
         argv: ["node", "openclaw", "acp", "--token", "-secret"],
-        protocolCommandPath: ["acp"],
+        commandPath: ["acp"],
         jsonOutputMode: false,
         env: {},
       }).startupPolicy.suppressDoctorStdout,
@@ -135,7 +156,7 @@ describe("command-execution-startup", () => {
     expect(
       mod.resolveCliExecutionStartupContext({
         argv: ["node", "openclaw", "acp", "--verbose", "client"],
-        protocolCommandPath: ["acp", "client"],
+        commandPath: ["acp", "client"],
         jsonOutputMode: false,
         env: {},
       }).startupPolicy.suppressDoctorStdout,

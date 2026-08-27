@@ -2,7 +2,9 @@ import { createHmac, randomBytes } from "node:crypto";
 import { safeEqualSecret } from "../security/secret-equal.js";
 
 export const BOARD_HTTP_PATH_PREFIX = "/__openclaw__/board/";
-export const BOARD_VIEW_TICKET_TTL_MS = 2 * 60_000;
+// Bounds residual bearer access after the originating client loses its view authority.
+// Each load rechecks grant state; content changes invalidate through revision and generation.
+export const BOARD_VIEW_TICKET_TTL_MS = 20 * 60_000;
 
 const BOARD_VIEW_TICKET_SCOPE = "board-widget-view";
 const BOARD_VIEW_TICKET_MAX_LENGTH = 2_048;
@@ -21,6 +23,10 @@ type BoardViewTicketClaims = {
   viewGeneration: string;
   expiresAtMs: number;
   nonce: string;
+  pluginFrame?: {
+    pluginKind: string;
+    scopedHostUrl: string;
+  };
 };
 
 function signTicketPayload(payload: string, secret: Buffer): string {
@@ -51,7 +57,13 @@ function isValidClaims(value: unknown): value is BoardViewTicketClaims {
     /^[a-f0-9]{32}$/u.test(claims.viewGeneration) &&
     Number.isSafeInteger(claims.expiresAtMs) &&
     typeof claims.nonce === "string" &&
-    /^[A-Za-z0-9_-]{32}$/u.test(claims.nonce)
+    /^[A-Za-z0-9_-]{32}$/u.test(claims.nonce) &&
+    (claims.pluginFrame === undefined ||
+      (typeof claims.pluginFrame === "object" &&
+        typeof claims.pluginFrame.pluginKind === "string" &&
+        claims.pluginFrame.pluginKind.length <= 128 &&
+        typeof claims.pluginFrame.scopedHostUrl === "string" &&
+        claims.pluginFrame.scopedHostUrl.length <= 1024))
   );
 }
 
@@ -62,6 +74,7 @@ export function createBoardViewTicket(params: {
   revision: number;
   viewGeneration: string;
   nowMs?: number;
+  pluginFrame?: BoardViewTicketClaims["pluginFrame"];
 }): BoardViewTicket {
   const nowMs = params.nowMs ?? Date.now();
   const claims: BoardViewTicketClaims = {
@@ -72,6 +85,7 @@ export function createBoardViewTicket(params: {
     viewGeneration: params.viewGeneration,
     expiresAtMs: nowMs + BOARD_VIEW_TICKET_TTL_MS,
     nonce: randomBytes(24).toString("base64url"),
+    ...(params.pluginFrame ? { pluginFrame: params.pluginFrame } : {}),
   };
   if (!Number.isSafeInteger(nowMs) || !isValidClaims(claims)) {
     throw new Error("invalid board view ticket binding");

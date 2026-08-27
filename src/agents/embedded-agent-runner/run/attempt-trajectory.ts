@@ -25,20 +25,34 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
   });
-  const recorder = attempt.disableTrajectory
-    ? null
-    : createTrajectoryRuntimeRecorder({
-        cfg: attempt.config,
-        env: process.env,
-        runId: attempt.runId,
-        sessionId: activeSession.sessionId,
-        sessionKey: attempt.sessionKey,
-        sessionFile: trajectorySessionFile,
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-        modelApi: attempt.model.api,
-        workspaceDir: attempt.workspaceDir,
-      });
+  if (attempt.disableTrajectory) {
+    return null;
+  }
+  const sessionTarget =
+    attempt.sessionTarget?.agentId &&
+    attempt.sessionTarget.sessionId &&
+    attempt.sessionTarget.sessionKey &&
+    attempt.sessionTarget.storePath
+      ? {
+          agentId: attempt.sessionTarget.agentId,
+          sessionId: attempt.sessionTarget.sessionId,
+          sessionKey: attempt.sessionTarget.sessionKey,
+          storePath: attempt.sessionTarget.storePath,
+        }
+      : undefined;
+  const recorder = createTrajectoryRuntimeRecorder({
+    cfg: attempt.config,
+    env: process.env,
+    runId: attempt.runId,
+    sessionId: activeSession.sessionId,
+    sessionKey: attempt.sessionKey,
+    sessionFile: trajectorySessionFile,
+    sessionTarget,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    modelApi: attempt.model.api,
+    workspaceDir: attempt.workspaceDir,
+  });
   recorder?.recordEvent("session.started", {
     trigger: attempt.trigger,
     sessionFile: attempt.sessionFile,
@@ -56,6 +70,9 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     buildTrajectoryRunMetadata({
       env: process.env,
       config: attempt.config,
+      ...(attempt.preparedModelRuntime?.metadataSnapshot
+        ? { pluginMetadataSnapshot: attempt.preparedModelRuntime.metadataSnapshot }
+        : {}),
       workspaceDir: input.effectiveWorkspace,
       sessionFile: attempt.sessionFile,
       sessionKey: attempt.sessionKey,

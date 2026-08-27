@@ -10,8 +10,7 @@ import {
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
-  toPluginInboundClaimContext,
-  toPluginInboundClaimEvent,
+  toPluginInboundClaimPair,
 } from "../../hooks/message-hook-mappers.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -21,6 +20,7 @@ import {
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
@@ -38,13 +38,22 @@ import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import { createFinalizationAwareTtsPayloadApplier } from "./dispatch-from-config.payloads.js";
 import { extendPreparedDispatchState } from "./dispatch-from-config.phase-state.js";
-import { loadRuntimePlugins } from "./dispatch-from-config.runtime-loaders.js";
+import {
+  loadPreparedModelRuntime,
+  loadRuntimePlugins,
+} from "./dispatch-from-config.runtime-loaders.js";
 import { createReplyHotPathTimingTracker } from "./dispatch-from-config.timing.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { noteDispatchProcessedOutcome } from "./dispatch-processed-outcome.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
-import { stripLegacyMediaContextFields } from "./inbound-context.js";
+import { finalizeInboundContext, isFinalizedInboundContext } from "./inbound-context.js";
 import { hasInboundAudio } from "./inbound-media.js";
+import { bindReplyDispatcherConversationContext } from "./reply-dispatcher.js";
+import {
+  resolveReplyOperationRunState,
+  type ReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -54,9 +63,43 @@ export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
 ) {
-  const state = { params, messageAuditTerminal };
-  const { ctx, cfg, dispatcher } = params;
+  const ctx = isFinalizedInboundContext(params.ctx)
+    ? params.ctx
+    : finalizeInboundContext(params.ctx);
+  const turnAdoptionLifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  const turnAdoptionState = { adopted: false };
+  const normalizedParams: DispatchFromConfigParams = {
+    ...params,
+    ctx,
+    replyOptions: {
+      ...params.replyOptions,
+      ...(turnAdoptionLifecycle
+        ? {
+            turnAdoptionLifecycle: {
+              ...turnAdoptionLifecycle,
+              onAdopted: async () => {
+                // The upstream owner is durable only after its callback commits.
+                // A rejected callback must leave replay dedupe releasable.
+                await turnAdoptionLifecycle.onAdopted();
+                turnAdoptionState.adopted = true;
+              },
+            },
+          }
+        : {}),
+    },
+  };
+  const state = {
+    params: normalizedParams,
+    messageAuditTerminal,
+    inboundDedupeReplayUnsafe: false,
+    turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,
+  };
+  const { cfg, dispatcher } = normalizedParams;
+  bindReplyDispatcherConversationContext(dispatcher, ctx.agentText);
+  const replyOperationRunState: ReplyOperationRunState =
+    resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   if (params.replyOptions?.abortSignal?.aborted) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply_operation_aborted" });
     messageAuditTerminal?.note("skipped", { reason: "reply_operation_aborted" });
     return {
       status: "complete" as const,
@@ -119,6 +162,10 @@ export async function gatherDispatchRequest(
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+    noteDispatchProcessedOutcome({
+      outcome,
+      ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
+    });
     messageAuditTerminal?.note(outcome, opts);
     if (diagnosticsEnabled) {
       replyHotPathTiming.logIfSlow({
@@ -173,9 +220,8 @@ export async function gatherDispatchRequest(
     messageLifecycle.markIdle(reason);
   };
 
-  let inboundDedupeReplayUnsafe = false;
   const markInboundDedupeReplayUnsafe = () => {
-    inboundDedupeReplayUnsafe = true;
+    state.inboundDedupeReplayUnsafe = true;
   };
 
   const boundAcpDispatchSessionKey = resolveBoundAcpDispatchSessionKey({ ctx, cfg });
@@ -210,6 +256,7 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey &&
     initialDispatchReplyOperation
   ) {
+    noteDispatchProcessedOutcome({ outcome: "skipped", reason: "reply-operation-active" });
     messageAuditTerminal?.note("skipped", { reason: "reply-operation-active" });
     return {
       status: "complete" as const,
@@ -308,7 +355,21 @@ export async function gatherDispatchRequest(
   const routeReplyThreadId = replyRoute.threadId ?? routeThreadId;
   const inboundAudio = hasInboundAudio(ctx);
   const sessionTtsAuto = normalizeTtsAutoMode(sessionStoreEntry.entry?.ttsAuto);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  // A bound ACP key names an external harness, not a configured model-runtime owner.
+  // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
+  const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
+    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    : sessionAgentId;
+  const preparedReplyDispatchRuntime = params.usePublishedModelRuntime
+    ? await traceReplyPhase("reply.load_prepared_dispatch_runtime", async () => {
+        const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
+        return await loadPublishedGatewayReplyDispatchRuntime({
+          agentId: preparedReplyDispatchAgentId,
+        });
+      })
+    : undefined;
+  const workspaceDir =
+    preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
     ctx,
     dispatcher,
@@ -316,15 +377,17 @@ export async function gatherDispatchRequest(
     initialDispatchReplyOperation,
     messageAuditTerminal,
     operationSessionStoreEntry,
-    replyOptions: params.replyOptions,
+    replyOptions: normalizedParams.replyOptions,
     resolveOperationExpectedSessionId,
     routeThreadId,
+    sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
   const {
     completeDispatchReplyOperation,
     dispatchHookDispatcher,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
     getDispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation,
@@ -338,18 +401,26 @@ export async function gatherDispatchRequest(
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,
     trackDispatchLifecycleWork,
+    turnLedger,
   } = replyOperationCoordinator;
   const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
     getReplyOperation: getDispatchReplyOperation,
     hasInboundAudio: () =>
       inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
   });
-  const { ensureRuntimePluginsLoaded } = await traceReplyPhase("reply.load_runtime_plugins", () =>
-    loadRuntimePlugins(),
-  );
-  await traceReplyPhase("reply.ensure_runtime_plugins", () => {
-    ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
-  });
+  const pluginRegistry =
+    preparedReplyDispatchRuntime?.inboundPluginRegistry ??
+    (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {
+      const { loadAgentRuntimePluginRegistryHandle } = await traceReplyPhase(
+        "reply.load_runtime_plugins",
+        loadRuntimePlugins,
+      );
+      return loadAgentRuntimePluginRegistryHandle({
+        config: cfg,
+        workspaceDir,
+        allowGatewaySubagentBinding: true,
+      });
+    }));
   const hookRunner = getGlobalHookRunner();
   // Extract message context for hooks (plugin and internal)
   const timestamp =
@@ -361,18 +432,19 @@ export async function gatherDispatchRequest(
     const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
       messageId: messageIdForHook,
     });
+    const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
+      commandAuthorized:
+        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+    });
     return {
       hookContext: nextHookContext,
-      inboundClaimContext: toPluginInboundClaimContext(nextHookContext),
-      inboundClaimEvent: toPluginInboundClaimEvent(nextHookContext, {
-        commandAuthorized:
-          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-      }),
+      inboundClaimContext: inboundClaim.context,
+      inboundClaimEvent: inboundClaim.event,
     };
   };
-  let { hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx);
-  const { isGroup, groupId } = hookContext;
+  const hookState = buildHookState(hookCtx);
+  const { isGroup, groupId } = hookState.hookContext;
   let hookMediaPrepared = false;
   let hookMediaMetadataStaged = false;
   const prepareHookMediaMetadata = async () => {
@@ -394,19 +466,13 @@ export async function gatherDispatchRequest(
     );
     if (staged) {
       hookMediaMetadataStaged = true;
-      ({ hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx));
+      Object.assign(hookState, buildHookState(hookCtx));
     }
   };
   const buildMessageReceivedHookContext = () => {
     const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
-    const hasUnstagedRemoteMediaMetadata = Boolean(
-      hookContext.mediaPath ||
-      hookContext.mediaUrl ||
-      hookContext.mediaType ||
-      hookContext.mediaPaths?.length ||
-      hookContext.mediaUrls?.length ||
-      hookContext.mediaTypes?.length,
-    );
+    const { hookContext } = hookState;
+    const hasUnstagedRemoteMediaMetadata = Boolean(hookContext.media?.length);
     if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
       return hookContext;
     }
@@ -419,6 +485,7 @@ export async function gatherDispatchRequest(
       ...buildHookState(messageReceivedCtx).hookContext,
       mediaRemoteHost,
       mediaStagingPending: true,
+      originalMedia: hookContext.media?.map((entry) => ({ ...entry })),
       originalMediaPath: hookContext.mediaPath,
       originalMediaUrl: hookContext.mediaUrl,
       originalMediaType: hookContext.mediaType,
@@ -427,86 +494,63 @@ export async function gatherDispatchRequest(
       originalMediaTypes: hookContext.mediaTypes,
     };
   };
-  const nextState = extendPreparedDispatchState(
-    state,
-    {
-      ctx,
-      cfg,
-      dispatcher,
-      sessionKey,
-      traceReplyPhase,
-      recordProcessed,
-      recordAgentDispatchStarted,
-      recordAgentDispatchCompleted,
-      markProcessing,
-      markIdle,
-      markInboundDedupeReplayUnsafe,
-      acpDispatchSessionKey,
-      markProgress,
-      sessionStoreEntry,
-      notePreparedSession,
-      resolvePreparedTranscriptBinding,
-      sessionAgentId,
-      shouldEmitVerboseProgress,
-      shouldEmitFullVerboseProgress,
-      replyRoute,
-      routeReplyThreadId,
-      inboundAudio,
-      sessionTtsAuto,
-      workspaceDir,
-      completeDispatchReplyOperation,
-      dispatchHookDispatcher,
-      ensureDispatchReplyOperation,
-      failDispatchReplyOperation,
-      getDispatchAbortOperation,
-      getDispatchAbortSignal,
-      getDispatchReplyOperation,
-      getObservedReplyDelivery,
-      getPreDispatchAbortSignal,
-      getReplyOptions,
-      isDispatchOperationAborted,
-      isPreDispatchOperationAborted,
-      markObservedReplyDelivery,
-      releasePreDispatchLifecycleAdmission,
-      runWithDispatchLifecycleAdmission,
-      throwIfDispatchOperationAborted,
-      trackDispatchLifecycleWork,
-      maybeApplyTtsWithFinalizationLease,
-      hookRunner,
-      timestamp,
-      messageIdForHook,
-      isGroup,
-      groupId,
-      prepareHookMediaMetadata,
-      buildMessageReceivedHookContext,
-    },
-    {
-      inboundDedupeReplayUnsafe: {
-        get: () => inboundDedupeReplayUnsafe,
-        set: (value: boolean) => {
-          inboundDedupeReplayUnsafe = value;
-        },
-      },
-      hookContext: {
-        get: () => hookContext,
-        set: (value: typeof hookContext) => {
-          hookContext = value;
-        },
-      },
-      inboundClaimContext: {
-        get: () => inboundClaimContext,
-        set: (value: typeof inboundClaimContext) => {
-          inboundClaimContext = value;
-        },
-      },
-      inboundClaimEvent: {
-        get: () => inboundClaimEvent,
-        set: (value: typeof inboundClaimEvent) => {
-          inboundClaimEvent = value;
-        },
-      },
-    },
-  );
+  const nextState = extendPreparedDispatchState(state, {
+    ctx,
+    cfg,
+    dispatcher,
+    sessionKey,
+    traceReplyPhase,
+    recordProcessed,
+    recordAgentDispatchStarted,
+    recordAgentDispatchCompleted,
+    markProcessing,
+    markIdle,
+    markInboundDedupeReplayUnsafe,
+    acpDispatchSessionKey,
+    markProgress,
+    sessionStoreEntry,
+    notePreparedSession,
+    resolvePreparedTranscriptBinding,
+    sessionAgentId,
+    shouldEmitVerboseProgress,
+    shouldEmitFullVerboseProgress,
+    replyRoute,
+    routeReplyThreadId,
+    inboundAudio,
+    sessionTtsAuto,
+    workspaceDir,
+    preparedReplyDispatchRuntime,
+    pluginRegistry,
+    replyOperationRunState,
+    completeDispatchReplyOperation,
+    dispatchHookDispatcher,
+    ensureDispatchReplyOperation,
+    failDispatchReplyOperation,
+    getAgentRunTerminalOutcome,
+    getDispatchAbortOperation,
+    getDispatchAbortSignal,
+    getDispatchReplyOperation,
+    getObservedReplyDelivery,
+    getPreDispatchAbortSignal,
+    getReplyOptions,
+    isDispatchOperationAborted,
+    isPreDispatchOperationAborted,
+    markObservedReplyDelivery,
+    releasePreDispatchLifecycleAdmission,
+    runWithDispatchLifecycleAdmission,
+    throwIfDispatchOperationAborted,
+    trackDispatchLifecycleWork,
+    turnLedger,
+    maybeApplyTtsWithFinalizationLease,
+    hookRunner,
+    timestamp,
+    messageIdForHook,
+    isGroup,
+    groupId,
+    hookState,
+    prepareHookMediaMetadata,
+    buildMessageReceivedHookContext,
+  });
   return { status: "ready" as const, state: nextState };
 }
 

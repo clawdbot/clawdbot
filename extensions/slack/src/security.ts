@@ -1,6 +1,9 @@
 // Slack plugin module implements security behavior.
 import { createScopedDmSecurityResolver } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createOpenProviderConfiguredRouteWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createConditionalWarningCollector,
+  createOpenProviderConfiguredRouteWarningCollector,
+} from "openclaw/plugin-sdk/channel-policy";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   resolveSlackAccountAllowFrom,
@@ -44,12 +47,18 @@ const collectSlackSecurityWarnings =
         'Set channels.slack.groupPolicy="allowlist" and configure channels.slack.channels',
     },
   });
+const collectSlackSecurityFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectSlackSecurityWarnings,
+  checkId: "channels.slack.groups.open",
+  severity: "critical",
+  title: "Slack security warning",
+});
 
 const loadSlackSecurityAuditModule = createLazyRuntimeModule(() => import("./security-audit.js"));
 
 export const slackSecurityAdapter = {
   resolveDmPolicy: resolveSlackDmPolicy,
-  collectWarnings: collectSlackSecurityWarnings,
+  collectWarnings: collectSlackSecurityFindings,
   collectAuditFindings: async (params) => {
     const { collectSlackSecurityAuditFindings } = await loadSlackSecurityAuditModule();
     return await collectSlackSecurityAuditFindings(params);

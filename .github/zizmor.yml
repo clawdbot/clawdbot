@@ -7,8 +7,7 @@ rules:
   unpinned-uses:
     disable: true
 
-  # Disable excessive-permissions for now - adding explicit permissions
-  # blocks requires careful review of each workflow's needs
+  # TODO(2026-10-01): Re-enable excessive-permissions after each workflow has an explicit permission review.
   excessive-permissions:
     disable: true
 

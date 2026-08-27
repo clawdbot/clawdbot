@@ -24,7 +24,6 @@ final class GatewayDiscoveryModel {
         var lanHost: String?
         var tailnetDns: String?
         var gatewayPort: Int?
-        var canvasPort: Int?
         var tlsEnabled: Bool
         var tlsFingerprintSha256: String?
         var cliPath: String?
@@ -37,7 +36,6 @@ final class GatewayDiscoveryModel {
                 lhs.lanHost == rhs.lanHost &&
                 lhs.tailnetDns == rhs.tailnetDns &&
                 lhs.gatewayPort == rhs.gatewayPort &&
-                lhs.canvasPort == rhs.canvasPort &&
                 lhs.tlsEnabled == rhs.tlsEnabled &&
                 lhs.tlsFingerprintSha256 == rhs.tlsFingerprintSha256 &&
                 lhs.cliPath == rhs.cliPath
@@ -45,7 +43,7 @@ final class GatewayDiscoveryModel {
     }
 
     var gateways: [DiscoveredGateway] = []
-    var statusText: String = "Idle"
+    var statusText: String = GatewayDiscoveryStatusText.idle
     private(set) var debugLog: [DebugLogEntry] = []
 
     private var browsers: [String: NWBrowser] = [:]
@@ -100,7 +98,6 @@ final class GatewayDiscoveryModel {
                                 lanHost: Self.txtValue(txt, key: "lanHost"),
                                 tailnetDns: Self.txtValue(txt, key: "tailnetDns"),
                                 gatewayPort: Self.txtIntValue(txt, key: "gatewayPort"),
-                                canvasPort: Self.txtIntValue(txt, key: "canvasPort"),
                                 tlsEnabled: Self.txtBoolValue(txt, key: "gatewayTls"),
                                 tlsFingerprintSha256: Self.txtValue(txt, key: "gatewayTlsSha256"),
                                 cliPath: Self.txtValue(txt, key: "cliPath"))
@@ -125,7 +122,7 @@ final class GatewayDiscoveryModel {
         self.gatewaysByDomain = [:]
         self.statesByDomain = [:]
         self.gateways = []
-        self.statusText = "Stopped"
+        self.statusText = GatewayDiscoveryStatusText.stopped
     }
 
     private func recomputeGateways() {

@@ -6,7 +6,7 @@ import path from "node:path";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createIrcIngressMonitor } from "./irc-ingress.js";
 import { monitorIrcProvider } from "./monitor.js";
@@ -103,7 +103,11 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
         idx = buffer.indexOf("\n");
         lines.push(line);
         if (line.startsWith("USER ")) {
-          socket.write(":server 001 bot :welcome\r\n");
+          if (connectionNumber === 2) {
+            socket.destroy();
+          } else {
+            socket.write(":server 001 bot :welcome\r\n");
+          }
           if (connectionNumber === 1) {
             setTimeout(() => socket.destroy(), 10);
           }
@@ -329,10 +333,44 @@ function installPairingMonitorRuntime(
   } as never);
 }
 
+describe("IRC configured-unavailable credential connection boundaries", () => {
+  it("opens no connection when an active NickServ SecretRef is unavailable", async () => {
+    installMonitorRuntime();
+    const connectSpy = vi.spyOn(net, "connect").mockImplementation(() => {
+      throw new Error("unexpected IRC connection");
+    });
+    const config = {
+      channels: {
+        irc: {
+          host: "127.0.0.1",
+          port: 6667,
+          tls: false,
+          nick: "openclaw",
+          nickserv: {
+            password: { source: "env", provider: "default", id: "IRC_UNAVAILABLE_EXPLICIT_SECRET" },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    try {
+      await withIngressQueue(async (ingressQueue) => {
+        await expect(monitorIrcProvider({ config, ingressQueue })).rejects.toThrow(
+          /configured but unavailable/i,
+        );
+      });
+      expect(connectSpy).not.toHaveBeenCalled();
+    } finally {
+      connectSpy.mockRestore();
+    }
+  });
+});
+
 describe("irc monitor reconnect", () => {
   it("reconnects when an established IRC socket closes", async () => {
     await withIngressQueue(async (ingressQueue) => {
       installMonitorRuntime();
+      const statusSink = vi.fn();
       const server = await startDisconnectingIrcServer();
       const config = {
         channels: {
@@ -350,14 +388,31 @@ describe("irc monitor reconnect", () => {
       let monitor: { stop: () => Promise<void> } | undefined;
 
       try {
-        monitor = await monitorIrcProvider({ config, ingressQueue });
+        monitor = await monitorIrcProvider({ config, ingressQueue, statusSink });
         await waitForIrcCondition(
           () =>
-            server.connectionCount >= 2 &&
-            server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length >= 2,
-          "expected IRC monitor to reconnect after the first socket closed",
+            server.connectionCount >= 3 &&
+            server.lines.filter((line) => line === "USER bot 0 * :OpenClaw").length >= 3 &&
+            statusSink.mock.calls.filter(([patch]) => patch.lifecycle).length >= 4,
+          "expected IRC monitor to recover after a failed reconnect attempt",
         );
-        expect(server.connectionCount).toBeGreaterThanOrEqual(2);
+        expect(server.connectionCount).toBeGreaterThanOrEqual(3);
+        expect(
+          statusSink.mock.calls.flatMap(([patch]) =>
+            patch.lifecycle ? [patch.lifecycle as string] : [],
+          ),
+        ).toEqual(["ready", "recovering", "recovering", "ready"]);
+        for (const [readyPatch] of statusSink.mock.calls.filter(
+          ([statusPatch]) => statusPatch.lifecycle === "ready",
+        )) {
+          expect(readyPatch).toMatchObject({
+            running: true,
+            connected: true,
+            lastConnectedAt: expect.any(Number),
+            lastError: null,
+            terminalDisconnect: undefined,
+          });
+        }
       } finally {
         if (monitor) {
           await monitor.stop();

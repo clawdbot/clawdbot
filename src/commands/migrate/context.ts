@@ -1,6 +1,8 @@
 /** Migration provider context and report-directory helpers. */
 import path from "node:path";
+import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
+import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -32,6 +34,25 @@ export function buildMigrationReportDir(
   return path.join(stateDir, "migration", providerId, stamp);
 }
 
+/** Resolves an explicit migration owner without allowing typo-created agent stores. */
+export function resolveMigrationTargetAgentId(
+  config: OpenClawConfig,
+  rawAgentId: string | undefined,
+): string | undefined {
+  const raw = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !raw) {
+    throw new Error("--agent must not be blank");
+  }
+  if (!raw) {
+    return undefined;
+  }
+  if (!isValidAgentId(raw)) {
+    throw new Error(`Invalid agent id "${raw}".`);
+  }
+  const agentId = normalizeAgentId(raw);
+  return resolveConfiguredAgentId(config, agentId);
+}
+
 /** Builds the provider-facing migration context from CLI options and runtime state. */
 export function buildMigrationContext(params: {
   source?: string;
@@ -51,7 +72,7 @@ export function buildMigrationContext(params: {
   return {
     config,
     stateDir,
-    targetAgentId: params.targetAgentId,
+    targetAgentId: resolveMigrationTargetAgentId(config, params.targetAgentId),
     itemKinds: params.itemKinds,
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),

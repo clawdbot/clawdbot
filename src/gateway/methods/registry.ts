@@ -12,6 +12,7 @@ import {
   type GatewayMethodHandler,
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
+  type GatewayMethodProfileAccess,
   type GatewayMethodRegistryView,
   NODE_GATEWAY_METHOD_SCOPE,
 } from "./descriptor.js";
@@ -43,6 +44,8 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
     ...input,
     name,
     scope: normalizedScope,
+    profileAccess:
+      input.profileAccess ?? (input.owner.kind === "core" ? "independent" : "required"),
     ...(input.startup === "unavailable-until-sidecars"
       ? { startup: "unavailable-until-sidecars" }
       : {}),
@@ -54,6 +57,7 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
 /** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
 export function createGatewayMethodRegistry(
   inputs: readonly GatewayMethodDescriptorInput[],
+  pluginRegistry?: PluginRegistry,
 ): GatewayMethodRegistry {
   const descriptors = inputs.map(normalizeDescriptor);
   const byName = new Map<string, GatewayMethodDescriptor>();
@@ -66,6 +70,7 @@ export function createGatewayMethodRegistry(
     byName.set(descriptor.name, descriptor);
   }
   return {
+    ...(pluginRegistry ? { pluginRegistry } : {}),
     getHandler: (name) => byName.get(name)?.handler,
     listMethods: () => descriptors.map((descriptor) => descriptor.name),
     listAdvertisedMethods: () =>
@@ -75,6 +80,7 @@ export function createGatewayMethodRegistry(
     getScope: (name) => byName.get(name)?.scope,
     isStartupUnavailable: (name) => byName.get(name)?.startup === "unavailable-until-sidecars",
     isControlPlaneWrite: (name) => byName.get(name)?.controlPlaneWrite === true,
+    requiresAuthenticatedProfile: (name) => byName.get(name)?.profileAccess === "required",
     descriptors: () => descriptors,
   };
 }
@@ -107,12 +113,14 @@ export function createPluginGatewayMethodDescriptor(params: {
   name: string;
   handler: GatewayMethodHandler;
   scope?: OperatorScope;
-}): GatewayMethodDescriptorInput {
+  profileAccess?: GatewayMethodProfileAccess;
+}): GatewayMethodDescriptor {
   const normalizedScope = normalizePluginGatewayMethodScope(params.name, params.scope).scope;
   return {
     name: params.name,
     handler: params.handler,
     owner: { kind: "plugin", pluginId: params.pluginId },
+    profileAccess: params.profileAccess ?? "required",
     scope: normalizedScope ?? ADMIN_SCOPE,
   };
 }

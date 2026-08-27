@@ -192,6 +192,40 @@ describe("discord live qa runtime", () => {
     });
   });
 
+  it("separates text ingress from target voice authorization", () => {
+    const next = testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      {
+        voiceChannelAccess: {
+          channelId: "523456789012345678",
+          users: ["323456789012345678"],
+        },
+      },
+    );
+
+    const account = next.channels?.discord?.accounts?.sut;
+    expect(next.channels?.discord?.voice).toEqual({
+      enabled: true,
+      mode: "stt-tts",
+      autoJoin: [],
+    });
+    expect(
+      account?.guilds?.["123456789012345678"]?.channels?.["223456789012345678"]?.users,
+    ).toEqual(["423456789012345678"]);
+    expect(
+      account?.guilds?.["123456789012345678"]?.channels?.["523456789012345678"]?.users,
+    ).toEqual(["323456789012345678"]);
+    expect(next.tools?.alsoAllow).toContain("transcripts");
+    expect(next.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
+  });
+
   it("injects tool-only Discord status reaction config for the Mantis scenario", () => {
     const next = testing.buildDiscordQaConfig(
       {},
@@ -282,25 +316,6 @@ describe("discord live qa runtime", () => {
       testing.computeDiscordRttMs("2026-04-22T11:59:59.125Z", "2026-04-22T12:00:00.875Z"),
     ).toBe(1750);
     expect(testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
-  });
-
-  it("includes the Discord live scenarios", () => {
-    expect(testing.findScenario().map((scenario) => scenario.id)).toEqual([
-      "discord-canary",
-      "discord-mention-gating",
-      "discord-native-help-command-registration",
-    ]);
-    expect(
-      testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
-    ).toEqual(["discord-status-reactions-tool-only"]);
-    expect(testing.findScenario(["discord-voice-autojoin"]).map((scenario) => scenario.id)).toEqual(
-      ["discord-voice-autojoin"],
-    );
-    expect(
-      testing
-        .findScenario(["discord-thread-reply-filepath-attachment"])
-        .map((scenario) => scenario.id),
-    ).toEqual(["discord-thread-reply-filepath-attachment"]);
   });
 
   it("collects the status reaction sequence across timeline snapshots", () => {
@@ -461,12 +476,6 @@ describe("discord live qa runtime", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("fails when any requested Discord scenario id is unknown", () => {
-    expect(() => testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
-      "unknown Discord QA scenario id(s): typo-scenario",
-    );
   });
 
   it("lists Discord application commands through the REST API", async () => {

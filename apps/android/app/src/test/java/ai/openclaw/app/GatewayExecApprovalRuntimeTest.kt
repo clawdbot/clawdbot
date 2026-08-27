@@ -6,6 +6,7 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.i18n.verbatimText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,6 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
-import java.lang.reflect.Field
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -46,9 +46,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun anotherSurfaceWinnerClosesLocalCardFromCanonicalResolveResult() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val requests = mutableListOf<Pair<String, String?>>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         requests += method to params
@@ -70,16 +68,14 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun exactApprovalIdsCannotCrossTargetThroughKotlinWhitespaceNormalization() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
       val controlPrefixedId = "\u001Capproval-1"
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = controlPrefixedId, commandText = "echo selected"),
-          approvalSummary(id = "approval-1", commandText = "echo other"),
-        ),
-      )
+      val runtime =
+        twoApprovalRuntime(
+          firstCommand = "echo selected",
+          secondCommand = "echo other",
+          firstId = controlPrefixedId,
+          secondId = "approval-1",
+        )
       val requestParams = CompletableDeferred<String>()
       val requestCount = AtomicInteger()
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
@@ -115,8 +111,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun approvalEventsPreserveExactStringIdsAndRejectNonStrings() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
+      val runtime = connectedRuntime()
       val controlPrefixedId = "\u001Capproval-1"
       val requestedIds = mutableListOf<String>()
       val methods = mutableListOf<String>()
@@ -152,9 +147,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun malformedOrMismatchedWriteResultFreezesThenUsesCanonicalReadback() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val methods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
@@ -179,9 +172,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun unknownWriteOutcomeStaysFrozenAndReconcilesAfterReconnect() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "approval.resolve", "approval.get" -> throw GatewayRequestOutcomeUnknown("disconnected")
@@ -219,11 +210,30 @@ class GatewayExecApprovalRuntimeTest {
     }
 
   @Test
+  fun cancelledApprovalRefreshPreservesOwnerStateWithoutPublishingFailure() =
+    runBlocking {
+      val runtime = approvalRuntime()
+      val requestStarted = CompletableDeferred<Unit>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
+        check(method == "exec.approval.list")
+        requestStarted.complete(Unit)
+        throw CancellationException("approval gateway generation retired")
+      }
+
+      runtime.refreshExecApprovals()
+      withTimeout(2_000) { requestStarted.await() }
+      waitUntil { !runtime.execApprovalsRefreshing.value }
+
+      val retainedApproval = runtime.execApprovals.value.single()
+      assertNull(runtime.execApprovalsErrorText.value)
+      assertEquals("approval-1", retainedApproval.id)
+      assertNull(retainedApproval.errorText)
+    }
+
+  @Test
   fun reconnectListHydrationPublishesTerminalForRetainedUnknownWrite() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "approval.resolve", "approval.get" -> throw GatewayRequestOutcomeUnknown("disconnected")
@@ -260,9 +270,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun reconnectKeepsInFlightWriteDisabledBeforeRetiredWaiterFails() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseUnknownOutcome = CompletableDeferred<Unit>()
       val pendingReadCompleted = CompletableDeferred<Unit>()
@@ -321,9 +329,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun fullRefreshCannotUnlockApprovalWhileResolveRequestIsInFlight() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseResolve = CompletableDeferred<Unit>()
       val refreshReadCompleted = CompletableDeferred<Unit>()
@@ -366,15 +372,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun unknownWriteInvalidatesRefreshSnapshotBuiltWhileRequestWasInFlight() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = "approval-1", commandText = "echo selected"),
-          approvalSummary(id = "approval-2", commandText = "echo retained"),
-        ),
-      )
+      val runtime = twoApprovalRuntime("echo selected", "echo retained")
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseUnknownOutcome = CompletableDeferred<Unit>()
       val retainedReadStarted = CompletableDeferred<Unit>()
@@ -445,9 +443,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun canonicalPendingReadbackInvalidatesConcurrentStaleRefresh() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val pendingReadStarted = CompletableDeferred<Unit>()
       val staleRefreshReadStarted = CompletableDeferred<Unit>()
       val releasePendingRead = CompletableDeferred<Unit>()
@@ -507,9 +503,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun legacyUnknownWriteUnlocksAfterReconnectProvesApprovalStillPending() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, legacyMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime(legacyMethods)
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "exec.approval.resolve", "exec.approval.get" -> throw GatewayRequestOutcomeUnknown("disconnected")
@@ -570,9 +564,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun legacySuccessUsesNeutralWinnerAttribution() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, legacyMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime(legacyMethods)
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         check(method == "exec.approval.resolve")
         """{"ok":true}"""
@@ -587,9 +579,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun resolutionEventWinsRaceAgainstLateLocalResponse() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseResolve = CompletableDeferred<Unit>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
@@ -622,15 +612,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun legacyResolutionEventWinsBeforeLateResponseAndListFailure() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, legacyMethods)
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = "approval-1", commandText = "echo selected"),
-          approvalSummary(id = "approval-2", commandText = "echo retained"),
-        ),
-      )
+      val runtime = twoApprovalRuntime("echo selected", "echo retained", legacyMethods)
       val methods = mutableListOf<String>()
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseResolve = CompletableDeferred<Unit>()
@@ -643,12 +625,7 @@ class GatewayExecApprovalRuntimeTest {
             """{"ok":true}"""
           }
           "exec.approval.list", "exec.approval.get" ->
-            throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
-                code = "UNAVAILABLE",
-                message = "$method failed",
-              ),
-            )
+            throw rejected("UNAVAILABLE", "$method failed")
           else -> error("unexpected method $method")
         }
       }
@@ -680,15 +657,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun legacyAlreadyResolvedRejectionRetiresExactCardWithoutEvent() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, legacyMethods)
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = "approval-1", commandText = "echo selected"),
-          approvalSummary(id = "approval-2", commandText = "echo retryable"),
-        ),
-      )
+      val runtime = twoApprovalRuntime("echo selected", "echo retryable", legacyMethods)
       val resolvedIds = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         check(method == "exec.approval.resolve")
@@ -700,13 +669,7 @@ class GatewayExecApprovalRuntimeTest {
             ?: error("missing approval id")
         resolvedIds += id
         val reason = if (id == "approval-1") "APPROVAL_ALREADY_RESOLVED" else "OTHER_REJECTION"
-        throw GatewayRequestRejected(
-          GatewaySession.ErrorShape(
-            code = "INVALID_REQUEST",
-            message = "approval rejected",
-            details = gatewayErrorDetails(reason),
-          ),
-        )
+        throw rejected("INVALID_REQUEST", "approval rejected", reason)
       }
 
       runtime.resolveExecApproval("approval-1", "allow-once")
@@ -731,9 +694,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun legacyAlreadyResolvedRacingMethodsEpochBumpReconcilesWrite() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, legacyMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime(legacyMethods)
       val resolveStarted = CompletableDeferred<Unit>()
       val releaseResolve = CompletableDeferred<Unit>()
       val methods = mutableListOf<String>()
@@ -743,13 +704,7 @@ class GatewayExecApprovalRuntimeTest {
           "exec.approval.resolve" -> {
             resolveStarted.complete(Unit)
             releaseResolve.await()
-            throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
-                code = "INVALID_REQUEST",
-                message = "approval rejected",
-                details = gatewayErrorDetails("APPROVAL_ALREADY_RESOLVED"),
-              ),
-            )
+            throw rejected("INVALID_REQUEST", "approval rejected", "APPROVAL_ALREADY_RESOLVED")
           }
           "exec.approval.get" -> legacyGet()
           else -> error("unexpected method $method")
@@ -778,15 +733,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun terminalNoticeSurvivesRefreshUntilUserDismissal() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = "approval-1", commandText = "echo losing"),
-          approvalSummary(id = "approval-2", commandText = "echo retained"),
-        ),
-      )
+      val runtime = twoApprovalRuntime("echo losing", "echo retained")
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         check(method == "approval.resolve")
         unifiedResolve(applied = false, status = "denied", decision = "deny")
@@ -822,24 +769,14 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun unrelatedApprovalWriteKeepsUnacknowledgedTerminalNotice() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = "approval-1", commandText = "echo losing"),
-          approvalSummary(id = "approval-2", commandText = "echo unrelated"),
-        ),
-      )
+      val runtime = twoApprovalRuntime("echo losing", "echo unrelated")
       runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
         check(method == "approval.resolve")
         val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
         when (val id = request["id"]?.jsonPrimitive?.content) {
           "approval-1" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
           "approval-2" ->
-            throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(code = "UNAVAILABLE", message = "resolve failed"),
-            )
+            throw rejected("UNAVAILABLE", "resolve failed")
           else -> error("unexpected approval id $id")
         }
       }
@@ -866,15 +803,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun staleDismissLeavesReplacementNoticeVisible() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApprovals(
-        runtime,
-        listOf(
-          approvalSummary(id = "approval-1", commandText = "echo first"),
-          approvalSummary(id = "approval-2", commandText = "echo second"),
-        ),
-      )
+      val runtime = twoApprovalRuntime("echo first", "echo second")
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "approval.resolve" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
@@ -908,9 +837,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun staleDismissCannotClearStructurallyEqualReplacementNotice() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         when (method) {
           "approval.resolve" -> unifiedResolve(applied = false, status = "denied", decision = "deny")
@@ -947,11 +874,10 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun oldGatewayUsesOnlyShippedExecMethods() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(
-        runtime,
-        setOf("exec.approval.list", "exec.approval.get", "exec.approval.resolve"),
-      )
+      val runtime =
+        connectedRuntime(
+          setOf("exec.approval.list", "exec.approval.get", "exec.approval.resolve"),
+        )
       val methods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
@@ -983,9 +909,8 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun partialCanonicalCatalogCannotMixWithLegacyApprovalMethods() =
     runBlocking {
-      val runtime = createTestRuntime()
       val mixedMethods = legacyMethods + "approval.get"
-      seedConnectedRuntime(runtime, mixedMethods)
+      val runtime = connectedRuntime(mixedMethods)
       val methods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
@@ -1018,8 +943,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun canonicalUnknownReadFailsClosedWithoutLegacyDowngrade() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, allApprovalMethods)
+      val runtime = connectedRuntime(allApprovalMethods)
       val methods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
@@ -1027,12 +951,7 @@ class GatewayExecApprovalRuntimeTest {
           "exec.approval.list" ->
             """[{"id":"approval-1","createdAtMs":100,"expiresAtMs":4000000000000}]"""
           "approval.get" ->
-            throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
-                code = "INVALID_REQUEST",
-                message = "unknown method: approval.get",
-              ),
-            )
+            throw rejected("INVALID_REQUEST", "unknown method: approval.get")
           "exec.approval.get" -> error("canonical hello must never downgrade")
           else -> error("unexpected method $method")
         }
@@ -1052,20 +971,13 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun canonicalUnknownResolveFailsClosedWithoutLegacyDowngrade() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, allApprovalMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime(allApprovalMethods)
       val methods = mutableListOf<String>()
       runtime.gatewayDataRequestOverrideForTests = { _, method, _ ->
         methods += method
         when (method) {
           "approval.resolve" ->
-            throw GatewayRequestRejected(
-              GatewaySession.ErrorShape(
-                code = "INVALID_REQUEST",
-                message = "unknown method: approval.resolve",
-              ),
-            )
+            throw rejected("INVALID_REQUEST", "unknown method: approval.resolve")
           "exec.approval.resolve" -> error("canonical hello must never downgrade")
           else -> error("unexpected method $method")
         }
@@ -1086,9 +998,7 @@ class GatewayExecApprovalRuntimeTest {
   @Test
   fun staleCanonicalRejectionFromRetiredSocketCannotAffectReplacementCatalog() =
     runBlocking {
-      val runtime = createTestRuntime()
-      seedConnectedRuntime(runtime, unifiedMethods)
-      seedApproval(runtime)
+      val runtime = approvalRuntime()
       val firstResolveStarted = CompletableDeferred<Unit>()
       val releaseFirstResolve = CompletableDeferred<Unit>()
       val methods = mutableListOf<String>()
@@ -1101,12 +1011,7 @@ class GatewayExecApprovalRuntimeTest {
             if (unifiedResolveCalls == 1) {
               firstResolveStarted.complete(Unit)
               releaseFirstResolve.await()
-              throw GatewayRequestRejected(
-                GatewaySession.ErrorShape(
-                  code = "INVALID_REQUEST",
-                  message = "unknown method: approval.resolve",
-                ),
-              )
+              throw rejected("INVALID_REQUEST", "unknown method: approval.resolve")
             }
             unifiedResolve(applied = true, status = "denied", decision = "deny")
           }
@@ -1139,6 +1044,28 @@ class GatewayExecApprovalRuntimeTest {
       )
     return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
   }
+
+  private fun connectedRuntime(methods: Set<String> = unifiedMethods): NodeRuntime = createTestRuntime().also { seedConnectedRuntime(it, methods) }
+
+  private fun approvalRuntime(
+    methods: Set<String> = unifiedMethods,
+    approvals: List<GatewayExecApprovalSummary> = listOf(approvalSummary()),
+  ): NodeRuntime = connectedRuntime(methods).also { seedApprovals(it, approvals) }
+
+  private fun twoApprovalRuntime(
+    firstCommand: String,
+    secondCommand: String,
+    methods: Set<String> = unifiedMethods,
+    firstId: String = "approval-1",
+    secondId: String = "approval-2",
+  ): NodeRuntime =
+    approvalRuntime(
+      methods,
+      listOf(
+        approvalSummary(id = firstId, commandText = firstCommand),
+        approvalSummary(id = secondId, commandText = secondCommand),
+      ),
+    )
 
   private fun seedConnectedRuntime(
     runtime: NodeRuntime,
@@ -1222,7 +1149,7 @@ class GatewayExecApprovalRuntimeTest {
     name: String,
     value: Any?,
   ) {
-    findField(target, name).set(target, value)
+    findTestField(target, name).set(target, value)
   }
 
   private fun <T> readField(
@@ -1230,22 +1157,7 @@ class GatewayExecApprovalRuntimeTest {
     name: String,
   ): T {
     @Suppress("UNCHECKED_CAST")
-    return findField(target, name).get(target) as T
-  }
-
-  private fun findField(
-    target: Any,
-    name: String,
-  ): Field {
-    var type: Class<*>? = target.javaClass
-    while (type != null) {
-      try {
-        return type.getDeclaredField(name).apply { isAccessible = true }
-      } catch (_: NoSuchFieldException) {
-        type = type.superclass
-      }
-    }
-    error("Field $name not found on ${target.javaClass.name}")
+    return findTestField(target, name).get(target) as T
   }
 
   private fun unifiedResolve(
@@ -1316,6 +1228,12 @@ class GatewayExecApprovalRuntimeTest {
       recommendedNextStep = null,
       reason = reason,
     )
+
+  private fun rejected(
+    code: String,
+    message: String,
+    reason: String? = null,
+  ): GatewayRequestRejected = GatewayRequestRejected(GatewaySession.ErrorShape(code, message, reason?.let(::gatewayErrorDetails)))
 
   private val unifiedMethods = setOf("approval.get", "approval.resolve", "exec.approval.list")
   private val legacyMethods = setOf("exec.approval.list", "exec.approval.get", "exec.approval.resolve")

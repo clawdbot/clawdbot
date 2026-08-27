@@ -1,4 +1,6 @@
 // Shared detection and text fallback for Slack's native chart and table blocks.
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderSlackBlockFallbackText } from "./blocks-fallback.js";
 import {
   hasSlackDataTableBlock,
@@ -13,12 +15,8 @@ import {
 
 export const SLACK_MALFORMED_NATIVE_DATA_FALLBACK =
   "Slack could not render this chart or table data.";
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+const SLACK_RESPONSE_URL_BODY_LIMIT_BYTES = 16 * 1024;
+const SLACK_RESPONSE_URL_BODY_TIMEOUT_MS = 30_000;
 
 /** Detect a native Slack chart or table block. */
 export function hasSlackNativeDataBlock(blocks?: readonly unknown[]): boolean {
@@ -28,18 +26,18 @@ export function hasSlackNativeDataBlock(blocks?: readonly unknown[]): boolean {
 /** Keep every sibling block while removing Slack's native data blocks. */
 export function stripSlackNativeDataBlocks<T>(blocks?: readonly T[]): T[] {
   return (blocks ?? []).filter((block) => {
-    const type = asRecord(block)?.type;
+    const type = asOptionalRecord(block)?.type;
     return type !== "data_table" && type !== "data_visualization";
   });
 }
 
 /** Match Slack's Web API and response_url `invalid_blocks` error shapes. */
 export function isSlackInvalidBlocksError(error: unknown): boolean {
-  const record = asRecord(error);
+  const record = asOptionalRecord(error);
   const rawData = record?.data;
-  const data = asRecord(rawData);
-  const rawResponseData = asRecord(record?.response)?.data;
-  const responseData = asRecord(rawResponseData);
+  const data = asOptionalRecord(rawData);
+  const rawResponseData = asOptionalRecord(record?.response)?.data;
+  const responseData = asOptionalRecord(rawResponseData);
   const code =
     data?.error ??
     (typeof rawData === "string" ? rawData : undefined) ??
@@ -49,9 +47,51 @@ export function isSlackInvalidBlocksError(error: unknown): boolean {
   return typeof code === "string" && code.trim().toLowerCase() === "invalid_blocks";
 }
 
+type SlackResponseLike = {
+  status: number;
+};
+
+function isSlackResponseLike(value: unknown): value is SlackResponseLike {
+  const record = asOptionalRecord(value);
+  const body = asOptionalRecord(record?.body);
+  return (
+    typeof record?.status === "number" &&
+    (typeof record.arrayBuffer === "function" || typeof body?.getReader === "function")
+  );
+}
+
+/** Consume Bolt 5's native response_url body under strict time and byte bounds. */
+export async function isSlackInvalidBlocksResponse(response: unknown): Promise<boolean> {
+  if (!isSlackResponseLike(response)) {
+    return isSlackInvalidBlocksError(response);
+  }
+  try {
+    const body = await readResponseTextLimited(
+      response as Response,
+      SLACK_RESPONSE_URL_BODY_LIMIT_BYTES,
+      { timeoutMs: SLACK_RESPONSE_URL_BODY_TIMEOUT_MS },
+    );
+    if (body.trim().toLowerCase() === "invalid_blocks") {
+      return true;
+    }
+    return isSlackInvalidBlocksError(JSON.parse(body));
+  } catch {
+    return false;
+  }
+}
+
+/** Bolt 5 omits the response body from RespondError; 400 is contextual here. */
+export function isSlackNativeResponseUrlRejection(error: unknown): boolean {
+  if (isSlackInvalidBlocksError(error)) {
+    return true;
+  }
+  const record = asOptionalRecord(error);
+  return record?.code === "slack_bolt_respond_error" && record.statusCode === 400;
+}
+
 /** Extract a complete accessible summary from a supported native data block. */
 function renderSlackNativeDataFallbackText(value: unknown): string | undefined {
-  const type = asRecord(value)?.type;
+  const type = asOptionalRecord(value)?.type;
   if (type === "data_visualization") {
     return renderSlackDataVisualizationMrkdwnFallbackText(value);
   }
@@ -116,7 +156,7 @@ function appendSlackNativeDataFallback(
 }
 
 function renderSlackNativeDataPlainTextBlock(value: unknown): string | undefined {
-  const type = asRecord(value)?.type;
+  const type = asOptionalRecord(value)?.type;
   if (type === "data_table") {
     return renderSlackDataTableCompactPlainTextFallback(value);
   }

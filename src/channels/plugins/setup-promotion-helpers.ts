@@ -66,7 +66,8 @@ function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null
 function getLoadedChannelSetupPromotionSurface(
   channelKey: string,
 ): ChannelSetupPromotionSurface | null {
-  return asPromotionSurface(getLoadedChannelPluginForRead(channelKey)?.setup);
+  const plugin = getLoadedChannelPluginForRead(channelKey);
+  return asPromotionSurface(plugin?.setupContract ?? plugin?.setup);
 }
 
 /**

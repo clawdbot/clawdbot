@@ -4,6 +4,7 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { OutboundDeliveryFormattingOptions } from "../../infra/outbound/formatting.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 
@@ -27,6 +28,10 @@ type RuntimeSendOpts = {
   gatewayClientScopes?: readonly string[];
   /** @internal Opaque durable intent id for provider-side reconciliation. */
   deliveryQueueId?: string;
+  /** @internal Stable provider-send index within one payload. */
+  deliveryPartIndex?: number;
+  /** @internal Exact provider-send count for one payload. */
+  deliveryPartCount?: number;
   /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
   onPlatformSendDispatch?: () => Promise<void>;
   textMode?: "markdown" | "html";
@@ -70,6 +75,8 @@ export function createChannelOutboundRuntimeSend(params: {
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
         deliveryQueueId: opts.deliveryQueueId,
+        deliveryPartIndex: opts.deliveryPartIndex,
+        deliveryPartCount: opts.deliveryPartCount,
         onPlatformSendDispatch: opts.onPlatformSendDispatch,
       });
       const hasMedia = Boolean(opts.mediaUrl);
@@ -90,7 +97,8 @@ export function createChannelOutboundRuntimeSend(params: {
         return await outbound.sendMedia(buildContext());
       }
       if (!outbound?.sendText) {
-        throw new Error(params.unavailableMessage);
+        const cause = new Error(params.unavailableMessage);
+        throw new PlatformMessageNotDispatchedError(params.unavailableMessage, { cause });
       }
       return await outbound.sendText(buildContext());
     },

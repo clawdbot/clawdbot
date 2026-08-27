@@ -47,7 +47,7 @@ export function renderTerminalPanelTabs(params: {
   activeId: string | null;
   booting: boolean;
   onSelect: (id: string) => void;
-  onClose: (id: string) => void;
+  onClose: (id: string) => void | Promise<void>;
   onNew: () => void;
 }) {
   const tabs: PanelTabStripTab[] = params.tabs.map((tab) => {

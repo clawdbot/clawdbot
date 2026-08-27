@@ -6,6 +6,20 @@ import { buildInlineProviderModels, resolveProviderModelInput } from "./model.in
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
+  it("reflects in-place changes for callers without a prepared snapshot", () => {
+    const providers: Parameters<typeof buildInlineProviderModels>[0] = {
+      alpha: { baseUrl: "http://alpha.local", models: [makeModel("first-model")] },
+    };
+
+    expect(expectDefined(buildInlineProviderModels(providers)[0], "first model").id).toBe(
+      "first-model",
+    );
+    expectDefined(providers.alpha, "alpha provider").models = [makeModel("second-model")];
+    expect(expectDefined(buildInlineProviderModels(providers)[0], "second model").id).toBe(
+      "second-model",
+    );
+  });
+
   it("attaches provider ids to inline models", () => {
     // Provider object keys are the source of truth for inline model provider ids;
     // trim them before runtime lookup stores the model.
@@ -30,6 +44,19 @@ describe("buildInlineProviderModels", () => {
         api: undefined,
       },
     ]);
+  });
+
+  it("preserves authored context windows and leaves omitted windows absent", () => {
+    const { contextWindow: _contextWindow, ...transportOnly } = makeModel("transport-only");
+    const result = buildInlineProviderModels({
+      proxy: {
+        baseUrl: "https://proxy.example.com/v1",
+        models: [transportOnly, { ...makeModel("authored-window"), contextWindow: 64_000 }],
+      },
+    });
+
+    expect(expectDefined(result[0], "transport-only model")).not.toHaveProperty("contextWindow");
+    expect(expectDefined(result[1], "authored-window model").contextWindow).toBe(64_000);
   });
 
   it("inherits baseUrl from provider when model does not specify it", () => {

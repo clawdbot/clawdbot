@@ -1,32 +1,23 @@
 // Module loader tests cover channel plugin module resolution and import failure handling.
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
-import { resolveExistingPluginModulePath } from "./module-loader.js";
+import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testRequire = createRequire(import.meta.url);
 
 afterEach(() => {
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
   vi.doUnmock("../../plugins/plugin-module-loader-cache.js");
 });
-
-function createTempDir(): string {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-module-loader-"));
-  tempDirs.push(tempDir);
-  return tempDir;
-}
 
 function normalizeModuleLoaderTarget(target: string): string {
   if (target.startsWith("file:")) {
@@ -37,7 +28,7 @@ function normalizeModuleLoaderTarget(target: string): string {
 
 describe("channel plugin module loader helpers", () => {
   it("resolves extensionless plugin module specifiers to the first existing extension", () => {
-    const rootDir = createTempDir();
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
     const expectedPath = path.join(rootDir, "src", "checker.mts");
     fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
     fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
@@ -45,10 +36,55 @@ describe("channel plugin module loader helpers", () => {
     expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
   });
 
+  it("preserves explicit JavaScript plugin module specifiers", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const expectedPath = path.join(rootDir, "checker.js");
+    fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+
+    expect(resolveExistingPluginModulePath(rootDir, "./checker.js")).toBe(expectedPath);
+  });
+
+  it("resolves plugin module directories through their index", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const expectedPath = path.join(rootDir, "checker", "index.js");
+    fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
+    fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
+
+    expect(resolveExistingPluginModulePath(rootDir, "./checker")).toBe(expectedPath);
+  });
+
   it("detects JavaScript module paths case-insensitively", () => {
     expect(isJavaScriptModulePath("/tmp/entry.js")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.MJS")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
+  });
+
+  it("reports a missing plugin module as not found instead of a boundary escape", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const modulePath = path.join(rootDir, "dist", "extensions", "demo", "auth-presence.js");
+
+    let thrown: unknown;
+    try {
+      loadChannelPluginModule({ modulePath, rootDir });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(`plugin module path not found: ${modulePath}`);
+    expect((thrown as Error).message).not.toContain("escapes");
+    expect(((thrown as Error).cause as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+  });
+
+  it("still reports a module outside the plugin root as a boundary escape", () => {
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
+    const outsideDir = tempDirs.make("openclaw-channel-module-loader-");
+    const modulePath = path.join(outsideDir, "evil.cjs");
+    fs.writeFileSync(modulePath, "module.exports = { ok: true };\n", "utf8");
+
+    expect(() => loadChannelPluginModule({ modulePath, rootDir })).toThrow(
+      `plugin module path escapes plugin root or fails alias checks: ${modulePath}`,
+    );
   });
 
   it("uses native require for eligible JavaScript modules without creating Jiti", async () => {
@@ -60,7 +96,7 @@ describe("channel plugin module loader helpers", () => {
       import.meta.url,
       "./module-loader.js?scope=native-require",
     );
-    const rootDir = createTempDir();
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
     const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.cjs");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, "module.exports = { ok: true };\n", "utf8");
@@ -94,7 +130,7 @@ describe("channel plugin module loader helpers", () => {
       import.meta.url,
       "./module-loader.js?scope=source-ts-jiti-fallback",
     );
-    const rootDir = createTempDir();
+    const rootDir = tempDirs.make("openclaw-channel-module-loader-");
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");

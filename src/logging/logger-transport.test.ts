@@ -44,9 +44,7 @@ describe("logger transport registry", () => {
     expect(
       (loggerModule as unknown as Record<string, unknown>).registerLogTransport,
     ).toBeUndefined();
-    expect(
-      (loggerModule.testApi as unknown as Record<string, unknown>).registerLogTransportForTest,
-    ).toBeUndefined();
+    expect((loggerModule as unknown as Record<string, unknown>).testApi).toBeUndefined();
   });
 
   it("does not publish mutable log transport state on a well-known global symbol", async () => {

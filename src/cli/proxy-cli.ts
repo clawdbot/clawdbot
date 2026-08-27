@@ -1,8 +1,10 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 // Commander registration for debug proxy capture, validation, query, and blob commands.
 import { InvalidArgumentError, type Command } from "commander";
-import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
+import { isProxyMachineOutput } from "./proxy-output-mode.js";
 
 type ProxyCliRuntime = typeof import("./proxy-cli.runtime.js");
 
@@ -47,6 +49,7 @@ export function registerProxyCli(program: Command) {
   const proxy = program
     .command("proxy")
     .description("Run the OpenClaw debug proxy and inspect captured traffic");
+  setCommandJsonMode(proxy, "output", ({ argv }) => isProxyMachineOutput(argv));
 
   proxy
     .command("start")
@@ -120,6 +123,7 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("coverage")
     .description("Report current debug proxy transport coverage and remaining gaps")
+    .option("--json", "Print machine-readable JSON")
     .action(async () => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxyCoverageCommand();
@@ -128,10 +132,11 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("sessions")
     .description("List recent capture sessions")
+    .option("--json", "Print machine-readable JSON")
     .option("--limit <count>", "Maximum sessions to show", (value) =>
       parsePositiveIntegerOption(value, "--limit"),
     )
-    .action(async (opts: { limit?: number }) => {
+    .action(async (opts: { json?: boolean; limit?: number }) => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxySessionsCommand(opts);
     });
@@ -143,10 +148,12 @@ export function registerProxyCli(program: Command) {
       "--preset <name>",
       "Query preset: double-sends, retry-storms, cache-busting, ws-duplicate-frames, missing-ack, error-bursts",
     )
+    .option("--json", "Print machine-readable JSON")
     .option("--session <id>", "Restrict to a capture session id")
-    .action(async (opts: { preset: CaptureQueryPreset; session?: string }) => {
+    .action(async (opts: { json?: boolean; preset: CaptureQueryPreset; session?: string }) => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxyQueryCommand({
+        json: opts.json,
         preset: opts.preset,
         sessionId: opts.session,
       });

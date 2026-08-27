@@ -8,9 +8,9 @@ type FileTransferToolDescriptor = Pick<
   "label" | "name" | "description" | "parameters"
 >;
 
-// Stash fetched files in a non-TTL subdir so follow-up tool calls within
-// the same turn can still reference them.
-export const FILE_TRANSFER_SUBDIR = "file-transfer";
+// Keep fetched files in the managed tool-media namespace so sandboxed replies
+// can attach them and follow-up file_write calls can reuse the media id.
+export const FILE_TRANSFER_SUBDIR = "tool-file-transfer";
 
 export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
@@ -42,7 +42,7 @@ export const FILE_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "File Fetch",
   name: "file_fetch",
   description:
-    "Retrieve a file from a paired node by absolute path. Returns image content blocks for image MIME types, inlines small text files (≤8 KB) as text content, and saves everything else under the gateway media store with a path you can pass to file_write or other tools. Use this for screenshots, photos, receipts, logs, source files. Pair with file_write to copy a file from one node to another (no exec/cp shell-out needed). Requires operator opt-in: gateway.nodes.allowCommands must include 'file.fetch' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the path. Without policy configured, every call is denied.",
+    "Retrieve a file from a paired node by absolute path. Returns image content blocks for image MIME types, inlines small text files (≤8 KB) as text content, and saves everything else under the gateway media store with a path you can pass to file_write or other tools. Use this for screenshots, photos, receipts, logs, source files. Pair with file_write to copy a file from one node to another (no exec/cp shell-out needed). Requires operator opt-in: gateway.nodes.allowCommands must include 'file.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: FileFetchToolSchema,
 };
 
@@ -71,7 +71,7 @@ export const DIR_LIST_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory List",
   name: "dir_list",
   description:
-    "Retrieve a structured directory listing from a paired node, not the local workspace. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path. Without policy configured, every call is denied.",
+    "Retrieve a structured directory listing from a paired node, not the local workspace. Returns file and subdirectory metadata (name, path, size, mimeType, isDir, mtime) without transferring file content. Use this to discover what files exist before fetching them with file_fetch. Pagination is offset-based; pass nextPageToken from the previous result. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.list', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: DirListToolSchema,
 };
 
@@ -100,7 +100,7 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory Fetch",
   name: "dir_fetch",
   description:
-    "Retrieve a directory tree from a paired node as a gzipped tarball, unpack it on the gateway, and return a manifest of saved paths. Use to pull source trees, asset folders, or log directories in a single round-trip. The unpacked files live on the GATEWAY (not your local machine); pass localPath into other tools or use file_fetch on individual entries to ship them elsewhere. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch' AND plugins.entries.file-transfer.config.nodes.<node>.allowReadPaths must match the directory path.",
+    "Retrieve a directory tree from a paired node as a gzipped tarball, unpack it on the gateway, and return a manifest of saved paths. Use to pull source trees, asset folders, or log directories in a single round-trip. The unpacked files live on the GATEWAY (not your local machine); pass localPath into other tools or use file_fetch on individual entries to ship them elsewhere. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
   parameters: DirFetchToolSchema,
 };
 
@@ -143,6 +143,6 @@ export const FILE_WRITE_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "File Write",
   name: "file_write",
   description:
-    "Write file bytes to a paired node by absolute path. Atomic write (temp + rename). Refuses to overwrite by default — pass overwrite=true to replace. Refuses to write through symlink targets unless policy explicitly allows following symlinks. Pair with file_fetch by passing its mediaId as sourceMediaId for binary copy. Requires operator opt-in: gateway.nodes.allowCommands must include 'file.write' AND plugins.entries.file-transfer.config.nodes.<node>.allowWritePaths must match the destination path. Without policy configured, every call is denied.",
+    "Write file bytes to a paired node by absolute path. Atomic write (temp + rename). Refuses to overwrite by default — pass overwrite=true to replace. Refuses to write through symlink targets unless policy explicitly allows following symlinks. Pair with file_fetch by passing its mediaId as sourceMediaId for binary copy. Requires operator opt-in: gateway.nodes.allowCommands must include 'file.write', and file-transfer policy must authorize the path through allowWritePaths or a remembered exact approval. Without policy configured, every call is denied.",
   parameters: FileWriteToolSchema,
 };

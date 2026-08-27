@@ -1,8 +1,9 @@
 // Slack tests cover plugin routes plugin behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerSlackPluginHttpRoutes } from "./plugin-routes.js";
 import { registerSlackHttpHandler } from "./registry.js";
 
@@ -71,6 +72,31 @@ describe("registerSlackPluginHttpRoutes", () => {
       .map((call) => (call[0] as { path: string }).path)
       .toSorted();
     expect(paths).toEqual(["/slack/events"]);
+  });
+
+  it("registers a shared account webhook path only once", () => {
+    const registerHttpRoute = vi.fn();
+    const api = createApi(
+      {
+        channels: {
+          slack: {
+            webhookPath: "/slack/events",
+            accounts: {
+              default: { webhookPath: "/slack/events" },
+              ops: { webhookPath: "/slack/events" },
+            },
+          },
+        },
+      },
+      registerHttpRoute,
+    );
+
+    registerSlackPluginHttpRoutes(api);
+
+    expect(registerHttpRoute).toHaveBeenCalledOnce();
+    expect(registerHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "/slack/events" }),
+    );
   });
 
   it("dispatches through the shared Slack HTTP handler registry", async () => {

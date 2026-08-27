@@ -10,7 +10,7 @@ read_when:
 
 This threat model documents adversarial threats to the OpenClaw AI agent platform and ClawHub skill marketplace. It is a living document maintained by the OpenClaw community. See [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL) for how to report new threats, propose attack chains, or suggest mitigations.
 
-**Key ATLAS resources:** [Techniques](https://atlas.mitre.org/techniques/) | [Tactics](https://atlas.mitre.org/tactics/) | [Case studies](https://atlas.mitre.org/studies/) | [ATLAS GitHub](https://github.com/mitre-atlas/atlas-data) | [Contributing to ATLAS](https://atlas.mitre.org/resources/contribute)
+**Key ATLAS resources:** [ATLAS website](https://atlas.mitre.org/) | [ATLAS data and contribution guide](https://github.com/mitre-atlas/atlas-data)
 
 ---
 
@@ -183,27 +183,27 @@ Out-of-scope reports and false-positive patterns (public internet exposure, prom
 
 #### T-EXEC-001: Direct prompt injection
 
-| Attribute               | Value                                                                                                                                        |
-| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0051.000 - LLM Prompt Injection: Direct                                                                                                 |
-| **Description**         | Attacker sends crafted prompts to manipulate agent behavior                                                                                  |
-| **Attack vector**       | Channel messages containing adversarial instructions                                                                                         |
-| **Affected components** | Agent LLM, all input surfaces                                                                                                                |
-| **Current mitigations** | Pattern detection, external content wrapping; treated as out-of-scope for vulnerability reports absent a boundary bypass (see `SECURITY.md`) |
-| **Residual risk**       | Critical - detection only, no blocking; sophisticated attacks bypass                                                                         |
-| **Recommendations**     | Output validation and user confirmation for sensitive actions, layered on top of existing detection                                          |
+| Attribute               | Value                                                                                                                                                                                                                                                                                            |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ATLAS ID**            | AML.T0051.000 - LLM Prompt Injection: Direct                                                                                                                                                                                                                                                     |
+| **Description**         | Attacker sends crafted prompts to manipulate agent behavior                                                                                                                                                                                                                                      |
+| **Attack vector**       | Channel messages containing adversarial instructions                                                                                                                                                                                                                                             |
+| **Affected components** | Agent LLM, all input surfaces                                                                                                                                                                                                                                                                    |
+| **Current mitigations** | Pattern detection, external content wrapping, and frontier-model robustness (2026 crowdsourced arena: 0.5% ASR on Claude Opus 4.5, 8.5% on Gemini 2.5 Pro, scored on execution plus concealment); treated as out-of-scope for vulnerability reports absent a boundary bypass (see `SECURITY.md`) |
+| **Residual risk**       | Model-tier dependent - low single-digit ASR against organic attacks on recommended frontier models, but adaptive attackers still exceed 80% against state-of-the-art defenses, and smaller/older models remain markedly easier to steer                                                          |
+| **Recommendations**     | Output validation and user confirmation for sensitive actions, layered on top of existing detection                                                                                                                                                                                              |
 
 #### T-EXEC-002: Indirect prompt injection
 
-| Attribute               | Value                                                                                                                 |
-| ----------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0051.001 - LLM Prompt Injection: Indirect                                                                        |
-| **Description**         | Attacker embeds malicious instructions in fetched content                                                             |
-| **Attack vector**       | Malicious URLs, poisoned emails, compromised webhooks                                                                 |
-| **Affected components** | `web_fetch`, email ingestion, external data sources                                                                   |
-| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, and a security notice |
-| **Residual risk**       | High - LLM may still ignore wrapper instructions                                                                      |
-| **Recommendations**     | Separate execution contexts for wrapped content                                                                       |
+| Attribute               | Value                                                                                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ATLAS ID**            | AML.T0051.001 - LLM Prompt Injection: Indirect                                                                                                                                                                     |
+| **Description**         | Attacker embeds malicious instructions in fetched content                                                                                                                                                          |
+| **Attack vector**       | Malicious URLs, poisoned emails, compromised webhooks                                                                                                                                                              |
+| **Affected components** | `web_fetch`, email ingestion, external data sources                                                                                                                                                                |
+| **Current mitigations** | Content wrapping with random-boundary XML-style markers, homoglyph/special-token normalization, a security notice, and frontier-model robustness (see T-EXEC-001)                                                  |
+| **Residual risk**       | Model-tier dependent - recommended frontier models largely hold the wrapper boundary, but it remains soft guidance an adaptive attacker can erode; scope tool policy and sandboxing to the blast radius you accept |
+| **Recommendations**     | Separate execution contexts for wrapped content                                                                                                                                                                    |
 
 #### T-EXEC-003: Tool argument injection
 

@@ -11,6 +11,7 @@ const originalServiceRepairPolicy = process.env.OPENCLAW_SERVICE_REPAIR_POLICY;
 
 const mocks = vi.hoisted(() => ({
   createUpdateProgress: vi.fn(),
+  isDefaultInstallIdentity: vi.fn(() => true),
   note: vi.fn(),
   readGatewayServiceState: vi.fn(),
   restartGatewayService: vi.fn(),
@@ -23,6 +24,11 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../cli/update-cli/progress.js", () => ({
   createUpdateProgress: mocks.createUpdateProgress,
 }));
+
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: mocks.isDefaultInstallIdentity };
+});
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: mocks.runCommandWithTimeout,
@@ -67,6 +73,7 @@ async function runOffer(params?: {
 beforeEach(async () => {
   mocks.createUpdateProgress.mockReset();
   mocks.createUpdateProgress.mockReturnValue({ progress: {}, stop: vi.fn() });
+  mocks.isDefaultInstallIdentity.mockReturnValue(true);
   mocks.note.mockReset();
   mocks.readGatewayServiceState.mockReset();
   mocks.restartGatewayService.mockReset();
@@ -79,6 +86,7 @@ beforeEach(async () => {
   });
   mocks.readGatewayServiceState.mockResolvedValue({
     installed: false,
+    loadState: { status: "not-loaded" },
     running: false,
     env: {},
   });
@@ -255,6 +263,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.readGatewayServiceState.mockResolvedValue({
       installed: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "work" },
       command: {
@@ -293,6 +302,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     mocks.readGatewayServiceState
       .mockResolvedValueOnce({
         installed: true,
+        loadState: { status: "loaded" },
         running: true,
         env: { OPENCLAW_PROFILE: "work" },
         command: {
@@ -301,6 +311,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
       })
       .mockResolvedValueOnce({
         installed: true,
+        loadState: { status: "loaded" },
         running: false,
         env: { OPENCLAW_PROFILE: "work" },
         command: {
@@ -328,6 +339,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.readGatewayServiceState.mockResolvedValue({
       installed: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "work" },
       command: {
@@ -364,6 +376,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.readGatewayServiceState.mockResolvedValue({
       installed: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "work" },
       command: {
@@ -400,6 +413,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.readGatewayServiceState.mockResolvedValue({
       installed: true,
+      loadState: { status: "loaded" },
       running: false,
       env: { OPENCLAW_PROFILE: "work" },
       command: {
@@ -421,6 +435,78 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     expect(mocks.restartGatewayService).not.toHaveBeenCalled();
   });
 
+  it("does not repair or activate when the initial service inspection is unknown", async () => {
+    mockGitCheckout();
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+    });
+    mocks.readGatewayServiceState.mockResolvedValue({
+      installed: true,
+      loadState: { status: "unknown", detail: "systemctl is-enabled failed" },
+      running: true,
+      env: { OPENCLAW_PROFILE: "work" },
+      command: {
+        programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+      },
+    });
+
+    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+      updated: true,
+      handled: true,
+    });
+
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      }),
+    );
+    expect(mocks.restartGatewayService).not.toHaveBeenCalled();
+  });
+
+  it("does not restart when the post-update service inspection is unknown", async () => {
+    mockGitCheckout();
+    mocks.runGatewayUpdate.mockResolvedValue({
+      status: "ok",
+      mode: "git",
+      root: "/repo/link",
+    });
+    mocks.readGatewayServiceState
+      .mockResolvedValueOnce({
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: { OPENCLAW_PROFILE: "work" },
+        command: {
+          programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+        },
+      })
+      .mockResolvedValueOnce({
+        installed: true,
+        loadState: { status: "unknown", detail: "launchctl inspection failed" },
+        running: true,
+        env: { OPENCLAW_PROFILE: "work" },
+        command: {
+          programArguments: ["node", "/repo/link/dist/index.js", "gateway", "run"],
+        },
+      });
+
+    await expect(runOffer({ confirm: vi.fn().mockResolvedValue(true) })).resolves.toEqual({
+      updated: true,
+      handled: true,
+    });
+
+    expect(mocks.runGatewayUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewayServiceRepair: true,
+        allowGatewayActivation: true,
+      }),
+    );
+    expect(mocks.restartGatewayService).not.toHaveBeenCalled();
+  });
+
   it("leaves a running gateway alone when service repair is externally managed", async () => {
     mockGitCheckout();
     process.env.OPENCLAW_SERVICE_REPAIR_POLICY = "external";
@@ -431,6 +517,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.readGatewayServiceState.mockResolvedValue({
       installed: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "work" },
     });
@@ -460,6 +547,7 @@ describe("maybeOfferUpdateBeforeDoctor", () => {
     });
     mocks.readGatewayServiceState.mockResolvedValue({
       installed: true,
+      loadState: { status: "loaded" },
       running: true,
       env: { OPENCLAW_PROFILE: "work" },
     });

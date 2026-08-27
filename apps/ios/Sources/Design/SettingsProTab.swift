@@ -38,7 +38,6 @@ struct SettingsProTab: View {
     @AppStorage("gateway.manual.port") var manualGatewayPort: Int = 18789
     @AppStorage("gateway.manual.tls") var manualGatewayTLS: Bool = true
     @AppStorage("gateway.discovery.debugLogs") var discoveryDebugLogsEnabled: Bool = false
-    @AppStorage("canvas.debugStatusEnabled") var canvasDebugStatusEnabled: Bool = false
     @AppStorage("gateway.setupCode") var setupCode: String = ""
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
@@ -56,7 +55,9 @@ struct SettingsProTab: View {
     @State var gatewayPassword = ""
     @State var gatewayCredentialFieldStableID: String?
     @State var manualGatewayPortText = ""
+    @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
+    @State var gatewayActionStatusText: String?
     @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
@@ -193,6 +194,9 @@ struct SettingsProTab: View {
                     self.refreshNotificationSettings()
                 }
             }
+            .onChange(of: self.appModel.locationAuthorizationSnapshot) { _, _ in
+                self.refreshLocationPermissionSummary()
+            }
             .onChange(of: self.locationModeRaw) { _, newValue in
                 self.handleLocationModeChange(newValue)
             }
@@ -323,10 +327,12 @@ struct SettingsProTab: View {
                             self.pendingForgetGateway = nil
                         }
                     }),
-                titleVisibility: .visible)
-            {
+                titleVisibility: .visible,
+                // The action only schedules Task; dismissal clears state before that task resumes.
+                presenting: self.pendingForgetGateway)
+            { entry in
                 Button(role: .destructive) {
-                    Task { await self.forgetPendingGateway() }
+                    Task { await self.forgetGateway(entry) }
                 } label: {
                     Text("Forget Gateway")
                         .font(OpenClawType.subheadSemiBold)
@@ -337,7 +343,7 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-            } message: {
+            } message: { _ in
                 // Keep the extraction key contiguous for the native localization inventory.
                 Text(
                     String(
@@ -354,8 +360,12 @@ struct SettingsProTab: View {
         self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
+    var canOpenNotificationsRouteFromApprovals: Bool {
+        self.ownsNavigationStack ? self.directRoute == nil : self.navigateToRoute != nil
+    }
+
     func openNotificationsRouteFromApprovals() {
-        guard self.directRoute == nil else { return }
+        guard self.canOpenNotificationsRouteFromApprovals else { return }
         if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
             self.onApprovalNotificationsRoute?(approvalID)
         }

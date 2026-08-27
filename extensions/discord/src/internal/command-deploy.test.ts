@@ -213,6 +213,7 @@ describe("commandsEqual", () => {
  */
 describe("DiscordCommandDeployer SQLite cache", () => {
   class StaticCommand extends BaseCommand {
+    readonly commandKind = "leaf";
     name: string;
     override description = "ping the bot";
     type = ApplicationCommandType.ChatInput;

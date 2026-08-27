@@ -3,6 +3,8 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 type DiscussionBindingGeneration = {
+  accountId?: string;
+  credentialFingerprint?: string;
   destinationIdentity: string;
   generation: string;
   pending?: {
@@ -49,16 +51,34 @@ function getGenerationStore(
 export function reserveDiscussionBindingGeneration(params: {
   runtime: PluginRuntime;
   sessionKey: string;
+  accountId: string;
+  credentialFingerprint: string;
   destinationIdentity: string;
   createGeneration?: () => string;
 }): string {
   const store = getGenerationStore(params.runtime);
   const existing = store.lookup(params.sessionKey);
-  if (existing?.destinationIdentity === params.destinationIdentity) {
+  const existingAccountId = existing?.accountId ?? existing?.pending?.accountId;
+  const existingCredentialFingerprint =
+    existing?.credentialFingerprint ?? existing?.pending?.credentialFingerprint;
+  if (
+    existing?.destinationIdentity === params.destinationIdentity &&
+    existingAccountId === params.accountId &&
+    existingCredentialFingerprint === params.credentialFingerprint
+  ) {
+    if (!existing.accountId || !existing.credentialFingerprint) {
+      store.register(params.sessionKey, {
+        ...existing,
+        accountId: params.accountId,
+        credentialFingerprint: params.credentialFingerprint,
+      });
+    }
     return existing.generation;
   }
   const generation = (params.createGeneration ?? randomUUID)();
   store.register(params.sessionKey, {
+    accountId: params.accountId,
+    credentialFingerprint: params.credentialFingerprint,
     destinationIdentity: params.destinationIdentity,
     generation,
   });
@@ -94,6 +114,12 @@ export function recordPendingDiscussionOpen(params: {
   if (!existing || existing.generation !== params.generation) {
     throw new Error("ClickClack discussion generation changed before channel creation");
   }
+  if (
+    existing.accountId !== params.pending.accountId ||
+    existing.credentialFingerprint !== params.pending.credentialFingerprint
+  ) {
+    throw new Error("ClickClack discussion ownership changed before channel creation");
+  }
   store.register(params.sessionKey, { ...existing, pending: params.pending });
 }
 
@@ -105,6 +131,25 @@ export function listPendingDiscussionOpens(runtime: PluginRuntime): PendingDiscu
         ? [{ sessionKey: entry.key, generation: entry.value.generation, ...entry.value.pending }]
         : [],
     );
+}
+
+/** Stops destination-wide quarantine after the exact remote channel is known. */
+export function clearPendingDiscussionOpen(params: {
+  runtime: PluginRuntime;
+  sessionKey: string;
+  expectedGeneration: string;
+}): void {
+  const store = getGenerationStore(params.runtime);
+  const existing = store.lookup(params.sessionKey);
+  if (!existing || existing.generation !== params.expectedGeneration || !existing.pending) {
+    return;
+  }
+  store.register(params.sessionKey, {
+    accountId: existing.accountId ?? existing.pending.accountId,
+    credentialFingerprint: existing.credentialFingerprint ?? existing.pending.credentialFingerprint,
+    destinationIdentity: existing.destinationIdentity,
+    generation: existing.generation,
+  });
 }
 
 export function hasPendingDiscussionOpenForDestination(params: {

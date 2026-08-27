@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
 export type ResponsesToolCallIdentity = { itemId?: string; callId?: string };
 
 export type ResponsesToolCallState = ResponsesToolCallIdentity & {
@@ -9,11 +11,6 @@ type ResponsesToolCallEvent = {
   item_id?: unknown;
 };
 
-function readIdentityValue(value: unknown): string | undefined {
-  const identity = typeof value === "string" ? value.trim() : "";
-  return identity || undefined;
-}
-
 function readOutputIndex(event: ResponsesToolCallEvent): number | undefined {
   return typeof event.output_index === "number" &&
     Number.isInteger(event.output_index) &&
@@ -23,7 +20,7 @@ function readOutputIndex(event: ResponsesToolCallEvent): number | undefined {
 }
 
 function readEventIdentity(event: ResponsesToolCallEvent): ResponsesToolCallIdentity {
-  return { itemId: readIdentityValue(event.item_id) };
+  return { itemId: normalizeOptionalString(event.item_id) };
 }
 
 export function readResponsesToolCallItemIdentity(item: {
@@ -31,8 +28,8 @@ export function readResponsesToolCallItemIdentity(item: {
   call_id?: unknown;
 }): ResponsesToolCallIdentity {
   return {
-    itemId: readIdentityValue(item.id),
-    callId: readIdentityValue(item.call_id),
+    itemId: normalizeOptionalString(item.id),
+    callId: normalizeOptionalString(item.call_id),
   };
 }
 

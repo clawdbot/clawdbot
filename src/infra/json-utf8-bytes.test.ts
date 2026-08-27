@@ -1,5 +1,5 @@
 // Tests JSON UTF-8 byte counting helpers.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -92,6 +92,19 @@ describe("boundedJsonUtf8Bytes", () => {
       bytes: 8_193,
       complete: false,
     });
+  });
+
+  it("rejects over-limit CJK strings before JSON serialization", () => {
+    const stringifySpy = vi.spyOn(JSON, "stringify");
+    try {
+      expect(boundedJsonUtf8Bytes("中".repeat(3_000), 8_192)).toEqual({
+        bytes: 8_193,
+        complete: false,
+      });
+      expect(stringifySpy).not.toHaveBeenCalled();
+    } finally {
+      stringifySpy.mockRestore();
+    }
   });
 
   it.each([

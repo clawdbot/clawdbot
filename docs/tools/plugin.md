@@ -3,7 +3,7 @@ summary: "Install, configure, and manage OpenClaw plugins"
 read_when:
   - Installing or configuring plugins
   - Understanding plugin discovery and load rules
-  - Working with Codex/Claude-compatible plugin bundles
+  - Working with Agent Plugins, Codex, Claude, or Cursor-compatible plugin bundles
 title: "Plugins"
 sidebarTitle: "Getting Started"
 doc-schema-version: 1
@@ -146,15 +146,30 @@ and fail when incompatible.
 
 Configure `security.installPolicy` to run a trusted local policy command
 before a plugin install or update proceeds. The policy receives metadata plus
-the staged source path and can allow or block the install. It covers both CLI
-and Gateway-backed install/update paths. Plugin `before_install` hooks run
-later, and only in OpenClaw processes where plugin hooks are loaded, so use
-`security.installPolicy` for operator-owned install decisions instead. The
-deprecated `--dangerously-force-unsafe-install` flag is accepted for
-compatibility but is a no-op: it does not bypass install policy or OpenClaw's
-built-in plugin dependency denylist.
+the staged source path and can allow, warn, or block the install. It covers both CLI
+and Gateway-backed install/update paths. CLI plugin and skill commands can
+acknowledge a warning interactively by typing the target name with the same
+copy as suspicious ClawHub releases; policy is then re-evaluated. Reviewed
+non-interactive direct CLI commands can use `--acknowledge-install-policy-warning`.
+That flag approves every warning for the command invocation; each warning is
+still re-evaluated before the install continues.
+The Control UI shows the structured warning and offers **Install anyway**. That
+action resends the same plugin request with `acknowledgeInstallPolicyWarning:
+true`, approving every warning encountered during that install invocation;
+each warning is still re-evaluated before installation continues. Other
+Gateway-backed and automatic installs remain blocked when they have no
+operator-confirmation flow. When an equivalent direct plugin or skill command
+exists, use that command to review and approve the warning. Otherwise, change
+`security.installPolicy` to return `allow` for the reviewed request, then retry
+the managed flow. Neither `--force` nor the deprecated plugin
+install/update flag `--dangerously-force-unsafe-install` approves a policy
+warning. Plugin
+`before_install` hooks run later, and only in OpenClaw processes where plugin
+hooks are loaded, so use `security.installPolicy` for operator-owned install
+decisions instead. The flag does not override a block or policy failure.
+It also does not bypass `before_install` hook blocks.
 
-See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+See [Skills config](/tools/skills-config#operator-install-policy-security-installpolicy)
 for the shared `security.installPolicy` exec schema used by both skills and
 plugins.
 
@@ -228,10 +243,10 @@ paths.
 
 OpenClaw recognizes two plugin formats:
 
-| Format                 | How it loads                                                                 | Use when                                                               |
-| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process               | You are installing or building OpenClaw-specific runtime capabilities  |
-| Compatible bundle      | Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
+| Format                 | How it loads                                                                                | Use when                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process                              | You are installing or building OpenClaw-specific runtime capabilities  |
+| Compatible bundle      | Agent Plugins, Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
 
 Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 `openclaw plugins enable`, and `openclaw plugins disable`. See
@@ -257,6 +272,19 @@ is fine.
 Plugin-managed internal hooks show up in `openclaw hooks list` with
 `plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
 enable or disable the plugin instead.
+
+Hook registration also depends on Gateway startup selection. For a hook-only
+plugin, declare `activation.onCapabilities: ["hook"]` in
+`openclaw.plugin.json`, then enable the plugin and include it in
+`plugins.allow` when that allowlist is configured. The manifest hint does not
+bypass global disable, deny, or per-plugin enablement policy.
+
+An explicit hook policy is also startup intent. For example,
+`plugins.entries.<id>.hooks.allowConversationAccess: true` both authorizes
+non-bundled conversation hooks and selects that configured plugin for Gateway
+startup; normal plugin policy still applies. After changing manifest or hook
+policy, restart the Gateway and verify the registration with
+`openclaw plugins inspect <id> --runtime --json`.
 
 ## Verify the active Gateway
 

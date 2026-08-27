@@ -1,5 +1,6 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import {
   classifyFailoverReason,
@@ -40,7 +41,7 @@ export async function handleEmbeddedPromptFailure(input: {
   runParams: RunEmbeddedAgentParams;
   attempt: EmbeddedRunAttemptResult;
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   activeErrorContext: { provider: string; model: string };
   provider: string;
   modelId: string;
@@ -52,7 +53,7 @@ export async function handleEmbeddedPromptFailure(input: {
   suspensionSessionId: string;
   runtimeAuthRetry: boolean;
   maybeRefreshRuntimeAuthForAuthError: (errorText: string, retry: boolean) => Promise<boolean>;
-  suspendForFailure: (params: Omit<SessionSuspensionParams, "laneId">) => void;
+  suspendForFailure: (params: SessionSuspensionParams) => void;
   resolveReplayInvalid: () => boolean;
   setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
   buildErrorAgentMeta: () => EmbeddedAgentMeta;
@@ -66,12 +67,12 @@ export async function handleEmbeddedPromptFailure(input: {
     reason: FailoverReason | null,
     options?: { providerStarted?: boolean; transientRateLimit?: boolean },
   ) => AuthProfileFailureReason | null;
-  maybeEscalateRateLimitProfileFallback: (params: {
+  advanceAuthProfile: () => Promise<boolean>;
+  advanceRateLimitAuthProfile: (context: {
     failoverProvider: string;
     failoverModel: string;
     logFallbackDecision: ReturnType<typeof createFailoverDecisionLogger>;
-  }) => void;
-  advanceAttemptAuthProfile: () => Promise<boolean>;
+  }) => Promise<boolean>;
   maybeMarkAuthProfileFailure: (failure: {
     profileId?: string;
     reason?: AuthProfileFailureReason | null;
@@ -155,13 +156,6 @@ export async function handleEmbeddedPromptFailure(input: {
     fallbackConfigured: input.fallbackConfigured,
     aborted: input.aborted,
   });
-  if (promptFailoverReason === "rate_limit") {
-    input.maybeEscalateRateLimitProfileFallback({
-      failoverProvider: input.provider,
-      failoverModel: input.modelId,
-      logFallbackDecision: logFailoverDecision,
-    });
-  }
   let failoverDecision = resolveRunFailoverDecision({
     stage: "prompt",
     aborted: input.aborted,
@@ -175,8 +169,20 @@ export async function handleEmbeddedPromptFailure(input: {
     timedOutByRunBudget: input.timedOutByRunBudget,
     profileRotated: false,
   });
-  if (failoverDecision.action === "rotate_profile" && (await input.advanceAttemptAuthProfile())) {
-    if (failedProfileId && promptProfileFailureReason) {
+  let rotated = false;
+  if (failoverDecision.action === "rotate_profile") {
+    if (promptFailoverReason === "rate_limit") {
+      rotated = await input.advanceRateLimitAuthProfile({
+        failoverProvider: input.provider,
+        failoverModel: input.modelId,
+        logFallbackDecision: logFailoverDecision,
+      });
+    } else {
+      rotated = await input.advanceAuthProfile();
+    }
+  }
+  if (rotated) {
+    if (promptProfileFailureReason) {
       void input
         .maybeMarkAuthProfileFailure({
           profileId: failedProfileId,
@@ -222,7 +228,7 @@ export async function handleEmbeddedPromptFailure(input: {
       profileRotated: true,
     });
   }
-  if (failedProfileId && promptProfileFailureReason) {
+  if (promptProfileFailureReason) {
     try {
       await input.maybeMarkAuthProfileFailure({
         profileId: failedProfileId,
@@ -262,7 +268,7 @@ export async function handleEmbeddedPromptFailure(input: {
     logFailoverDecision("fallback_model", { status });
     await input.maybeBackoffBeforeOverloadFailover(promptFailoverReason);
     throw (
-      normalizedPromptFailover ??
+      (normalizedPromptFailover?.reason === fallbackReason ? normalizedPromptFailover : null) ??
       new FailoverError(errorText, {
         reason: fallbackReason,
         provider: input.provider,

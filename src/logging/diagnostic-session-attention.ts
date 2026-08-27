@@ -34,6 +34,19 @@ export function classifySessionAttention(params: {
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
     const lastProgressAgeMs = params.activity.lastProgressAgeMs ?? 0;
+    if (
+      params.activity.hasActiveEmbeddedRun === true &&
+      typeof params.stuckSessionAbortMs === "number" &&
+      (params.activity.repeatedRequestNoProgressAgeMs ?? 0) >= params.stuckSessionAbortMs
+    ) {
+      return {
+        eventType: "session.stalled",
+        reason: "repeated_model_requests_without_progress",
+        classification: "stalled_agent_run",
+        activeWorkKind: params.activity.activeWorkKind,
+        recoveryEligible: false,
+      };
+    }
 
     // Idle session with queued work and stale orphaned activity (no active
     // embedded owner) should be classified as recoverable stuck state, not as

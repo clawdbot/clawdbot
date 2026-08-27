@@ -1,42 +1,12 @@
 // npm resolution tests cover CLI plugin package resolution from installed roots.
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import {
-  buildNpmInstallRecordFields,
-  resolvePinnedNpmInstallRecordForCli,
-} from "./npm-resolution.js";
+import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
 
 const CLI_STATE_ROOT = "/tmp/openclaw";
 const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("npm-resolution helpers", () => {
-  it("builds common npm install record fields", () => {
-    expect(
-      buildNpmInstallRecordFields({
-        spec: "@openclaw/plugin-alpha@latest",
-        installPath: ALPHA_INSTALL_PATH,
-        version: "1.2.3",
-        resolution: {
-          name: "@openclaw/plugin-alpha",
-          version: "1.2.3",
-          resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
-          integrity: "sha512-abc",
-        },
-      }),
-    ).toEqual({
-      source: "npm",
-      spec: "@openclaw/plugin-alpha@latest",
-      installPath: ALPHA_INSTALL_PATH,
-      version: "1.2.3",
-      resolvedName: "@openclaw/plugin-alpha",
-      resolvedVersion: "1.2.3",
-      resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
-      integrity: "sha512-abc",
-      shasum: undefined,
-      resolvedAt: undefined,
-    });
-  });
-
   it("pins the install record to the resolved spec and logs a notice", () => {
     const logs: string[] = [];
     const record = resolvePinnedNpmInstallRecordForCli(

@@ -345,111 +345,48 @@ extension CritterStatusLabel {
     }
 
     private var gatewayNeedsAttention: Bool {
-        if self.isSleeping { return false }
-        switch self.gatewayStatus {
-        case .failed, .stopped:
-            return !self.isPaused
-        case .starting, .running, .attachedExisting:
+        Self.needsAttention(
+            connectionMode: self.connectionMode,
+            controlState: self.controlChannelState,
+            gatewayStatus: self.gatewayStatus,
+            isPaused: self.isPaused,
+            isSleeping: self.isSleeping)
+    }
+
+    static func needsAttention(
+        connectionMode: AppState.ConnectionMode,
+        controlState: ControlChannel.ConnectionState,
+        gatewayStatus: GatewayProcessManager.Status,
+        isPaused: Bool,
+        isSleeping: Bool) -> Bool
+    {
+        guard !isPaused else { return false }
+        switch connectionMode {
+        case .unconfigured:
             return false
+        case .remote:
+            return GatewayConnectionPresentation(state: controlState).needsAttention
+        case .local:
+            guard !isSleeping else { return false }
+            switch gatewayStatus {
+            case .failed, .stopped:
+                return true
+            case .starting, .running, .attachedExisting:
+                return false
+            }
         }
     }
 
     private var gatewayBadgeColor: Color {
+        if self.connectionMode == .remote,
+           GatewayConnectionPresentation(state: self.controlChannelState).needsAttention
+        {
+            return .red
+        }
         switch self.gatewayStatus {
-        case .failed: .red
-        case .stopped: .orange
-        default: .clear
+        case .failed: return .red
+        case .stopped: return .orange
+        default: return .clear
         }
     }
 }
-
-#if DEBUG
-@MainActor
-extension CritterStatusLabel {
-    static func exerciseForTesting() async {
-        var label = CritterStatusLabel(
-            isPaused: false,
-            isSleeping: false,
-            isWorking: true,
-            earBoostActive: false,
-            blinkTick: 1,
-            sendCelebrationTick: 1,
-            gatewayStatus: .running(details: nil),
-            animationsEnabled: true,
-            iconState: .workingMain(.tool(.bash)),
-            voiceWakeMeterActive: true)
-
-        _ = label.body
-        _ = label.iconImage
-        _ = label.tickTaskID
-        _ = label.isWorkingNow
-        label.tick(Date())
-        label.resetMotion()
-        label.blink()
-        label.wiggle()
-        label.wiggleLegs()
-        label.wiggleEars()
-        label.scurry()
-        label.celebrate()
-        label.scheduleRandomTimers(from: Date())
-        label.handleGatewayStatusChange(from: .failed("boom"), to: .running(details: nil))
-        let workStartedAt = Date(timeIntervalSinceReferenceDate: 100)
-        label.handleWorkingChange(from: false, to: true, at: workStartedAt)
-        label.handleWorkingChange(from: true, to: false, at: workStartedAt.addingTimeInterval(10))
-        _ = Self.reconnectBeat(lastSettled: .failed("boom"), to: .running(details: nil))
-        _ = Self.isSettled(.starting)
-        _ = Self.workCompletionBeat(startedAt: nil, endedAt: Date(), minimumDuration: 10)
-        _ = label.gatewayNeedsAttention
-        _ = label.gatewayBadgeColor
-
-        label.isPaused = true
-        _ = label.iconImage
-
-        label.isPaused = false
-        label.isSleeping = true
-        _ = label.iconImage
-
-        label.isSleeping = false
-        label.iconState = .idle
-        _ = label.iconImage
-
-        let failed = CritterStatusLabel(
-            isPaused: false,
-            isSleeping: false,
-            isWorking: false,
-            earBoostActive: false,
-            blinkTick: 0,
-            sendCelebrationTick: 0,
-            gatewayStatus: .failed("boom"),
-            animationsEnabled: false,
-            iconState: .idle,
-            voiceWakeMeterActive: false)
-        _ = failed.gatewayNeedsAttention
-        _ = failed.gatewayBadgeColor
-
-        let stopped = CritterStatusLabel(
-            isPaused: false,
-            isSleeping: false,
-            isWorking: false,
-            earBoostActive: false,
-            blinkTick: 0,
-            sendCelebrationTick: 0,
-            gatewayStatus: .stopped,
-            animationsEnabled: false,
-            iconState: .idle,
-            voiceWakeMeterActive: false)
-        _ = stopped.gatewayNeedsAttention
-        _ = stopped.gatewayBadgeColor
-
-        _ = CritterIconRenderer.makeIcon(
-            blink: 0.6,
-            legWiggle: 0.8,
-            earWiggle: 0.4,
-            earScale: 1.4,
-            antennaDroop: 0.5,
-            eyesClosedLines: true,
-            happyEyes: true,
-            badge: .init(symbolName: "gearshape.fill", prominence: .secondary))
-    }
-}
-#endif

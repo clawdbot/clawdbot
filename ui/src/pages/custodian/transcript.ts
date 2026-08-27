@@ -4,8 +4,11 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { WizardStep } from "../../api/types.ts";
+import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
@@ -19,6 +22,7 @@ export type CustodianMessage = {
   text: string;
   at: number;
   question: CustodianStructuredQuestion | null;
+  step: WizardStep | null;
 };
 
 export function hasUnresolvedCustodianQuestion(
@@ -53,20 +57,8 @@ export function retireCustodianQuestions(
   return answered;
 }
 
-export function createCustodianSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `control-ui-onboarding-${crypto.randomUUID()}`;
-  }
-  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-  return `control-ui-onboarding-${suffix}`;
-}
-
 export function custodianErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : t("custodian.requestFailed");
+  return formatUiError(error, t("custodian.requestFailed"));
 }
 
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
@@ -121,6 +113,7 @@ export function createCustodianTranscriptMessages(
         : turn.text,
     at: turn.at,
     question: null,
+    step: null,
   }));
   return { messages, nextMessageId };
 }
@@ -139,19 +132,30 @@ function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterI
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
   boundaryAfterId: number | null;
+  assistantAvatar: string;
   showQuestion: boolean;
   questionDisabled: boolean;
+  showWizardStep: boolean;
+  wizardValue: unknown;
+  wizardDisabled: boolean;
+  wizardSecretVisible: boolean;
+  showWizardCancel: boolean;
   onSelect: (label: string) => void;
   onSkip: () => void;
+  onWizardValueChange: (value: unknown) => void;
+  onWizardAnswer: (value: unknown) => void;
+  onWizardCancel: () => void;
+  onToggleWizardSecretVisibility: () => void;
 }) {
   const question = params.message.question;
+  const step = params.message.step;
   return html`
     ${params.message.text
       ? renderMessageGroup(toCustodianMessageGroup(params.message), {
           showReasoning: false,
           showToolCalls: false,
           assistantName: t("custodian.title"),
-          assistantAvatar: "OC",
+          assistantAvatar: params.assistantAvatar,
         })
       : nothing}
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}
@@ -162,6 +166,38 @@ export function renderCustodianTranscriptEntry(params: {
           onSelect: params.onSelect,
           onSkip: params.onSkip,
         })
+      : nothing}
+    ${params.showWizardStep && step
+      ? html`<section
+          class="custodian__wizard-step"
+          aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
+        >
+          ${step.title
+            ? html`<strong class="custodian__wizard-title"
+                >${formatUiExternalText(step.title)}</strong
+              >`
+            : nothing}
+          ${renderWizardStepControls({
+            step,
+            value: params.wizardValue,
+            busy: params.wizardDisabled,
+            inputId: `custodian-wizard-input-${params.message.id}`,
+            sensitiveRevealed: params.wizardSecretVisible,
+            onValueChange: params.onWizardValueChange,
+            onAnswer: params.onWizardAnswer,
+            leadingAction: params.showWizardCancel
+              ? html`<button
+                  class="btn btn--ghost custodian__wizard-cancel"
+                  type="button"
+                  ?disabled=${params.wizardDisabled}
+                  @click=${params.onWizardCancel}
+                >
+                  ${t("custodian.cancel")}
+                </button>`
+              : undefined,
+            onToggleSensitiveVisibility: params.onToggleWizardSecretVisibility,
+          })}
+        </section>`
       : nothing}
   `;
 }

@@ -41,38 +41,3 @@ export function resolveCurrentSelfUser({
     ? snapshotUser
     : presenceUser;
 }
-
-export function userProfileAvatarUrl(
-  gatewayUrl: string,
-  profileId: string,
-  updatedAt: number,
-  documentHref = globalThis.location?.href,
-): string | null {
-  if (!documentHref) {
-    return null;
-  }
-  try {
-    const url = new URL(gatewayUrl, documentHref);
-    if (url.protocol === "ws:") {
-      url.protocol = "http:";
-    } else if (url.protocol === "wss:") {
-      url.protocol = "https:";
-    }
-    // The authenticated avatar endpoint is HTTP-only and the Control UI CSP
-    // permits images from its own origin. Cross-origin gateways keep initials.
-    if (
-      !["http:", "https:"].includes(url.protocol) ||
-      url.origin !== new URL(documentHref).origin
-    ) {
-      return null;
-    }
-    url.username = "";
-    url.password = "";
-    url.pathname = `/api/users/${encodeURIComponent(profileId)}/avatar`;
-    url.search = `?v=${updatedAt}`;
-    url.hash = "";
-    return url.href;
-  } catch {
-    return null;
-  }
-}

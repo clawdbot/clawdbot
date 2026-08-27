@@ -8,8 +8,8 @@ import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   Client,
   ReadyListener,
-  type BaseCommand,
   type BaseMessageInteractiveComponent,
+  type DiscordCommand,
   type Modal,
   type Plugin,
 } from "../internal/discord.js";
@@ -35,6 +35,7 @@ import {
   DiscordPresenceReadyListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
+  DiscordThreadDeleteListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
@@ -92,7 +93,7 @@ export async function createDiscordMonitorClient(params: {
   applicationId: string;
   token: string;
   restFetch?: typeof fetch;
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
   voiceEnabled: boolean;
@@ -285,7 +286,11 @@ export function registerDiscordMonitorListeners(params: {
   }
   registerDiscordListener(
     params.client.listeners,
-    new DiscordThreadUpdateListener(params.cfg, params.accountId, params.logger),
+    new DiscordThreadUpdateListener(params.cfg, params.logger),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
   );
 
   if (params.discordConfig.intents?.presence) {

@@ -1,7 +1,5 @@
-// Real-transport regression proof for GitHub Copilot embedding error redaction.
-// Drives the production discovery + embeddings paths against a loopback HTTP
-// server with NO ssrf-runtime or global fetch mocks, so redactSensitiveText is
-// exercised end to end over real sockets rather than synthetic stubs.
+// Exercise discovery and embeddings over real sockets, including request
+// cancellation and redaction without relying on fetch or SSRF mocks.
 import fs from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -10,19 +8,17 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
-const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
+const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./auth.js", () => ({
   resolveFirstGithubToken: resolveFirstGithubTokenMock,
 }));
 
-vi.mock("./token.js", () => ({
+vi.mock("./runtime-auth.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
-  resolveCopilotApiToken: resolveCopilotApiTokenMock,
+  resolveCopilotRuntimeAuth: resolveCopilotRuntimeAuthMock,
 }));
 
-// Intentionally NOT mocked: openclaw/plugin-sdk/ssrf-runtime, global fetch, and
-// openclaw/plugin-sdk/logging-core (redactSensitiveText is the unit under proof).
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 
 type CopilotServer = {
@@ -37,7 +33,7 @@ const DISCOVERY_MODELS_BODY = JSON.stringify({
 });
 
 async function startCopilotServer(handle: {
-  models: { status: number; body: string };
+  models: { status: number; body: string } | ((response: ServerResponse) => void);
   embeddings?: { status: number; body: string };
 }): Promise<CopilotServer> {
   const requests: CopilotServer["requests"] = [];
@@ -51,6 +47,10 @@ async function startCopilotServer(handle: {
       requests.push({ method: req.method, url: req.url });
       const isEmbeddings = req.method === "POST" && req.url === "/embeddings";
       const route = isEmbeddings && handle.embeddings ? handle.embeddings : handle.models;
+      if (typeof route === "function") {
+        route(res);
+        return;
+      }
       res.writeHead(route.status, { "content-type": "application/json" });
       res.end(route.body);
     })();
@@ -68,6 +68,7 @@ async function startCopilotServer(handle: {
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
+        server.closeAllConnections();
       }),
   });
 
@@ -76,9 +77,8 @@ async function startCopilotServer(handle: {
 }
 
 function pointTokenAt(baseUrl: string): void {
-  resolveCopilotApiTokenMock.mockResolvedValue({
-    token: "copilot_test_token_abc",
-    expiresAt: Date.now() + 3_600_000,
+  resolveCopilotRuntimeAuthMock.mockResolvedValue({
+    apiKey: "copilot_test_token_abc",
     source: "test",
     baseUrl,
   });
@@ -123,8 +123,42 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     const pending = servers.splice(0);
     await Promise.all(pending.map((server) => server.close()));
     resolveFirstGithubTokenMock.mockReset();
-    resolveCopilotApiTokenMock.mockReset();
+    resolveCopilotRuntimeAuthMock.mockReset();
   });
+
+  it.each(["headers", "trickling body"])(
+    "aborts model discovery with stalled %s within its operation deadline",
+    async (phase) => {
+      let connectionClosed = false;
+      const server = await startCopilotServer({
+        models: (response) => {
+          const trickle =
+            phase === "trickling body" ? setInterval(() => response.write(" "), 100) : undefined;
+          // Finish successfully beyond the deadline so a missing timeout fails
+          // the assertion without leaving a hanging request in the test process.
+          const finish = setTimeout(() => response.end(DISCOVERY_MODELS_BODY), 15_000);
+          response.on("close", () => {
+            connectionClosed = true;
+            clearInterval(trickle);
+            clearTimeout(finish);
+          });
+        },
+      });
+      const startedAt = performance.now();
+
+      await expect(
+        githubCopilotMemoryEmbeddingProviderAdapter.create({
+          ...defaultCreateOptions(),
+          remote: { baseUrl: server.baseUrl, apiKey: "copilot-test-only" },
+        }),
+      ).rejects.toThrow("request timed out");
+
+      expect(performance.now() - startedAt).toBeLessThan(15_000);
+      await vi.waitFor(() => expect(connectionClosed).toBe(true));
+      expect(server.requests).toEqual([{ method: "GET", url: "/models" }]);
+    },
+    20_000,
+  );
 
   it("redacts credential-shaped text in model discovery errors over real transport", async () => {
     const server = await startCopilotServer({
@@ -163,7 +197,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
 
     let caught: Error | undefined;
     try {
-      await result.provider?.embedQuery("hello");
+      await result.provider?.embed("hello", { inputType: "query" });
     } catch (error) {
       caught = error as Error;
     }
@@ -218,7 +252,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     pointTokenAt(server.baseUrl);
 
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    const vector = await result.provider?.embedQuery("hello");
+    const vector = await result.provider?.embed("hello", { inputType: "query" });
 
     expect(server.requests).toEqual([
       { method: "GET", url: "/models" },

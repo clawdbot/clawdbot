@@ -1405,6 +1405,13 @@ extension OpenClawChatSQLiteTranscriptCache {
                         thinkingSignature: nil,
                         mimeType: item.mimeType,
                         fileName: item.fileName,
+                        artifactId: item.artifactId,
+                        url: item.url,
+                        openUrl: item.openUrl,
+                        alt: item.alt,
+                        width: item.width,
+                        height: item.height,
+                        sizeBytes: item.sizeBytes,
                         durationSeconds: item.durationSeconds,
                         content: nil,
                         id: item.id,
@@ -1414,6 +1421,8 @@ extension OpenClawChatSQLiteTranscriptCache {
                         isError: item.isError)
                 },
                 timestamp: message.timestamp,
+                transcriptMessageID: message.transcriptMessageID,
+                isTruncated: message.isTruncated,
                 idempotencyKey: message.idempotencyKey,
                 toolCallId: message.toolCallId,
                 toolName: message.toolName,
@@ -1421,7 +1430,9 @@ extension OpenClawChatSQLiteTranscriptCache {
                 stopReason: message.stopReason,
                 errorMessage: message.errorMessage,
                 details: self.cacheableDetails(message.details),
-                isError: message.isError)
+                isError: message.isError,
+                provenance: message.provenance,
+                historyMarker: message.historyMarker)
         }
     }
 

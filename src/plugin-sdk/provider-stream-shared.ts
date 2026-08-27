@@ -1,6 +1,10 @@
 // Provider stream shared helpers implement reusable stream wrappers and payload policies.
 import { resolveOpenAIReasoningEffortForModel } from "@openclaw/ai/internal/openai";
-import { resolveOpenAIReasoningEffortMap } from "@openclaw/ai/transports";
+import {
+  createEmptyTransportUsage,
+  resolveOpenAIReasoningEffortMap,
+} from "@openclaw/ai/transports";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   createPromotedPlainTextToolCallBlock,
   createPromotedPlainTextToolCallEvents,
@@ -20,7 +24,10 @@ import {
 import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
+import type { Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { findCodeRegions } from "../shared/text/code-regions.js";
+import { assertProviderStreamEvent } from "./provider-stream-event-normalization.js";
 export { applyAnthropicRefusal } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
@@ -45,10 +52,6 @@ export function composeProviderStreamWrappers(
   );
 }
 
-function toRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
 function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
   const tools = (context as { tools?: unknown }).tools;
   if (!Array.isArray(tools)) {
@@ -56,7 +59,7 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   }
   const names = tools
     .map((tool) => {
-      const record = toRecord(tool);
+      const record = asOptionalObjectRecord(tool);
       return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
     })
     .filter((name): name is string => Boolean(name));
@@ -67,10 +70,10 @@ function promotePlainTextToolCalls(
   message: unknown,
   toolNames: Set<string>,
 ): PlainTextToolCallMessageProjection | undefined {
-  const messageRecord = toRecord(message);
+  const messageRecord = asOptionalObjectRecord(message);
   if (
     Array.isArray(messageRecord?.content) &&
-    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
+    messageRecord.content.some((block) => asOptionalObjectRecord(block)?.type === "toolCall")
   ) {
     return undefined;
   }
@@ -79,6 +82,7 @@ function promotePlainTextToolCalls(
     createToolCallBlock: createPromotedPlainTextToolCallBlock,
     isRetainableNonTextBlock: () => true,
     message,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
@@ -127,12 +131,14 @@ function scrubProviderTerminalMessage(
     matcher,
     message,
     preserveEmptyTextBlocks,
+    resolveProtectedRanges: findCodeRegions,
   });
 }
 
 function wrapPlainTextToolCallStream(
-  source: ReturnType<StreamFn>,
+  source: Awaited<ReturnType<StreamFn>>,
   context: Parameters<StreamFn>[1],
+  model: Model,
 ): ReturnType<StreamFn> {
   const toolNames = resolveContextToolNames(context);
   if (toolNames.size === 0) {
@@ -140,46 +146,49 @@ function wrapPlainTextToolCallStream(
   }
   const matcher = createProviderToolNameMatcher(toolNames);
   const output = createAssistantMessageEventStream();
-  const stream = output as unknown as { push(event: unknown): void; end(): void };
 
   void (async () => {
     let ended = false;
     const endStream = () => {
       if (!ended) {
         ended = true;
-        stream.end();
+        output.end();
       }
     };
 
     try {
-      const normalizedEvents = normalizePlainTextToolCallStreamEvents(
-        source as AsyncIterable<unknown>,
-        {
-          createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
-          matcher,
-          normalizeTerminalMessage: ({ allowPromotion, message, preserveEmptyTextBlocks }) =>
-            normalizeProviderDoneMessage(
-              message,
-              allowPromotion,
-              toolNames,
-              matcher,
-              preserveEmptyTextBlocks,
-            ),
-          stopAfterDone: true,
-        },
-      );
-      for await (const event of normalizedEvents) {
-        stream.push(event);
+      const normalizedEvents = normalizePlainTextToolCallStreamEvents(source, {
+        createPromotedToolCallEvents: createPromotedPlainTextToolCallEvents,
+        matcher,
+        normalizeTerminalMessage: ({ allowPromotion, message, preserveEmptyTextBlocks }) =>
+          normalizeProviderDoneMessage(
+            message,
+            allowPromotion,
+            toolNames,
+            matcher,
+            preserveEmptyTextBlocks,
+          ),
+        resolveProtectedRanges: findCodeRegions,
+        stopAfterDone: true,
+      });
+      for await (const normalizedEvent of normalizedEvents) {
+        assertProviderStreamEvent(normalizedEvent, model);
+        output.push(normalizedEvent);
       }
     } catch (error) {
-      stream.push({
+      output.push({
         type: "error",
         reason: "error",
         error: {
           role: "assistant",
           content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createEmptyTransportUsage(),
           stopReason: "error",
           errorMessage: error instanceof Error ? error.message : String(error),
+          timestamp: Date.now(),
         },
       });
     } finally {
@@ -187,7 +196,7 @@ function wrapPlainTextToolCallStream(
     }
   })();
 
-  return output as ReturnType<StreamFn>;
+  return output;
 }
 
 /**
@@ -203,10 +212,10 @@ export function createPlainTextToolCallCompatWrapper(
     const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapPlainTextToolCallStream(stream, context),
-      ) as ReturnType<StreamFn>;
+        wrapPlainTextToolCallStream(stream, context, model),
+      );
     }
-    return wrapPlainTextToolCallStream(maybeStream, context);
+    return wrapPlainTextToolCallStream(maybeStream, context, model);
   };
 }
 
@@ -457,21 +466,17 @@ function resolveDeepSeekV4ReasoningEffort(
   return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
 }
 
-function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void {
-  if (!Array.isArray(payload.messages)) {
-    return;
-  }
-  for (const message of payload.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    delete (message as Record<string, unknown>).reasoning_content;
-  }
-}
-
-function ensureDeepSeekV4AssistantReasoningContent(
+/** Normalizes assistant reasoning replay shared by OpenAI-compatible provider families. */
+export function normalizeOpenAICompatibleReasoningReplay(
   payload: Record<string, unknown>,
-  params?: {
+  params: {
+    /** Disabled reasoning strips replay fields instead of backfilling assistant turns. */
+    thinkingEnabled: boolean;
+    /** Restricts disabled-reasoning cleanup to assistant messages when required. */
+    stripAssistantMessagesOnly?: boolean;
+    /** Replaces explicit null values for transports that require string reasoning. */
+    replaceNullReasoningContent?: boolean;
+    /** Preserves provider-specific tool-call selection for assistant replay. */
     shouldBackfillAssistantMessage?: (message: Record<string, unknown>) => boolean;
   },
 ): void {
@@ -483,13 +488,22 @@ function ensureDeepSeekV4AssistantReasoningContent(
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role !== "assistant") {
+    if (!params.thinkingEnabled) {
+      if (!params.stripAssistantMessagesOnly || record.role === "assistant") {
+        delete record.reasoning_content;
+      }
       continue;
     }
-    if (params?.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record)) {
+    if (
+      record.role !== "assistant" ||
+      (params.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record))
+    ) {
       continue;
     }
-    if (!("reasoning_content" in record)) {
+    if (
+      !("reasoning_content" in record) ||
+      (params.replaceNullReasoningContent && record.reasoning_content == null)
+    ) {
       record.reasoning_content = "";
     }
   }
@@ -518,13 +532,14 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
         payload.thinking = { type: "disabled" };
         delete payload.reasoning_effort;
         delete payload.reasoning;
-        stripDeepSeekV4ReasoningContent(payload);
+        normalizeOpenAICompatibleReasoningReplay(payload, { thinkingEnabled: false });
         return;
       }
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload, {
+      normalizeOpenAICompatibleReasoningReplay(payload, {
+        thinkingEnabled: true,
         shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
       });
     });
@@ -693,6 +708,7 @@ export {
 export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
+  resolveMoonshotThinkingKeep,
   resolveMoonshotThinkingType,
 } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };

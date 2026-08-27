@@ -6,13 +6,126 @@ import {
   type ValidationError,
   validateSecretsResolveParams,
   validateSecretsResolveResult,
+  validateSecretsStoreDeleteParams,
+  validateSecretsStoreListParams,
+  validateSecretsStoreListResult,
+  validateSecretsStoreMutationResult,
+  validateSecretsStoreSetParams,
+  type SecretStoreEntry,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
+import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import {
+  collectSecretStoreRefKeysInConfig,
+  getActiveSecretsRuntimeSnapshotState,
+} from "../../secrets/runtime-state.js";
+import {
+  deleteSecretStoreEntry,
+  listSecretStoreEntries,
+  purgeExpiredSecretStoreEntries,
+  SecretStoreValidationError,
+  writeSecretStoreEntry,
+} from "../../secrets/store/secret-store.js";
 import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+const teamScope = { kind: "team" } as const;
+
+function toProtocolStoreEntry(
+  entry: ReturnType<typeof listSecretStoreEntries>[number],
+): SecretStoreEntry {
+  const metadata = {
+    name: entry.name,
+    scopeKind: "team" as const,
+    scopeId: "" as const,
+    createdAtMs: entry.createdAtMs,
+    updatedAtMs: entry.updatedAtMs,
+    ...(entry.updatedBy ? { updatedBy: entry.updatedBy } : {}),
+  };
+  if (entry.kind === "env") {
+    if (typeof entry.valuePreview !== "string") {
+      throw new Error(`Secret store env metadata is missing its value for ${entry.name}.`);
+    }
+    return { ...metadata, kind: "env", value: entry.valuePreview };
+  }
+  return { ...metadata, kind: "secret", allowedHosts: entry.allowedHosts ?? [] };
 }
+
+function storeUpdatedBy(client: GatewayClient | null): string {
+  return (
+    client?.authenticatedUserProfile?.displayName?.trim() ||
+    client?.connect?.client?.displayName?.trim() ||
+    client?.connect?.client?.id?.trim() ||
+    "gateway"
+  );
+}
+
+type SecretStoreReload = (options?: {
+  forceColdRefKeys?: ReadonlySet<string>;
+  joinInFlight?: boolean;
+}) => Promise<{ warningCount: number }>;
+
+type SecretStoreLogger = {
+  warn?: (message: string) => void;
+  debug?: (message: string) => void;
+};
+
+class SecretStorePostWriteError extends Error {
+  constructor(cause: unknown) {
+    super(errorMessage(cause), { cause });
+    this.name = "SecretStorePostWriteError";
+  }
+}
+
+/** Owns redaction-first store writes and the runtime refresh shared by Gateway RPCs. */
+export function createSecretStoreWriteService(params: {
+  reloadSecrets: SecretStoreReload;
+  log?: SecretStoreLogger;
+}) {
+  const purgeRetention = () => {
+    try {
+      purgeExpiredSecretStoreEntries();
+    } catch (error) {
+      params.log?.warn?.(`secrets.store retention purge failed: ${errorMessage(error)}`);
+    }
+  };
+  const reloadReference = async (
+    name: string,
+  ): Promise<{ reloaded: boolean; warningCount?: number }> => {
+    const snapshot = getActiveSecretsRuntimeSnapshotState();
+    const refKeys = snapshot
+      ? collectSecretStoreRefKeysInConfig(snapshot.sourceConfig, name)
+      : new Set<string>();
+    if (refKeys.size === 0) {
+      return { reloaded: false };
+    }
+    // Explicit replacement must cold-refresh affected owners instead of
+    // retaining an older credential from the active runtime snapshot.
+    const reload = await params.reloadSecrets({ forceColdRefKeys: refKeys, joinInFlight: false });
+    return { reloaded: true, warningCount: reload.warningCount };
+  };
+
+  return {
+    resolveUpdatedBy: storeUpdatedBy,
+    purgeRetention,
+    reloadReference,
+    async write(input: Omit<Parameters<typeof writeSecretStoreEntry>[0], "scope" | "database">) {
+      // Registration precedes validation and SQLite so even write failures
+      // cannot disclose the submitted credential through downstream logging.
+      registerSecretValueForRedaction(input.value);
+      writeSecretStoreEntry({ scope: teamScope, ...input });
+      purgeRetention();
+      try {
+        return await reloadReference(input.name);
+      } catch (error) {
+        throw new SecretStorePostWriteError(error);
+      }
+    },
+  };
+}
+
+export type SecretStoreWriteService = ReturnType<typeof createSecretStoreWriteService>;
 
 function invalidSecretsResolveField(
   errors: ValidationError[] | null | undefined,
@@ -53,7 +166,8 @@ function invalidSecretsResolveField(
 }
 
 export function createSecretsHandlers(params: {
-  reloadSecrets: () => Promise<{ warningCount: number }>;
+  reloadSecrets: SecretStoreReload;
+  storeWriteService: SecretStoreWriteService;
   resolveSecrets: (params: {
     commandName: string;
     targetIds: string[];
@@ -73,9 +187,7 @@ export function createSecretsHandlers(params: {
     diagnostics: string[];
     inactiveRefPaths: string[];
   }>;
-  log?: {
-    warn?: (message: string) => void;
-  };
+  log?: SecretStoreLogger;
 }): GatewayRequestHandlers {
   return {
     "secrets.reload": async ({ respond }) => {
@@ -169,6 +281,124 @@ export function createSecretsHandlers(params: {
       } catch (error) {
         params.log?.warn?.(`secrets.resolve failed: ${errorMessage(error)}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.resolve failed"));
+      }
+    },
+    "secrets.store.list": ({ params: requestParams, respond }) => {
+      if (
+        !assertValidParams(
+          requestParams,
+          validateSecretsStoreListParams,
+          "secrets.store.list",
+          respond,
+        )
+      ) {
+        return;
+      }
+      try {
+        const result = {
+          entries: listSecretStoreEntries({ scope: teamScope }).map(toProtocolStoreEntry),
+        };
+        if (!validateSecretsStoreListResult(result)) {
+          throw new Error("secrets.store.list returned invalid payload.");
+        }
+        respond(true, result);
+      } catch (error) {
+        params.log?.warn?.(`secrets.store.list failed: ${errorMessage(error)}`);
+        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.store.list failed"));
+      }
+    },
+    "secrets.store.set": async ({ params: requestParams, respond, client }) => {
+      if (
+        !assertValidParams(
+          requestParams,
+          validateSecretsStoreSetParams,
+          "secrets.store.set",
+          respond,
+        )
+      ) {
+        return;
+      }
+      try {
+        const reload = await params.storeWriteService.write({
+          name: requestParams.name,
+          value: requestParams.value,
+          kind: requestParams.kind,
+          ...(requestParams.allowedHosts !== undefined
+            ? { allowedHosts: requestParams.allowedHosts }
+            : {}),
+          updatedBy: params.storeWriteService.resolveUpdatedBy(client),
+        });
+        const result = {
+          ok: true as const,
+          ...reload,
+        };
+        if (!validateSecretsStoreMutationResult(result)) {
+          throw new Error("secrets.store.set returned invalid payload.");
+        }
+        respond(true, result);
+      } catch (error) {
+        if (error instanceof SecretStoreValidationError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          return;
+        }
+        params.log?.warn?.(`secrets.store.set failed: ${errorMessage(error)}`);
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            error instanceof SecretStorePostWriteError
+              ? "Secret store entry was saved, but post-write runtime refresh failed. Resolve provider errors and retry secrets.reload."
+              : "secrets.store.set failed",
+          ),
+        );
+      }
+    },
+    "secrets.store.delete": async ({ params: requestParams, respond, client }) => {
+      if (
+        !assertValidParams(
+          requestParams,
+          validateSecretsStoreDeleteParams,
+          "secrets.store.delete",
+          respond,
+        )
+      ) {
+        return;
+      }
+      let deleted = false;
+      try {
+        const agentId = client?.internal?.agentRuntimeIdentity?.agentId;
+        if (agentId) {
+          params.log?.debug?.(`secrets.store.delete requested by agent:${agentId}`);
+        }
+        deleteSecretStoreEntry({ scope: teamScope, name: requestParams.name });
+        deleted = true;
+        params.storeWriteService.purgeRetention();
+        const reload = await params.storeWriteService.reloadReference(requestParams.name);
+        const result = {
+          ok: true as const,
+          ...reload,
+        };
+        if (!validateSecretsStoreMutationResult(result)) {
+          throw new Error("secrets.store.delete returned invalid payload.");
+        }
+        respond(true, result);
+      } catch (error) {
+        if (error instanceof SecretStoreValidationError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+          return;
+        }
+        params.log?.warn?.(`secrets.store.delete failed: ${errorMessage(error)}`);
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            deleted
+              ? "Secret store entry was deleted, but the active runtime could not refresh. Update the config reference or restore the entry, then retry secrets.reload."
+              : "secrets.store.delete failed",
+          ),
+        );
       }
     },
   };

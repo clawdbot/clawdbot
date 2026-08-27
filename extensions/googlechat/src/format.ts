@@ -1,36 +1,28 @@
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownIRChunksWithinLimit,
   renderMarkdownWithMarkers,
   sanitizeAssistantVisibleText,
-  type FormatCapabilityProfile,
   type MarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
 
-export const GOOGLE_CHAT_FORMAT_PROFILE = {
+export const GOOGLE_CHAT_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "markdown",
   constructs: {
-    bold: "native",
-    italic: "native",
     underline: "fallback",
-    strikethrough: "native",
     spoiler: "fallback",
-    codeInline: "native",
-    codeBlock: "native",
     codeLanguage: "fallback",
-    linkLabel: "native",
     heading: "fallback",
-    bulletList: "native",
     orderedList: "fallback",
     taskList: "fallback",
     table: "fallback",
-    blockquote: "native",
     image: "fallback",
     mention: "strip",
   },
   chunk: { limit: 32_000, unit: "bytes" },
-} satisfies FormatCapabilityProfile;
+});
 
 const GOOGLE_CHAT_LITERAL_FALLBACKS = new Map([
   ["*", "＊"],
@@ -121,15 +113,23 @@ function projectGoogleChatLinkLabels(ir: MarkdownIR): MarkdownIR {
 }
 
 function markGoogleChatBulletLists(ir: MarkdownIR, markerToken: string): MarkdownIR {
-  let text = ir.text;
+  let characters: string[] | undefined;
   for (const item of ir.listItems ?? []) {
     const marker = item.listMarker;
-    if (item.kind !== "bullet" || !marker || text.slice(marker.start, marker.end) !== "• ") {
+    if (
+      item.kind !== "bullet" ||
+      !marker ||
+      marker.end !== marker.start + 2 ||
+      ir.text[marker.start] !== "•" ||
+      ir.text[marker.start + 1] !== " "
+    ) {
       continue;
     }
-    text = `${text.slice(0, marker.start)}${markerToken}${text.slice(marker.end)}`;
+    characters ??= ir.text.split("");
+    characters[marker.start] = markerToken[0] ?? "";
+    characters[marker.start + 1] = markerToken[1] ?? "";
   }
-  return text === ir.text ? ir : { ...ir, text };
+  return characters ? { ...ir, text: characters.join("") } : ir;
 }
 
 function projectUnsafeCodeFallbacks(ir: MarkdownIR): MarkdownIR {

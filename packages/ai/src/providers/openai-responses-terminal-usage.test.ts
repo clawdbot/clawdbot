@@ -64,10 +64,44 @@ describe("resolveResponsesTerminalStopReason", () => {
     ).toEqual({ stopReason: "length" });
   });
 
+  it("uses the terminal incomplete event when a compatible response omits its status", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: undefined,
+        terminalEventType: "response.incomplete",
+        hasToolCall: false,
+      }),
+    ).toEqual({ stopReason: "length" });
+  });
+
+  it("keeps an explicit response status authoritative over the terminal event", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: "completed",
+        terminalEventType: "response.incomplete",
+        hasToolCall: false,
+      }),
+    ).toEqual({ stopReason: "stop" });
+  });
+
   it("reports a content-filtered turn as a provider error", () => {
     expect(
       resolveResponsesTerminalStopReason({
         status: "incomplete",
+        incompleteReason: "content_filter",
+        hasToolCall: false,
+      }),
+    ).toEqual({
+      stopReason: "error",
+      errorMessage: "Provider incomplete_reason: content_filter",
+    });
+  });
+
+  it("does not expose filtered output when an incomplete response omits its status", () => {
+    expect(
+      resolveResponsesTerminalStopReason({
+        status: undefined,
+        terminalEventType: "response.incomplete",
         incompleteReason: "content_filter",
         hasToolCall: false,
       }),

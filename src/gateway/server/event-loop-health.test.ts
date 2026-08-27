@@ -93,6 +93,7 @@ function expectSnapshotFields(snapshot: unknown, expected: Record<string, unknow
 function expectSaturatedLoadSnapshot(snapshot: unknown) {
   return expectSnapshotFields(snapshot, {
     degraded: true,
+    degradedSinceMs: 0,
     reasons: ["event_loop_utilization", "cpu"],
     intervalMs: 1_000,
     delayP99Ms: 30,
@@ -114,6 +115,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setNow(1_000);
     expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
+      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1_000,
       delayP99Ms: 0,
@@ -151,10 +153,58 @@ describe("createGatewayEventLoopHealthMonitor", () => {
 
     expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
+      degradedSinceMs: null,
       reasons: [],
       intervalMs: 1_000,
       utilization: 0.2,
       cpuCoreRatio: 0.1,
+    });
+  });
+
+  it("tracks continuous degradation and clears it on the first healthy snapshot", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setNow(1_000);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      degradedSinceMs: null,
+    });
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(2_000);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: true,
+      degradedSinceMs: 0,
+    });
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(3_500);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: true,
+      degradedSinceMs: 1_500,
+    });
+
+    harness.setNow(4_500);
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      degradedSinceMs: null,
+    });
+  });
+
+  it("exposes persistent degradation only after the warning threshold", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(1_000);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(60_999);
+    expect(harness.monitor.persistentDegradationSnapshot()).toBeUndefined();
+
+    harness.setDelay({ maxMs: 1_500 });
+    harness.setNow(61_000);
+    expectSnapshotFields(harness.monitor.persistentDegradationSnapshot(), {
+      degraded: true,
+      degradedSinceMs: 60_000,
     });
   });
 
@@ -203,5 +253,20 @@ describe("createGatewayEventLoopHealthMonitor", () => {
 
     expect(harness.delayMonitor["disable"]).toHaveBeenCalledTimes(1);
     expect(harness.monitor.snapshot()).toBeUndefined();
+  });
+
+  it("resets delay and rate baselines after a host thaw", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setDelay({ maxMs: 90_000 });
+    harness.setNow(90_000);
+
+    harness.monitor.reset();
+    harness.setNow(91_000);
+
+    expectSnapshotFields(harness.monitor.snapshot(), {
+      degraded: false,
+      intervalMs: 1_000,
+      delayMaxMs: 0,
+    });
   });
 });

@@ -99,7 +99,6 @@ function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
     startup: {
       sidecar: false,
       memory: false,
-      deferConfiguredChannelFullLoadUntilAfterListen: false,
       agentHarnesses: [],
     },
     compat: [],
@@ -171,7 +170,6 @@ describe("provider install catalog", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -353,7 +351,6 @@ describe("provider install catalog", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -407,7 +404,6 @@ describe("provider install catalog", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -460,7 +456,6 @@ describe("provider install catalog", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -782,7 +777,6 @@ describe("provider install catalog", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],
@@ -838,7 +832,6 @@ describe("provider install catalog", () => {
           startup: {
             sidecar: false,
             memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
           compat: [],

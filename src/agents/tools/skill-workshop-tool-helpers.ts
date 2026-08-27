@@ -1,7 +1,14 @@
+import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
+import {
+  readProposalFrontmatter,
+  stripProposalFrontmatterForSkill,
+} from "../../skills/workshop/frontmatter.js";
+import { prepareSkillProposalDraft } from "../../skills/workshop/proposal-draft.js";
 import {
   inspectSkillProposal,
   resolvePendingSkillProposal,
 } from "../../skills/workshop/service.js";
+import { PROPOSAL_DRAFT_FILE } from "../../skills/workshop/store-record.js";
 import type {
   SkillProposalReadResult,
   SkillProposalRecord,
@@ -9,7 +16,36 @@ import type {
   SkillProposalSupportFileInput,
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
-import { readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
+import { readPositiveIntegerParam, readToolStringParam, ToolInputError } from "./common.js";
+
+export function assertAutonomousSkillSize(
+  name: string,
+  description: string | undefined,
+  content: string,
+  currentContent: string | undefined,
+  maxSkillBytes: number,
+): void {
+  const draft = prepareSkillProposalDraft({
+    name,
+    description: description ?? readProposalFrontmatter(currentContent ?? "")?.description ?? name,
+    content,
+    fallbackFrontmatterContent: currentContent,
+    date: new Date().toISOString(),
+    maxSkillBytes,
+  });
+  if (!draft.ok) {
+    throw draft.error.cause;
+  }
+  const resultChars = stripProposalFrontmatterForSkill(draft.value.content).length;
+  const sizeError = autonomousSkillSizeError(name, currentContent?.length ?? 0, resultChars);
+  if (sizeError) {
+    throw new ToolInputError(sizeError);
+  }
+}
+
+export function skillWorkshopAgentEventActor(agentId?: string) {
+  return { type: "agent" as const, ...(agentId ? { id: agentId } : {}) };
+}
 
 export function proposalReviewPhase(
   completion: SkillWorkshopProposalReviewCompletion,
@@ -86,13 +122,22 @@ export function actionResult(
       targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
       scanState: record.scan.state,
       proposedVersion: record.proposedVersion,
+      draftHash: record.draftHash,
     },
   };
 }
 
 export function proposalResult(
   proposal: SkillProposalReadResult,
-  options: { contentText?: string; includeContent?: boolean } = {},
+  options: {
+    contentText?: string;
+    inspect?: {
+      artifactPath: string;
+      artifactSizeBytes: number;
+      availableArtifacts: Array<{ path: string; sizeBytes: number }>;
+      contentIncluded: boolean;
+    };
+  } = {},
 ) {
   return {
     content: options.contentText ? [{ type: "text" as const, text: options.contentText }] : [],
@@ -102,21 +147,21 @@ export function proposalResult(
       kind: proposal.record.kind,
       skillName: proposal.record.target.skillName,
       skillKey: proposal.record.target.skillKey,
-      proposalFile: proposal.record.draftFile,
+      proposalFile: PROPOSAL_DRAFT_FILE,
       supportFileCount: proposal.record.supportFiles?.length ?? 0,
       targetSkillFile: proposal.record.target.skillFile,
       scanState: proposal.record.scan.state,
       proposedVersion: proposal.record.proposedVersion,
-      ...(options.includeContent ? { proposalContent: proposal.content } : {}),
-      ...(options.includeContent && proposal.supportFiles
-        ? { supportFiles: proposal.supportFiles }
-        : {}),
+      draftHash: proposal.record.draftHash,
+      revisionHash: proposal.revisionHash,
+      ...(proposal.record.evaluation ? { evaluation: proposal.record.evaluation } : {}),
+      ...(options.inspect ? { inspect: options.inspect } : {}),
     },
   };
 }
 
 export function readLifecycleProposalIdParam(params: Record<string, unknown>): string {
-  return readStringParam(params, "proposal_id", {
+  return readToolStringParam(params, "proposal_id", {
     required: true,
     label: "proposal_id",
   });
@@ -126,21 +171,27 @@ export async function readProposalForInspect(
   params: Record<string, unknown>,
   workspaceDir: string,
   env?: NodeJS.ProcessEnv,
+  agentId?: string,
 ): Promise<SkillProposalReadResult> {
-  const proposalId = readStringParam(params, "proposal_id", { label: "proposal_id" });
+  const proposalId = readToolStringParam(params, "proposal_id", { label: "proposal_id" });
   if (proposalId) {
-    const proposal = await inspectSkillProposal(proposalId, { workspaceDir, env });
+    const proposal = await inspectSkillProposal(proposalId, { agentId, workspaceDir, env });
     if (!proposal) {
       throw new ToolInputError(`Skill proposal not found: ${proposalId}`);
     }
     return proposal;
   }
   const resolved = await resolvePendingSkillProposal({
-    name: readStringParam(params, "name", { required: true }),
+    name: readToolStringParam(params, "name", { required: true }),
+    workspaceDir,
+    env,
+    agentId,
+  });
+  const proposal = await inspectSkillProposal(resolved.record.id, {
+    agentId,
     workspaceDir,
     env,
   });
-  const proposal = await inspectSkillProposal(resolved.record.id, { workspaceDir, env });
   if (!proposal) {
     throw new ToolInputError(`Skill proposal not found: ${resolved.record.id}`);
   }
@@ -151,7 +202,7 @@ export function readProposalStatusParam(
   params: Record<string, unknown>,
   statuses: readonly SkillProposalStatus[],
 ): SkillProposalStatus | undefined {
-  const status = readStringParam(params, "status");
+  const status = readToolStringParam(params, "status");
   if (!status) {
     return undefined;
   }

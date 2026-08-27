@@ -49,7 +49,7 @@ final class MacNodePresenceReporter {
     private let idleSecondsProvider: IdleSecondsProvider
 
     init(
-        reportingEnabled: Bool = UserDefaults.standard.bool(forKey: activeComputerPresenceEnabledKey),
+        reportingEnabled: Bool = AppDefaults.standard.bool(forKey: activeComputerPresenceEnabledKey),
         idleSecondsProvider: @escaping IdleSecondsProvider = {
             guard AXIsProcessTrusted() else { return nil }
             return SystemPresenceInfo.lastHardwareInputSeconds()

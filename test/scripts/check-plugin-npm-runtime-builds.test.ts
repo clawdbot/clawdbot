@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { checkPluginNpmRuntimeBuilds } from "../../scripts/check-plugin-npm-runtime-builds.mjs";
+import { checkPluginNpmRuntimeBuilds } from "../../scripts/check-plugin-npm-runtime-builds.mts";
 
 const tempDirs: string[] = [];
 

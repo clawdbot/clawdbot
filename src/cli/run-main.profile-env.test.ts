@@ -42,9 +42,8 @@ vi.mock("./dotenv.js", () => ({
   loadCliDotEnv: dotenvState.loadDotEnv,
 }));
 
-vi.mock("../infra/env.js", () => ({
-  isTruthyEnvValue: (value?: string) =>
-    typeof value === "string" && ["1", "on", "true", "yes"].includes(value.trim().toLowerCase()),
+vi.mock("../infra/env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/env.js")>()),
   normalizeEnv: vi.fn(),
 }));
 

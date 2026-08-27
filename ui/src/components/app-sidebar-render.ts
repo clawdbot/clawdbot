@@ -5,74 +5,157 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
-import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
+import { activityPersonLocation, isRouteId, isSessionRouteId } from "../app-route-paths.ts";
+import { resolveControlUiAuthToken } from "../app/control-ui-auth.ts";
+import { isNativeWebChromeHost } from "../app/native-web-chrome.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
-import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { deriveAvatarInitial, resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import {
+  isPresenceViewerIdle,
+  presenceViewerLabel,
+  projectOnlinePresenceViewers,
+} from "../lib/presence-users.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
+import {
+  resolveSessionPreferredFace,
+  sessionNavigationTarget,
+} from "../lib/sessions/route-navigation.ts";
+import {
+  areUiSessionKeysEquivalent,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarPluginTab, shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
+import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
-import { renderOfflineSidebarStatus, renderSessionRowBadges } from "./session-row-badges.ts";
+import {
+  renderSessionAttentionIcon,
+  renderSessionRunSpinner,
+  sessionAttentionSubtitle,
+} from "./session-attention-presentation.ts";
+import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts";
+import { renderSessionRowBadges, renderSidebarConnectionStatus } from "./session-row-badges.ts";
+import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 
 type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   activePluginTabId: string;
   activeWorkboardBoardId: string;
   offline: boolean;
-  queuedOutboxCount: number;
-  lastError: string | null;
-  onOpenApprovals?: () => void;
-  onRetryConnect?: () => void;
   getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
+  toggleSection(sectionId: string): void;
 };
 
+type SidebarNativeGateway = {
+  id: string;
+  name: string;
+  isPrimary: boolean;
+  health: "ok" | "error" | "unknown";
+};
+
+type SidebarNativeGatewaysSnapshot = {
+  gateways: SidebarNativeGateway[];
+  currentId: string;
+};
+
+// Display-only: read the injected global directly; the capability module must stay
+// chat-chunk-owned to protect the QA smoke startup budget.
+function readSidebarNativeGateway(): SidebarNativeGateway | null {
+  if (!isNativeWebChromeHost()) {
+    return null;
+  }
+  const snapshot = (
+    window as Window & { __OPENCLAW_NATIVE_GATEWAYS__?: SidebarNativeGatewaysSnapshot }
+  )["__OPENCLAW_NATIVE_GATEWAYS__"];
+  if (!snapshot || !Array.isArray(snapshot.gateways) || snapshot.gateways.length < 2) {
+    return null;
+  }
+  return snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
+}
+
 export function renderAppSidebarBrand(host: AppSidebarRenderHost) {
-  const { activeId: cardAgentId, agent: cardAgent, agents: cardAgents } = host.activeChipAgent();
+  const {
+    activeId: cardAgentId,
+    agent: cardAgent,
+    agents: cardAgents,
+    identity: cardIdentity,
+  } = host.activeChipAgent();
   const menuUnread = cardAgents.some((entry) => {
     const agentId = normalizeAgentId(entry.id);
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
-  const cardName = cardAgent ? normalizeAgentLabel(cardAgent) : cardAgentId;
-  const approvalCount = host.sessionData.approvalBadgeSnapshot().agentCounts.get(cardAgentId) ?? 0;
+  const cardName = normalizeAgentLabel(cardAgent ?? { id: cardAgentId }, cardIdentity);
+  const gateway = host.sessionDataContext?.gateway;
+  const avatarAuthToken = gateway
+    ? resolveControlUiAuthToken({
+        hello: gateway.snapshot.hello,
+        settings: { token: gateway.connection.token },
+        password: gateway.connection.password,
+      })
+    : null;
+  const avatarAuthReady = Boolean(
+    gateway &&
+    (gateway.snapshot.hello ||
+      gateway.connection.token.trim() ||
+      gateway.connection.password.trim()),
+  );
   const cardAvatarText =
-    (cardAgent ? resolveAgentTextAvatar(cardAgent) : null) ??
-    (cardName || cardAgentId).slice(0, 1).toUpperCase();
+    (cardAgent ? resolveAgentTextAvatar(cardAgent, cardIdentity) : cardIdentity?.emoji) ??
+    (deriveAvatarInitial(cardName || cardAgentId) || "?");
+  const newSessionAccess = host.readNewSessionAccess();
   // The sidebar action follows gateway availability; collapsed native chrome
   // keeps its separate offline-tolerant ⌘N mirror.
   return html`
     <div class="sidebar-brand">
       <openclaw-sidebar-agent-card
         .agentName=${cardName}
-        .avatarUrl=${cardAgent ? resolveAgentAvatarUrl(cardAgent) : null}
+        .avatarUrl=${cardAgent
+          ? resolveAgentAvatarUrl(cardAgent, cardIdentity)
+          : cardIdentity?.avatar}
+        .authToken=${avatarAuthToken}
+        .avatarAuthReady=${avatarAuthReady}
         .avatarText=${cardAvatarText}
         .subtitle=${host.agentChipSubtitle(cardAgentId)}
+        .environment=${host.sessionDataContext?.config?.current?.environment ?? null}
         .menuOpen=${host.sidebarMenus.agentMenuPosition !== null}
         .menuUnread=${menuUnread}
-        .approvalCount=${approvalCount}
         .switcherAvailable=${cardAgents.length > 1}
         .onToggleMenu=${(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
+        .onMenuPointerEnter=${(trigger: HTMLElement, event: PointerEvent) =>
+          host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)}
+        .onMenuPointerLeave=${() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+        @contextmenu=${(event: MouseEvent) => {
+          event.preventDefault();
+          if (host.sidebarMenus.agentMenuPosition !== null) {
+            return;
+          }
+          const card = event.currentTarget as HTMLElement;
+          const trigger = card.querySelector<HTMLElement>(".sidebar-agent-card__main") ?? card;
+          host.sidebarMenus.toggleAgentMenu(trigger);
+        }}
       ></openclaw-sidebar-agent-card>
       <div class="sidebar-brand__actions">
         <openclaw-tooltip
-          .content=${host.connected
+          .content=${newSessionAccess.allowed
             ? t("chat.runControls.newSession")
-            : t("chat.runControls.newSessionDisconnected")}
+            : newSessionAccess.reason}
         >
           <button
             class="sidebar-brand__icon sidebar-brand__new-thread"
             type="button"
-            @click=${() => host.onOpenNewSession?.(host.expandedAgentId())}
+            @click=${() => host.requestOpenNewSession(host.expandedAgentId())}
             aria-label=${t("chat.runControls.newSession")}
-            ?disabled=${!host.connected}
+            ?disabled=${!newSessionAccess.allowed}
           >
             ${icons.plus}
           </button>
@@ -87,32 +170,43 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const agentId = host.activeChipAgent().activeId;
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
-  const approvalNeeded = sessionHasPendingApproval(
-    host.sessionData.approvalBadgeSnapshot(),
-    mainKey,
-  );
-  const outboxCount = host.outboxCountForSessionKey(mainKey);
+  const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
+  const attentionLabel = sessionAttentionSubtitle(attention);
+  const outboxAttentionCount = host.outboxAttentionCountForSession(mainKey);
   const active =
-    host.activeRouteId === "chat" && areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
-  const stateBadge = mainRow?.hasActiveRun
-    ? html`<openclaw-tooltip .content=${t("sessionsView.activeRun")}>
-        <span
-          class="session-run-spinner"
-          role="img"
-          aria-label=${t("sessionsView.activeRun")}
-        ></span>
-      </openclaw-tooltip>`
-    : mainRow?.unread === true && !active
-      ? html`<span
-          class="session-unread-dot"
-          role="img"
-          aria-label=${t("sessionsView.unread")}
-        ></span>`
-      : nothing;
+    isSessionRouteId(host.activeRouteId) &&
+    areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
+  const hasComposerDraft = host.hasSessionDraft(mainKey);
+  const running = mainRow ? isSessionRunActive(mainRow) : false;
+  const unread = mainRow?.unread === true && !active;
+  const activeRunLabel = running ? t("sessionsView.activeRun") : "";
+  const unreadLabel = unread ? t("sessionsView.unread") : "";
+  const homeDescription =
+    attentionLabel || (activeRunLabel && unreadLabel)
+      ? [attentionLabel, activeRunLabel, unreadLabel].filter(Boolean).join(" · ")
+      : "";
+  // Home keeps its page/attention glyph leading and shares trailing activity with session rows.
+  const homeGlyph = renderSessionGlyph({
+    content:
+      attention.kind === "none"
+        ? html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`
+        : renderSessionAttentionIcon(attention),
+    running: false,
+    badge: unread && !running ? renderSessionUnreadBadge() : nothing,
+  });
   return html`
     <a
-      href=${`${pathForRoute("chat", host.basePath)}${searchForSession(mainKey)}`}
+      href=${sessionNavigationTarget({
+        face: resolveSessionPreferredFace(mainRow),
+        sessionKey: mainKey,
+        fallbackAgentId: agentId,
+        basePath: host.basePath,
+        row: mainRow ?? undefined,
+        mainKey: parseAgentSessionKey(mainKey)?.rest,
+        preferenceDerivedFace: true,
+      }).href}
       class="nav-item nav-item--home ${active ? "nav-item--active" : ""}"
+      aria-label=${homeDescription ? `${t("nav.home")} · ${homeDescription}` : nothing}
       aria-current=${active ? "page" : nothing}
       @click=${(event: MouseEvent) => {
         if (!shouldHandleNavigationClick(event)) {
@@ -122,7 +216,9 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         host.openMainSession(agentId);
       }}
     >
-      <span class="nav-item__icon" aria-hidden="true">${icons.home}</span>
+      ${attentionLabel
+        ? html`<openclaw-tooltip .content=${attentionLabel}>${homeGlyph}</openclaw-tooltip>`
+        : homeGlyph}
       <span class="nav-item__text">${t("nav.home")}</span>
       ${sessionHasBoard(mainKey)
         ? html`<openclaw-tooltip .content=${t("sessionsView.dashboardAvailable")}>
@@ -134,20 +230,14 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
             >
           </openclaw-tooltip>`
         : nothing}
-      ${stateBadge !== nothing || approvalNeeded || outboxCount > 0
+      ${running || outboxAttentionCount > 0 || hasComposerDraft
         ? html`<span class="nav-item__state sidebar-home-session-states">
-            ${stateBadge}
-            ${approvalNeeded
-              ? html`<openclaw-tooltip .content=${t("sessionsView.approvalNeeded")}>
-                  <span
-                    class="session-approval-badge"
-                    role="img"
-                    aria-label=${t("sessionsView.approvalNeeded")}
-                    >${icons.alertTriangle}</span
-                  >
-                </openclaw-tooltip>`
-              : nothing}
-            ${renderSessionRowBadges({ hasAutomation: false, outboxCount })}
+            ${running ? renderSessionRunSpinner() : nothing}
+            ${renderSessionRowBadges({
+              hasAutomation: false,
+              outboxAttentionCount,
+              hasComposerDraft,
+            })}
           </span>`
         : nothing}
     </a>
@@ -157,7 +247,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
 export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
   return html`
     <div class="sidebar-nav__head">
-      <span class="sidebar-recent-sessions__label-text">${t("nav.pages")}</span>
+      <span class="sidebar-recent-sessions__label-text sr-only">${t("nav.pages")}</span>
       <button
         type="button"
         class="sidebar-nav__head-action"
@@ -173,57 +263,137 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
   `;
 }
 
+export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
+  const sectionId = "online";
+  const collapsed = host.collapsedSessionSections.has(sectionId);
+  const label = t("presence.rosterTitle");
+  const selfUser = resolveCurrentSelfUser({
+    snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
+    presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
+    presenceInstanceId: host.sessionData.presenceInstanceId,
+  });
+  const users = projectOnlinePresenceViewers(
+    host.sessionData.presencePayload,
+    selfUser?.id,
+    host.sessionData.presenceInstanceId,
+  );
+  if (users.length === 0) {
+    return nothing;
+  }
+  return html`
+    <section class="sidebar-online" aria-label=${label} data-session-section=${sectionId}>
+      ${renderSidebarSessionSectionHeader({
+        sectionId,
+        draggable: false,
+        onStartDrag: () => undefined,
+        onFinishDrag: () => undefined,
+        content: html`
+          <button
+            type="button"
+            class="sidebar-session-group-toggle"
+            aria-expanded=${String(!collapsed)}
+            aria-label=${label}
+            @click=${() => host.toggleSection(sectionId)}
+          >
+            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+              <span class="sidebar-session-group-toggle__icon"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+              >
+            </span>
+            <span class="sidebar-recent-sessions__label-text">${label}</span>
+            ${collapsed
+              ? html`<span class="sidebar-online__facepile">
+                  <openclaw-viewer-facepile
+                    .staticUsers=${users}
+                    .maxVisible=${2}
+                  ></openclaw-viewer-facepile>
+                </span>`
+              : nothing}
+          </button>
+        `,
+      })}
+      ${collapsed
+        ? nothing
+        : html`<div class="sidebar-online__list">
+            ${users.map((user) => {
+              const { pathname, search, href } = activityPersonLocation(user.id, host.basePath);
+              return html`<a
+                class="sidebar-online__person ${isPresenceViewerIdle(user)
+                  ? "sidebar-online__person--away"
+                  : ""}"
+                data-online-user-id=${user.id}
+                href=${href}
+                @click=${(event: MouseEvent) => {
+                  if (!shouldHandleNavigationClick(event)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  host.onNavigate?.("activity", { pathname, search });
+                }}
+              >
+                <openclaw-viewer-avatar .user=${user} variant="footer"></openclaw-viewer-avatar>
+                <span class="sidebar-online__person-name">${presenceViewerLabel(user)}</span>
+                <span class="sidebar-online__person-action" aria-hidden="true"
+                  >${icons.chevronRight}</span
+                >
+              </a>`;
+            })}
+          </div>`}
+    </section>
+  `;
+}
+
 /** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
-  const reconnecting = t("connection.reconnecting");
-  const selfUser = host.connected
-    ? resolveCurrentSelfUser({
-        snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
-        presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
-        presenceInstanceId: host.sessionData.presenceInstanceId,
-      })
+  const selfUser = resolveCurrentSelfUser({
+    snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
+    presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
+    presenceInstanceId: host.sessionData.presenceInstanceId,
+  });
+  const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.account");
+  const avatarUser = {
+    ...(selfUser ?? { id: "account", name: selfLabel }),
+    watchedSessions: [],
+  };
+  const gateway = host.offline ? null : readSidebarNativeGateway();
+  const buildSubtitle = formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
+  // Health is visual-only here by budget decision; the header picker owns health accessibility.
+  const gatewayPrimaryTag = gateway?.isPrimary
+    ? t("chat.sessionHeader.gatewayPicker.primaryTag")
     : null;
-  const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
+  const identityMenuLabel = t("profilePage.identity.menuButtonLabel", { name: selfLabel });
+  const identityDetail = host.offline
+    ? t("connection.reconnecting")
+    : gateway
+      ? `${gateway.name}${gatewayPrimaryTag ? `, ${gatewayPrimaryTag}` : ""}`
+      : buildSubtitle;
   return html`
-    <div class="sidebar-footer-bar">
-      ${selfUser && selfLabel
-        ? html`<openclaw-tooltip .content=${selfLabel}>
-            <button
-              type="button"
-              class="sidebar-footer-bar__identity"
-              aria-haspopup="menu"
-              aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
-              aria-label=${t("profilePage.identity.menuButtonLabel", { name: selfLabel })}
-              @click=${(event: MouseEvent) =>
-                host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
-            >
-              <openclaw-viewer-avatar
-                .user=${{ ...selfUser, watchedSessions: [] }}
-                variant="footer"
-              ></openclaw-viewer-avatar>
-              <span class="sidebar-footer-bar__identity-name">${selfLabel}</span>
-            </button>
-          </openclaw-tooltip>`
-        : nothing}
-      <span class="sidebar-footer-bar__spacer" aria-hidden="true"></span>
-      ${host.offline
-        ? renderOfflineSidebarStatus({
+    <div class="sidebar-footer-bar sidebar-footer-bar--one-action">
+      <button
+        type="button"
+        class="sidebar-identity-card"
+        aria-haspopup="menu"
+        aria-expanded=${String(host.sidebarMenus.identityMenuPosition !== null)}
+        aria-label=${identityDetail ? `${identityMenuLabel}: ${identityDetail}` : identityMenuLabel}
+        @click=${(event: MouseEvent) =>
+          host.sidebarMenus.toggleIdentityMenu(event.currentTarget as HTMLElement)}
+      >
+        <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
+        <span class="sidebar-identity-card__text">
+          <span class="sidebar-identity-card__name" title=${selfLabel}>${selfLabel}</span>
+        </span>
+      </button>
+      ${host.restartPending || host.offline
+        ? renderSidebarConnectionStatus({
+            kind: host.restartPending ? "restarting" : "offline",
             queuedOutboxCount: host.queuedOutboxCount,
-            reconnecting,
-            title: host.lastError ? redactLoginFailureError(host.lastError) : reconnecting,
+            title: host.lastError
+              ? redactLoginFailureError(host.lastError)
+              : t("connection.reconnecting"),
             onRetry: () => host.onRetryConnect?.(),
           })
         : nothing}
-      <openclaw-tooltip .content=${t("nav.settings")}>
-        <button
-          type="button"
-          class="sidebar-footer-bar__settings"
-          aria-label=${t("nav.settings")}
-          @click=${() => host.onNavigate?.("config")}
-        >
-          ${icons.settings}
-        </button>
-      </openclaw-tooltip>
+      <span class="sidebar-footer-actions">${renderAppSidebarAttention(host)}</span>
     </div>
   `;
 }
@@ -285,14 +455,20 @@ export function renderAppSidebarPluginTabEntry(
 ) {
   const ref = { pluginId: tab.pluginId, id: tab.id };
   const key = pluginTabKey(ref);
+  const routePlacement = tab.placement?.startsWith("route:")
+    ? tab.placement.slice("route:".length)
+    : "";
+  const routeId = isRouteId(routePlacement) ? routePlacement : null;
   return html`
     <div class="sidebar-zone-entry" data-sidebar-entry=${`plugin:${key}`}>
-      ${renderSidebarPluginTab({
-        tab,
-        basePath: host.basePath,
-        active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
-        onNavigate: (search) => host.onNavigate?.("plugin", { search }),
-      })}
+      ${routeId
+        ? host.sidebarMenus.renderRoute(routeId)
+        : renderSidebarPluginTab({
+            tab,
+            basePath: host.basePath,
+            active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
+            onNavigate: (search) => host.onNavigate?.("plugin", { search }),
+          })}
     </div>
   `;
 }
@@ -315,9 +491,10 @@ function renderWorkboardBoard(
   );
 }
 
-export function renderAppSidebarAttention(host: AppSidebarRenderHost) {
+function renderAppSidebarAttention(host: AppSidebarRenderHost) {
   return html`<openclaw-sidebar-attention
+    .activeRouteId=${host.activeRouteId}
     .onNavigate=${(routeId: NavigationRouteId) => host.onNavigate?.(routeId)}
-    .onOpenApprovals=${() => host.onOpenApprovals?.()}
+    .watchUpdateProgress=${host.watchUpdateProgress}
   ></openclaw-sidebar-attention>`;
 }

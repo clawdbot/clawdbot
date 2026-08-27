@@ -28,6 +28,7 @@ export const whatsappQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "whatsapp",
     adapterFactory: createLiveTransportQaAdapterFactory({
       id: "whatsapp",
+      supportsModuleFlows: true,
       async create(context) {
         return (await loadWhatsAppQaAdapterRuntime()).createWhatsAppQaTransportAdapter(context);
       },

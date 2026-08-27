@@ -1,3 +1,5 @@
+import { OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH } from "@openclaw/ai/providers";
+
 export function resolveSessionBoundaryPromptCacheKey(params: {
   api: string;
   boundaryCount: number;
@@ -12,5 +14,11 @@ export function resolveSessionBoundaryPromptCacheKey(params: {
     params.api === "openai-completions" ||
     params.api === "openai-responses" ||
     params.api.includes("openai");
-  return usesOpenAIPromptCacheKey ? `${params.sessionId}:${params.boundaryCount}` : undefined;
+  if (!usesOpenAIPromptCacheKey) {
+    return undefined;
+  }
+  // Reserve the lifecycle suffix inside OpenAI's 64-code-point limit for proxy runtimes.
+  const suffix = `:${params.boundaryCount}`;
+  const maxSessionIdLength = OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH - suffix.length;
+  return `${Array.from(params.sessionId).slice(0, maxSessionIdLength).join("")}${suffix}`;
 }

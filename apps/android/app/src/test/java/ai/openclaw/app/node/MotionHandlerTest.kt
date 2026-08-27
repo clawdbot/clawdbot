@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -71,6 +72,57 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
           .getValue("confidence")
           .jsonPrimitive.content,
       )
+    }
+
+  @Test
+  fun handleMotionActivity_treatsJsonNullRangeAsAbsent() =
+    runTest {
+      val dataSource = FakeMotionDataSource(hasPermission = true)
+      val handler = MotionHandler.forTesting(appContext(), dataSource)
+
+      val result = handler.handleMotionActivity("""{"startISO":null,"endISO":null,"limit":null}""")
+
+      assertTrue(result.ok)
+      assertNull(dataSource.lastActivityRequest?.startISO)
+      assertNull(dataSource.lastActivityRequest?.endISO)
+      assertEquals(200, dataSource.lastActivityRequest?.limit)
+    }
+
+  @Test
+  fun handleMotionPedometer_treatsJsonNullRangeAsAbsent() =
+    runTest {
+      val dataSource = FakeMotionDataSource(hasPermission = true)
+      val handler = MotionHandler.forTesting(appContext(), dataSource)
+
+      val result = handler.handleMotionPedometer("""{"startISO":null,"endISO":null}""")
+
+      assertTrue(result.ok)
+      assertNull(dataSource.lastPedometerRequest?.startISO)
+      assertNull(dataSource.lastPedometerRequest?.endISO)
+      val payload = Json.parseToJsonElement(result.payloadJson ?: error("missing payload")).jsonObject
+      assertEquals(
+        1234,
+        payload
+          .getValue("steps")
+          .jsonPrimitive.content
+          .toInt(),
+      )
+    }
+
+  @Test
+  fun motionRangeRequests_preserveLiteralNullStringsAndLimitBounds() =
+    runTest {
+      val dataSource = FakeMotionDataSource(hasPermission = true)
+      val handler = MotionHandler.forTesting(appContext(), dataSource)
+
+      assertTrue(handler.handleMotionActivity("""{"startISO":" null ","endISO":"null","limit":2000}""").ok)
+      assertEquals("null", dataSource.lastActivityRequest?.startISO)
+      assertEquals("null", dataSource.lastActivityRequest?.endISO)
+      assertEquals(1000, dataSource.lastActivityRequest?.limit)
+
+      assertTrue(handler.handleMotionPedometer("""{"startISO":"null","endISO":" null "}""").ok)
+      assertEquals("null", dataSource.lastPedometerRequest?.startISO)
+      assertEquals("null", dataSource.lastPedometerRequest?.endISO)
     }
 
   @Test
@@ -161,6 +213,9 @@ private class FakeMotionDataSource(
   private val activityError: Throwable? = null,
   private val pedometerError: Throwable? = null,
 ) : MotionDataSource {
+  var lastActivityRequest: MotionActivityRequest? = null
+  var lastPedometerRequest: MotionPedometerRequest? = null
+
   override fun isActivityAvailable(context: Context): Boolean = activityAvailable
 
   override fun isPedometerAvailable(context: Context): Boolean = pedometerAvailable
@@ -171,6 +226,7 @@ private class FakeMotionDataSource(
     context: Context,
     request: MotionActivityRequest,
   ): MotionActivityRecord {
+    lastActivityRequest = request
     activityError?.let { throw it }
     return activityRecord
   }
@@ -179,6 +235,7 @@ private class FakeMotionDataSource(
     context: Context,
     request: MotionPedometerRequest,
   ): PedometerRecord {
+    lastPedometerRequest = request
     pedometerError?.let { throw it }
     return pedometerRecord
   }

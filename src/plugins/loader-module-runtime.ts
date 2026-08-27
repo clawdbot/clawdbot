@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { attachPluginApiFacades } from "./api-facades.js";
 import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
@@ -9,6 +10,8 @@ import {
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import type { PluginRegistry } from "./registry-types.js";
+import { withPluginRegistrationContext } from "./runtime.js";
 import type { CreatePluginRuntimeOptions, PluginRuntime } from "./runtime/types.js";
 import {
   buildPluginLoaderAliasMap,
@@ -38,14 +41,6 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "musicGeneration",
   "llm",
 ] as const satisfies readonly (keyof PluginRuntime)[];
-
-function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
-  return (
-    (typeof value === "object" || typeof value === "function") &&
-    value !== null &&
-    typeof (value as { then?: unknown }).then === "function"
-  );
-}
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   api: OpenClawPluginApi;
@@ -79,7 +74,7 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   };
 }
 
-export function runPluginRegisterSync(
+function runPluginRegisterSync(
   register: NonNullable<OpenClawPluginDefinition["register"]>,
   api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
 ): void {
@@ -95,33 +90,49 @@ export function runPluginRegisterSync(
   }
 }
 
+export function runPluginRegisterSyncInRegistry(
+  register: NonNullable<OpenClawPluginDefinition["register"]>,
+  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  registry: PluginRegistry,
+  pluginId: string,
+): void {
+  withPluginRegistrationContext(registry, pluginId, () => runPluginRegisterSync(register, api));
+}
+
 export function createPluginModuleLoader(options: {
   devSourceRoot?: string | null;
   pluginSdkResolution?: PluginSdkResolutionPreference;
+  tryNative?: boolean;
+  loaderFilename?: string;
+  installNativeSdkResolver?: boolean;
 }) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
   const createLoaderForModule = (modulePath: string) => {
-    installOpenClawPluginSdkNativeResolver({
-      argv1: process.argv[1],
-      moduleUrl: import.meta.url,
-      pluginModulePath: modulePath,
-      devSourceRoot: options.devSourceRoot,
-      pluginSdkResolution: options.pluginSdkResolution,
-    });
+    if (options.installNativeSdkResolver !== false && options.tryNative !== false) {
+      installOpenClawPluginSdkNativeResolver({
+        argv1: process.argv[1],
+        moduleUrl: import.meta.url,
+        pluginModulePath: modulePath,
+        devSourceRoot: options.devSourceRoot,
+        pluginSdkResolution: options.pluginSdkResolution,
+      });
+    }
+    const aliasMap = buildPluginLoaderAliasMap(
+      modulePath,
+      process.argv[1],
+      import.meta.url,
+      options.pluginSdkResolution,
+      options.devSourceRoot,
+    );
     return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
-      loaderFilename: modulePath,
+      loaderFilename: options.loaderFilename ?? modulePath,
       devSourceRoot: options.devSourceRoot,
-      aliasMap: buildPluginLoaderAliasMap(
-        modulePath,
-        process.argv[1],
-        import.meta.url,
-        options.pluginSdkResolution,
-        options.devSourceRoot,
-      ),
+      aliasMap,
       pluginSdkResolution: options.pluginSdkResolution,
+      ...(options.tryNative !== undefined ? { tryNative: options.tryNative } : {}),
     });
   };
   return (modulePath: string): unknown =>
@@ -212,6 +223,14 @@ export function createLazyPluginRuntime(params: {
   };
   return new Proxy({} as PluginRuntime, {
     get(_target, prop, receiver) {
+      // Instance-bound surfaces are complete runtime objects. Keep them direct so
+      // the first Gateway call does not materialize the broad plugin runtime graph.
+      if (prop === "gateway" || prop === "nodes" || prop === "subagent") {
+        const value = params.runtimeOptions?.[prop];
+        if (value !== undefined) {
+          return value;
+        }
+      }
       return Reflect.get(resolveRuntime(), prop, receiver);
     },
     set(_target, prop, value, receiver) {

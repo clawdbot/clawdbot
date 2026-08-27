@@ -1,6 +1,22 @@
 import Foundation
 
 public enum GatewayPluginSurfaceURL {
+    static func resolveHTTPURL(raw: String, against activeGatewayURL: URL?) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if let absolute = URL(string: trimmed),
+           let scheme = absolute.scheme?.lowercased()
+        {
+            return scheme == "http" || scheme == "https" ? absolute : nil
+        }
+        guard let canonical = canonicalize(raw: trimmed, against: activeGatewayURL),
+              let url = URL(string: canonical),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https"
+        else { return nil }
+        return url
+    }
+
     public static func canonicalize(raw: String?, against activeGatewayURL: URL?) -> String? {
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return nil }

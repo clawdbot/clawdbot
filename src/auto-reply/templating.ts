@@ -1,6 +1,7 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
+import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -38,7 +39,7 @@ type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
-type UntrustedStructuredContextEntry = {
+export type ChannelStructuredContextEntry = {
   label: string;
   source?: string;
   type?: string;
@@ -56,6 +57,9 @@ export type SessionTranscriptContext = {
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
 };
+
+/** @deprecated Use ChannelStructuredContextEntry. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
+export type UntrustedStructuredContextEntry = ChannelStructuredContextEntry;
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
 export type SupplementalContextFacts = {
@@ -84,14 +88,26 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  channelStructuredContext?: ChannelStructuredContextEntry[];
+  /** @deprecated Use channelStructuredContext. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
+  untrustedContext?: ChannelStructuredContextEntry[];
   groupSystemPrompt?: string;
   /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
   untrustedGroupSystemPrompt?: string;
 };
 
+/** Canonical normalized inbound text populated once by `finalizeInboundContext`. */
+export type CanonicalInboundText = {
+  /** Clean text used for command and directive parsing. */
+  commandText: string;
+  /** Prompt-facing text used for the agent turn. */
+  agentText: string;
+  /** Normalized visible/raw inbound text before command-specific projection. */
+  rawText: string;
+};
+
 /** Raw inbound message context accepted from channels before finalization. */
-export type MsgContext = {
+export type MsgContext = Partial<CanonicalInboundText> & {
   Body?: string;
   InboundEventKind?: InboundEventKind;
   /**
@@ -214,25 +230,35 @@ export type MsgContext = {
   ThreadHistoryBody?: string;
   IsFirstThreadTurn?: boolean;
   ThreadLabel?: string;
+  /** @deprecated Use `media?.[0]?.path`. */
   MediaPath?: string;
+  /** @deprecated Use `media?.[0]?.url`. */
   MediaUrl?: string;
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   MediaType?: string;
+  /** @deprecated Derive the directory from `media?.[0]?.path` at the consuming boundary. */
   MediaDir?: string;
+  /** @deprecated Use `media?.map((entry) => entry.path)`. */
   MediaPaths?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.url)`. */
   MediaUrls?: string[];
+  /** @deprecated Use `media?.map((entry) => entry.contentType ?? entry.kind)`. */
   MediaTypes?: string[];
   /** Ordered current-turn media facts; array position is attachment identity. */
   media?: MediaFact[];
   /** Original message modality before transcription or other media normalization. */
   SourceModality?: InboundSourceModality;
+  /** @deprecated Use each media fact's `workspaceDir`. */
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
+  /** @deprecated Use each media fact's `transcribed` field. */
   MediaTranscribedIndexes?: number[];
   /**
    * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
    * staging runs synchronously before respond() and surfaces 5xx to the
    * client; any later failure only reaches the broadcast channel.
    */
+  /** @deprecated Use each media fact's `workspaceDir` or `staged` proof. */
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
@@ -251,6 +277,8 @@ export type MsgContext = {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
+  /** Trusted channel-configured policy for this admitted conversation turn. */
+  ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
   GroupSubject?: string;
@@ -266,9 +294,13 @@ export type MsgContext = {
    * projects these to the existing flat reply/forward/thread/group prompt fields.
    */
   SupplementalContext?: SupplementalContextFacts;
-  /** Untrusted metadata that must not be treated as system instructions. */
+  /** Channel-provided metadata that must not be treated as system instructions. */
+  ChannelPromptContext?: string[];
+  /** @deprecated Use ChannelPromptContext. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
   UntrustedContext?: string[];
-  /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
+  /** Structured channel metadata rendered by prompt assembly as fenced JSON. */
+  ChannelStructuredContext?: ChannelStructuredContextEntry[];
+  /** @deprecated Use ChannelStructuredContext. Removal: after 2026-09-08 (see sdk-untrusted-context-identifier-aliases). */
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
@@ -280,6 +312,7 @@ export type MsgContext = {
   SessionCreation?: {
     via: import("../config/sessions/session-entry-provenance.js").SessionCreatedVia;
     actor?: import("../config/sessions/session-entry-provenance.js").SessionCreatedActor;
+    sandbox?: "required";
   };
   SenderUsername?: string;
   SenderTag?: string;
@@ -293,7 +326,16 @@ export type MsgContext = {
   LocationAddress?: string;
   LocationSource?: string;
   LocationIsLive?: boolean;
+  LocationLivePeriodSeconds?: number;
   LocationCaption?: string;
+  /** Stable identity of the provider update that carried this message. */
+  ProviderUpdateId?: string;
+  /** Provider update kind, for example `message` or `edited_message`. */
+  ProviderUpdateKind?: string;
+  /** Provider-native timestamp for the original message. */
+  ProviderMessageTimestamp?: number;
+  /** Provider-native timestamp for an edited message update. */
+  ProviderEditTimestamp?: number;
   /** Provider label. */
   Provider?: string;
   /** Provider surface label. Prefer this over `Provider` when available. */
@@ -316,6 +358,7 @@ export type MsgContext = {
   CommandAuthorized?: boolean;
   CommandTurn?: CommandTurnContext;
   CommandSource?: "text" | "native";
+  CommandInterpretationSuppressed?: boolean;
   CommandTargetSessionKey?: string;
   /**
    * Internal flag: command handling prepared trailing prompt text for ACP dispatch.
@@ -336,6 +379,8 @@ export type MsgContext = {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  ConversationAvatar?: string;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -369,6 +414,10 @@ export type MsgContext = {
    * Correlation interceptors must fail closed when this proof is absent.
    */
   InboundAccessAuthorized?: boolean;
+  /** Internal marker that channel ingress authoritatively observed route-context facts. */
+  ConversationRouteContextObserved?: boolean;
+  /** Canonical peer used by route selection; delivery targets may use a different namespace. */
+  ConversationRoutePeerId?: string;
   /**
    * Internal flag for channels that emit message_received through a channel-specific
    * privacy gate before entering the shared reply dispatcher.
@@ -414,21 +463,43 @@ type RuntimeMediaContextKey =
 /** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
 export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
 
-export type FinalizedRuntimeMsgContext = Omit<RuntimeMsgContext, "CommandAuthorized"> & {
-  CommandAuthorized: boolean;
-  CommandTurn?: CommandTurnContext;
-};
+export type FinalizedRuntimeMsgContext = Omit<
+  RuntimeMsgContext,
+  "CommandAuthorized" | keyof CanonicalInboundText
+> &
+  CanonicalInboundText & {
+    CommandAuthorized: boolean;
+    CommandTurn?: CommandTurnContext;
+  };
 
-export type TemplateContext = RuntimeMsgContext & {
+type NonTemplateContextKey = "ConversationAvatar";
+
+export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
   SessionId?: string;
   IsNewSession?: string;
-  /** Documented singular media variables projected only at template execution. */
+  /** Local path for the attachment currently being processed. */
+  AttachmentPath?: string;
+  /** Original URL/reference for the attachment currently being processed. */
+  AttachmentUrl?: string;
+  /** MIME content type for the attachment currently being processed. */
+  AttachmentContentType?: string;
+  /** Directory containing AttachmentPath. */
+  AttachmentDir?: string;
+  /** Stable zero-based source fact index for the attachment currently being processed. */
+  AttachmentIndex?: number;
+  /** @deprecated Use AttachmentPath. */
   MediaPath?: string;
+  /** @deprecated Use AttachmentUrl. */
   MediaUrl?: string;
+  /** @deprecated Use AttachmentContentType. */
   MediaType?: string;
+  /** @deprecated Use AttachmentDir. */
   MediaDir?: string;
 };
+
+export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
+  CanonicalInboundText;
 
 function formatTemplateValue(value: unknown): string {
   if (value == null) {
@@ -471,6 +542,9 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
+    if (key === "ConversationAvatar") {
+      return "";
+    }
     const value = ctx[key as keyof TemplateContext];
     return formatTemplateValue(value);
   });

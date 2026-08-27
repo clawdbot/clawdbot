@@ -16,13 +16,17 @@ struct GatewayManualTransportPresentation: Equatable {
 }
 
 extension GatewayConnectionController {
-    func buildGatewayURL(host: String, port: Int, useTLS: Bool) -> URL? {
-        let scheme = useTLS ? "wss" : "ws"
-        var components = URLComponents()
-        components.scheme = scheme
-        components.host = host
-        components.port = port
-        return components.url
+    func buildGatewayURL(
+        host: String,
+        port: Int,
+        useTLS: Bool,
+        contextPath: String? = nil) -> URL?
+    {
+        GatewayConnectEndpoint(
+            host: host,
+            port: port,
+            tls: useTLS,
+            contextPath: contextPath).websocketURL
     }
 
     func resolveManualUseTLS(host: String, useTLS: Bool) -> Bool {
@@ -51,8 +55,8 @@ extension GatewayConnectionController {
             helperText: helperText)
     }
 
-    func manualStableID(host: String, port: Int) -> String {
-        ManualAuthOverride.manualStableID(host: host, port: port)
+    func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
+        ManualAuthOverride.manualStableID(host: host, port: port, contextPath: contextPath)
     }
 
     func makeConnectOptions(
@@ -107,10 +111,7 @@ extension GatewayConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [
-            OpenClawCapability.canvas.rawValue,
-            OpenClawCapability.screen.rawValue,
-        ]
+        var caps = [OpenClawCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
@@ -147,14 +148,6 @@ extension GatewayConnectionController {
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            OpenClawCanvasCommand.present.rawValue,
-            OpenClawCanvasCommand.hide.rawValue,
-            OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
             OpenClawScreenCommand.record.rawValue,
             OpenClawSystemCommand.notify.rawValue,
             OpenClawChatCommand.push.rawValue,
@@ -212,7 +205,7 @@ extension GatewayConnectionController {
         permissions["camera"] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         permissions["microphone"] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         permissions["speechRecognition"] = SFSpeechRecognizer.authorizationStatus() == .authorized
-        let locationStatus = CLLocationManager().authorizationStatus
+        let locationStatus = self.locationAuthorizationSnapshot.authorizationStatus
         let locationServicesEnabled = await Self.locationServicesEnabled()
         permissions["location"] = Self.isLocationAvailable(
             servicesEnabled: locationServicesEnabled,

@@ -1,21 +1,24 @@
 // Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
+  SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
+import { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
+import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+export { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
+
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -41,7 +44,7 @@ const EnvSecretRefSchema = z
     id: z
       .string()
       .regex(
-        ENV_SECRET_REF_ID_PATTERN,
+        ENV_SECRET_REF_ID_RE,
         'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
       ),
   })
@@ -78,20 +81,49 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+const StoreSecretRefSchema = z
+  .object({
+    source: z.literal("store"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .regex(
+        ENV_SECRET_REF_ID_RE,
+        'Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
+      ),
+  })
+  .strict();
+
 /** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  StoreSecretRefSchema,
 ]);
 
 /** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
+/** Canonical operator-configurable SSRF policy shared by network-capable surfaces. */
+export const SsrFPolicyConfigSchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowRfc2544BenchmarkRange: z.boolean().optional(),
+    allowIpv6UniqueLocalRange: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const SecretsEnvProviderSchema = z
   .object({
     source: z.literal("env"),
-    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(256).optional(),
+    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(256).optional(),
   })
   .strict();
 
@@ -132,7 +164,7 @@ const SecretsManualExecProviderSchema = z
       .optional(),
     jsonOnly: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
-    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(128).optional(),
+    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(128).optional(),
     trustedDirs: z
       .array(
         z
@@ -162,16 +194,45 @@ const SecretsExecProviderSchema = z.union([
   SecretsPluginIntegrationExecProviderSchema,
 ]);
 
-/** Schema for one configured env/file/exec secret provider entry. */
+const SecretsStoreProviderSchema = z.object({ source: z.literal("store") }).strict();
+
+// Same exact-host contract as per-secret destination bindings: rejecting schemes,
+// ports, wildcards, and malformed hostnames here keeps invalid entries out of the
+// egress-proxy startup path, which would otherwise throw while starting the Gateway.
+const EgressProxyExactHostSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((host, ctx) => {
+    try {
+      normalizeExactAllowedHost(host);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Invalid allowed host",
+      });
+    }
+  });
+
+/** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
+  SecretsStoreProviderSchema,
 ]);
 
 /** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
+    egressProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowedHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
+        bypassHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
+      })
+      .strict()
+      .optional(),
     providers: z
       .object({
         // Keep this as a record so users can define multiple named providers per source.
@@ -183,6 +244,7 @@ export const SecretsConfigSchema = z
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
+        store: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
       .strict()
       .optional(),
@@ -210,7 +272,9 @@ const ModelCompatSchema = z
     supportsTemperature: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
+    codeMode: z.enum(["preferred", "capable"]).optional(),
     supportsStrictMode: z.boolean().optional(),
+    supportsJsonSchemaResponseFormat: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
     strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
@@ -409,92 +473,6 @@ const ModelProviderLocalServiceSchema = z
   .strict()
   .optional();
 
-const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
-  "amazon-bedrock",
-  "amazon-bedrock-mantle",
-  "anthropic",
-  "anthropic-vertex",
-  "arcee",
-  "azure-openai-responses",
-  "byteplus",
-  "byteplus-plan",
-  "cerebras",
-  "chutes",
-  "claude-cli",
-  "clawrouter",
-  "cloudflare-ai-gateway",
-  "codex",
-  "comfy",
-  "copilot-proxy",
-  "dashscope",
-  "deepinfra",
-  "deepseek",
-  "fal",
-  "fireworks",
-  "github-copilot",
-  "gmi",
-  "gmi-cloud",
-  "gmicloud",
-  "google",
-  "google-antigravity",
-  "google-gemini-cli",
-  "google-vertex",
-  "groq",
-  "huggingface",
-  "kilocode",
-  "kimi",
-  "kimi-coding",
-  "litellm",
-  "lmstudio",
-  "meta",
-  "microsoft-foundry",
-  "minimax",
-  "minimax-portal",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "moonshot-ai",
-  "moonshotai",
-  "nvidia",
-  "novita",
-  "novita-ai",
-  "novitaai",
-  "ollama",
-  "ollama-cloud",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "qianfan",
-  "qwen",
-  "qwen-token-plan",
-  "qwencloud",
-  "sglang",
-  "stepfun",
-  "stepfun-plan",
-  "synthetic",
-  "tencent-tokenhub",
-  "tencent-tokenplan",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "volcengine",
-  "volcengine-plan",
-  "vydra",
-  "x-ai",
-  "xai",
-  "xiaomi",
-  "xiaomi-token-plan",
-  "z.ai",
-  "z-ai",
-  "zai",
-]);
-
-export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
-  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
-}
-
 const ModelProviderSchema = z
   .object({
     // Bundled provider overlays are materialized with an empty-string sentinel.
@@ -505,8 +483,6 @@ const ModelProviderSchema = z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
-    contextWindow: z.number().positive().optional(),
-    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     region: z.string().min(1).optional(),
@@ -547,9 +523,29 @@ const ModelProvidersSchema = z
     }
   });
 
-const ModelPricingConfigSchema = z
+const ModelCatalogRefreshConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    url: z
+      .string()
+      .refine(
+        (value) => {
+          try {
+            const parsed = new URL(value);
+            return (
+              parsed.protocol === "https:" ||
+              (parsed.protocol === "http:" &&
+                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
+            );
+          } catch {
+            return false;
+          }
+        },
+        {
+          message: "models.catalogRefresh.url must use https, or http on localhost",
+        },
+      )
+      .optional(),
   })
   .strict()
   .optional();
@@ -558,7 +554,7 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
-    pricing: ModelPricingConfigSchema,
+    catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
   .strict()
   .optional();

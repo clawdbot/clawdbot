@@ -126,6 +126,70 @@ describe("sidebar Workboard runtime", () => {
     runtime.dispose();
   });
 
+  it("preserves the cached catalog when an in-flight refresh resolves after disconnect", async () => {
+    const pending = deferred<{ boards: ReturnType<typeof board>[] }>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ boards: [board("ops")] })
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ boards: [board("platform")] });
+    const snapshots: SidebarWorkboardSnapshot[] = [];
+    const host = createHost();
+    const runtime = createSidebarWorkboardRuntime((snapshot) => snapshots.push(snapshot), host);
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    runtime.sync(client, true);
+    await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("ops"));
+    runtime.handleGatewayEvent("plugin.workboard.changed");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    runtime.sync(client, false);
+    pending.resolve({ boards: [board("stale")] });
+    await pending.promise;
+
+    expect(snapshots.at(-1)?.boards[0]?.id).toBe("ops");
+    expect(getWorkboardState(host).boards[0]?.id).toBe("ops");
+    expect(host.boardsReady).toBe(true);
+
+    runtime.sync(client, true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform"));
+    expect(getWorkboardState(host).boards[0]?.id).toBe("platform");
+    runtime.dispose();
+  });
+
+  it("does not let a pre-disconnect response overwrite a reconnected catalog", async () => {
+    const pending = deferred<{ boards: ReturnType<typeof board>[] }>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ boards: [board("ops")] })
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ boards: [board("platform")] });
+    const snapshots: SidebarWorkboardSnapshot[] = [];
+    const host = createHost();
+    const runtime = createSidebarWorkboardRuntime((snapshot) => snapshots.push(snapshot), host);
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    runtime.sync(client, true);
+    await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("ops"));
+    runtime.handleGatewayEvent("plugin.workboard.changed");
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+    runtime.sync(client, false);
+    runtime.sync(client, true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform"));
+
+    pending.resolve({ boards: [board("stale")] });
+    await pending.promise;
+
+    expect(snapshots.at(-1)?.boards[0]?.id).toBe("platform");
+    expect(getWorkboardState(host).boards[0]?.id).toBe("platform");
+    expect(host.boardsReady).toBe(true);
+    expect(request).toHaveBeenCalledTimes(3);
+    runtime.dispose();
+  });
+
   it("preserves catalog data and retries a malformed forced refresh", async () => {
     vi.useFakeTimers();
     const request = vi

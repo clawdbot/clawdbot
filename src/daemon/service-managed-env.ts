@@ -1,6 +1,7 @@
 /** Tracks managed service environment keys across reinstall and repair flows. */
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { detectRespawnSupervisor } from "../infra/supervisor-markers.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
@@ -11,8 +12,17 @@ type ServiceEnvCommand = {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 } | null;
 
-function normalizeServiceEnvKey(key: string): string | null {
+export function normalizeServiceEnvKey(key: string): string | null {
   return normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
+}
+
+export function normalizeServiceEnvKeys(keys: Iterable<string>): Set<string> {
+  return new Set(
+    [...keys].flatMap((key) => {
+      const normalized = normalizeServiceEnvKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
 }
 
 export function hasInlineEnvironmentSource(
@@ -34,34 +44,17 @@ export function hasEnvironmentFileSource(
 }
 
 function parseManagedServiceEnvKeys(value: string | undefined): Set<string> {
-  const keys = new Set<string>();
-  for (const entry of value?.split(",") ?? []) {
-    const key = normalizeServiceEnvKey(entry.trim());
-    if (key) {
-      keys.add(key);
-    }
-  }
-  return keys;
+  return normalizeServiceEnvKeys(value?.split(",") ?? []);
 }
 
 export function formatManagedServiceEnvKeys(
   managedEnvironment: Record<string, string | undefined>,
   options?: { omitKeys?: Iterable<string> },
 ): string | undefined {
-  const omitKeys = new Set(
-    [...(options?.omitKeys ?? [])].flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      return normalized ? [normalized] : [];
-    }),
-  );
+  const omitKeys = normalizeServiceEnvKeys(options?.omitKeys ?? []);
   const keys = Object.keys(managedEnvironment)
-    .flatMap((key) => {
-      const normalized = normalizeServiceEnvKey(key);
-      if (!normalized || omitKeys.has(normalized)) {
-        return [];
-      }
-      return [normalized];
-    })
+    .map(normalizeServiceEnvKey)
+    .filter((key): key is string => Boolean(key && !omitKeys.has(key)))
     .toSorted();
   return keys.length > 0 ? keys.join(",") : undefined;
 }
@@ -80,16 +73,41 @@ export function readManagedServiceEnvKeysFromEnvironment(
   return new Set();
 }
 
-function deleteManagedServiceEnvKeys(
-  environment: Record<string, string | undefined>,
-  keys: Iterable<string>,
-): void {
-  const normalizedKeys = new Set(
-    [...keys].flatMap((key) => {
+export function readManagedSystemdServiceEnvKeysFromEnvironment(
+  environment: Record<string, string | undefined> | undefined,
+  platform: NodeJS.Platform = process.platform,
+): Set<string> {
+  // Only systemd snapshots state dotenv values into its inherited service environment.
+  // Other supervisors retain their existing reinstall-based precedence contract.
+  return environment && detectRespawnSupervisor(environment, platform) === "systemd"
+    ? readManagedServiceEnvKeysFromEnvironment(environment)
+    : new Set();
+}
+
+export function clearMissingManagedServiceEnvKeys(params: {
+  environment: Record<string, string | undefined>;
+  managedKeys: Iterable<string>;
+  presentKeys: Iterable<string>;
+  preserveKeys?: Iterable<string>;
+}): void {
+  const presentKeys = new Set(
+    [...params.presentKeys, ...(params.preserveKeys ?? [])].flatMap((key) => {
       const normalized = normalizeServiceEnvKey(key);
       return normalized ? [normalized] : [];
     }),
   );
+  const missingKeys = [...params.managedKeys].filter((key) => {
+    const normalized = normalizeServiceEnvKey(key);
+    return normalized !== null && !presentKeys.has(normalized);
+  });
+  deleteManagedServiceEnvKeys(params.environment, missingKeys);
+}
+
+function deleteManagedServiceEnvKeys(
+  environment: Record<string, string | undefined>,
+  keys: Iterable<string>,
+): void {
+  const normalizedKeys = normalizeServiceEnvKeys(keys);
   if (normalizedKeys.size === 0) {
     return;
   }
@@ -114,11 +132,17 @@ export function writeManagedServiceEnvKeysToEnvironment(
   environment[MANAGED_SERVICE_ENV_KEYS_VAR] = value;
 }
 
-function readEnvironmentValueSource(
-  command: ServiceEnvCommand,
-  normalizedKey: string,
+export function readEnvironmentValueSource(
+  environmentValueSources:
+    | Record<string, GatewayServiceEnvironmentValueSource | undefined>
+    | undefined,
+  key: string,
 ): GatewayServiceEnvironmentValueSource | undefined {
-  for (const [rawKey, source] of Object.entries(command?.environmentValueSources ?? {})) {
+  const normalizedKey = normalizeServiceEnvKey(key);
+  if (!normalizedKey) {
+    return undefined;
+  }
+  for (const [rawKey, source] of Object.entries(environmentValueSources ?? {})) {
     if (normalizeServiceEnvKey(rawKey) === normalizedKey) {
       return source;
     }
@@ -134,13 +158,21 @@ export function collectInlineManagedServiceEnvKeys(
     return [];
   }
   const managedKeys = parseManagedServiceEnvKeys(command.environment[MANAGED_SERVICE_ENV_KEYS_VAR]);
-  for (const key of expectedManagedKeys ?? []) {
-    const normalized = normalizeServiceEnvKey(key);
-    if (normalized) {
-      managedKeys.add(normalized);
-    }
+  for (const key of normalizeServiceEnvKeys(expectedManagedKeys ?? [])) {
+    managedKeys.add(key);
   }
-  if (managedKeys.size === 0) {
+  return collectInlineServiceEnvKeys(command, managedKeys);
+}
+
+export function collectInlineServiceEnvKeys(
+  command: ServiceEnvCommand,
+  expectedKeys: Iterable<string>,
+): string[] {
+  if (!command?.environment) {
+    return [];
+  }
+  const normalizedKeys = normalizeServiceEnvKeys(expectedKeys);
+  if (normalizedKeys.size === 0) {
     return [];
   }
   const inlineKeys: string[] = [];
@@ -149,13 +181,17 @@ export function collectInlineManagedServiceEnvKeys(
       continue;
     }
     const normalized = normalizeServiceEnvKey(rawKey);
-    if (!normalized || !managedKeys.has(normalized)) {
+    if (!normalized || !normalizedKeys.has(normalized)) {
       continue;
     }
     if (normalized === MANAGED_SERVICE_ENV_KEYS_VAR) {
       continue;
     }
-    if (!hasInlineEnvironmentSource(readEnvironmentValueSource(command, normalized))) {
+    if (
+      !hasInlineEnvironmentSource(
+        readEnvironmentValueSource(command.environmentValueSources, normalized),
+      )
+    ) {
       continue;
     }
     // Only inline/file-overlap sources can be repaired from the service command

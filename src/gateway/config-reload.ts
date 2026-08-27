@@ -28,11 +28,13 @@ import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createConfigAppliedRevisionTracker } from "./config-applied-revision.js";
 import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
+  isNoopGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
   type GatewayReloadPlan,
@@ -84,22 +86,6 @@ function matchesSkillsInvalidationPrefix(path: string): boolean {
 
 function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
-}
-
-function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
-  return (
-    !plan.restartGateway &&
-    plan.hotReasons.length === 0 &&
-    !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
-    !plan.restartCron &&
-    !plan.restartHeartbeat &&
-    !plan.restartHealthMonitor &&
-    !plan.reloadPlugins &&
-    !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0 &&
-    (plan.restartChannelAccounts?.size ?? 0) === 0
-  );
 }
 
 type GatewayConfigReloader = {
@@ -182,6 +168,8 @@ export function startGatewayConfigReloader(opts: {
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   /** Publishes runtime state after a hot or no-op config transaction. */
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  /** Runs synchronously when a config transaction publishes its runtime state. */
+  onRuntimeConfigCommitted?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
   /** Publishes the resolved source-config revision accepted by the active runtime. */
   onConfigRevisionApplied?: (hash: string) => void;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
@@ -279,9 +267,15 @@ export function startGatewayConfigReloader(opts: {
   const activeReloads = new Set<Promise<void>>();
   let missingConfigRetries = 0;
   let configWriteEpoch = 0;
+  // Signaled metadata changes clear the process snapshot slot before the diff
+  // pass runs; the counters keep that pass honest when config bytes are
+  // unchanged, and stay pending until a plugin reload or restart commits.
+  let pluginMetadataRefreshRequests = 0;
+  let pluginMetadataRefreshApplied = 0;
   let pendingInProcessConfig: InProcessConfigCandidate | null = null;
   let activeInProcessConfig: InProcessConfigCandidate | null = null;
   let watcherIntentCandidate: InProcessConfigCandidate | null = null;
+  let watcherIntentCameFromPendingWrite = false;
   let startupInternalWriteHash = opts.initialInternalWriteHash ?? null;
   let lastAppliedWriteHash: string | null = null;
   let lastSourceOnlyWriteHash: string | null = null;
@@ -517,6 +511,7 @@ export function startGatewayConfigReloader(opts: {
         // transaction. Advance the runtime diff baseline at that exact edge so
         // the newer disk config plans the reverse work instead of diffing stale state.
         commitPublishedRuntimeEnv();
+        opts.onRuntimeConfigCommitted?.(plan, runtimeConfig);
         committedRuntimeConfig = runtimeConfig;
         currentConfig = runtimeConfig;
         currentCompareConfig = nextCompareConfig;
@@ -657,7 +652,16 @@ export function startGatewayConfigReloader(opts: {
       }
       notifyCommitted();
     };
-    if (changedPaths.length === 0) {
+    // A signaled metadata change emptied the process snapshot slot. An
+    // unchanged config diff must still replace the plugin runtime generation so
+    // the slot republishes instead of leaving configless readers cold-scanning
+    // against a registry that diverged from the live runtime owners.
+    const pluginMetadataRefreshToken = pluginMetadataRefreshRequests;
+    const forcePluginMetadataReload = pluginMetadataRefreshToken !== pluginMetadataRefreshApplied;
+    const markPluginMetadataRefreshApplied = () => {
+      pluginMetadataRefreshApplied = pluginMetadataRefreshToken;
+    };
+    if (changedPaths.length === 0 && !forcePluginMetadataReload) {
       let publishedSource: { rollback: () => Promise<void>; commit?: () => void } | undefined;
       let publishedSourceRollback: (() => Promise<void>) | undefined;
       let publishedSourceRolledBack = false;
@@ -694,7 +698,11 @@ export function startGatewayConfigReloader(opts: {
     }
 
     const followUp = resolveConfigWriteFollowUp(afterWrite);
-    opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
+    opts.log.info(
+      changedPaths.length > 0
+        ? `config change detected; evaluating reload (${changedPaths.join(", ")})`
+        : "plugin metadata changed with identical config; replacing plugin runtime generation",
+    );
     if (followUp.mode === "none") {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
       await commitReloadBaseline({ runtimeApplied: false });
@@ -705,12 +713,18 @@ export function startGatewayConfigReloader(opts: {
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
     });
+    if (forcePluginMetadataReload && !plan.restartGateway && !plan.reloadPlugins) {
+      // Mirror the `plugins.*` hot rule pairing: a replaced plugin registry
+      // also invalidates MCP runtimes assembled from the previous generation.
+      plan.reloadPlugins = true;
+      plan.disposeMcpRuntimes = true;
+    }
     if (nextSettings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
       await commitReloadBaseline({ runtimeApplied: false });
       return;
     }
-    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+    if (isNoopGatewayReloadPlan(plan) && !followUp.requiresRestart) {
       await opts.onConfigChange?.(plan, nextConfig);
       // No-op plans still change the runtime config snapshot. Commit before
       // marking applied so getRuntimeConfig() readers do not stay stale until restart.
@@ -729,12 +743,15 @@ export function startGatewayConfigReloader(opts: {
       await opts.onConfigChange?.(restartPlan, nextConfig);
       await prepareRestart(restartPlan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
+      // The accepted restart owns snapshot republication at next startup.
+      markPluginMetadataRefreshApplied();
       return;
     }
     if (plan.restartGateway) {
       await opts.onConfigChange?.(plan, nextConfig);
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
+      markPluginMetadataRefreshApplied();
       return;
     }
 
@@ -748,6 +765,10 @@ export function startGatewayConfigReloader(opts: {
     assertCurrent();
     await appliedRevision.apply(plan, nextConfig, nextConfigRevisionHash);
     await commitReloadBaseline();
+    if (plan.reloadPlugins) {
+      // The committed reload republished the metadata snapshot generation.
+      markPluginMetadataRefreshApplied();
+    }
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -861,6 +882,7 @@ export function startGatewayConfigReloader(opts: {
             !watcherIntentCandidate
           ) {
             watcherIntentCandidate = pendingWrite;
+            watcherIntentCameFromPendingWrite = false;
           }
           throw err;
         } finally {
@@ -872,6 +894,7 @@ export function startGatewayConfigReloader(opts: {
       }
       const transactionEpoch = configWriteEpoch;
       const intentCandidate = watcherIntentCandidate;
+      const intentCandidateCameFromPendingWrite = watcherIntentCameFromPendingWrite;
       const snapshot = await opts.readSnapshot(currentRuntimeEnvSourceConfig);
       if (configWriteEpoch !== transactionEpoch) {
         throw new GatewayConfigReloadSupersededError();
@@ -919,6 +942,7 @@ export function startGatewayConfigReloader(opts: {
             );
             if (watcherIntentCandidate === intentCandidate) {
               watcherIntentCandidate = null;
+              watcherIntentCameFromPendingWrite = false;
             }
             await promoteAcceptedSnapshot(snapshot, "in-process-write");
           });
@@ -928,6 +952,7 @@ export function startGatewayConfigReloader(opts: {
           }
           if (configWriteEpoch === transactionEpoch && !watcherIntentCandidate) {
             watcherIntentCandidate = intentCandidate;
+            watcherIntentCameFromPendingWrite = intentCandidateCameFromPendingWrite;
           }
           throw err;
         }
@@ -936,6 +961,7 @@ export function startGatewayConfigReloader(opts: {
       }
       if (watcherIntentCandidate === intentCandidate) {
         watcherIntentCandidate = null;
+        watcherIntentCameFromPendingWrite = false;
       }
       if (intentCandidate && lastAppliedWriteHash === intentCandidate.persistedHash) {
         lastAppliedWriteHash = null;
@@ -1085,6 +1111,7 @@ export function startGatewayConfigReloader(opts: {
       (!watcherIntentCandidate || newestLiveCandidate.epoch > watcherIntentCandidate.epoch)
     ) {
       watcherIntentCandidate = newestLiveCandidate;
+      watcherIntentCameFromPendingWrite = newestLiveCandidate === pendingCandidate;
     }
     if (pendingInProcessConfig) {
       pendingInProcessConfig = null;
@@ -1102,12 +1129,27 @@ export function startGatewayConfigReloader(opts: {
       startupInternalWriteHash = null;
       opts.onConfigCandidateObserved?.();
       configWriteEpoch += 1;
+      const pendingRestartIntent =
+        pendingInProcessConfig?.afterWrite?.mode === "restart"
+          ? pendingInProcessConfig.afterWrite
+          : watcherIntentCameFromPendingWrite &&
+              watcherIntentCandidate?.afterWrite?.mode === "restart"
+            ? watcherIntentCandidate.afterWrite
+            : undefined;
       watcherIntentCandidate = null;
+      watcherIntentCameFromPendingWrite = false;
+      // Pending writes coalesce to the latest config, but a newer non-restart intent
+      // must not erase a restart already required by an unapplied committed write,
+      // including one moved into watcher ownership by its filesystem echo.
+      const afterWrite =
+        pendingRestartIntent && event.afterWrite?.mode !== "restart"
+          ? pendingRestartIntent
+          : event.afterWrite;
       pendingInProcessConfig = {
         config: event.runtimeConfig,
         compareConfig: event.sourceConfig,
         persistedHash: event.persistedHash,
-        afterWrite: event.afterWrite,
+        afterWrite,
         ...(event.preparedCandidate ? { preparedCandidate: event.preparedCandidate } : {}),
         ...(event.runtimeRefresh ? { runtimeRefresh: event.runtimeRefresh } : {}),
         epoch: configWriteEpoch,
@@ -1263,7 +1305,9 @@ export function startGatewayConfigReloader(opts: {
     notifyPluginMetadataChanged: () => {
       // The signal carries a metadata change while config bytes stay identical.
       // Clear both metadata and config-echo caches before scheduling the shared diff path.
+      pluginMetadataRefreshRequests += 1;
       clearLoadInstalledPluginIndexInstallRecordsCache();
+      clearPluginMetadataLifecycleCaches();
       startupInternalWriteHash = null;
       lastAppliedWriteHash = null;
       scheduleExternalRefresh();

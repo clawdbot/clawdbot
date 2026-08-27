@@ -1,13 +1,21 @@
-// Whatsapp tests cover send api plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+// Whatsapp tests cover send api plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareWhatsAppOutboundMedia } from "../outbound-media-contract.js";
+import { markdownToWhatsApp } from "../text-runtime.js";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
-import type { WhatsAppSendResult } from "./send-result.js";
+import { normalizeWhatsAppSendResult, type WhatsAppSendResult } from "./send-result.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 const imageOps = vi.hoisted(() => ({
@@ -36,12 +44,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null) {
-    throw new Error(`${label} was not an object`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "label-not-object");
 
 type MockCallSource = {
   mock: {
@@ -108,6 +111,15 @@ describe("createWebSendApi", () => {
 
   function expectSendResultFields(result: WhatsAppSendResult, fields: Record<string, unknown>) {
     expectRecordFields(requireRecord(result, "send result"), fields);
+  }
+
+  function expectOutboundActivityOnce(accountId = "main") {
+    expect(recordChannelActivity).toHaveBeenCalledOnce();
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId,
+      direction: "outbound",
+    });
   }
 
   it("uses sendOptions fileName for outbound documents", async () => {
@@ -318,6 +330,35 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it.each([
+    { messageText: "Run `notify @15551234567" },
+    { messageText: "Run `notify\n@15551234567" },
+    { messageText: "Run ``notify ` @15551234567" },
+    { messageText: "literal \\` ping @15551234567", nativeMention: true },
+    { messageText: "literal \\\\` inside @15551234567" },
+  ])(
+    "only sends native mentions for visible phone numbers outside inline code: $messageText",
+    async ({ messageText, nativeMention }) => {
+      api = createWebSendApi({
+        sock: { sendMessage, sendPresenceUpdate },
+        defaultAccountId: "main",
+        resolveOutboundMentions: ({ jid, text }) =>
+          resolveWhatsAppOutboundMentions({
+            chatJid: jid,
+            text,
+            participants: [{ id: "15551234567@s.whatsapp.net" }],
+          }),
+      });
+
+      await api.sendMessage("120363000000000000@g.us", markdownToWhatsApp(messageText));
+
+      expect(sendMessage).toHaveBeenCalledWith("120363000000000000@g.us", {
+        text: messageText,
+        ...(nativeMention ? { mentions: ["15551234567@s.whatsapp.net"] } : {}),
+      });
+    },
+  );
+
   it("supports image media with caption", async () => {
     const payload = Buffer.from("img");
     await api.sendMessage("+1555", "cap", payload, "image/jpeg");
@@ -328,6 +369,25 @@ describe("createWebSendApi", () => {
       mimetype: "image/jpeg",
     });
   });
+
+  it.each([
+    { kind: "image", contentType: " Image/PNG; charset=binary ", mimetype: "image/png" },
+    { kind: "video", contentType: " Video/MP4; charset=binary ", mimetype: "video/mp4" },
+  ])(
+    "preserves the native $kind payload after canonicalizing mixed-case media MIME",
+    async ({ kind, contentType, mimetype }) => {
+      const payload = Buffer.from(kind);
+      const media = await prepareWhatsAppOutboundMedia({ buffer: payload, contentType });
+
+      await api.sendMessage("+1555", "cap", media.buffer, media.mimetype);
+
+      expectSendContentFields(0, {
+        [kind]: payload,
+        caption: "cap",
+        mimetype,
+      });
+    },
+  );
 
   it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
     const payload = Buffer.from("img");
@@ -450,6 +510,161 @@ describe("createWebSendApi", () => {
       "voice-1",
       "voice-text-1",
     ]);
+    expectOutboundActivityOnce();
+  });
+
+  it("preserves the accepted voice receipt when its visible caption send disconnects", async () => {
+    const captionError = new Error("connection closed while sending the voice caption");
+    sendMessage
+      .mockResolvedValueOnce({ key: { id: "voice-accepted-1" } })
+      .mockRejectedValueOnce(captionError);
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice delivery did not preserve its partial receipt");
+    }
+    expect(failure.deliveryResult.visibleReplySent).toBe(true);
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-1"]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["voice-accepted-1"]);
+    expect(failure).toHaveProperty("cause", captionError);
+    expectOutboundActivityOnce();
+  });
+
+  it("composes accepted voice and caption receipts when the caption throws a nested partial", async () => {
+    const bookkeepingError = new Error("accepted voice caption bookkeeping failed");
+    const acceptedCaption = normalizeWhatsAppSendResult(
+      { key: { id: "nested-voice-caption" } } as WAMessage,
+      "text",
+    );
+    sendMessage.mockResolvedValueOnce({ key: { id: "nested-voice-media" } }).mockRejectedValueOnce(
+      createChannelPartialDeliveryError(bookkeepingError, {
+        messageIds: [acceptedCaption.messageId],
+        receipt: acceptedCaption.receipt,
+        visibleReplySent: true,
+      }),
+    );
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("nested accepted voice-caption receipt replaced its earlier voice receipt");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual([
+      "nested-voice-media",
+      "nested-voice-caption",
+    ]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
+      "nested-voice-media",
+      "nested-voice-caption",
+    ]);
+    expect(failure).toHaveProperty("cause", bookkeepingError);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expectOutboundActivityOnce();
+  });
+
+  it("preserves the accepted voice receipt when Baileys never accepts its caption", async () => {
+    sendMessage
+      .mockResolvedValueOnce({ key: { id: "voice-accepted-no-caption" } })
+      .mockResolvedValueOnce(undefined);
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice delivery was lost when Baileys rejected its caption");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-no-caption"]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([
+      "voice-accepted-no-caption",
+    ]);
+    expect(failure).toHaveProperty("cause", expect.any(PlatformMessageNotDispatchedError));
+    expectOutboundActivityOnce();
+  });
+
+  it("preserves the accepted voice receipt when caption mention resolution fails", async () => {
+    const mentionError = new Error("group metadata lookup disconnected");
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: vi.fn().mockRejectedValue(mentionError),
+    });
+    sendMessage.mockResolvedValueOnce({ key: { id: "voice-accepted-2" } });
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice delivery was lost during mention resolution");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-2"]);
+    expect(failure).toHaveProperty("cause", mentionError);
+    expectOutboundActivityOnce();
+  });
+
+  it.each([
+    {
+      kind: "text",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) => sendApi.sendMessage("+1555", "hello"),
+    },
+    {
+      kind: "poll",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
+        sendApi.sendPoll("+1555", { question: "Q?", options: ["a", "b"] }),
+    },
+  ])("retains the accepted $kind receipt when activity recording fails", async ({ kind, send }) => {
+    const activityError = new Error("channel activity bookkeeping disconnected");
+    sendMessage.mockResolvedValueOnce({ key: { id: `${kind}-accepted` } });
+    recordChannelActivity.mockImplementationOnce(() => {
+      throw activityError;
+    });
+
+    const failure = await send(api).catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted provider delivery was lost during activity bookkeeping");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual([`${kind}-accepted`]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual([`${kind}-accepted`]);
+    expect(failure).toHaveProperty("cause", activityError);
+    expectOutboundActivityOnce();
+  });
+
+  it("retains the first accepted voice receipt when immediate activity recording fails", async () => {
+    const activityError = new Error("channel activity bookkeeping disconnected");
+    sendMessage.mockResolvedValueOnce({ key: { id: "voice-accepted-3" } });
+    recordChannelActivity.mockImplementationOnce(() => {
+      throw activityError;
+    });
+
+    const failure = await api
+      .sendMessage("+1555", "voice text", Buffer.from("voice"), "audio/ogg")
+      .catch((caught: unknown) => caught);
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(isChannelPartialDeliveryError(failure)).toBe(true);
+    if (!isChannelPartialDeliveryError(failure)) {
+      throw new Error("accepted voice delivery was lost during immediate activity bookkeeping");
+    }
+    expect(failure.deliveryResult.messageIds).toEqual(["voice-accepted-3"]);
+    expect(failure.deliveryResult.receipt?.platformMessageIds).toEqual(["voice-accepted-3"]);
+    expect(failure).toHaveProperty("cause", activityError);
+    expectOutboundActivityOnce();
   });
 
   it("supports video media and gifPlayback option", async () => {
@@ -464,10 +679,13 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to unknown messageId if Baileys result does not expose key.id", async () => {
+  it("rejects Baileys results that do not expose an accepted message key", async () => {
     sendMessage.mockResolvedValueOnce({ key: {} as { id: string } });
-    const res = await api.sendMessage("+1555", "hello");
-    expect(res.messageId).toBe("unknown");
+
+    await expect(api.sendMessage("+1555", "hello")).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    expect(recordChannelActivity).not.toHaveBeenCalled();
   });
 
   it("sends polls and records outbound activity", async () => {
@@ -508,18 +726,40 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("reports provider-unaccepted sends when Baileys returns no message", async () => {
-    sendMessage.mockResolvedValueOnce(undefined);
-
-    const res = await api.sendMessage("+1555", "hello");
-
-    expectSendResultFields(res, {
+  it.each([
+    {
       kind: "text",
-      messageId: "unknown",
-      providerAccepted: false,
-    });
-    expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toStrictEqual([]);
-  });
+      send: (sendApi: ReturnType<typeof createWebSendApi>) => sendApi.sendMessage("+1555", "hello"),
+    },
+    {
+      kind: "image",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
+        sendApi.sendMessage("+1555", "image", Buffer.from("image"), "image/png"),
+    },
+    {
+      kind: "document",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
+        sendApi.sendMessage("+1555", "file", Buffer.from("file"), "application/pdf"),
+    },
+    {
+      kind: "voice",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
+        sendApi.sendMessage("+1555", "", Buffer.from("voice"), "audio/ogg"),
+    },
+    {
+      kind: "poll",
+      send: (sendApi: ReturnType<typeof createWebSendApi>) =>
+        sendApi.sendPoll("+1555", { question: "Q?", options: ["a", "b"] }),
+    },
+  ])(
+    "rejects an unaccepted Baileys $kind send without recording outbound activity",
+    async ({ send }) => {
+      sendMessage.mockResolvedValueOnce(undefined);
+
+      await expect(send(api)).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(recordChannelActivity).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps direct-chat reactions without a participant key", async () => {
     await api.sendReaction("+1555", "msg-2", "👍", false);
@@ -599,6 +839,26 @@ describe("createWebSendApi", () => {
     expectRecordFields(requireRecord(quoted.key, "quoted key"), {
       remoteJid: "277038292303944@lid",
       id: "quoted-1",
+    });
+  });
+
+  it("aligns a lookup-proven LID quote with the final PN destination", async () => {
+    await api.sendMessage("+1555", "hello", undefined, undefined, {
+      quotedMessageKey: {
+        id: "quoted-self",
+        remoteJid: "277038292303944@lid",
+        fromMe: true,
+        lookupTargetJid: "1555@s.whatsapp.net",
+        messageText: "quoted body",
+      },
+    });
+
+    expectFirstSendJid("1555@s.whatsapp.net");
+    const quoted = requireRecord(requireSendOptions().quoted, "quoted message");
+    expectRecordFields(requireRecord(quoted.key, "quoted key"), {
+      remoteJid: "1555@s.whatsapp.net",
+      id: "quoted-self",
+      fromMe: true,
     });
   });
 });

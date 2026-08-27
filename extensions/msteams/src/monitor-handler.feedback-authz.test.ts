@@ -49,6 +49,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
           enqueue: async () => {},
           flushKey: async () => {},
           cancelKey: () => false,
+          drain: async () => {},
         }),
       },
       pairing: {

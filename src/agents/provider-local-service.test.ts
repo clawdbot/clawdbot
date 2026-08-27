@@ -21,8 +21,9 @@ import {
   getManagedProviderLocalServiceDiagnosticsForTest,
   getModelProviderLocalService,
   hasLocalServiceProcessExited,
-  stopManagedProviderLocalServicesForTest,
+  stopManagedProviderLocalServices,
 } from "./provider-local-service.js";
+import { hasManagedProviderLocalServices } from "./provider-runtime-lifecycle.js";
 
 const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
 const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
@@ -182,7 +183,7 @@ describe("provider local service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
-    stopManagedProviderLocalServicesForTest();
+    stopManagedProviderLocalServices();
   });
 
   it("attaches local service metadata to model objects", () => {
@@ -204,6 +205,7 @@ describe("provider local service", () => {
   });
 
   it("starts an on-demand local service and stops it after idle", async () => {
+    expect(hasManagedProviderLocalServices()).toBe(false);
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
     const model = attachModelProviderLocalService(
@@ -230,9 +232,11 @@ describe("provider local service", () => {
     if (!lease) {
       throw new Error("Expected provider local service lease");
     }
+    expect(hasManagedProviderLocalServices()).toBe(true);
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease.release();
     await waitForProbeFailure(healthUrl);
+    expect(hasManagedProviderLocalServices()).toBe(false);
   });
 
   it("resolves process configuration from the host config", async () => {
@@ -820,16 +824,34 @@ describe("provider local service", () => {
     const tempDir = tempDirs.make("openclaw-local-service-failed-unref-");
     const servicePidPath = path.join(tempDir, "service.pid");
     const moduleUrl = new URL("./provider-local-service.ts", import.meta.url).href;
+    const failedServiceReadyTimeoutMs = 60_000;
     const serviceScript = [
       `const fs=require("node:fs");`,
       `fs.writeFileSync(${JSON.stringify(servicePidPath)},String(process.pid));`,
       `process.on("SIGTERM",()=>{});`,
       `setInterval(()=>process.stderr.write("tick\\n"),10);`,
     ].join("");
+    // Advance only the nested host's readiness clock after the service PID exists.
+    // This preserves live-child failure cleanup without spending the deadline in wall time.
     const script = [
+      `import fs from "node:fs";`,
       `import { ensureProviderLocalService } from ${JSON.stringify(moduleUrl)};`,
       `if (!process.send) throw new Error("missing one-shot host IPC");`,
       `process.on("disconnect", () => {});`,
+      `const realNow = Date.now.bind(Date);`,
+      `const realSetTimeout = globalThis.setTimeout.bind(globalThis);`,
+      `let clockOffsetMs = 0;`,
+      `Date.now = () => realNow() + clockOffsetMs;`,
+      `globalThis.setTimeout = (callback, delay, ...args) => {`,
+      `  if (clockOffsetMs === 0 && fs.existsSync(${JSON.stringify(servicePidPath)})) {`,
+      `    return realSetTimeout(() => {`,
+      `      clockOffsetMs = ${failedServiceReadyTimeoutMs + 1};`,
+      `      globalThis.setTimeout = realSetTimeout;`,
+      `      callback(...args);`,
+      `    }, 0);`,
+      `  }`,
+      `  return realSetTimeout(callback, delay, ...args);`,
+      `};`,
       `try {`,
       `  await ensureProviderLocalService({`,
       `    providerId: "local-failed-unref",`,
@@ -837,10 +859,13 @@ describe("provider local service", () => {
       `    service: {`,
       `      command: process.execPath,`,
       `      args: ["-e", ${JSON.stringify(serviceScript)}],`,
-      `      readyTimeoutMs: 100,`,
+      `      readyTimeoutMs: ${failedServiceReadyTimeoutMs},`,
       `    },`,
       `  });`,
-      `} catch {}`,
+      `} catch (error) {`,
+      `  if (!(error instanceof Error) || !error.message.includes("did not become ready")) throw error;`,
+      `}`,
+      `if (clockOffsetMs === 0) throw new Error("test clock did not advance");`,
       `process.send({ kind: ${JSON.stringify(ONE_SHOT_HOST_READY_KIND)} });`,
     ].join("\n");
     const parent = spawn(

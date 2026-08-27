@@ -18,7 +18,7 @@ const {
 vi.mock("./accounts.js", () => {
   return {
     listMattermostAccountIds: listMattermostAccountIdsMock,
-    resolveMattermostAccount: resolveMattermostAccountMock,
+    inspectMattermostAccount: resolveMattermostAccountMock,
   };
 });
 
@@ -40,6 +40,51 @@ describe("mattermost directory", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("skips an unavailable account while retaining a healthy directory client", async () => {
+    const client = {
+      token: "token-healthy",
+      request: vi.fn().mockResolvedValueOnce([]),
+    };
+    listMattermostAccountIdsMock.mockReturnValue(["broken", "healthy"]);
+    resolveMattermostAccountMock.mockImplementation(({ accountId }) =>
+      accountId === "broken"
+        ? { enabled: true, botToken: undefined, baseUrl: "https://chat.example.com" }
+        : { enabled: true, botToken: "token-healthy", baseUrl: "https://chat.example.com" },
+    );
+    createMattermostClientMock.mockReturnValue(client);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryGroups({ cfg: {} as never, runtime: {} as never }),
+    ).resolves.toEqual([]);
+    expect(createMattermostClientMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses only the requested account for scoped directory discovery", async () => {
+    const personalClient = { token: "token-personal", request: vi.fn().mockResolvedValue([]) };
+    listMattermostAccountIdsMock.mockReturnValue(["personal", "finance"]);
+    resolveMattermostAccountMock.mockImplementation(({ accountId }) => ({
+      enabled: true,
+      botToken: `token-${accountId}`,
+      baseUrl: "https://chat.example.com",
+    }));
+    createMattermostClientMock.mockReturnValue(personalClient);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryGroups({
+        cfg: {} as never,
+        accountId: "personal",
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual([]);
+    expect(resolveMattermostAccountMock).toHaveBeenCalledOnce();
+    expect(resolveMattermostAccountMock).toHaveBeenCalledWith({
+      cfg: {},
+      accountId: "personal",
+    });
   });
 
   it("deduplicates channels across enabled accounts and skips failing accounts", async () => {
@@ -83,6 +128,35 @@ describe("mattermost directory", () => {
         query: "  op  ",
       }),
     ).resolves.toEqual([{ kind: "group", id: "channel:chan-2", name: "ops", handle: "Ops" }]);
+  });
+
+  it("labels public O channels as channel and private P channels as group (#95646)", async () => {
+    // A public `O` channel must NOT be keyed as `group`, otherwise a name-resolved
+    // public channel forks a phantom `group:<id>` session on outbound routing.
+    const client = {
+      token: "token-default",
+      request: vi.fn().mockResolvedValueOnce([
+        { id: "pub-1", type: "O", name: "general", display_name: "General" },
+        { id: "priv-1", type: "P", name: "secret", display_name: "Secret" },
+        { id: "dm-1", type: "D", name: "dm", display_name: "DM" },
+      ]),
+    };
+
+    listMattermostAccountIdsMock.mockReturnValue(["default"]);
+    resolveMattermostAccountMock.mockReturnValue({
+      enabled: true,
+      botToken: "token-default",
+      baseUrl: "https://chat.example.com",
+    });
+    createMattermostClientMock.mockReturnValueOnce(client);
+    fetchMattermostMeMock.mockResolvedValue({ id: "me-1" });
+
+    await expect(
+      listMattermostDirectoryGroups({ cfg: {} as never, runtime: {} as never }),
+    ).resolves.toEqual([
+      { kind: "channel", id: "channel:pub-1", name: "general", handle: "General" },
+      { kind: "group", id: "channel:priv-1", name: "secret", handle: "Secret" },
+    ]);
   });
 
   it("uses the first healthy client for peers and filters self and blanks", async () => {

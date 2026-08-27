@@ -1,11 +1,11 @@
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import {
   appendCapturedOutput,
@@ -16,10 +16,12 @@ import {
   MAX_PRESERVED_PENDING_LINE_BYTES,
   resolveMaxOutputBytes,
   resolveOutputCapture,
+  shouldTerminateOnOutputError,
   shouldTerminateOnOutputLimit,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
   type CommandOutputCaptureOption,
+  type CommandOutputErrorOption,
   type CommandOutputLimitOption,
   type CommandOutputStream,
   type PreserveOutputLine,
@@ -57,12 +59,16 @@ export type CommandOptions = {
   onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => boolean | void;
   /** Accept a successful exit when only the selected diagnostic output stream failed. */
   tolerateOutputError?: { stdout?: boolean; stderr?: boolean };
+  /** Terminate when the selected output stream emits an error. */
+  terminateOnOutputError?: CommandOutputErrorOption;
   terminateOnOutputLimit?: CommandOutputLimitOption;
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
   /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
   killSignal?: NodeJS.Signals | number;
+  /** Grace between graceful termination and the force-kill fallback. */
+  killGraceMs?: number;
 };
 
 export async function runCommandWithTimeout(
@@ -97,11 +103,17 @@ async function runCommandWithOutputEncoding(
     signal,
     killProcessTree,
     killSignal,
+    killGraceMs,
   } = options;
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
   const hasInput = input !== undefined;
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  const resolvedKillGraceMs = resolveTimerTimeoutMs(
+    killGraceMs,
+    COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    0,
+  );
 
   if (signal?.aborted) {
     return {
@@ -153,6 +165,7 @@ async function runCommandWithOutputEncoding(
   let noOutputTimer: NodeJS.Timeout | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
+  let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
     buffer: false,
@@ -162,7 +175,7 @@ async function runCommandWithOutputEncoding(
     encoding: "buffer",
     baseEnv,
     env,
-    forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
     ...(hasInput ? { input } : {}),
     reject: false,
@@ -170,19 +183,21 @@ async function runCommandWithOutputEncoding(
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
-  const releaseOutput = releaseChildProcessOutputAfterExit(child);
-  child.once("exit", (code, signalValue) => {
+  const nodeChild = child.nodeChildProcess;
+  const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+  nodeChild.once("exit", (code, signalValue) => {
     childExited = true;
     childExitState = { code, signal: signalValue };
   });
   const terminationController = createCommandTerminationController({
-    child,
+    child: nodeChild,
     cancelController,
     baseEnv,
     env,
-    killProcessTree,
+    processTree: killProcessTree ? { mode: "graceful" } : undefined,
     isChildExited: () => childExited,
     isCommandSettled: () => commandSettled,
+    killGraceMs: resolvedKillGraceMs,
   });
 
   const clearNoOutputTimer = () => {
@@ -323,12 +338,21 @@ async function runCommandWithOutputEncoding(
     return buffer;
   };
 
-  child.stdout?.once("error", () => {
-    outputErrorStream ??= "stdout";
-  });
-  child.stderr?.once("error", () => {
-    outputErrorStream ??= "stderr";
-  });
+  const onOutputError = (error: unknown, stream: CommandOutputStream) => {
+    outputErrorStream ??= stream;
+    if (
+      termination ||
+      options.tolerateOutputError?.[stream] === true ||
+      !shouldTerminateOnOutputError(options.terminateOnOutputError, stream)
+    ) {
+      return;
+    }
+    terminatingOutputError = toErrorObject(error, `Command ${stream} stream failed`);
+    Object.assign(terminatingOutputError, { outputErrorStream: stream });
+    cancel("signal");
+  };
+  child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
+  child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
   child.stdout?.on("data", (chunk) => {
     const buffer = observeOutputChunk(chunk, "stdout");
     appendPreservedOutputLines({
@@ -366,6 +390,9 @@ async function runCommandWithOutputEncoding(
     releaseOutput();
   });
   await terminationController.settle();
+  if (terminatingOutputError) {
+    throw terminatingOutputError;
+  }
   if (outputObserverError !== undefined) {
     throw toErrorObject(outputObserverError, "Command output observer failed");
   }
@@ -374,7 +401,7 @@ async function runCommandWithOutputEncoding(
   const isCauseLessWindowsShimResult =
     !termination &&
     invocation.usesWindowsExitCodeShim &&
-    typeof child.pid === "number" &&
+    typeof nodeChild.pid === "number" &&
     result.code === undefined &&
     result.cause === undefined &&
     !result.timedOut &&
@@ -392,8 +419,8 @@ async function runCommandWithOutputEncoding(
       if (
         childExitState?.code != null ||
         childExitState?.signal != null ||
-        child.exitCode != null ||
-        child.signalCode != null
+        nodeChild.exitCode != null ||
+        nodeChild.signalCode != null
       ) {
         break;
       }
@@ -421,10 +448,10 @@ async function runCommandWithOutputEncoding(
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? child.signalCode ?? null;
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
-    childExitCode: child.exitCode,
+    childExitCode: nodeChild.exitCode,
     resolvedSignal,
     usesWindowsExitCodeShim: invocation.usesWindowsExitCodeShim,
     timedOut: termination === "timeout",
@@ -474,7 +501,7 @@ async function runCommandWithOutputEncoding(
   };
 
   return {
-    pid: child.pid,
+    pid: nodeChild.pid,
     stdout: decodeCapturedOutput(stdoutCapture, stdoutCaptureMode),
     stderr: decodeCapturedOutput(stderrCapture, stderrCaptureMode),
     stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
@@ -485,7 +512,7 @@ async function runCommandWithOutputEncoding(
       stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
     code: normalizedCode,
     signal: resolvedSignal,
-    killed: child.killed,
+    killed: nodeChild.killed,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

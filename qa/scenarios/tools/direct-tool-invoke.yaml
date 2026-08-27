@@ -1,0 +1,26 @@
+title: Direct tool invoke API invocation
+
+scenario:
+  id: direct-tool-invoke
+  surface: tools
+  coverage:
+    primary:
+      - tools.direct-tool-invoke-api-invocation
+  objective: Verify direct tool invocation across the Gateway HTTP and authenticated WebSocket RPC boundaries.
+  successCriteria:
+    - The same safe real core tool returns a real result through POST /tools/invoke and tools.invoke.
+    - HTTP authentication and WebSocket operator.write authorization reject requests before tool execution, while shared-secret HTTP restores owner trust despite a narrower scope header.
+    - Malformed requests, unavailable tools, hook approval requirements, hook blocks, and idempotency-derived tool-call IDs return their structured public outcomes.
+  docsRefs:
+    - docs/gateway/tools-invoke-http-api.md
+    - docs/gateway/operator-scopes.md
+    - docs/gateway/protocol.md
+  codeRefs:
+    - src/gateway/tools-invoke-http.ts
+    - src/gateway/server-methods/tools-invoke.ts
+    - src/gateway/tools-invoke-shared.ts
+    - test/e2e/qa-lab/runtime/gateway-direct-tool-invoke.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/gateway-direct-tool-invoke.e2e.test.ts
+    summary: Starts the full Gateway and proves direct core-tool invocation, authorization, policy hooks, and structured errors over real HTTP and WebSocket transports.

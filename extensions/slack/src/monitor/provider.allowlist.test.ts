@@ -1,9 +1,11 @@
 // Slack tests cover provider.allowlist plugin behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   flush,
+  getSlackClient,
   getSlackHandlerOrThrow,
   getSlackTestState,
   resetSlackTestState,
@@ -26,6 +28,9 @@ function createRuntimeContextCapture(): {
   const register = vi.fn(() => ({ dispose: vi.fn() }));
   return {
     channelRuntime: {
+      inbound: {
+        buildContext: buildChannelInboundEventContext,
+      },
       runtimeContexts: {
         register,
         get: vi.fn(),
@@ -101,6 +106,58 @@ describe("slack allowlist log formatting", () => {
 });
 
 describe("slack startup user allowlist resolution", () => {
+  it("registers one native approval client per Enterprise Grid team", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-1-A123-test",
+          dmPolicy: "disabled",
+          groupPolicy: "open",
+          execApprovals: {
+            enabled: true,
+            approvers: ["U123OWNER"],
+            target: "both",
+          },
+        },
+      },
+    });
+    getSlackClient().auth.test.mockResolvedValueOnce({
+      user_id: "UENTERPRISE",
+      bot_id: "BENTERPRISE",
+      enterprise_id: "E123",
+      app_id: "A123",
+      is_enterprise_install: true,
+    });
+    const { channelRuntime, register } = createRuntimeContextCapture();
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      channelRuntime,
+      appToken: "xapp-1-A123-test",
+    });
+    try {
+      await getSlackHandlerOrThrow("message");
+      await flush();
+
+      const registration = vi.mocked(register).mock.calls[0]?.[0] as
+        | { context?: { resolveClient?: (teamId?: string) => unknown } }
+        | undefined;
+      const resolveClient = registration?.context?.resolveClient;
+      expect(resolveClient).toBeTypeOf("function");
+      const teamOne = resolveClient?.("T111") as { teamId?: string };
+      const teamOneAgain = resolveClient?.("T111") as { teamId?: string };
+      const teamTwo = resolveClient?.("T222") as { teamId?: string };
+
+      expect(teamOneAgain).toBe(teamOne);
+      expect(teamTwo).not.toBe(teamOne);
+      expect(teamOne.teamId).toBe("T111");
+      expect(teamTwo.teamId).toBe("T222");
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  });
+
   it("registers the native approval runtime for plugin-only Slack approvals", async () => {
     resetSlackTestState({
       channels: {

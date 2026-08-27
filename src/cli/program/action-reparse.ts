@@ -25,11 +25,27 @@ function findRootCommand(cmd: Command): Command {
 function findOption(command: Command, token: string): Option | undefined {
   const equalsIndex = token.indexOf("=");
   const flag = equalsIndex === -1 ? token : token.slice(0, equalsIndex);
-  return command.options.find(
+  const exactOption = command.options.find(
     (candidate) =>
       (candidate.short === flag || candidate.long === flag) &&
       (equalsIndex === -1 || candidate.required || candidate.optional),
   );
+  if (exactOption || !token.startsWith("-") || token.startsWith("--") || token.length <= 2) {
+    return exactOption;
+  }
+  // Once a child claims a short group, preserve its unknown suffix for Commander.
+  let claimedOption: Option | undefined;
+  for (let index = 1; index < token.length; index += 1) {
+    const option = command.options.find((candidate) => candidate.short === `-${token[index]}`);
+    if (!option) {
+      return claimedOption;
+    }
+    claimedOption ??= option;
+    if (option.required || option.optional || index === token.length - 1) {
+      return option;
+    }
+  }
+  return undefined;
 }
 
 function findNearestOption(commands: readonly Command[], token: string): Option | undefined {
@@ -50,7 +66,12 @@ function matchesCommandName(command: Command, token: string): boolean {
 // Returns 0 for a missing required value, otherwise the number of consumed tokens.
 function optionTokenCount(option: Option, argv: readonly string[], index: number): number {
   const token = argv[index] ?? "";
-  if (token.includes("=") || (!option.required && !option.optional)) {
+  const shortFlagIndex =
+    option.short !== undefined && !token.startsWith("--")
+      ? token.indexOf(option.short.slice(1), 1)
+      : -1;
+  const hasAttachedShortValue = shortFlagIndex !== -1 && shortFlagIndex < token.length - 1;
+  if (token.includes("=") || hasAttachedShortValue || (!option.required && !option.optional)) {
     return 1;
   }
   const next = argv[index + 1];

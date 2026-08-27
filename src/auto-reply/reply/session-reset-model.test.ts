@@ -13,6 +13,7 @@ import type { ModelAliasIndex } from "./model-selection-directive.js";
 const loadPreparedModelCatalog = vi.hoisted(() => vi.fn(async () => modelCatalog));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   loadPreparedModelCatalog,
 }));
 
@@ -29,6 +30,7 @@ function createResetFixture(entry: Partial<SessionEntry> = {}) {
   const sessionEntry: SessionEntry = {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...entry,
   };
   return {
@@ -90,13 +92,15 @@ describe("applyResetModelOverride", () => {
     });
   });
 
-  it("selects a model hint and strips it from the body", async () => {
+  it("selects a model hint while preserving the stored thinking level for validation", async () => {
     const { sessionEntry, sessionCtx } = await applyResetFixture({
       resetTriggered: true,
+      sessionEntry: { thinkingLevel: "ultra" },
     });
 
     expect(sessionEntry.providerOverride).toBe("minimax");
     expect(sessionEntry.modelOverride).toBe("m2.7");
+    expect(sessionEntry.thinkingLevel).toBe("ultra");
     expect(sessionCtx.BodyStripped).toBe("summarize");
   });
 
@@ -291,6 +295,7 @@ describe("applyResetModelOverride", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: fixture.sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       providerOverride: "openai",
       modelOverride: "gpt-4o-mini",
       modelOverrideSource: "user",

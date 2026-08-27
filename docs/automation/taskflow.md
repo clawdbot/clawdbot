@@ -16,7 +16,7 @@ Task Flow is the orchestration layer above [background tasks](/automation/tasks)
 | Single background job                     | Plain task                                  |
 | Multi-step pipeline driven by plugin code | Task Flow (managed)                         |
 | Detached ACP or subagent spawn            | Task Flow (mirrored, created automatically) |
-| One-shot reminder                         | Cron job                                    |
+| One-shot reminder                         | Automation job                              |
 
 ## Sync modes
 
@@ -44,20 +44,29 @@ OpenClaw creates a mirrored one-task flow automatically when a detached ACP or s
 
 ## Flow statuses
 
-| Status      | Meaning                                                                    |
-| ----------- | -------------------------------------------------------------------------- |
-| `queued`    | Created, not yet progressing                                               |
-| `running`   | Flow is actively progressing                                               |
-| `waiting`   | Managed flow is parked on wait metadata (timer, external event)            |
-| `blocked`   | A step finished without a usable result; `blockedTaskId`/summary say which |
-| `succeeded` | Completed successfully                                                     |
-| `failed`    | Completed with an error                                                    |
-| `cancelled` | Cancel requested and all child tasks settled                               |
-| `lost`      | Flow lost its authoritative backing state                                  |
+| Status      | Meaning                                                           |
+| ----------- | ----------------------------------------------------------------- |
+| `queued`    | Created, not yet progressing                                      |
+| `running`   | Flow is actively progressing                                      |
+| `waiting`   | Managed flow is parked on wait metadata (timer, external event)   |
+| `blocked`   | Waiting on a blocking condition, or ended without a usable result |
+| `succeeded` | Completed successfully                                            |
+| `failed`    | Completed with an error                                           |
+| `cancelled` | Cancel requested and all child tasks settled                      |
+| `lost`      | Flow lost its authoritative backing state                         |
+
+`blocked` is the only status whose terminal meaning depends on the record. A
+managed flow with no `endedAt` remains resumable. A `blocked` flow with
+`endedAt` is finished, including mirrored flows whose backing task completed
+with a blocked outcome.
 
 ## Durable state and revision tracking
 
 Flow records persist in the shared SQLite state database (`~/.openclaw/state/openclaw.sqlite`, `flow_runs` table) alongside task records, so progress survives gateway restarts. Each write bumps the flow's `revision`; concurrent writers that pass a stale expected revision get a conflict and must re-read. WAL growth is bounded by SQLite autocheckpointing plus periodic passive checkpoints, with truncate checkpoints on shutdown. The legacy `flows/registry.sqlite` sidecar from older installs is imported by `openclaw doctor`.
+
+Gateway maintenance retains finished flows for 7 days, then prunes them. This
+includes `blocked` flows with `endedAt`; resumable managed `blocked` flows are
+retained regardless of age.
 
 ## Cancel behavior
 
@@ -88,15 +97,15 @@ Flows are also covered by `openclaw tasks audit` (stale or broken flow findings)
 
 For recurring workflows such as market intelligence briefings, treat the schedule, orchestration, and reliability checks as separate layers:
 
-1. Use [Scheduled Tasks](/automation/cron-jobs) for timing.
-2. Use a persistent cron session when the workflow should build on prior context.
+1. Use [Automations](/automation/cron-jobs) for timing.
+2. Use a persistent automation session when the workflow should build on prior context.
 3. Use [Lobster](/tools/lobster) for deterministic steps, approval gates, and resume tokens.
 4. Use Task Flow to track the multi-step run across child tasks, waits, retries, and gateway restarts.
 
-Example cron shape:
+Example automation job (`openclaw automations`; `openclaw cron` remains an alias):
 
 ```bash
-openclaw cron add \
+openclaw automations add \
   --name "Market intelligence brief" \
   --cron "0 7 * * 1-5" \
   --tz "America/New_York" \
@@ -138,7 +147,7 @@ Recommended preflight checks:
 - API credentials and quota for each source.
 - Network reachability for required endpoints.
 - Required tools enabled for the agent, such as `lobster`, `browser`, and `llm-task`.
-- Failure destination configured for cron so preflight failures are visible. See [Scheduled Tasks](/automation/cron-jobs#delivery-and-output).
+- Failure destination configured for the automation so preflight failures are visible. See [Automations](/automation/cron-jobs#delivery-and-output).
 
 Recommended data provenance fields for every collected item:
 
@@ -165,4 +174,4 @@ Flows coordinate tasks, not replace them. A single flow may drive multiple backg
 - [Background Tasks](/automation/tasks) - the detached work ledger that flows coordinate
 - [CLI: tasks](/cli/tasks) - CLI command reference for `openclaw tasks flow`
 - [Automation Overview](/automation) - all automation mechanisms at a glance
-- [Cron Jobs](/automation/cron-jobs) - scheduled jobs that may feed into flows
+- [Automations](/automation/cron-jobs) - scheduled jobs that may feed into flows

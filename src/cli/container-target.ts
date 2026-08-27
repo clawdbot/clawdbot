@@ -7,6 +7,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
+import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 type CliContainerParseResult =
   | { ok: true; container: string | null; argv: string[] }
@@ -319,8 +320,11 @@ export function maybeRunCliInContainer(
       env: buildContainerExecEnv(resolvedDeps.env),
     },
   );
+  if (result.error) {
+    throw result.error;
+  }
   return {
     handled: true,
-    exitCode: typeof result.status === "number" ? result.status : 1,
+    exitCode: resolveSubprocessExitCode(result.status, result.signal),
   };
 }

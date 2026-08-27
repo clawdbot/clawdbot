@@ -78,6 +78,10 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelOverrideSource;
       updated = true;
     }
+    if (entry.modelOverrideRouteResolution) {
+      delete entry.modelOverrideRouteResolution;
+      updated = true;
+    }
     updated = clearFallbackOrigin(entry) || updated;
   } else {
     if (entry.providerOverride !== selection.provider) {
@@ -92,6 +96,10 @@ export function applyModelOverrideToSessionEntry(params: {
     }
     if (entry.modelOverrideSource !== selectionSource) {
       entry.modelOverrideSource = selectionSource;
+      updated = true;
+    }
+    if (entry.modelOverrideRouteResolution !== "resolved") {
+      entry.modelOverrideRouteResolution = "resolved";
       updated = true;
     }
     updated = clearFallbackOrigin(entry) || updated;
@@ -128,19 +136,20 @@ export function applyModelOverrideToSessionEntry(params: {
   // contextTokens are derived from the active session model. When the selected
   // model changes (or runtime model is already stale), the cached window can
   // pin the session to an older/smaller limit until another run refreshes it.
-  if (
-    entry.contextTokens !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextTokens;
-    updated = true;
-  }
-  if (
-    entry.contextBudgetStatus !== undefined &&
-    (selectionUpdated || (runtimePresent && !runtimeAligned))
-  ) {
-    delete entry.contextBudgetStatus;
-    updated = true;
+  const shouldClearModelDerivedState = selectionUpdated || (runtimePresent && !runtimeAligned);
+  if (shouldClearModelDerivedState) {
+    if (entry.contextTokens !== undefined) {
+      delete entry.contextTokens;
+      updated = true;
+    }
+    if (entry.contextTokensSource !== undefined) {
+      delete entry.contextTokensSource;
+      updated = true;
+    }
+    if (entry.contextBudgetStatus !== undefined) {
+      delete entry.contextBudgetStatus;
+      updated = true;
+    }
   }
 
   if (profileOverride) {
@@ -183,9 +192,7 @@ export function applyModelOverrideToSessionEntry(params: {
       // runtime model fields so live-switch resolution lands on the default.
       entry.liveModelSwitchPending = true;
     }
-    delete entry.fallbackNoticeSelectedModel;
-    delete entry.fallbackNoticeActiveModel;
-    delete entry.fallbackNoticeReason;
+    delete entry.fallbackNotice;
     entry.updatedAt = Date.now();
   }
 

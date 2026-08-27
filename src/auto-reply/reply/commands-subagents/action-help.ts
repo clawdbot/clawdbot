@@ -1,7 +1,8 @@
+import { commandReply } from "../command-gates.js";
 // Formats subagent command help text and usage summaries.
 import type { CommandHandlerResult } from "../commands-types.js";
-import { buildSubagentsHelp, stopWithText } from "./shared.js";
+import { buildSubagentsHelp } from "./shared.js";
 
 export function handleSubagentsHelpAction(): CommandHandlerResult {
-  return stopWithText(buildSubagentsHelp());
+  return commandReply(buildSubagentsHelp());
 }

@@ -9,6 +9,7 @@ import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.mod
 
 export async function offerLiveModelVerification(params: {
   config: OpenClawConfig;
+  initialCandidate?: SetupModelAuthCandidate;
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
@@ -17,14 +18,20 @@ export async function offerLiveModelVerification(params: {
   stateDir?: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   required?: boolean;
-}): Promise<{ config: OpenClawConfig; verified: boolean; modelRef?: string }> {
+}): Promise<{
+  config: OpenClawConfig;
+  attempted: boolean;
+  persisted: boolean;
+  verified: boolean;
+  modelRef?: string;
+}> {
   if (!params.required) {
     const shouldTest = await params.prompter.confirm({
       message: t("wizard.setup.testAiAccess"),
       initialValue: true,
     });
     if (!shouldTest) {
-      return { config: params.config, verified: false };
+      return { config: params.config, attempted: false, persisted: false, verified: false };
     }
   }
   const [inference, authStore, agentDatabase] = await Promise.all([
@@ -37,7 +44,7 @@ export async function offerLiveModelVerification(params: {
     : undefined;
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
-    const result = await withConsoleSubsystemsSuppressed(() =>
+    const verification = withConsoleSubsystemsSuppressed(() =>
       inference.verifySetupInferenceConfig({
         config: candidate.config,
         runtime: params.runtime,
@@ -60,7 +67,12 @@ export async function offerLiveModelVerification(params: {
           : {}),
       }),
     );
-    progress.stop();
+    let result: Awaited<typeof verification>;
+    try {
+      result = await verification;
+    } finally {
+      progress.stop();
+    }
     if (result.ok) {
       await params.prompter.note(
         t("wizard.setup.testAiSuccess", { seconds: (result.latencyMs / 1000).toFixed(1) }),
@@ -75,27 +87,41 @@ export async function offerLiveModelVerification(params: {
     return result;
   };
 
-  let candidate: SetupModelAuthCandidate = {
-    config: params.config,
-    authProfiles: [],
-    persistAuthProfiles: async () => {},
-  };
-  let shouldPersistCandidate = false;
+  let candidate: SetupModelAuthCandidate =
+    params.initialCandidate ??
+    ({
+      config: params.config,
+      authProfiles: [],
+      persistAuthProfiles: async () => {},
+    } satisfies SetupModelAuthCandidate);
+  let shouldPersistCandidate = params.initialCandidate !== undefined;
   while (true) {
     const result = await verify(candidate);
     if (result.ok) {
       if (!shouldPersistCandidate) {
-        return { config: params.config, verified: true, modelRef: result.modelRef };
+        return {
+          config: params.config,
+          attempted: true,
+          persisted: false,
+          verified: true,
+          modelRef: result.modelRef,
+        };
       }
       await candidate.persistAuthProfiles(result.authProfiles);
       const config = await params.writeConfig(candidate.config);
-      return { config, verified: true, modelRef: result.modelRef };
+      return {
+        config,
+        attempted: true,
+        persisted: true,
+        verified: true,
+        modelRef: result.modelRef,
+      };
     }
     if (result.authProfiles) {
       candidate.authProfiles = result.authProfiles;
     }
     if (params.opts.nonInteractive) {
-      return { config: params.config, verified: false };
+      return { config: params.config, attempted: true, persisted: false, verified: false };
     }
     if (
       !params.required &&
@@ -107,7 +133,7 @@ export async function offerLiveModelVerification(params: {
         ],
       })) === "continue"
     ) {
-      return { config: params.config, verified: false };
+      return { config: params.config, attempted: true, persisted: false, verified: false };
     }
 
     candidate = await runSetupModelAuthStep({

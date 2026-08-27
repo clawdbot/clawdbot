@@ -9,6 +9,7 @@ import {
   resolveClosestResolution,
   resolveClosestSize,
   resolveMediaProviderRequestTimeoutMs,
+  resolveReferenceImageCapabilityError,
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
@@ -28,6 +29,28 @@ function parseModelRef(raw?: string) {
 }
 
 describe("media-generation runtime shared candidates", () => {
+  it.each([
+    [0, undefined, undefined],
+    [1, { enabled: false }, "provider/model does not support reference-image edit inputs"],
+    [
+      2,
+      { enabled: true, maxInputImages: 1 },
+      "provider/model supports at most 1 reference image, 2 requested",
+    ],
+    [11, { enabled: true }, "provider/model supports at most 10 reference images, 11 requested"],
+  ] as const)(
+    "validates finite reference-image capability for %s inputs",
+    (inputImageCount, edit, error) => {
+      expect(
+        resolveReferenceImageCapabilityError({
+          candidateRef: "provider/model",
+          inputImageCount,
+          edit,
+        }),
+      ).toBe(error);
+    },
+  );
+
   it("appends auth-backed provider defaults after explicit refs by default", () => {
     const cfg = {
       agents: {
@@ -96,6 +119,59 @@ describe("media-generation runtime shared candidates", () => {
       { provider: "openai", model: "gpt-image-1" },
       { provider: "fal", model: "fal-ai/flux/dev" },
     ]);
+  });
+
+  it("auto-detects config-only providers that do not implement custom readiness", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        models: {
+          providers: {
+            "media-config-only": {
+              apiKey: "config-only-media-key",
+              baseUrl: "https://media.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "media-config-only",
+          defaultModel: "configured-video",
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "media-config-only", model: "configured-video" }]);
+  });
+
+  it("preserves an owner readiness veto even when generic config contains an API key", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        models: {
+          providers: {
+            "media-config-only": {
+              apiKey: "config-only-media-key",
+              baseUrl: "https://media.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "media-config-only",
+          defaultModel: "configured-video",
+          isConfigured: () => false,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([]);
   });
 
   it("orders auto-detected provider defaults by canonical aliases", () => {

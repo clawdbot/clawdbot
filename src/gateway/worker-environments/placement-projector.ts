@@ -1,13 +1,79 @@
-import type { SessionPlacement } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionPlacement,
+  SessionPlacementDiskSpace,
+  SessionPlacementMove,
+  SessionPlacementRunner,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementRecord } from "./placement-store.js";
+import type { WorkerEnvironmentServiceContract } from "./service-contract.js";
 
 export type WorkerSessionPlacementReader = {
   getMany(sessionIds: readonly string[]): ReadonlyMap<string, WorkerSessionPlacementRecord>;
+  getPlacementMoves?(sessionIds: readonly string[]): ReadonlyMap<string, WorkerPlacementMoveIntent>;
 };
+
+export type WorkerPlacementDiskSpaceReader = {
+  read(record: WorkerSessionPlacementRecord): SessionPlacementDiskSpace | undefined;
+  version(): number;
+};
+
+export type WorkerPlacementRunnerAvailabilityReader = {
+  read(record: WorkerSessionPlacementRecord): SessionPlacementRunner | undefined;
+  version(): number;
+};
+
+export function createWorkerPlacementRunnerAvailabilityReader(params: {
+  environments: Pick<WorkerEnvironmentServiceContract, "get">;
+  hasCurrentDeviceRunner: (deviceId: string) => boolean;
+}): WorkerPlacementRunnerAvailabilityReader & { markChanged(): void } {
+  let version = 0;
+  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record) => {
+    if (record.state !== "active") {
+      return undefined;
+    }
+    const environment = params.environments.get(record.environmentId);
+    if (
+      environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
+      environment.state !== "attached" ||
+      environment.ownerEpoch !== record.activeOwnerEpoch ||
+      environment.attachedSessionIds.length !== 1 ||
+      environment.attachedSessionIds[0] !== record.sessionId ||
+      !environment.nodeDeviceId
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "device",
+      deviceId: environment.nodeDeviceId,
+      status: params.hasCurrentDeviceRunner(environment.nodeDeviceId) ? "available" : "offline",
+    };
+  };
+  return {
+    read,
+    markChanged: () => {
+      version += 1;
+    },
+    version: () => version,
+  };
+}
+
+export function projectWorkerPlacementMove(
+  intent: WorkerPlacementMoveIntent,
+): SessionPlacementMove {
+  return {
+    target: intent.target,
+    updatedAtMs: intent.updatedAtMs,
+    ...(intent.lastError ? { error: intent.lastError } : {}),
+  };
+}
 
 /** Removes gateway-only identity and turn-claim fields from the operator projection. */
 export function projectWorkerSessionPlacement(
   record: WorkerSessionPlacementRecord,
+  diskSpace?: SessionPlacementDiskSpace,
+  runner?: SessionPlacementRunner,
 ): SessionPlacement {
   const timing = {
     generation: record.generation,
@@ -18,6 +84,10 @@ export function projectWorkerSessionPlacement(
   const conflict = record.workspaceResultConflict
     ? { workspaceResultConflict: record.workspaceResultConflict }
     : {};
+  const terminal = {
+    ...(record.terminalReason ? { terminalReason: record.terminalReason } : {}),
+    ...(record.terminalAtMs !== null ? { terminalAtMs: record.terminalAtMs } : {}),
+  };
   switch (record.state) {
     case "local":
       return { state: "local", ...timing };
@@ -60,6 +130,8 @@ export function projectWorkerSessionPlacement(
         ...(record.lastLiveEventAckCursor !== null
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
+        ...(diskSpace ? { diskSpace } : {}),
+        ...(runner ? { runner } : {}),
         ...conflict,
       };
     case "draining":
@@ -114,6 +186,7 @@ export function projectWorkerSessionPlacement(
           ? { lastLiveEventAckCursor: record.lastLiveEventAckCursor }
           : {}),
         ...conflict,
+        ...terminal,
       };
     case "failed":
       return {
@@ -134,6 +207,7 @@ export function projectWorkerSessionPlacement(
           : {}),
         ...conflict,
         recoveryError: record.recoveryError,
+        ...terminal,
       };
   }
   // Exhaustive over placement states; the return satisfies consistent-return.

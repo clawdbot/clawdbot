@@ -3,17 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import {
-  clearActivatedPluginRuntimeState,
-  clearPluginRegistryLoadCache,
-  loadOpenClawPlugins,
-} from "./loader.js";
+import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
   clearPluginRuntimeArtifactResolutionMemo,
   resolvePluginRuntimeArtifact,
 } from "./plugin-runtime-artifact-resolution.js";
-import { pinActivePluginChannelRegistry } from "./runtime.js";
+import { getActivePluginChannelRegistry } from "./runtime.js";
 
 const tempDirs: string[] = [];
 
@@ -91,6 +87,80 @@ describe("resolvePluginRuntimeArtifact", () => {
     },
   );
 
+  it("prefers the root build for source-external plugins without using package-local output", () => {
+    const fixture = createBundledPluginFixture();
+    const packageLocalSource = path.join(fixture.rootDir, "dist", "index.js");
+    fs.mkdirSync(path.dirname(packageLocalSource), { recursive: true });
+    fs.writeFileSync(packageLocalSource, 'module.exports = { id: "stale" };\n');
+
+    const resolved = resolvePluginRuntimeArtifact({
+      pluginId: "fixture",
+      entryKind: "runtime",
+      rootDir: fixture.rootDir,
+      source: fixture.source,
+      origin: "bundled",
+      preferBuiltPluginArtifacts: true,
+      packageManifest: { build: { bundledDist: false } },
+    });
+
+    expect(resolved.source).toBe(fixture.builtSource);
+    expect(resolved.source).not.toBe(fs.realpathSync(packageLocalSource));
+  });
+
+  it.each([
+    { entryKind: "runtime" as const, sourceName: "index.ts", artifactName: "index.js" },
+    {
+      entryKind: "setup" as const,
+      sourceName: "setup-entry.ts",
+      artifactName: "setup-entry.js",
+    },
+  ])(
+    "keeps source-external $entryKind entries inside their selected root after packaging",
+    ({ entryKind, sourceName, artifactName }) => {
+      const fixture = createBundledPluginFixture();
+      const packageRoot = path.dirname(path.dirname(fixture.rootDir));
+      const source = path.join(fixture.rootDir, sourceName);
+      if (source !== fixture.source) {
+        fs.writeFileSync(source, "export default { register() {} };\n");
+      }
+      const stagingSource = path.join(
+        packageRoot,
+        "dist-runtime",
+        "extensions",
+        "fixture",
+        artifactName,
+      );
+      fs.mkdirSync(path.dirname(stagingSource), { recursive: true });
+      fs.writeFileSync(
+        stagingSource,
+        `export * from "../../../dist/extensions/fixture/${artifactName}";\n`,
+      );
+      fs.rmSync(path.dirname(fixture.builtSource), { recursive: true });
+      const packagedSource = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "fixture",
+        "dist",
+        artifactName,
+      );
+      fs.mkdirSync(path.dirname(packagedSource), { recursive: true });
+      fs.writeFileSync(packagedSource, 'module.exports = { id: "packed" };\n');
+
+      const resolved = resolvePluginRuntimeArtifact({
+        pluginId: "fixture",
+        entryKind,
+        rootDir: fixture.rootDir,
+        source,
+        origin: "bundled",
+        preferBuiltPluginArtifacts: true,
+        packageManifest: { build: { bundledDist: false } },
+      });
+
+      expect(resolved).toEqual({ source: fs.realpathSync(source), rootDir: fixture.rootDir });
+    },
+  );
+
   it("aliases different physical inputs for the same logical runtime entry", () => {
     const fixture = createBundledPluginFixture();
     const first = resolveFixture({
@@ -130,14 +200,14 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(setup.source).toBe(fs.realpathSync(setupSource));
   });
 
-  it("re-resolves after activated runtime state is cleared", () => {
+  it("re-resolves after the active registry memo is cleared", () => {
     const fixture = createBundledPluginFixture();
     const sourceResolution = resolveFixture({
       ...fixture,
       preferBuiltPluginArtifacts: false,
     });
 
-    clearActivatedPluginRuntimeState();
+    clearPluginRuntimeArtifactResolutionMemo();
 
     const builtResolution = resolveFixture({
       ...fixture,
@@ -164,7 +234,7 @@ describe("resolvePluginRuntimeArtifact", () => {
     expect(builtResolution.source).toBe(fixture.builtSource);
   });
 
-  it("keeps one physical entry across activating registry assemblies", () => {
+  it("resolves replacement artifacts independently while pinned consumers keep their registry", () => {
     const fixture = createBundledPluginFixture();
     const config = {
       plugins: {
@@ -186,7 +256,6 @@ describe("resolvePluginRuntimeArtifact", () => {
           onlyPluginIds: ["fixture"],
           preferBuiltPluginArtifacts: false,
         });
-        pinActivePluginChannelRegistry(sourceRegistry);
         const builtPreferredRegistry = loadOpenClawPlugins({
           cache: false,
           config,
@@ -197,8 +266,13 @@ describe("resolvePluginRuntimeArtifact", () => {
       },
     );
 
-    expect(first.plugins.find((plugin) => plugin.id === "fixture")?.source).toBe(fixture.source);
-    expect(second.plugins.find((plugin) => plugin.id === "fixture")?.source).toBe(fixture.source);
+    expect([...first.pluginRuntimeArtifacts.values()].map((entry) => entry.source)).toEqual([
+      fixture.source,
+    ]);
+    expect([...second.pluginRuntimeArtifacts.values()].map((entry) => entry.source)).toEqual([
+      fixture.builtSource,
+    ]);
+    expect(getActivePluginChannelRegistry()).toBe(second);
   });
 
   it("leaves dist-only installs unchanged because both preferences resolve the built entry", () => {

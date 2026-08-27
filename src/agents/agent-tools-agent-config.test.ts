@@ -37,6 +37,7 @@ describe("Agent-specific tool filtering", () => {
     }),
     readFile: async () => Buffer.from(""),
     writeFile: async () => {},
+    createFileExclusive: async () => "created",
     mkdirp: async () => {},
     remove: async () => {},
     rename: async () => {},
@@ -199,7 +200,7 @@ describe("Agent-specific tool filtering", () => {
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("browser");
-    expect(toolNames).not.toContain("cron");
+    expect(toolNames).not.toContain("automations");
     expect(toolNames).not.toContain("message");
   });
 
@@ -501,7 +502,7 @@ describe("Agent-specific tool filtering", () => {
 
     expect(ownerTools).toContain("exec");
     expect(ownerTools).toContain("process");
-    expect(ownerTools).toContain("cron");
+    expect(ownerTools).toContain("automations");
     expect(ownerTools).toContain("gateway");
     expect(ownerTools).toContain("nodes");
     expect(ownerTools).toContain("openclaw");
@@ -510,7 +511,7 @@ describe("Agent-specific tool filtering", () => {
     expect(ownerTools).toContain("conversations_turn");
     expect(nonOwnerTools).not.toContain("exec");
     expect(nonOwnerTools).not.toContain("process");
-    expect(nonOwnerTools).not.toContain("cron");
+    expect(nonOwnerTools).not.toContain("automations");
     expect(nonOwnerTools).not.toContain("gateway");
     expect(nonOwnerTools).not.toContain("nodes");
     expect(nonOwnerTools).not.toContain("openclaw");

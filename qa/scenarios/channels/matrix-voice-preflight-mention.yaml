@@ -2,6 +2,8 @@ title: Matrix voice notes can trigger mention gating through transcription
 scenario:
   id: matrix-voice-preflight-mention
   surface: channels
+  plugins:
+    - openai
   coverage:
     primary:
       - matrix.media-and-rich-content
@@ -21,7 +23,6 @@ scenario:
         mentionPatterns:
           - 'matrix\W+qa\W+voice\W+pre[ -]?flight\W+ok(?:ay)?'
   execution:
-    profiles: { "matrix:all": 54, "matrix:media": 3 }
     kind: flow
     channel: matrix
     providerMode: mock-openai

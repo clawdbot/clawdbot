@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   authorizeClientVoiceConfirmation as authorizeClientVoiceConfirmationForTest,
   bindAuthorizedClientVoiceConfirmation,
+  checkClientVoiceToolConfirmationPolicy as checkClientVoiceToolConfirmationPolicyForTest,
+  consumeClientVoiceToolConfirmationPolicy as consumeClientVoiceToolConfirmationPolicyForTest,
   deactivateClientVoiceConfirmationSession,
   noteClientVoiceConfirmationUtterance as noteClientVoiceConfirmationUtteranceForTest,
   releaseClientVoiceConfirmationRun,
-  resolveClientVoiceToolConfirmationPolicy as resolveClientVoiceToolConfirmationPolicyForTest,
 } from "./client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
 
@@ -21,10 +22,16 @@ function noteClientVoiceConfirmationUtterance(
   noteClientVoiceConfirmationUtteranceForTest({ agentId: "main", ...params });
 }
 
-function resolveClientVoiceToolConfirmationPolicy(
-  params: Omit<Parameters<typeof resolveClientVoiceToolConfirmationPolicyForTest>[0], "agentId">,
+function checkClientVoiceToolConfirmationPolicy(
+  params: Omit<Parameters<typeof checkClientVoiceToolConfirmationPolicyForTest>[0], "agentId">,
 ) {
-  return resolveClientVoiceToolConfirmationPolicyForTest({ agentId: "main", ...params });
+  return checkClientVoiceToolConfirmationPolicyForTest({ agentId: "main", ...params });
+}
+
+function consumeClientVoiceToolConfirmationPolicy(
+  params: Omit<Parameters<typeof consumeClientVoiceToolConfirmationPolicyForTest>[0], "agentId">,
+) {
+  return consumeClientVoiceToolConfirmationPolicyForTest({ agentId: "main", ...params });
 }
 
 function confirmationIdFrom(reason: string): string {
@@ -42,7 +49,7 @@ function block(params: {
   toolParams?: unknown;
   now?: number;
 }) {
-  const result = resolveClientVoiceToolConfirmationPolicy({
+  const result = checkClientVoiceToolConfirmationPolicy({
     voiceSessionId: params.voiceSessionId,
     runId: params.runId,
     toolName: params.toolName ?? "message",
@@ -63,7 +70,7 @@ describe("client voice confirmation", () => {
     block({ voiceSessionId: "voice-1", runId: "voice-run" });
 
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         toolName: "message",
         toolParams: { action: "send", message: "other run" },
       }),
@@ -77,7 +84,7 @@ describe("client voice confirmation", () => {
     "requires confirmation for an unlisted destructive shell command: %s %s",
     (toolName, command) => {
       expect(
-        resolveClientVoiceToolConfirmationPolicy({
+        checkClientVoiceToolConfirmationPolicy({
           voiceSessionId: "voice-1",
           runId: "voice-run",
           toolName,
@@ -91,7 +98,7 @@ describe("client voice confirmation", () => {
     "does not require confirmation for a classified read-only shell command: %s",
     (command) => {
       expect(
-        resolveClientVoiceToolConfirmationPolicy({
+        checkClientVoiceToolConfirmationPolicy({
           voiceSessionId: "voice-1",
           runId: "voice-run",
           toolName: "exec",
@@ -103,7 +110,7 @@ describe("client voice confirmation", () => {
 
   it("requires confirmation before delegating work outside the voice-bound run", () => {
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "voice-run",
         toolName: "sessions_send",
@@ -114,7 +121,7 @@ describe("client voice confirmation", () => {
 
   it("keeps pre-gate behavior for sessions that cannot report spoken approvals", () => {
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-legacy",
         runId: "voice-run",
         toolName: "message",
@@ -123,7 +130,7 @@ describe("client voice confirmation", () => {
       }),
     ).toEqual({ allowed: true });
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-modern",
         runId: "voice-run",
         toolName: "message",
@@ -135,7 +142,7 @@ describe("client voice confirmation", () => {
 
   it("keeps workspace-local writes confirmation-free", () => {
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "voice-run",
         toolName: "write",
@@ -191,7 +198,7 @@ describe("client voice confirmation", () => {
     bindAuthorizedClientVoiceConfirmation({ grant, runId: "run-approved" });
 
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-approved",
         toolName: "message",
@@ -200,7 +207,7 @@ describe("client voice confirmation", () => {
       }).allowed,
     ).toBe(false);
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-approved",
         toolName: "message",
@@ -263,7 +270,7 @@ describe("client voice confirmation", () => {
     bindAuthorizedClientVoiceConfirmation({ grant, runId: "run-approved" });
 
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-approved",
         toolName: "message",
@@ -272,12 +279,30 @@ describe("client voice confirmation", () => {
       }),
     ).toEqual({ allowed: true });
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      checkClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-approved",
         toolName: "message",
         toolParams,
         now: 104,
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      consumeClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-1",
+        runId: "run-approved",
+        toolName: "message",
+        toolParams,
+        now: 105,
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      consumeClientVoiceToolConfirmationPolicy({
+        voiceSessionId: "voice-1",
+        runId: "run-approved",
+        toolName: "message",
+        toolParams,
+        now: 106,
       }).allowed,
     ).toBe(false);
   });
@@ -345,7 +370,7 @@ describe("client voice confirmation", () => {
     bindAuthorizedClientVoiceConfirmation({ grant, runId: "run-approved" });
 
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      consumeClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-other",
         toolName: "message",
@@ -354,7 +379,7 @@ describe("client voice confirmation", () => {
       }).allowed,
     ).toBe(false);
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      consumeClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-approved",
         toolName: "message",
@@ -447,7 +472,7 @@ describe("client voice confirmation", () => {
 
     deactivateClientVoiceConfirmationSession("main", "voice-1", ["run-live"]);
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      consumeClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-live",
         toolName: "message",
@@ -459,7 +484,7 @@ describe("client voice confirmation", () => {
     bindAuthorizedClientVoiceConfirmation({ grant, runId: "run-done" });
     releaseClientVoiceConfirmationRun("main", "voice-1", "run-done");
     expect(
-      resolveClientVoiceToolConfirmationPolicy({
+      consumeClientVoiceToolConfirmationPolicy({
         voiceSessionId: "voice-1",
         runId: "run-done",
         toolName: "message",
@@ -470,7 +495,7 @@ describe("client voice confirmation", () => {
   });
 
   it("isolates same-named voice sessions across agents", () => {
-    const blocked = resolveClientVoiceToolConfirmationPolicyForTest({
+    const blocked = checkClientVoiceToolConfirmationPolicyForTest({
       agentId: "agent-b",
       voiceSessionId: "shared-id",
       runId: "run-b",

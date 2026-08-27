@@ -1,6 +1,7 @@
 // Msteams plugin module implements shared behavior.
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
+import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   isHttpsUrlAllowedByHostnameSuffixAllowlist,
@@ -15,7 +16,6 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "../request-timeout.js";
-import { responseWithRelease } from "../response-with-release.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "./types.js";
 
 type InlineImageCandidate =
@@ -165,16 +165,20 @@ const GRAPH_SHARED_LINK_HOST_SUFFIXES = [
  * than directly.
  */
 function isGraphSharedLinkUrl(url: string): boolean {
-  let host: string;
+  let parsed: URL;
   try {
-    host = normalizeLowercaseStringOrEmpty(new URL(url).hostname);
+    parsed = new URL(url);
   } catch {
     return false;
   }
-  if (!host) {
+  const host = normalizeLowercaseStringOrEmpty(parsed.hostname);
+  if (parsed.protocol !== "https:" || !host) {
     return false;
   }
-  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some((suffix) => host === suffix || host.endsWith(suffix));
+  // Only HTTPS URLs on a DNS label boundary may select the authenticated Graph path.
+  return GRAPH_SHARED_LINK_HOST_SUFFIXES.some(
+    (suffix) => host === suffix || host.endsWith(suffix.startsWith(".") ? suffix : `.${suffix}`),
+  );
 }
 
 /**
@@ -626,6 +630,10 @@ async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
+export function isRedirectStatus(status: number): boolean {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
  * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
@@ -673,6 +681,10 @@ async function safeFetch(params: {
   }
 
   if (!hasDispatcher) {
+    const lookupFn: LookupFn = async (hostname) => {
+      const resolved = await resolveFn(hostname);
+      return [{ ...resolved, family: resolved.address.includes(":") ? 6 : 4 }];
+    };
     const guarded = await fetchWithSsrFGuard({
       url: currentUrl,
       fetchImpl: resolveGuardedFetchImpl({
@@ -686,7 +698,7 @@ async function safeFetch(params: {
       maxRedirects: MAX_SAFE_REDIRECTS,
       requireHttps: true,
       policy: resolveMediaSsrfPolicy(params.allowHosts),
-      lookupFn: resolveFn as LookupFn,
+      lookupFn,
       retainAuthorizationRedirectHostnameAllowlist:
         resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
       auditContext: "msteams.attachment",
@@ -711,7 +723,7 @@ async function safeFetch(params: {
       redirect: "manual",
     });
 
-    if (![301, 302, 303, 307, 308].includes(res.status)) {
+    if (!isRedirectStatus(res.status)) {
       return res;
     }
 

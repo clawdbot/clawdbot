@@ -89,6 +89,12 @@ describe("group runtime loading", () => {
         defaultActivation: "always",
       }),
     ).toContain("You see every message; most need no response. When you do reply");
+    expect(
+      isolatedGroups.buildGroupIntro({
+        sessionEntry: { groupActivation: "mention" } as never,
+        defaultActivation: "always",
+      }),
+    ).toContain("Activation: trigger-only");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
   });
@@ -215,37 +221,6 @@ describe("group runtime loading", () => {
     expect(context).toContain("do not use the message tool to send to this same destination");
     expect(context).toContain("attachments to this same channel/thread");
     expect(context).not.toContain("group chat");
-  });
-
-  it("marks non-visible assistant replies silent for groups with silence allowed", () => {
-    expect(
-      groups.resolveGroupSilentReplyBehavior({
-        defaultActivation: "always",
-        silentReplyPolicy: "allow",
-      }).allowEmptyAssistantReplyAsSilent,
-    ).toBe(true);
-
-    expect(
-      groups.resolveGroupSilentReplyBehavior({
-        defaultActivation: "mention",
-        silentReplyPolicy: "allow",
-      }).allowEmptyAssistantReplyAsSilent,
-    ).toBe(true);
-
-    expect(
-      groups.resolveGroupSilentReplyBehavior({
-        sessionEntry: { groupActivation: "mention" } as never,
-        defaultActivation: "always",
-        silentReplyPolicy: "allow",
-      }).allowEmptyAssistantReplyAsSilent,
-    ).toBe(true);
-
-    expect(
-      groups.resolveGroupSilentReplyBehavior({
-        defaultActivation: "always",
-        silentReplyPolicy: "disallow",
-      }).allowEmptyAssistantReplyAsSilent,
-    ).toBe(false);
   });
 
   it("resolves requireMention through runtime and generic fallback paths", async () => {

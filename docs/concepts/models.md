@@ -56,6 +56,7 @@ OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
 Related model-config surfaces:
 
 - `agents.defaults.models` stores aliases and per-model settings. Adding an entry does not restrict model overrides.
+- `agents.defaults.modelSelectionScope` optionally chooses the scope of chat commands and Gateway session model updates without an explicit scope. Omit it to preserve existing behavior; see [Model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 - `agents.defaults.modelPolicy.allow` is the optional override allowlist. Use exact refs or trailing prefix wildcards such as `provider/*` and `provider/namespace/*`; omit it or set `[]` to allow any model. Per-agent `agents.entries.*.modelPolicy.allow` replaces the default policy for that agent.
 - `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.entries.*.utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Generated titles retry once with the primary model when a distinct utility model fails. For dashboard titles, automatic utility derivation and the regular fallback follow the effective session provider and auth profile; an explicit utility model keeps its configured provider/auth. An empty utility model skips only the alternate small-model route, not dashboard title generation. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
@@ -80,7 +81,7 @@ Other selection rules:
 
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
-- The Control UI model picker asks the Gateway for its configured model view. An explicit `modelPolicy.allow` filters it, including trailing prefix wildcard entries; otherwise it shows configured models plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening or refreshing a model picker may discover models required by a trailing `provider/*` policy entry. Default and configured picker views hide catalog rows marked `deprecated` or `disabled` unless that exact model is configured as a primary, fallback, utility/tool model, alias/settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 Full mechanics: [Model failover](/concepts/model-failover).
@@ -99,9 +100,9 @@ openclaw onboard
 
 Sets up model and auth for common providers without hand-editing config, including OpenAI Codex subscription OAuth and Anthropic (API key or Claude CLI reuse).
 
-With no primary model configured, fresh OpenAI API-key setup selects
-`openai/gpt-5.6`; the bare direct-API id resolves to the Sol tier. Fresh
-ChatGPT/Codex OAuth setup selects the exact `openai/gpt-5.6-sol` catalog ref.
+With no primary model configured, fresh OpenAI API-key and ChatGPT/Codex OAuth
+setup select the exact `openai/gpt-5.6-sol` catalog ref. The bare direct-API
+`openai/gpt-5.6` alias remains supported and resolves to the Sol tier.
 Reauthentication preserves an existing explicit primary model, including
 `openai/gpt-5.5`. If GPT-5.6 is unavailable to the account, select
 `openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
@@ -164,20 +165,54 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 `openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
 </Accordion>
 
+## Choose a model for a session
+
+Choose the model when you create a session whenever possible. The Control UI's
+**New Chat** composer includes the model picker for this reason: a fresh session
+gives the selected model a clean conversation boundary.
+
+Changing the model for an established session is an advanced operation. The
+session transcript remains available, but the next model may have a different
+context window, prompt and tool behavior, or prompt-cache implementation. A
+mid-session switch can therefore reduce continuity, require earlier compaction,
+or lose prompt-cache reuse and increase latency or cost. For a planned model
+change, prefer a new session; use `/model` or the active-session model picker
+when you intentionally want the existing transcript to continue with another
+model.
+
+Keep the thinking or reasoning level stable for the session when cache reuse
+matters. On OpenAI, changing the reasoning effort changes the reusable request
+state and can force the next turn to process the full conversation again. Other
+providers may also include thinking configuration in their cache identity, so
+changing only the thinking level can increase latency and input-token cost even
+when the model itself stays the same.
+
 ## `/model` in chat
+
+`/model <model>` changes the current session. Use `-s` for only this session, `-a` to also update the agent's default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`. Configured-default writes require owner or admin authority.
+
+Without a scope flag, `agents.defaults.modelSelectionScope` can opt into `"session"`, `"agent"`, or `"global"` scope. Leaving this setting unset preserves existing behavior: direct owner/admin commands request a best-effort update to the agent's explicit primary when one exists, otherwise to the shared `agents.defaults.model` fallback. Without owner/admin authority, bare commands remain session-only and explicit `-a` or `-g` requests are rejected.
 
 ```text
 /model
 /model list
 /model 3
 /model openai/gpt-5.4
+/model openai/gpt-5.4 -s
+/model openai/gpt-5.4 -a
+/model openai/gpt-5.4 -g
+/model default -s
 /model default
 /model status
 ```
 
-- `/model` and `/model list` show a compact numbered picker (model family + available providers); `/model <#>` selects from it. On Discord this opens provider/model dropdowns with a Submit step; on Telegram, picker selections are session-scoped and never rewrite the agent's persistent default in `openclaw.json`. `/models add` is deprecated and returns a message instead of registering models from chat.
-- `/model` persists the new session selection immediately. If the agent is idle, the next run uses it right away; if a run is already active, the switch is queued for the next clean retry point (or a later one, if tool activity or reply output already started).
-- `/model default` clears the session selection so it inherits the configured primary again.
+- `/model` and `/model list` show a compact numbered picker. `/model <#>` selects from it. Discord pickers follow the direct command behavior, including `modelSelectionScope`. Telegram callback pickers always stay session-only. `/models add` is deprecated and returns a message instead of registering models from chat.
+- **Current session:** `/model <model> -s` (or `--session`) changes only this session, regardless of `modelSelectionScope`. Neither configured default changes.
+- **Agent default:** Owner/admin `/model <model> -a` (or `--agent`) selects the model for this session and requests an update for `agents.entries.<agent>.model`. It creates an explicit primary for that configured agent when needed and never falls through to the shared global default.
+- **Global default:** Owner/admin `/model <model> -g` (or `--global`) changes this session and requests an update for the shared `agents.defaults.model` fallback. It does not overwrite other agents' explicit primaries or other sessions' model pins. New and existing unpinned sessions, and cron jobs that inherit this default, can use the changed model on their next run.
+- Immutable configuration stays unchanged. Asynchronous write errors are logged without reverting the session selection. Explicit model and auth-profile pins survive `/new`, `/reset`, session rollover, compaction, and cooldown windows while valid.
+- **Use the configured default:** `/model default -s` clears the current session model selection without writing configured defaults. A compatible auth-profile pin remains. An incompatible pin is cleared. Selecting the effective configured default by name also clears the session model pin, but agent/global scope still requests a write to that configured target. This does not restore an older configured default changed by a previous selection.
+- If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point (or a later one, if tool activity or reply output already started).
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
 - Model refs are parsed by splitting on the first `/`; type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, e.g. `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries: (1) alias match, (2) unique configured-provider match for that exact unprefixed model id, (3) the configured default provider (deprecated fallback) — and if that provider no longer exposes the configured default model, the first configured provider/model instead, to avoid surfacing a stale removed-provider default.
@@ -212,6 +247,32 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 ## Models registry (`models.json`)
 
+### Hosted catalog updates
+
+OpenClaw can refresh the model metadata shipped by installed provider plugins
+without waiting for a new OpenClaw release. The Gateway makes one background
+JSON `GET` at startup and then checks at most every six hours. The request sends
+no prompts, credentials, model usage, or configuration payload beyond the
+normal HTTP user agent and conditional cache headers.
+
+The downloaded bundle is stored in the shared SQLite state database and becomes
+visible after the next Gateway restart. Remote data can update or add models
+only for providers declared by installed plugin manifests. It cannot supply API
+base URLs or request headers, and a catalog older than the installed release's
+build stamp is ignored.
+
+The hosted file is published from the public
+[`openclaw/catalog`](https://github.com/openclaw/catalog) GitHub repository.
+Its scheduled workflow refreshes from OpenClaw's shipped plugin manifests and
+pricing sources; every catalog content change is preserved as a public commit.
+
+Run `openclaw models refresh` for an immediate metadata and pricing check, or
+disable every hosted catalog request with `models.catalogRefresh.enabled:
+false`. When disabled, pricing stays at bundled and explicitly configured
+values. A self-hosted mirror can be selected with an HTTPS
+`models.catalogRefresh.url` (or localhost HTTP for testing); see
+[configuration reference](/gateway/configuration-reference#models).
+
 Custom providers configured under `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored separately as generated plugin-owned catalog shards and load automatically. This file is merged with config by default; set `models.mode: "replace"` to use only your configured providers.
 
 <AccordionGroup>
@@ -220,7 +281,7 @@ Custom providers configured under `models.providers` are written into `models.js
 
     - A non-empty `baseUrl` already present in the agent `models.json` wins.
     - A non-empty `apiKey` in `models.json` wins only when that provider is not SecretRef-managed in the current config/auth-profile context.
-    - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec refs.
+    - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
     - Other provider fields refresh from config and normalized catalog data.

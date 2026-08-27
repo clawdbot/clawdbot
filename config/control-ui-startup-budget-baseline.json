@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 323435,
-  "reason": "catalog session activity indicator",
-  "updatedAt": "2026-07-23"
+  "startupJsGzipBytes": 342930,
+  "reason": "per-profile appearance preferences: profile-scoped resolution, users.prefs routing, and live cross-device sync on the boot path; measured 342875 B on the tide/beacon/phosphor base, pinned with jitter headroom",
+  "updatedAt": "2026-08-26"
 }

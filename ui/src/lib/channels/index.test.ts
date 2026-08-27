@@ -1,20 +1,12 @@
 // Channels domain tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../../api/types.ts";
-import { createChannelCapability } from "./index.ts";
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
+import {
+  channelSnapshotEntryIsActive,
+  channelSnapshotHasActiveChannel,
+  createChannelCapability,
+} from "./index.ts";
 
 function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
   return {
@@ -26,6 +18,39 @@ function createChannelsSnapshot(label: string): ChannelsStatusSnapshot {
     channelDefaultAccountId: {},
   };
 }
+
+describe("channel readiness", () => {
+  it("treats aggregate or account configuration as active", () => {
+    const snapshot = createChannelsSnapshot("Test");
+    snapshot.channelOrder = ["configured", "connected", "empty"];
+    snapshot.channels = {
+      configured: { configured: true },
+      connected: { configured: false, connected: false },
+      empty: { configured: false, running: false, connected: false },
+    };
+    snapshot.channelAccounts = {
+      connected: [{ accountId: "work", connected: true }],
+      empty: [],
+    };
+
+    expect(channelSnapshotEntryIsActive(snapshot, "configured")).toBe(true);
+    expect(channelSnapshotEntryIsActive(snapshot, "connected")).toBe(true);
+    expect(channelSnapshotEntryIsActive(snapshot, "empty")).toBe(false);
+    expect(channelSnapshotHasActiveChannel(snapshot)).toBe(true);
+  });
+
+  it("recognizes active channels omitted from channelOrder", () => {
+    const snapshot = createChannelsSnapshot("Test");
+    snapshot.channelOrder = [];
+    snapshot.channels = {};
+    snapshot.channelAccounts = {
+      telegram: [{ accountId: "default", running: true }],
+    };
+
+    expect(channelSnapshotHasActiveChannel(snapshot)).toBe(true);
+    expect(channelSnapshotHasActiveChannel(null)).toBe(false);
+  });
+});
 
 describe("channels controller WhatsApp wait", () => {
   beforeEach(() => {
@@ -301,12 +326,67 @@ describe("channels controller WhatsApp logout", () => {
 
     await channels.logoutWhatsApp();
 
-    expect(channels.state.whatsappLoginMessage).toBe("Error: credential cleanup failed");
+    expect(channels.state.whatsappLoginMessage).toBe("credential cleanup failed");
     expect(channels.state.whatsappLoginQrDataUrl).toBe("data:image/png;base64,current-qr");
     expect(channels.state.whatsappLoginConnected).toBe(true);
-    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "channels.status")).toHaveLength(0);
     channels.dispose();
   });
+});
+
+describe("channels controller WhatsApp mutation failures", () => {
+  it.each([
+    {
+      operation: "login",
+      method: "web.login.start",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) =>
+        channels.startWhatsApp(false),
+      preservesQr: false,
+    },
+    {
+      operation: "scan wait",
+      method: "web.login.wait",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.waitWhatsApp(),
+      preservesQr: true,
+    },
+    {
+      operation: "logout",
+      method: "channels.logout",
+      invoke: (channels: ReturnType<typeof createChannelCapability>) => channels.logoutWhatsApp(),
+      preservesQr: true,
+    },
+  ])(
+    "publishes a rejected $operation without probing channel status",
+    async ({ method, invoke, preservesQr }) => {
+      const request = vi.fn(async (requestedMethod: string) => {
+        if (requestedMethod === method) {
+          throw new Error("WhatsApp request rejected");
+        }
+        return createChannelsSnapshot("unexpected refresh");
+      });
+      const channels = createChannelCapability({
+        snapshot: { client: { request }, phase: "connected" },
+        subscribe: () => () => undefined,
+      } as never);
+      channels.state.whatsappLoginQrDataUrl = "data:image/png;base64,current-qr";
+      channels.state.whatsappLoginConnected = true;
+      const updates: Array<{ busy: boolean; message: string | null }> = [];
+      channels.subscribe((state) => {
+        updates.push({ busy: state.whatsappBusy, message: state.whatsappLoginMessage });
+      });
+
+      await invoke(channels);
+
+      expect(
+        request.mock.calls.filter(([requestedMethod]) => requestedMethod === "channels.status"),
+      ).toHaveLength(0);
+      expect(updates.at(-1)).toEqual({ busy: false, message: "WhatsApp request rejected" });
+      expect(channels.state.whatsappLoginQrDataUrl).toBe(
+        preservesQr ? "data:image/png;base64,current-qr" : null,
+      );
+      channels.dispose();
+    },
+  );
 });
 
 describe("channels controller DM pairing", () => {
@@ -432,7 +512,7 @@ describe("channels controller DM pairing", () => {
     await approval;
 
     expect(channels.state.pairingSnapshot?.requests).toEqual([]);
-    expect(channels.state.pairingError).toBe("Error: refresh unavailable");
+    expect(channels.state.pairingError).toBe("refresh unavailable");
     channels.dispose();
   });
 
@@ -588,12 +668,48 @@ describe("channels controller DM pairing", () => {
     await channels.refreshPairing();
 
     expect(channels.state.pairingSnapshot).toBe(emptyPairing);
-    expect(channels.state.pairingError).toBe("Error: gateway unavailable");
+    expect(channels.state.pairingError).toBe("gateway unavailable");
     channels.dispose();
   });
 });
 
 describe("channel refresh sequencing", () => {
+  it("clears a failed request generation on reconnect so status can recover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockResolvedValueOnce(createChannelsSnapshot("recovered"));
+    const client = { request };
+    let snapshot = { client, phase: "connected" };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+
+    await channels.refresh();
+    expect(channels.state.channelsError).toBe("status unavailable");
+
+    snapshot = { client, phase: "reconnecting" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    snapshot = { client, phase: "connected" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+
+    expect(channels.state.channelsError).toBeNull();
+    await channels.refresh();
+    expect(channels.state.channelsSnapshot?.channelLabels.test).toBe("recovered");
+    channels.dispose();
+  });
+
   it("rejects an in-flight channel snapshot after read access is revoked", async () => {
     const pending = createDeferred<ChannelsStatusSnapshot | null>();
     const request = vi.fn(() => pending.promise);

@@ -1,19 +1,16 @@
 // Host-owned SQLite leases serialize trusted work across processes.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { isSqliteLockError } from "../infra/sqlite-transaction.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "./openclaw-agent-db.js";
+import { loggingState } from "../logging/state.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -22,12 +19,12 @@ import {
 } from "./openclaw-state-db.js";
 
 type LeaseDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
-type AgentLeaseDatabase = Pick<OpenClawAgentKyselyDatabase, "state_leases">;
 type LeaseKysely = ReturnType<typeof getNodeSqliteKysely<LeaseDatabase>>;
 
-type OpenClawStateLeaseDatabase =
-  | { scope: "shared"; options?: OpenClawStateDatabaseOptions }
-  | { scope: "agent"; agentId: string };
+type OpenClawStateLeaseDatabase = {
+  scope: "shared";
+  options?: OpenClawStateDatabaseOptions;
+};
 
 type OpenClawStateLeaseOptions = {
   scope: string;
@@ -50,7 +47,7 @@ export type OpenClawStateLeaseContext = {
   assertOwnedInTransaction(database: DatabaseSync): void;
 };
 
-export type OpenClawStateLeaseErrorCode =
+type OpenClawStateLeaseErrorCode =
   | "OPENCLAW_STATE_LEASE_INVALID_INPUT"
   | "OPENCLAW_STATE_LEASE_TIMEOUT"
   | "OPENCLAW_STATE_LEASE_ABORTED"
@@ -76,6 +73,45 @@ const ACQUIRE_BACKOFF = {
 const MIN_LEASE_MS = 1_000;
 const LEASE_DB_BUSY_TIMEOUT_MS = 0;
 const RELEASE_RETRY_TIMEOUT_MS = 2_000;
+const processExitLeaseCleanups = new Set<() => void>();
+let processExitListenerInstalled = false;
+
+function runProcessExitLeaseCleanups(): void {
+  processExitListenerInstalled = false;
+  // Exit cleanup runs after CLI output routing is restored (for example after a
+  // --json envelope already reached stdout). Lease release reopens the state
+  // database and can emit diagnostics, so keep them on stderr to preserve
+  // machine-readable stdout for the whole process lifetime.
+  const previousForceConsoleToStderr = loggingState.forceConsoleToStderr;
+  loggingState.forceConsoleToStderr = true;
+  try {
+    for (const cleanup of processExitLeaseCleanups) {
+      try {
+        cleanup();
+      } catch {
+        // Expiry still recovers a lease when synchronous process-exit cleanup loses a DB race.
+      }
+    }
+    processExitLeaseCleanups.clear();
+  } finally {
+    loggingState.forceConsoleToStderr = previousForceConsoleToStderr;
+  }
+}
+
+function registerProcessExitLeaseCleanup(cleanup: () => void): () => void {
+  processExitLeaseCleanups.add(cleanup);
+  if (!processExitListenerInstalled) {
+    process.once("exit", runProcessExitLeaseCleanups);
+    processExitListenerInstalled = true;
+  }
+  return () => {
+    processExitLeaseCleanups.delete(cleanup);
+    if (processExitLeaseCleanups.size === 0 && processExitListenerInstalled) {
+      process.removeListener("exit", runProcessExitLeaseCleanups);
+      processExitListenerInstalled = false;
+    }
+  };
+}
 
 function leaseError(
   code: OpenClawStateLeaseErrorCode,
@@ -117,11 +153,8 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
   if (typeof database !== "object" || database === null || Array.isArray(database)) {
     throw invalidInput("state lease database must be an object");
   }
-  if (database.scope !== "shared" && database.scope !== "agent") {
-    throw invalidInput("state lease database scope must be shared or agent");
-  }
-  if (database.scope === "agent") {
-    validateNonEmptyString(database.agentId, "state lease agent database agentId");
+  if (database.scope !== "shared") {
+    throw invalidInput("state lease database scope must be shared");
   }
   const leaseLabel =
     options.leaseLabel === undefined
@@ -148,63 +181,27 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
   };
 }
 
-function readBusyTimeout(database: DatabaseSync): number {
-  const row = database // sqlite-allow-raw -- Narrow connection primitive for bounded lease admission.
-    .prepare("PRAGMA busy_timeout")
-    .get() as { busy_timeout?: unknown; timeout?: unknown } | undefined;
-  const value = row?.busy_timeout ?? row?.timeout;
-  return typeof value === "bigint" ? Number(value) : Number(value ?? 0);
-}
-
-function withBusyTimeout<T>(database: DatabaseSync, busyTimeoutMs: number, run: () => T): T {
-  const previousBusyTimeoutMs = readBusyTimeout(database);
-  if (previousBusyTimeoutMs === busyTimeoutMs) {
-    return run();
-  }
-  database.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`); // sqlite-allow-raw -- Bound synchronous lease admission to waitMs.
-  try {
-    return run();
-  } finally {
-    if (database.isOpen) {
-      database.exec(`PRAGMA busy_timeout = ${previousBusyTimeoutMs}`); // sqlite-allow-raw -- Restore canonical connection policy.
-    }
-  }
-}
-
 function withLeaseWriteTransaction<T>(
   database: OpenClawStateLeaseDatabase,
   operationLabel: string,
   operation: (db: DatabaseSync, kysely: LeaseKysely) => T,
   busyTimeoutMs = LEASE_DB_BUSY_TIMEOUT_MS,
 ): T {
-  if (database.scope === "shared") {
-    const stateDatabase = openOpenClawStateDatabase(database.options);
-    const run = () =>
-      runOpenClawStateWriteTransaction(
-        ({ db }) => operation(db, getNodeSqliteKysely<LeaseDatabase>(db)),
-        database.options,
-        { operationLabel, busyTimeoutMs },
-      );
-    return withBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
-  }
-  const agentDatabase = openOpenClawAgentDatabase({ agentId: database.agentId });
+  const stateDatabase = openOpenClawStateDatabase(database.options);
   const run = () =>
-    runOpenClawAgentWriteTransaction(
-      ({ db }) => operation(db, getNodeSqliteKysely<AgentLeaseDatabase>(db)),
-      { agentId: database.agentId },
+    runOpenClawStateWriteTransaction(
+      ({ db }) => operation(db, getNodeSqliteKysely<LeaseDatabase>(db)),
+      database.options,
       { operationLabel, busyTimeoutMs },
     );
-  return withBusyTimeout(agentDatabase.db, busyTimeoutMs, run);
+  return runWithSqliteBusyTimeout(stateDatabase.db, busyTimeoutMs, run);
 }
 
 function withLeaseRead<T>(
   database: OpenClawStateLeaseDatabase,
   operation: (db: DatabaseSync, kysely: LeaseKysely) => T,
 ): T {
-  const sqlite =
-    database.scope === "shared"
-      ? openOpenClawStateDatabase(database.options).db
-      : openOpenClawAgentDatabase({ agentId: database.agentId }).db;
+  const sqlite = openOpenClawStateDatabase(database.options).db;
   return operation(sqlite, getNodeSqliteKysely<LeaseDatabase>(sqlite));
 }
 
@@ -269,11 +266,7 @@ function renew(
       db,
       kysely
         .updateTable("state_leases")
-        .set({
-          expires_at: expiresAt,
-          heartbeat_at: now,
-          updated_at: now,
-        })
+        .set({ expires_at: expiresAt, heartbeat_at: now, updated_at: now })
         .where("scope", "=", params.scope)
         .where("lease_key", "=", params.key)
         .where("owner", "=", params.owner)
@@ -367,11 +360,8 @@ async function releaseBestEffort(params: Parameters<typeof release>[0]): Promise
       release(params);
       return;
     } catch (error) {
-      if (!isSqliteLockError(error)) {
-        return;
-      }
       const now = performance.now();
-      if (now >= deadline) {
+      if (!isSqliteLockError(error) || now >= deadline) {
         return;
       }
       attempt += 1;
@@ -480,6 +470,15 @@ export async function withOpenClawStateLease<T>(
     owner,
     leaseLabel: validated.leaseLabel,
   };
+  // `process.exit()` skips async `finally` blocks. Release synchronously so a normal CLI error
+  // cannot strand the lease until its TTL and block the next lifecycle command.
+  const unregisterProcessExitCleanup = registerProcessExitLeaseCleanup(() => {
+    release({
+      ...identity,
+      database: validated.database,
+      operationLabel: validated.operationLabel,
+    });
+  });
   const leaseLost = new AbortController();
   const operationSignal = validated.signal
     ? AbortSignal.any([validated.signal, leaseLost.signal])
@@ -551,9 +550,6 @@ export async function withOpenClawStateLease<T>(
   try {
     let result: T;
     try {
-      if (validated.signal?.aborted) {
-        throw abortError(validated.signal, "operation", validated.leaseLabel);
-      }
       // Acquisition and callback entry are separate scheduling points. A
       // suspended process must not enter after its persisted lease expires.
       assertOperationOwned();
@@ -580,6 +576,7 @@ export async function withOpenClawStateLease<T>(
     verifyLeaseOwnership({ ...identity, database: validated.database });
     return result;
   } finally {
+    unregisterProcessExitCleanup();
     clearInterval(heartbeat);
     if (expiryTimer) {
       clearTimeout(expiryTimer);

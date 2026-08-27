@@ -1,3 +1,4 @@
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 // Openai plugin module implements openai chatgpt device code behavior.
 import {
   shouldUseEnvHttpProxyForUrl,
@@ -7,9 +8,10 @@ import {
   positiveSecondsToSafeMilliseconds,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { resolveOpenAICodexAccessTokenExpiry } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
 
 const OPENAI_AUTH_BASE_URL = "https://auth.openai.com";
@@ -149,12 +151,13 @@ function formatDeviceCodeError(params: {
     : `${params.prefix}: HTTP ${params.status}`;
 }
 
-async function readOpenAICodexDeviceBody(response: Response): Promise<string> {
+async function readOpenAICodexDeviceBody(response: Response, timeoutMs: number): Promise<string> {
   return await readResponseTextLimited(
     response,
     response.ok
       ? OPENAI_CODEX_DEVICE_JSON_BODY_LIMIT_BYTES
       : OPENAI_CODEX_DEVICE_ERROR_BODY_LIMIT_BYTES,
+    { chunkTimeoutMs: timeoutMs },
   );
 }
 
@@ -183,7 +186,7 @@ async function runOpenAICodexDeviceRequest(params: {
     return {
       ok: response.ok,
       status: response.status,
-      bodyText: await readOpenAICodexDeviceBody(response),
+      bodyText: await readOpenAICodexDeviceBody(response, params.timeoutMs),
     };
   } finally {
     await release();
@@ -299,11 +302,22 @@ async function pollOpenAICodexDeviceCode(params: {
       });
     } catch (error) {
       rethrowIfDeviceCodeCallerAborted(params.signal, error);
-      // A stalled poll is transient; keep the overall 15-minute authorization deadline.
       if (isDeviceCodeOperationTimeoutError(error)) {
         continue;
       }
-      throw error;
+      const retryableTransportError = collectErrorGraphCandidates(error, (candidate) => [
+        candidate.cause,
+      ]).some(
+        (candidate) => classifyTransientNetworkErrorCode(extractErrorCode(candidate)) !== undefined,
+      );
+      if (!retryableTransportError) {
+        throw error;
+      }
+      await waitForDeviceCodePoll(
+        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+        params.signal,
+      );
+      continue;
     }
 
     if (result.ok) {
@@ -383,7 +397,7 @@ async function exchangeOpenAICodexDeviceCode(params: {
 
   const expires =
     resolveExpiresAtMsFromDurationSeconds(body?.expires_in) ??
-    resolveCodexAccessTokenExpiry(access) ??
+    resolveOpenAICodexAccessTokenExpiry(access) ??
     Date.now();
 
   return {

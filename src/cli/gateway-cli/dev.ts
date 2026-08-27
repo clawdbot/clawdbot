@@ -8,6 +8,7 @@ import { resolveWorkspaceTemplateSearchDirs } from "../../agents/workspace-templ
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { handleReset } from "../../commands/onboard-helpers.js";
 import { createConfigIO, replaceConfigFile } from "../../config/config.js";
+import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../../utils.js";
 
@@ -65,7 +66,7 @@ async function ensureDevWorkspace(dir: string) {
   const resolvedDir = resolveUserPath(dir);
   await fs.promises.mkdir(resolvedDir, { recursive: true });
 
-  const [agents, soul, tools, identity, user] = await Promise.all([
+  const [agents, soul, identity, user] = await Promise.all([
     loadDevTemplate(
       "AGENTS.dev.md",
       `# AGENTS.md - OpenClaw Dev Workspace\n\nDefault dev workspace for openclaw gateway --dev.\n`,
@@ -73,10 +74,6 @@ async function ensureDevWorkspace(dir: string) {
     loadDevTemplate(
       "SOUL.dev.md",
       `# SOUL.md - Dev Persona\n\nProtocol droid for debugging and operations.\n`,
-    ),
-    loadDevTemplate(
-      "TOOLS.dev.md",
-      `# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n`,
     ),
     loadDevTemplate(
       "IDENTITY.dev.md",
@@ -90,7 +87,6 @@ async function ensureDevWorkspace(dir: string) {
 
   await writeFileIfMissing(path.join(resolvedDir, "AGENTS.md"), agents);
   await writeFileIfMissing(path.join(resolvedDir, "SOUL.md"), soul);
-  await writeFileIfMissing(path.join(resolvedDir, "TOOLS.md"), tools);
   await writeFileIfMissing(path.join(resolvedDir, "IDENTITY.md"), identity);
   await writeFileIfMissing(path.join(resolvedDir, "USER.md"), user);
 }
@@ -119,9 +115,8 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
           workspace,
           skipBootstrap: true,
         },
-        list: [
-          {
-            id: "dev",
+        entries: {
+          dev: {
             default: true,
             workspace,
             identity: {
@@ -130,10 +125,13 @@ export async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
               emoji: DEV_IDENTITY_EMOJI,
             },
           },
-        ],
+        },
       },
     },
     afterWrite: { mode: "auto" },
+    // An absent config resolves to the implicit legacy agent before this full
+    // replacement. Declare only that synthetic deletion; authored rosters stay protected.
+    writeOptions: { allowedAgentRosterRemovals: [LEGACY_IMPLICIT_AGENT_ID] },
   });
   await ensureDevWorkspace(workspace);
   defaultRuntime.log(`Dev config ready: ${shortenHomePath(configPath)}`);

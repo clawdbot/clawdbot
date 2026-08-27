@@ -1,18 +1,20 @@
 // Codex tests cover protocol validators plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  assertCodexModelListResponse,
   assertCodexThreadForkParams,
-  readCodexModelListResponse,
   readCodexTurn,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 function makeMinimalThread(overrides: Record<string, unknown> = {}) {
   return {
     id: "thread-1",
     sessionId: "session-1",
-    cliVersion: "0.129.0",
+    projectId: null,
+    cliVersion: CODEX_APP_SERVER_VERSION,
     createdAt: 1715299200,
     updatedAt: 1715299200,
     cwd: "/tmp",
@@ -39,8 +41,8 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
 }
 
 describe("Codex thread response validators", () => {
-  // The 0.143 floor guarantees both thread ids; pre-0.131 servers without
-  // sessionId must fail loudly instead of being silently normalized.
+  // The pinned Codex protocol requires both thread identities; never silently
+  // invent a session identity when a malformed response omits one.
   it("rejects thread responses missing sessionId", () => {
     for (const assertResponse of [
       assertCodexThreadStartResponse,
@@ -103,9 +105,29 @@ describe("assertCodexThreadResumeResponse", () => {
   });
 });
 
-describe("readCodexModelListResponse", () => {
+describe("assertCodexModelListResponse", () => {
+  it.each([
+    { label: "missing response", value: undefined },
+    { label: "null response", value: null },
+    { label: "missing model data", value: {} },
+    { label: "non-array model data", value: { data: {} } },
+    { label: "null model row", value: { data: [null] } },
+    { label: "invalid pagination cursor", value: { data: [], nextCursor: 42 } },
+  ])("rejects $label", ({ value }) => {
+    expect(() => assertCodexModelListResponse(value)).toThrow(
+      /Invalid Codex app-server model\/list response/,
+    );
+  });
+
+  it.each([{ data: [] }, { data: [], nextCursor: null }])(
+    "accepts a genuinely empty model catalog",
+    (value) => {
+      expect(assertCodexModelListResponse(value)).toMatchObject({ data: [] });
+    },
+  );
+
   it("applies defaults from generated schemas behind local refs", () => {
-    const response = readCodexModelListResponse({
+    const response = assertCodexModelListResponse({
       data: [
         {
           id: "gpt-test",
@@ -120,8 +142,8 @@ describe("readCodexModelListResponse", () => {
       ],
     });
 
-    const model = response?.data[0] as
-      | (NonNullable<ReturnType<typeof readCodexModelListResponse>>["data"][number] & {
+    const model = response.data[0] as
+      | (ReturnType<typeof assertCodexModelListResponse>["data"][number] & {
           serviceTiers?: unknown;
           supportsPersonality?: unknown;
         })
@@ -133,6 +155,20 @@ describe("readCodexModelListResponse", () => {
 });
 
 describe("readCodexTurn", () => {
+  it("normalizes omitted agent-message delivery to the synchronous default", () => {
+    const turn = readCodexTurn({
+      id: "turn-1",
+      status: "completed",
+      items: [{ id: "message-1", type: "agentMessage", text: "done" }],
+    });
+
+    expect(turn?.items[0]).toMatchObject({
+      id: "message-1",
+      type: "agentMessage",
+      delivery: null,
+    });
+  });
+
   it("does not merge defaults from unrelated thread item union branches", () => {
     const turn = readCodexTurn({
       id: "turn-1",

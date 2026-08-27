@@ -2,6 +2,7 @@
 import { die } from "./host-command.ts";
 
 const positiveIntPattern = /^[1-9]\d*$/u;
+const fullGitCommitPattern = /^[0-9a-f]{40}$/iu;
 
 export function parsePositiveInt(value: string, label: string): number {
   const trimmed = value.trim();
@@ -29,4 +30,16 @@ export function readPositiveIntEnv(name: string, fallback: number): number {
     return fallback;
   }
   return parsePositiveInt(raw, name);
+}
+
+export function readGitCommitEnv(name: string): string | undefined {
+  const raw = process.env[name];
+  if (raw == null || raw.trim() === "") {
+    return undefined;
+  }
+  const value = raw.trim();
+  if (!fullGitCommitPattern.test(value)) {
+    die(`invalid ${name}: expected a full 40-character commit SHA`);
+  }
+  return value.toLowerCase();
 }

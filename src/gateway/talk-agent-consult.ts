@@ -1,7 +1,6 @@
 // Gateway Talk realtime agent-consult bridge.
 // Starts chat.send runs that answer realtime Talk tool calls.
 import { randomUUID } from "node:crypto";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
   errorShape,
@@ -11,12 +10,16 @@ import {
 import { normalizeTalkSection } from "../config/talk.js";
 import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
 import { abortChatRunById } from "./chat-abort.js";
-import { chatHandlers } from "./server-methods/chat.js";
+import {
+  handleChatSend,
+  handleChatSendWithRuntimeTools,
+} from "./server-methods/chat-send-handler.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
-  GatewayRequestHandlers,
+  GatewayRequestHandlerOptions,
 } from "./server-methods/shared-types.js";
+import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -79,15 +82,13 @@ export async function startTalkRealtimeAgentConsult(params: {
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
   const normalizedTalk = normalizeTalkSection(params.context.getRuntimeConfig().talk);
+  const authority = resolveTalkAgentConsultAuthority(params.client?.connect?.scopes);
   let acknowledgedRunId: string | undefined;
   const chatResponse = await new Promise<
     { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined
   >((resolve) => {
     let acknowledged = false;
-    const chatSendResult = expectDefined(
-      chatHandlers["chat.send"],
-      "chat.send handler",
-    )({
+    const chatSendOptions = {
       req: {
         type: "req",
         id: `${params.requestId}:talk-tool-call`,
@@ -150,7 +151,13 @@ export async function startTalkRealtimeAgentConsult(params: {
               },
         );
       },
-    } as Parameters<GatewayRequestHandlers[string]>[0]);
+    } as GatewayRequestHandlerOptions;
+    // talk.client.toolCall enters below the normal chat.send scope gate, so its
+    // delegated run must carry the Talk caller's already-resolved tool boundary.
+    const chatSendResult =
+      authority.toolsAllow !== undefined
+        ? handleChatSendWithRuntimeTools(chatSendOptions, authority.toolsAllow)
+        : handleChatSend(chatSendOptions);
     void Promise.resolve(chatSendResult).then(
       () => {
         if (!acknowledged) {
@@ -186,6 +193,11 @@ export async function startTalkRealtimeAgentConsult(params: {
   if (terminalAckError) {
     return { ok: false, error: terminalAckError };
   }
-  const runId = expectDefined(acknowledgedRunId, "talk agent run id");
-  return { ok: true, runId: expectDefined(runId, "talk agent run id"), idempotencyKey };
+  if (!acknowledgedRunId) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.UNAVAILABLE, "chat.send did not acknowledge an active run"),
+    };
+  }
+  return { ok: true, runId: acknowledgedRunId, idempotencyKey };
 }

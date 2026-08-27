@@ -1,7 +1,7 @@
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Mattermost type declarations define plugin contracts.
 import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-outbound";
-import type { DmPolicy, GroupPolicy } from "./runtime-api.js";
+import type { DmPolicy, GroupPolicy } from "../runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
 export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
@@ -54,6 +54,7 @@ export type MattermostAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  historyLimit?: number;
   /** Preview streaming config (nested-only; scalar modes migrate via doctor). */
   streaming?: ChannelPreviewStreamingConfig;
   /** Outbound response prefix override for this channel/account. */
@@ -74,9 +75,13 @@ export type MattermostAccountConfig = {
   replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
   /** Action toggles for this account. */
   actions?: {
+    /** Enable channel message reads. Default: false. */
+    messages?: boolean;
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
   };
+  /** Channel IDs allowed for delegated cross-channel reads and inbound routing. */
+  groups?: Record<string, { requireMention?: boolean } | undefined>;
   /** Native slash command configuration. */
   commands?: {
     /** Enable native slash commands. "auto" resolves to false (opt-in). */

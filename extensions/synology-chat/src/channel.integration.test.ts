@@ -1,4 +1,5 @@
 // Synology Chat tests cover channel.integration plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildChannelInboundEventContextMock,
@@ -8,6 +9,9 @@ import {
   registerPluginHttpRouteMock,
   resolveAgentRouteMock,
   setSynologyRuntimeConfigForTest,
+  synologyIngressStartMock,
+  synologyIngressStopMock,
+  tryHandleSynologyHostedMediaRequestMock,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
@@ -23,12 +27,7 @@ function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireMockCall<TArgs extends unknown[]>(
   mock: { mock: { calls: TArgs[] } },
@@ -54,6 +53,10 @@ describe("Synology channel wiring integration", () => {
     channelInboundRunMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
+    synologyIngressStartMock.mockClear();
+    synologyIngressStopMock.mockClear();
+    tryHandleSynologyHostedMediaRequestMock.mockClear();
+    tryHandleSynologyHostedMediaRequestMock.mockResolvedValue(false);
     setSynologyRuntimeConfigForTest({});
   });
 
@@ -90,6 +93,7 @@ describe("Synology channel wiring integration", () => {
     const registered = firstCall[0];
     expect(registered.path).toBe("/webhook/synology-alerts");
     expect(registered.accountId).toBe("alerts");
+    expect(registered.throwOnFailure).toBe(true);
 
     const req = makeReq(
       "POST",
@@ -109,6 +113,77 @@ describe("Synology channel wiring integration", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     abortController.abort();
     await started;
+  });
+
+  it("dispatches hosted GET and HEAD capabilities before the inbound webhook parser", async () => {
+    const abortController = new AbortController();
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "valid-token",
+          incomingUrl: "https://nas.example.com/incoming",
+          webhookUrl: "https://gateway.example.com/webhook/synology",
+          webhookPath: "/webhook/synology",
+          dmPolicy: "allowlist",
+          allowedUserIds: ["123"],
+        },
+      },
+    };
+    const started = synologyChatPlugin.gateway.startAccount(
+      makeStartContext(cfg, "default", abortController.signal),
+    );
+    const [registered] = requireMockCall(
+      registerPluginHttpRouteMock,
+      0,
+      "Synology hosted media route",
+    );
+    tryHandleSynologyHostedMediaRequestMock.mockResolvedValue(true);
+
+    for (const method of ["GET", "HEAD"]) {
+      await registered.handler(
+        makeReq(method, "", {
+          url: "/webhook/synology?__openclaw_synology_media_token_id=token",
+        }),
+        makeRes(),
+      );
+    }
+
+    expect(tryHandleSynologyHostedMediaRequestMock).toHaveBeenCalledTimes(2);
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    abortController.abort();
+    await started;
+  });
+
+  it("stops ingress and rejects startup when the webhook route cannot bind", async () => {
+    const abortController = new AbortController();
+    const statusSink = vi.fn();
+    const cfg = {
+      channels: {
+        "synology-chat": {
+          enabled: true,
+          token: "valid-token",
+          incomingUrl: "https://nas.example.com/incoming",
+          webhookPath: "/webhook/synology",
+          dmPolicy: "allowlist",
+          allowedUserIds: ["123"],
+        },
+      },
+    };
+    registerPluginHttpRouteMock.mockImplementationOnce(() => {
+      throw new Error("Synology route conflict");
+    });
+
+    await expect(
+      synologyChatPlugin.gateway.startAccount({
+        ...makeStartContext(cfg, "default", abortController.signal),
+        setStatus: statusSink,
+      }),
+    ).rejects.toThrow("Synology route conflict");
+
+    expect(synologyIngressStartMock).toHaveBeenCalledOnce();
+    expect(synologyIngressStopMock).toHaveBeenCalledOnce();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
   });
 
   it("uses gateway trusted proxy settings for pre-auth invalid-token throttling", async () => {

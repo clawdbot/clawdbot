@@ -48,10 +48,15 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="How do I switch models without wiping my config?">
     Change only the model fields — avoid full config replaces.
 
-    - `/model` in chat (per-session, see [Slash commands](/tools/slash-commands))
+    - `/model <model> -s` in chat (current session only)
+    - owner/admin `/model <model> -a` (current session and agent default)
+    - owner/admin `/model <model> -g` (current session and global default)
     - `openclaw models set ...` (updates just model config)
     - `openclaw configure --section model` (interactive)
     - edit `agents.defaults.model` in `~/.openclaw/openclaw.json` directly
+
+    Bare `/model <model>` keeps owner/admin configured-default persistence unless
+    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
     For RPC edits, inspect with `config.schema.lookup` first (normalized
     path, shallow schema docs, child summaries), then prefer `config.patch`
@@ -86,22 +91,26 @@ troubleshooting, see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="How do I switch models on the fly (without restarting)?">
-    Send `/model <name>` as a standalone message. See
+    Send `/model <name> -s` as a standalone message to switch only this session.
+    Without a scope flag, the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+    applies; leaving it unset preserves owner/admin configured-default persistence. See
     [Slash commands](/tools/slash-commands) for the
     full command list, including the numbered picker (`/model`, `/model
-    list`, `/model 3`), `/model default` to clear a session override, and
+    list`, `/model 3`), `/model default -s` to clear only a session model override, and
     `/model status` for endpoint/API-mode detail.
 
     Force a specific auth profile per session with `@profile`:
 
     ```text
-    /model opus@anthropic:default
-    /model opus@anthropic:work
+    /model opus@anthropic:default -s
+    /model opus@anthropic:work -s
     ```
 
-    To unpin a profile set with `@profile`, re-run `/model` without the
-    suffix (e.g. `/model anthropic/claude-opus-4-6`), or pick the default from
-    `/model`. Use `/model status` to confirm the active auth profile.
+    A model selection without `@profile` preserves an existing compatible
+    profile pin. Choose another explicit `@profile` suffix to replace it. Use
+    `/model status` to inspect the active auth profile. `/model default` keeps
+    a compatible auth pin and clears one that does not match the configured
+    default provider.
 
   </Accordion>
 
@@ -215,7 +224,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     ```json5
     {
-      env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
+      env: { vars: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." } },
       agents: {
         defaults: {
           model: { primary: "minimax/MiniMax-M3" },
@@ -228,7 +237,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    Then `/model gpt`.
+    Then `/model gpt -s`.
 
     **Option B: separate agents** — Agent A defaults to MiniMax, Agent B
     defaults to OpenAI; route by agent or use `/agent` to switch.
@@ -244,8 +253,8 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     | Alias | Resolves to |
     | --- | --- |
-    | `opus` | `anthropic/claude-opus-4-8` |
-    | `sonnet` | `anthropic/claude-sonnet-4-6` |
+    | `opus` | `anthropic/claude-opus-5` |
+    | `sonnet` | `anthropic/claude-sonnet-5` |
     | `gpt` | `openai/gpt-5.4` |
     | `gpt-mini` | `openai/gpt-5.4-mini` |
     | `gpt-nano` | `openai/gpt-5.4-nano` |
@@ -274,8 +283,9 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    Then `/model sonnet` (or `/<alias>` when supported) resolves to that
-    model id.
+    Then `/model sonnet -s` selects that model ID for the current session only.
+    Owners/admins can use `-a` to also update the agent default or `-g` for the
+    shared global default. Bare selections follow the [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
   </Accordion>
 
@@ -290,7 +300,7 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: { "openrouter/anthropic/claude-sonnet-4-6": {} },
         },
       },
-      env: { OPENROUTER_API_KEY: "sk-or-..." },
+      env: { vars: { OPENROUTER_API_KEY: "sk-or-..." } },
     }
     ```
 
@@ -304,7 +314,7 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: { "zai/glm-5.1": {} },
         },
       },
-      env: { ZAI_API_KEY: "..." },
+      env: { vars: { ZAI_API_KEY: "..." } },
     }
     ```
 

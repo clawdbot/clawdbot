@@ -15,7 +15,7 @@ export {
   asToolParamsRecord,
   jsonResult,
   readNumberParam,
-  readStringParam,
+  readToolStringParam as readStringParam,
 } from "../../../../src/agents/tools/common.js";
 export type { AnyAgentTool } from "../../../../src/agents/tools/common.js";
 export {
@@ -36,11 +36,7 @@ export {
 } from "../../../../src/auto-reply/tokens.js";
 
 // CLI/runtime/config helpers.
-export { formatErrorMessage, withManager } from "../../../../src/cli/cli-utils.js";
-export { resolveCommandSecretRefsViaGateway } from "../../../../src/cli/command-secret-gateway.js";
-export { formatHelpExamples } from "../../../../src/cli/help-format.js";
 export { parseDurationMs } from "../../../../src/cli/parse-duration.js";
-export { withProgress, withProgressTotals } from "../../../../src/cli/progress.js";
 export { parseNonNegativeByteSize } from "../../../../src/config/byte-size.js";
 export {
   getRuntimeConfig,
@@ -55,11 +51,13 @@ export {
   isUsageCountedSessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
+export { materializeSessionArchiveForRead } from "../../../../src/config/sessions/archive-compression.js";
 export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export {
-  resolveSessionFilePath,
-  resolveSessionTranscriptsDirForAgent,
-} from "../../../../src/config/sessions/paths.js";
+  listSessionTranscriptInstances,
+  type SessionTranscriptInstance,
+} from "../../../../src/config/sessions/session-history.js";
+export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export {
   loadTranscriptEventsSync,
   listSessionEntries,
@@ -88,21 +86,13 @@ export function readTranscriptContentRevisionSync(params: {
     stats.lastObservedMutationAtMs ?? "",
   ].join(":");
 }
-export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
-export type {
-  MemoryBackend,
-  MemoryCitationsMode,
-  MemoryQmdConfig,
-  MemoryQmdIndexPath,
-  MemoryQmdSearchMode,
-} from "../../../../src/config/types.memory.js";
+export type { MemoryCitationsMode } from "../../../../src/config/types.memory.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
 } from "../../../../src/config/types.secrets.js";
 export type { SecretInput } from "../../../../src/config/types.secrets.js";
 export type { MemorySearchConfig } from "../../../../src/config/types.tools.js";
-export { isVerbose, setVerbose } from "../../../../src/globals.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
@@ -130,7 +120,6 @@ export {
   getMemoryEmbeddingProvider,
   listMemoryEmbeddingProviders,
   listRegisteredMemoryEmbeddingProviderAdapters,
-  listRegisteredMemoryEmbeddingProviders,
 } from "../../../../src/plugins/memory-embedding-provider-runtime.js";
 export type {
   MemoryEmbeddingBatchChunk,
@@ -160,14 +149,14 @@ export type {
 export type { OpenClawPluginApi } from "../../../../src/plugins/types.js";
 
 // Shared session/text utilities.
-export { defaultRuntime } from "../../../../src/runtime.js";
 export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { formatDocsLink } from "../../../terminal-core/src/links.js";
-export { colorize, isRich, theme } from "../../../terminal-core/src/theme.js";
-export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
+export {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 export {
@@ -176,8 +165,4 @@ export {
   shortenHomePath,
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
-export {
-  materializeWindowsSpawnProgram,
-  resolveWindowsSpawnProgram,
-} from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

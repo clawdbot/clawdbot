@@ -1,66 +1,33 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config-contracts.js";
-import { normalizeChannelConfigEntries, stripRetiredChannelKeys } from "./runtime-doctor.js";
+import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
+import * as doctorRepairRuntime from "./doctor-repair-runtime.js";
+import * as runtimeDoctorMigrations from "./runtime-doctor-migrations.js";
+import * as legacyRuntimeDoctor from "./runtime-doctor.js";
 
-function cfgWith(entry: Record<string, unknown>): OpenClawConfig {
-  return { channels: { sample: entry } } as never;
-}
-
-describe("runtime-doctor channel helpers", () => {
-  it("normalizes the root and every object-shaped account in order", () => {
-    const changeLog: string[] = [];
-    const result = normalizeChannelConfigEntries({
-      cfg: cfgWith({ legacy: true, accounts: { work: { legacy: false }, invalid: "skip" } }),
-      channelId: "sample",
-      changes: changeLog,
-      normalizeEntry: ({ entry, pathPrefix, changes }) => {
-        if (!Object.hasOwn(entry, "legacy")) {
-          return { entry, changed: false };
-        }
-        const { legacy: _legacy, ...rest } = entry;
-        changes.push(`Removed ${pathPrefix}.legacy.`);
-        return { entry: rest, changed: true };
-      },
-    });
-
-    expect(result.changes).toBe(changeLog);
-    expect(result.changes).toEqual([
-      "Removed channels.sample.legacy.",
-      "Removed channels.sample.accounts.work.legacy.",
-    ]);
-    expect((result.config.channels as Record<string, unknown>).sample).toEqual({
-      accounts: { work: {}, invalid: "skip" },
-    });
-  });
-
-  it("supports recursive and root-account-only retired key scopes", () => {
-    const source = cfgWith({
-      retired: 1,
-      nested: { retired: 2 },
-      accounts: { work: { retired: 3, nested: { retired: 4 } } },
-    });
-    const keys = new Set(["retired"]);
-
-    const scoped = stripRetiredChannelKeys({
-      cfg: source,
-      channelId: "sample",
-      keys,
-      scope: "root-and-accounts",
-    });
-    expect((scoped.config.channels as Record<string, unknown>).sample).toEqual({
-      nested: { retired: 2 },
-      accounts: { work: { nested: { retired: 4 } } },
-    });
-
-    const recursive = stripRetiredChannelKeys({
-      cfg: source,
-      channelId: "sample",
-      keys,
-      scope: "recursive",
-    });
-    expect((recursive.config.channels as Record<string, unknown>).sample).toEqual({
-      nested: {},
-      accounts: { work: { nested: {} } },
-    });
+describe("legacy runtime-doctor package facade", () => {
+  it("is exactly the migration surface plus the published-artifact repair bridge", () => {
+    // Bridge names ship for published pre-split doctor artifacts (#124041
+    // class); delete them here alongside the runtime-doctor.ts bridge.
+    const expected = [
+      ...new Set([
+        ...Object.keys(runtimeDoctorMigrations),
+        ...Object.keys(doctorRepairRuntime),
+        "createPluginStateSyncKeyedStore",
+      ]),
+    ].toSorted();
+    expect(Object.keys(legacyRuntimeDoctor).toSorted()).toEqual(expected);
+    for (const key of Object.keys(runtimeDoctorMigrations)) {
+      expect(legacyRuntimeDoctor[key as keyof typeof legacyRuntimeDoctor]).toBe(
+        runtimeDoctorMigrations[key as keyof typeof runtimeDoctorMigrations],
+      );
+    }
+    for (const key of Object.keys(doctorRepairRuntime)) {
+      expect(legacyRuntimeDoctor[key as keyof typeof legacyRuntimeDoctor]).toBe(
+        doctorRepairRuntime[key as keyof typeof doctorRepairRuntime],
+      );
+    }
+    expect(legacyRuntimeDoctor.createPluginStateSyncKeyedStore).toBe(
+      createPluginStateSyncKeyedStore,
+    );
   });
 });

@@ -2,11 +2,21 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { buildSummaryChunksWithWorker } from "./compaction-planning-worker.js";
-import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.test-support.js";
+import * as compactionPlanningWorkerRuntime from "./compaction-planning-worker-runtime.js";
+import {
+  CompactionPlanningWorkerError,
+  runCompactionPlanningWorker,
+} from "./compaction-planning-worker-runtime.js";
+import {
+  buildOversizedFallbackPlanWithWorker,
+  buildStageSplitPlanWithWorker,
+  buildSummaryChunksWithWorker,
+  computeAdaptiveChunkRatioWithWorker,
+} from "./compaction-planning-worker.js";
 import { estimateMessagesTokens } from "./compaction-planning.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function makeMessage(id: number, text = "x".repeat(4000)): AgentMessage {
   return {
@@ -22,13 +32,34 @@ function createSyntheticWorkerUrl(source: string): URL {
   return new URL(`data:text/javascript,${encodeURIComponent(source)}`);
 }
 
+const cancellablePlanningOperations = [
+  {
+    operation: "summary chunks",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      buildSummaryChunksWithWorker({ messages, maxChunkTokens: 1_200, signal }),
+  },
+  {
+    operation: "oversized fallback",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      buildOversizedFallbackPlanWithWorker({ messages, contextWindow: 1_200, signal }),
+  },
+  {
+    operation: "stage splitting",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      buildStageSplitPlanWithWorker({ messages, maxChunkTokens: 1_200, signal }),
+  },
+  {
+    operation: "adaptive chunk sizing",
+    run: (messages: AgentMessage[], signal: AbortSignal) =>
+      computeAdaptiveChunkRatioWithWorker({ messages, contextWindow: 1_200, signal }),
+  },
+];
+
 describe("compaction planning worker", () => {
-  let packagedSummaryChunks: Awaited<
-    ReturnType<typeof compactionPlanningWorkerTesting.runCompactionPlanningWorker>
-  >;
+  let packagedSummaryChunks: Awaited<ReturnType<typeof runCompactionPlanningWorker>>;
 
   beforeAll(async () => {
-    packagedSummaryChunks = await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+    packagedSummaryChunks = await runCompactionPlanningWorker({
       input: {
         kind: "summaryChunks",
         messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
@@ -38,26 +69,86 @@ describe("compaction planning worker", () => {
     });
   });
 
-  it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    // Hashed bundle names still resolve to the stable worker sibling emitted by
-    // the build, so runtime imports do not depend on the main chunk hash.
-    expect(
-      compactionPlanningWorkerTesting.resolveCompactionPlanningWorkerUrl(
-        "file:///repo/dist/agents/compaction-planning-worker.js",
-      ).pathname,
-    ).toBe("/repo/dist/agents/compaction-planning.worker.js");
-    expect(
-      compactionPlanningWorkerTesting.resolveCompactionPlanningWorkerUrl(
-        "file:///repo/dist/selection-abc123.js",
-      ).pathname,
-    ).toBe("/repo/dist/agents/compaction-planning.worker.js");
+  it("rejects invalid and retired worker input", () => {
+    for (const input of [
+      { kind: "summaryChunks" },
+      {
+        kind: "historyPrune",
+        messagesToSummarize: [],
+        turnPrefixMessages: [],
+        tokensBefore: 0,
+        contextWindowTokens: 1,
+        maxHistoryShare: 0.5,
+      },
+    ]) {
+      expect(runCompactionPlanningWorkerInput(input)).toEqual({
+        status: "failed",
+        error: "invalid compaction planning worker input",
+      });
+    }
   });
 
-  it("rejects invalid worker input", () => {
-    expect(runCompactionPlanningWorkerInput({ kind: "summaryChunks" })).toEqual({
-      status: "failed",
-      error: "invalid compaction planning worker input",
-    });
+  it.each(
+    cancellablePlanningOperations.flatMap(({ operation, run }) =>
+      [63, 64].map((messageCount) => ({ operation, run, messageCount })),
+    ),
+  )(
+    "honors cancellation for $operation with $messageCount messages",
+    async ({ run, messageCount }) => {
+      const reason = new Error("operator cancelled compaction");
+      const signal = AbortSignal.abort(reason);
+      const messages = Array.from({ length: messageCount }, (_, index) =>
+        makeMessage(index + 1, "active user request"),
+      );
+
+      await expect(run(messages, signal)).rejects.toBe(reason);
+    },
+  );
+
+  it("does not resume cancelled compaction when its worker becomes unavailable", async () => {
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled compaction");
+    const worker = vi
+      .spyOn(compactionPlanningWorkerRuntime, "runCompactionPlanningWorker")
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw new CompactionPlanningWorkerError("worker disappeared", "unavailable");
+      });
+
+    try {
+      await expect(
+        buildSummaryChunksWithWorker({
+          messages: Array.from({ length: 64 }, (_, index) => makeMessage(index + 1, "request")),
+          maxChunkTokens: 1_200,
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+    } finally {
+      worker.mockRestore();
+    }
+  });
+
+  it("does not restore a worker plan after its compaction has been cancelled", async () => {
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled compaction");
+    const worker = vi
+      .spyOn(compactionPlanningWorkerRuntime, "runCompactionPlanningWorker")
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return { kind: "summaryChunks", chunkIndexes: [[0]] };
+      });
+
+    try {
+      await expect(
+        buildSummaryChunksWithWorker({
+          messages: Array.from({ length: 64 }, (_, index) => makeMessage(index + 1, "request")),
+          maxChunkTokens: 1_200,
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(reason);
+    } finally {
+      worker.mockRestore();
+    }
   });
 
   it("plans summary chunks in the packaged worker", () => {
@@ -163,6 +254,49 @@ describe("compaction planning worker", () => {
     expect(value.chunkIndexes.length).toBeGreaterThan(1);
   });
 
+  it.each([
+    { kind: "oversizedFallback", messages: [makeMessage(1)], contextWindow: 1200 },
+    { kind: "stageSplit", messages: [makeMessage(1)], maxChunkTokens: 1200 },
+    { kind: "adaptiveChunkRatio", messages: [makeMessage(1)], contextWindow: 1200 },
+  ])("plans $kind for worker input", (input) => {
+    expect(runCompactionPlanningWorkerInput(input)).toMatchObject({
+      status: "ok",
+      value: { kind: input.kind },
+    });
+  });
+
+  it("preserves original user identity while worker fallback omits an oversized tool batch", async () => {
+    const displacedUser = makeMessage(2, "keep the latest real user request");
+    const messages: AgentMessage[] = [
+      makeAgentAssistantMessage({
+        content: [
+          { type: "text", text: "x".repeat(12_000) },
+          { type: "toolCall", id: "call_large", name: "read", arguments: {} },
+        ],
+        model: "gpt-5.6-luna",
+        stopReason: "stop",
+        timestamp: 1,
+      }),
+      displacedUser,
+      {
+        role: "toolResult",
+        toolCallId: "call_large",
+        toolName: "read",
+        content: [{ type: "text", text: "small result" }],
+        isError: false,
+        timestamp: 3,
+      },
+      ...Array.from({ length: 61 }, (_, index) => makeMessage(index + 4, "keep")),
+    ];
+
+    const plan = await buildOversizedFallbackPlanWithWorker({ messages, contextWindow: 2_000 });
+
+    expect(plan.smallMessages).toHaveLength(62);
+    expect(plan.smallMessages[0]).toBe(displacedUser);
+    expect(plan.smallMessages.every((message) => message.role === "user")).toBe(true);
+    expect(plan.oversizedNotes).toEqual([expect.stringContaining("Large assistant")]);
+  }, 45_000);
+
   it("clamps oversized worker timeouts before scheduling", async () => {
     const workerUrl = createSyntheticWorkerUrl(`
       import { parentPort } from "node:worker_threads";
@@ -176,7 +310,7 @@ describe("compaction planning worker", () => {
     `);
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
-      await compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+      await runCompactionPlanningWorker({
         input: {
           kind: "summaryChunks",
           messages: [makeMessage(1), makeMessage(2), makeMessage(3)],
@@ -195,7 +329,7 @@ describe("compaction planning worker", () => {
 
   it("classifies missing worker runtime as unavailable", async () => {
     await expect(
-      compactionPlanningWorkerTesting.runCompactionPlanningWorker({
+      runCompactionPlanningWorker({
         input: {
           kind: "summaryChunks",
           messages: [makeMessage(1)],
@@ -225,20 +359,18 @@ describe("compaction planning worker", () => {
     const timer = new Promise<"timer">((resolve) => {
       setTimeout(() => resolve("timer"), 0);
     });
-    const planning = compactionPlanningWorkerTesting
-      .runCompactionPlanningWorker({
-        input: {
-          kind: "stageSplit",
-          messages: Array.from({ length: 180 }, (_, index) =>
-            makeMessage(index + 1, "x".repeat(12_000)),
-          ),
-          maxChunkTokens: 8000,
-          parts: 4,
-        },
-        timeoutMs: 30_000,
-        workerUrl,
-      })
-      .then(() => "planning" as const);
+    const planning = runCompactionPlanningWorker({
+      input: {
+        kind: "stageSplit",
+        messages: Array.from({ length: 180 }, (_, index) =>
+          makeMessage(index + 1, "x".repeat(12_000)),
+        ),
+        maxChunkTokens: 8000,
+        parts: 4,
+      },
+      timeoutMs: 30_000,
+      workerUrl,
+    }).then(() => "planning" as const);
 
     await expect(Promise.race([timer, planning])).resolves.toBe("timer");
     await expect(planning).resolves.toBe("planning");

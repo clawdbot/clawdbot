@@ -1,3 +1,4 @@
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 // Zalouser plugin module implements setup surface behavior.
 import {
   addWildcardAllowFrom,
@@ -65,18 +66,10 @@ function setZalouserDmPolicy(
 ): OpenClawConfig {
   const resolvedAccountId = normalizeAccountId(accountId) ?? DEFAULT_ACCOUNT_ID;
   const resolved = resolveZalouserAccountSync({ cfg, accountId: resolvedAccountId });
-  return setZalouserAccountScopedConfig(
-    cfg,
-    resolvedAccountId,
-    {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    },
-    {
-      dmPolicy: policy,
-      ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
-    },
-  );
+  return setZalouserAccountScopedConfig(cfg, resolvedAccountId, {
+    dmPolicy: policy,
+    ...(policy === "open" ? { allowFrom: addWildcardAllowFrom(resolved.config.allowFrom) } : {}),
+  });
 }
 
 function setZalouserGroupPolicy(
@@ -210,28 +203,16 @@ async function promptZalouserAllowFrom(params: {
   }
 }
 
-const zalouserDmPolicy: ChannelSetupDmPolicy = {
+const zalouserDmPolicy = createChannelDmPolicy({
   label: "Zalo Personal",
   channel,
-  policyKey: "channels.zalouser.dmPolicy",
-  allowFromKey: "channels.zalouser.allowFrom",
-  resolveConfigKeys: (cfg, accountId) =>
-    (accountId ?? resolveDefaultZalouserAccountId(cfg)) !== DEFAULT_ACCOUNT_ID
-      ? {
-          policyKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.dmPolicy`,
-          allowFromKey: `channels.zalouser.accounts.${accountId ?? resolveDefaultZalouserAccountId(cfg)}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.zalouser.dmPolicy",
-          allowFromKey: "channels.zalouser.allowFrom",
-        },
-  getCurrent: (cfg, accountId) =>
+  resolveAccount: (cfg, accountId) =>
     resolveZalouserAccountSync({
       cfg,
       accountId: accountId ?? resolveDefaultZalouserAccountId(cfg),
-    }).config.dmPolicy ?? "pairing",
-  setPolicy: (cfg, policy, accountId) =>
-    setZalouserDmPolicy(cfg, accountId ?? resolveDefaultZalouserAccountId(cfg), policy),
+    }),
+  applyPatch: ({ cfg, account, patch }) =>
+    setZalouserAccountScopedConfig(cfg, account.accountId, patch, patch),
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const id =
       accountId && normalizeAccountId(accountId)
@@ -243,7 +224,7 @@ const zalouserDmPolicy: ChannelSetupDmPolicy = {
       accountId: id,
     });
   },
-};
+});
 
 async function promptZalouserQuickstartDmPolicy(params: {
   cfg: OpenClawConfig;

@@ -51,6 +51,78 @@ class ShareLaunchTest {
   }
 
   @Test
+  fun preservesIndexedCaptionsAcrossMultipleAttachmentsWithoutRepeatingSubjectOrClipData() {
+    val first = Uri.parse("content://photos/shared/first")
+    val second = Uri.parse("content://photos/shared/second")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("image/png")
+          .putExtra(Intent.EXTRA_SUBJECT, "  First caption  ")
+          .putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf("First caption", "Second caption"))
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(first, second))
+          .apply {
+            clipData =
+              ClipData("shared", arrayOf("image/png"), ClipData.Item("First caption", null, first)).apply {
+                addItem(ClipData.Item("Second caption", null, second))
+              }
+          },
+      )
+
+    requireNotNull(parsed)
+    assertEquals("First caption\n\nSecond caption", parsed.text)
+    assertEquals(listOf(first, second), parsed.attachments.map(SharedAttachment::uri))
+    assertEquals(0, parsed.droppedAttachmentCount)
+  }
+
+  @Test
+  fun acceptsTextOnlyMultipleShareArrayAtTheExistingParserBoundary() {
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("text/plain")
+          .putCharSequenceArrayListExtra(Intent.EXTRA_TEXT, arrayListOf("First note", "Second note")),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("First note\n\nSecond note", parsed.text)
+    assertEquals(emptyList<SharedAttachment>(), parsed.attachments)
+  }
+
+  @Test
+  fun readsProviderBackedImageCaptionDirectlyFromClipData() {
+    val image = Uri.parse("content://photos/shared/captioned-clip")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND)
+          .setType("image/png")
+          .apply {
+            clipData = ClipData("shared", arrayOf("image/png"), ClipData.Item("Clip caption", null, image))
+          },
+      )
+
+    requireNotNull(parsed)
+    assertEquals("Clip caption", parsed.text)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
+  }
+
+  @Test
+  fun preservesLegacyScalarCaptionForMultipleAttachmentSenders() {
+    val image = Uri.parse("content://photos/shared/legacy-caption")
+    val parsed =
+      parseShare(
+        Intent(Intent.ACTION_SEND_MULTIPLE)
+          .setType("image/png")
+          .putExtra(Intent.EXTRA_TEXT, "Legacy scalar caption")
+          .putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(image)),
+      )
+
+    requireNotNull(parsed)
+    assertEquals("Legacy scalar caption", parsed.text)
+    assertEquals(listOf(image), parsed.attachments.map(SharedAttachment::uri))
+  }
+
+  @Test
   fun readsProviderBackedImageFromClipData() {
     val image = Uri.parse("content://photos/shared/clip")
     val parsed =
@@ -127,6 +199,24 @@ class ShareLaunchTest {
     requireNotNull(parsed)
     assertEquals(audio, parsed.attachments.map(SharedAttachment::uri))
     assertTrue(parsed.attachments.all { it.kind == SharedAttachmentKind.Audio })
+  }
+
+  @Test
+  fun acceptsVideoShareFromProviderMimeType() {
+    val video = Uri.parse("content://media/shared/video")
+    val parsed =
+      parseShare(
+        intent =
+          Intent(Intent.ACTION_SEND)
+            .setType("video/*")
+            .putExtra(Intent.EXTRA_STREAM, video),
+        mimeTypes = mapOf(video to "video/mp4"),
+      )
+
+    requireNotNull(parsed)
+    assertEquals(SharedAttachmentKind.Video, parsed.attachments.single().kind)
+    assertEquals("video/mp4", parsed.attachments.single().mimeType)
+    assertTrue("video/*" in SHARED_ATTACHMENT_MIME_ALLOWLIST)
   }
 
   @Test

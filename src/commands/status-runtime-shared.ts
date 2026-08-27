@@ -1,13 +1,19 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import {
+  resolveAmbientOwnerAgentId,
+  resolveConfiguredAgentId,
+} from "../agents/agent-scope-config.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   buildCodexSyntheticUsageAuth,
@@ -46,13 +52,16 @@ function loadGatewayCallModule() {
 function shouldUseConfiguredCodexSyntheticUsage(params: {
   config: OpenClawConfig;
   agentDir: string;
+  agentId?: string;
 }): boolean {
   const configuredDefault = resolveDefaultModelForAgent({
     cfg: params.config,
+    agentId: params.agentId,
     allowPluginNormalization: false,
   });
   const policy = resolveAgentHarnessPolicy({
     config: params.config,
+    agentId: params.agentId,
     provider: configuredDefault.provider,
     modelId: configuredDefault.model,
   });
@@ -108,19 +117,42 @@ export async function resolveStatusSecurityAudit(params: {
 type StatusUsageSummaryOptions = {
   config: OpenClawConfig;
   timeoutMs?: number;
+  agentId?: string;
   agentDir?: string;
 };
 
-/** Loads provider usage for status output, defaulting to the config's default agent directory. */
+/** Loads provider usage for status output from an explicit or ambient system-agent scope. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
-  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
+  const rawAgentId = params.agentId?.trim();
+  if (params.agentId !== undefined && !rawAgentId) {
+    throw new Error("--agent must not be blank");
+  }
+  const agentId = rawAgentId ? normalizeAgentId(rawAgentId) : undefined;
+  if (agentId) {
+    resolveConfiguredAgentId(params.config, agentId);
+  }
+  let resolvedAgentId = agentId;
+  let agentDir = params.agentDir;
+  if (!agentDir) {
+    resolvedAgentId ??= resolveAmbientOwnerAgentId(params.config, undefined, {
+      surface: "status usage credentials",
+      hint: "Set agents.defaults.systemAgent.agentId.",
+    });
+    agentDir = resolveAgentDir(params.config, resolvedAgentId);
+  }
   const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
     config: params.config,
     agentDir,
   });
-  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir })) {
+  if (
+    !shouldUseConfiguredCodexSyntheticUsage({
+      config: params.config,
+      agentDir,
+      agentId: resolvedAgentId,
+    })
+  ) {
     return usage;
   }
   const codexUsage = await loadProviderUsageSummary({
@@ -178,28 +210,34 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err: unknown) => ({ error: String(err) }));
 }
 
-/** Reads gateway delivery diagnostics when reachable, returning null on failures. */
+export type StatusGatewayDiagnosticsResult = Result<unknown, string>;
+
+/** Reads gateway diagnostics while preserving whether data or an unavailable outcome was observed. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
+  type?: string;
   callOverrides?: {
     url: string;
     token?: string;
     password?: string;
   };
-}) {
+}): Promise<StatusGatewayDiagnosticsResult> {
   if (!params.gatewayReachable) {
-    return null;
+    return { ok: false, error: "gateway unreachable" };
   }
   const { callGateway } = await loadGatewayCallModule();
   return await callGateway<unknown>({
     method: "diagnostics.stability",
-    params: { limit: 1000 },
+    params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch(() => null);
+  }).then<StatusGatewayDiagnosticsResult, StatusGatewayDiagnosticsResult>(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error: String(error) }),
+  );
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
@@ -235,6 +273,7 @@ export async function resolveStatusServiceSummaries(timeoutMs?: number) {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
+type StatusGatewayHealthResult = StatusGatewayHealth | { error: string };
 type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
 type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
@@ -244,6 +283,7 @@ type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>
 async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
+  agentId?: string;
   usage?: boolean;
   deep?: boolean;
   gatewayReachable: boolean;
@@ -260,14 +300,16 @@ async function resolveStatusRuntimeDetails(params: {
     ? await resolveUsageSummary({
         timeoutMs: params.timeoutMs,
         config: params.config,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       })
     : undefined;
+  // JSON status remains nonthrowing, but requested probe failures must stay visible.
   const health = params.deep
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
-        }).catch(() => undefined)
+        }).catch((error: unknown) => ({ error: String(error) }))
       : await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
@@ -291,7 +333,7 @@ async function resolveStatusRuntimeDetails(params: {
   };
   return result satisfies {
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;
@@ -303,6 +345,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   timeoutMs?: number;
+  agentId?: string;
   usage?: boolean;
   deep?: boolean;
   gatewayReachable: boolean;
@@ -329,6 +372,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   const runtimeDetails = await resolveStatusRuntimeDetails({
     config: params.config,
     timeoutMs: params.timeoutMs,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     usage: params.usage,
     deep: params.deep,
     gatewayReachable: params.gatewayReachable,
@@ -342,7 +386,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   } satisfies {
     securityAudit?: StatusSecurityAudit;
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;

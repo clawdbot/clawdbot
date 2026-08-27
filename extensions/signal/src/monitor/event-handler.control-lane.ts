@@ -1,4 +1,8 @@
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 // Signal plugin helpers isolate active-run control scheduling from the inbound handler.
 import {
   listChatCommands,
@@ -32,6 +36,11 @@ export type SignalInboundEntry = {
   replyToSender?: string;
   replyToIsQuote?: boolean;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
+  channelIngress?: readonly ResolvedChannelMessageIngress[];
+  boundChannelIngress?: readonly ResolvedChannelMessageIngress[];
+  resolveChannelIngress?: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
 };
 
 type TrackedSignalInboundLane = {
@@ -159,15 +168,5 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     }
   };
 
-  const completeAfter =
-    (flush: (entries: SignalInboundEntry[]) => Promise<void>) =>
-    async (entries: SignalInboundEntry[]) => {
-      try {
-        await flush(entries);
-      } finally {
-        complete(entries);
-      }
-    };
-
-  return { track, complete, completeAfter, cancelPendingOnAbort };
+  return { track, complete, cancelPendingOnAbort };
 }

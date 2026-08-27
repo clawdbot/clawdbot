@@ -1,6 +1,6 @@
 import type {
   AgentMessage,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -16,7 +16,7 @@ function buildSnapshot(trigger: EmbeddedRunAttemptParams["trigger"]): AgentMessa
     turnId: "turn-1",
     upstreamUserText: undefined,
     reasoningText: "checking memory",
-    planText: undefined,
+    asyncMessages: [],
     commentaryMessages: [],
     toolMessages: [
       {

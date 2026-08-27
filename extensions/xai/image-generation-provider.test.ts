@@ -72,12 +72,19 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  normalizeOptionalString: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
-  normalizeOptionalLowercaseString: (v: unknown) =>
-    typeof v === "string" ? v.trim().toLowerCase() : undefined,
-  readStringValue: (v: unknown) => (typeof v === "string" ? v.trim() : undefined),
-}));
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => {
+  const normalizeMockOptionalString = (value: unknown) =>
+    typeof value === "string" ? value.trim() : undefined;
+  const normalizeMockOptionalLowercaseString = (value: unknown) =>
+    typeof value === "string" ? value.trim().toLowerCase() : undefined;
+  const readMockStringValue = (value: unknown) =>
+    typeof value === "string" ? value.trim() : undefined;
+  return {
+    normalizeOptionalString: normalizeMockOptionalString,
+    normalizeOptionalLowercaseString: normalizeMockOptionalLowercaseString,
+    readStringValue: readMockStringValue,
+  };
+});
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {

@@ -566,30 +566,22 @@ final class NodePairingApprovalPrompter {
 
     private static func probeSSH(user: String, host: String, port: Int) async -> Bool {
         let options = self.silentPairingSSHOptions
-        return await Task.detached(priority: .utility) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-
-            guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
-                return false
-            }
-            let args = CommandResolver.sshArguments(
-                target: target,
-                identity: "",
-                options: options,
-                remoteCommand: ["/usr/bin/true"])
-            process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-
-            do {
-                _ = try process.runAndReadToEnd(from: pipe)
-            } catch {
-                return false
-            }
-            return process.terminationStatus == 0
-        }.value
+        guard let target = CommandResolver.makeSSHTarget(user: user, host: host, port: port) else {
+            return false
+        }
+        let args = CommandResolver.sshArguments(
+            target: target,
+            identity: "",
+            options: options,
+            remoteCommand: ["/usr/bin/true"])
+        do {
+            return try await BoundedProcess.run(
+                path: "/usr/bin/ssh",
+                arguments: args,
+                timeout: 8).terminationStatus == 0
+        } catch {
+            return false
+        }
     }
 
     private var shouldPoll: Bool {
@@ -671,40 +663,6 @@ final class NodePairingApprovalPrompter {
 extension NodePairingApprovalPrompter {
     static func _testSilentPairingSSHOptions() -> [String] {
         self.silentPairingSSHOptions
-    }
-
-    static func exerciseForTesting() async {
-        let prompter = NodePairingApprovalPrompter()
-        let pending = PendingRequest(
-            requestId: "req-1",
-            nodeId: "node-1",
-            displayName: "Node One",
-            platform: "macos",
-            version: "1.0.0",
-            coreVersion: "1.0.0",
-            deviceFamily: "Mac",
-            modelIdentifier: "MacBookPro18,3",
-            caps: ["screen"],
-            commands: ["system.run"],
-            remoteIp: "127.0.0.1",
-            silent: true,
-            ts: 1_700_000_000_000)
-        let paired = PairedNode(
-            nodeId: "node-1",
-            approvedAtMs: 1_700_000_000_000,
-            displayName: "Node One",
-            platform: "macOS",
-            version: "1.0.0",
-            remoteIp: "127.0.0.1")
-        let list = PairingList(pending: [pending], paired: [paired])
-
-        _ = prompter.card(for: pending)
-        _ = prompter.inferResolution(for: pending, list: list)
-
-        prompter.queue = [pending]
-        _ = prompter.shouldPoll
-        _ = await prompter.tryAutomaticApproveIfPossible(pending)
-        prompter.queue.removeAll()
     }
 }
 #endif

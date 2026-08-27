@@ -1,7 +1,7 @@
 // Zalo tests cover accounts plugin behavior.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  listEnabledZaloAccounts,
+  inspectZaloAccount,
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -91,6 +91,63 @@ describe("resolveZaloAccount", () => {
 
     expect(listZaloAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
-    expect(listEnabledZaloAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
+    expect(resolveZaloAccount({ cfg, accountId: "default" }).enabled).toBe(true);
+  });
+
+  it("carries account-owned unavailable credential diagnostics into the resolved account", () => {
+    const tokenFile = "/private/zalo-resolved-account-token";
+    const resolved = resolveZaloAccount({
+      cfg: {
+        channels: {
+          zalo: {
+            botToken: "lower-priority-token",
+            accounts: { work: { tokenFile } },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved).toMatchObject({
+      token: "",
+      tokenSource: "configFile",
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.zalo.accounts.work.tokenFile",
+          reason: "not-found",
+        },
+      ],
+    });
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(tokenFile);
+  });
+});
+
+describe("Zalo account SecretRef inspection", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const unresolvedRef = {
+    source: "env" as const,
+    provider: "default",
+    id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
+  };
+
+  it("keeps direct account resolution strict", () => {
+    expect(() =>
+      resolveZaloAccount({ cfg: { channels: { zalo: { botToken: unresolvedRef } } } }),
+    ).toThrow(/unresolved SecretRef/);
+  });
+
+  it("does not fall through an unavailable configured ref to the environment", () => {
+    vi.stubEnv("ZALO_BOT_TOKEN", "lower-precedence-token");
+    const account = inspectZaloAccount({
+      cfg: { channels: { zalo: { botToken: unresolvedRef } } },
+    });
+    expect(account).toMatchObject({
+      token: "",
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+    });
   });
 });

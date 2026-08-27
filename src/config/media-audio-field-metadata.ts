@@ -1,21 +1,5 @@
-/** Config paths with user-facing metadata for audio understanding settings. */
-const MEDIA_AUDIO_FIELD_KEYS = [
-  "tools.media.audio.enabled",
-  "tools.media.audio.preferredModel",
-  "tools.media.audio.maxBytes",
-  "tools.media.audio.maxChars",
-  "tools.media.audio.prompt",
-  "tools.media.audio.timeoutSeconds",
-  "tools.media.audio.language",
-  "tools.media.audio.scope",
-  "tools.media.audio.attachments",
-  "tools.media.audio.echoTranscript",
-  "tools.media.audio.echoFormat",
-] as const;
-
-type MediaAudioFieldKey = (typeof MEDIA_AUDIO_FIELD_KEYS)[number];
-
-export const MEDIA_AUDIO_FIELD_HELP: Record<MediaAudioFieldKey, string> = {
+/** User-facing audio config metadata; the help map owns the supported field paths. */
+export const MEDIA_AUDIO_FIELD_HELP = {
   "tools.media.audio.enabled":
     "Enable audio understanding so voice notes or audio clips can be transcribed for agent context.",
   "tools.media.audio.preferredModel":
@@ -38,9 +22,9 @@ export const MEDIA_AUDIO_FIELD_HELP: Record<MediaAudioFieldKey, string> = {
     "Echo the audio transcript to the originating chat before agent processing. Enable this when users need to verify what the system heard.",
   "tools.media.audio.echoFormat":
     "Format the echoed transcript with a {transcript} placeholder. Keep the placeholder intact so delivery includes the transcript.",
-};
+} satisfies Record<string, string>;
 
-export const MEDIA_AUDIO_FIELD_LABELS: Record<MediaAudioFieldKey, string> = {
+export const MEDIA_AUDIO_FIELD_LABELS: Record<keyof typeof MEDIA_AUDIO_FIELD_HELP, string> = {
   "tools.media.audio.enabled": "Enable Audio Understanding",
   "tools.media.audio.preferredModel": "Preferred Audio Understanding Model",
   "tools.media.audio.maxBytes": "Audio Understanding Max Bytes",

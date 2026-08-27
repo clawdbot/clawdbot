@@ -62,6 +62,7 @@ gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"
 for _ in $(seq 1 360); do
   if ! kill -0 "$gateway_pid" 2>/dev/null; then
     echo "gateway exited before listening" >&2
+    openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     exit 1
   fi
   if node "$entry" gateway health \

@@ -1,0 +1,110 @@
+title: Channel sends preserve workspace-relative media authority
+
+scenario:
+  id: channel-workspace-relative-media
+  surface: channels
+  coverage:
+    primary:
+      - channels.outbound-direct-text-media-sends
+    secondary:
+      - channels.media-roots
+  objective: Deliver a workspace-relative image through direct Gateway and plugin-action sends.
+  execution:
+    kind: flow
+    channels:
+      - matrix
+      - telegram
+    timeoutMs: 90000
+
+flow:
+  steps:
+    - name: delivers workspace-relative images through direct and plugin-action sends
+      actions:
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - set: marker
+          value:
+            expr: "`QA-WORKSPACE-RELATIVE-MEDIA-${randomUUID()}`"
+        - set: filename
+          value:
+            expr: "`${marker}.png`"
+        - set: fixturePath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, filename)"
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: 'group:main' })"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - set: matrixRecordIndex
+          value:
+            expr: "transport.id === 'matrix' ? scenarioContext.faultProxyObserver.records().length : 0"
+        - try:
+            actions:
+              - call: fs.writeFile
+                args:
+                  - ref: fixturePath
+                  - expr: "Buffer.from(imageUnderstandingValidPngBase64, 'base64')"
+              - call: env.gateway.call
+                saveAs: sent
+                args:
+                  - send
+                  - channel: { expr: delivery.channel }
+                    to: { expr: delivery.to }
+                    accountId: { expr: transport.accountId }
+                    agentId: qa
+                    message: { ref: marker }
+                    mediaUrl: { expr: "`./${filename}`" }
+                    idempotencyKey: { expr: randomUUID() }
+                  - timeoutMs: 60000
+              - assert:
+                  expr: "Boolean(sent?.messageId) && sent.channel === delivery.channel"
+                  message: Gateway did not return a successful channel delivery receipt
+              - waitForOutbound:
+                  textIncludes: { ref: marker }
+                  sinceIndex: { ref: outboundStartIndex }
+                  timeoutMs: 60000
+                saveAs: outbound
+              - assert:
+                  expr: "state.getSnapshot().messages.filter((message) => message.accountId === transport.accountId && message.direction === 'outbound' && message.text === marker).length === 1"
+                  message: workspace-relative image caption was not delivered exactly once
+              - call: env.gateway.call
+                saveAs: actionSent
+                args:
+                  - message.action
+                  - channel: { expr: delivery.channel }
+                    action: send
+                    accountId: { expr: transport.accountId }
+                    agentId: qa
+                    idempotencyKey: { expr: randomUUID() }
+                    params:
+                      to: { expr: delivery.to }
+                      message: { expr: "`${marker}-ACTION`" }
+                      media: { expr: "`./${filename}`" }
+                  - timeoutMs: 60000
+              - assert:
+                  expr: "actionSent?.ok === true && Boolean(actionSent.messageId ?? actionSent.result?.messageId)"
+                  message: channel plugin action did not return a successful delivery receipt
+              - waitForOutbound:
+                  textIncludes: { expr: "`${marker}-ACTION`" }
+                  sinceIndex: { ref: outboundStartIndex }
+                  timeoutMs: 60000
+                saveAs: actionOutbound
+              - assert:
+                  expr: "state.getSnapshot().messages.filter((message) => message.accountId === transport.accountId && message.direction === 'outbound' && message.text === `${marker}-ACTION`).length === 1"
+                  message: plugin-action image caption was not delivered exactly once
+              - if:
+                  expr: "transport.id === 'matrix'"
+                  then:
+                    - assert:
+                        expr: "[marker, `${marker}-ACTION`].every((caption) => scenarioContext.observedEvents.some((event) => event.roomId === delivery.to && event.sender === scenarioContext.sutUserId && event.body === caption && event.msgtype === 'm.image')) && scenarioContext.faultProxyObserver.records().slice(matrixRecordIndex).filter((record) => record.request.method === 'POST' && record.request.route.includes('/media/') && record.request.route.endsWith('/upload') && record.response.status >= 200 && record.response.status < 300).length >= 2"
+                        message: Matrix did not upload and deliver both native image events
+            finally:
+              - call: fs.rm
+                args:
+                  - ref: fixturePath
+                  - force: true
+      detailsExpr: "JSON.stringify({ channel: delivery.channel, relativeMediaUrl: `./${filename}`, messageId: sent.messageId, outboundId: outbound.id, actionMessageId: actionSent.messageId ?? actionSent.result?.messageId, actionOutboundId: actionOutbound.id, nativeImagesVerified: transport.id === 'matrix' })"

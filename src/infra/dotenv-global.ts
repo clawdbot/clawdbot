@@ -29,6 +29,8 @@ type LoadedDotEnvFile = {
 type GlobalRuntimeDotEnvOptions = {
   additionalEnvPaths?: string[];
   entryFilter?: (key: string, value: string) => boolean;
+  /** Keys whose service-managed inherited values may be replaced by trusted dotenv files. */
+  overrideKeys?: Iterable<string>;
   quiet?: boolean;
   stateEnvPath?: string;
 };
@@ -76,18 +78,32 @@ export function readDotEnvFile(params: {
   return { filePath: params.filePath, entries };
 }
 
-function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]> {
+function loadParsedDotEnvFiles(
+  files: LoadedDotEnvFile[],
+  overrideKeys?: Iterable<string>,
+): Map<string, string[]> {
   const preExistingKeys = new Set(Object.keys(process.env));
+  const canonicalizeKey = (key: string): string | null =>
+    normalizeEnvVarKey(key, { portable: true })?.toUpperCase() ?? null;
+  const normalizedOverrideKeys = new Set(
+    [...(overrideKeys ?? [])].flatMap((key) => {
+      const normalized = canonicalizeKey(key);
+      return normalized ? [normalized] : [];
+    }),
+  );
   const conflicts = new Map<string, { keptPath: string; ignoredPath: string; keys: Set<string> }>();
   const firstSeen = new Map<string, { value: string; filePath: string }>();
   const appliedKeysByFile = new Map<string, string[]>();
 
   for (const file of files) {
     for (const { key, value } of file.entries) {
-      if (preExistingKeys.has(key)) {
+      const canonicalKey = canonicalizeKey(key);
+      const mayOverride = canonicalKey !== null && normalizedOverrideKeys.has(canonicalKey);
+      const precedenceKey = mayOverride && canonicalKey ? canonicalKey : key;
+      if (preExistingKeys.has(key) && !mayOverride) {
         continue;
       }
-      const previous = firstSeen.get(key);
+      const previous = firstSeen.get(precedenceKey);
       if (previous) {
         if (previous.value !== value) {
           // First file wins for deterministic startup; conflicts are logged once
@@ -106,8 +122,17 @@ function loadParsedDotEnvFiles(files: LoadedDotEnvFile[]): Map<string, string[]>
         }
         continue;
       }
-      firstSeen.set(key, { value, filePath: file.filePath });
-      if (process.env[key] === undefined) {
+      firstSeen.set(precedenceKey, { value, filePath: file.filePath });
+      if (process.env[key] === undefined || mayOverride) {
+        if (mayOverride) {
+          // Service ownership is case-insensitive. Refresh every inherited alias so Linux cannot
+          // retain a stale uppercase value beside a newly parsed lowercase dotenv key.
+          for (const inheritedKey of preExistingKeys) {
+            if (canonicalizeKey(inheritedKey) === canonicalKey) {
+              process.env[inheritedKey] = value;
+            }
+          }
+        }
         process.env[key] = value;
         const appliedKeys = appliedKeysByFile.get(file.filePath);
         if (appliedKeys) {
@@ -164,8 +189,9 @@ export function loadGlobalRuntimeDotEnvFiles(opts?: GlobalRuntimeDotEnvOptions) 
     parsedFiles.push(gatewayEnv);
   }
   const parsed = parsedFiles.filter((file): file is LoadedDotEnvFile => file !== null);
-  const appliedKeysByFile = loadParsedDotEnvFiles(parsed);
+  const appliedKeysByFile = loadParsedDotEnvFiles(parsed, opts?.overrideKeys);
   return {
+    dotenvPresentKeys: [...new Set(parsed.flatMap((file) => file.entries.map(({ key }) => key)))],
     stateEnvAppliedKeys: globalEnvs.flatMap((file) =>
       file ? (appliedKeysByFile.get(file.filePath) ?? []) : [],
     ),

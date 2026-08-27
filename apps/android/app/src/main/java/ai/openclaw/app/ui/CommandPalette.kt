@@ -100,7 +100,7 @@ internal fun CommandPalette(
   val sessionRows =
     sessions
       .filter { session ->
-        val title = commandSessionTitle(session.displayName)
+        val title = sessionPresentationTitle(session) { nativeString("Main thread") }
         commandSessionMatches(title = title, query = normalizedQuery)
       }.take(5)
 
@@ -173,9 +173,9 @@ internal fun CommandPalette(
                   CommandSessionRow(
                     key = session.key,
                     ownerAgentId = session.ownerAgentId,
-                    title = commandSessionTitle(session.displayName),
+                    title = sessionPresentationTitle(session) { nativeString("Main thread") },
                     subtitle = if (pendingRunCount > 0) nativeString("Assistant working") else nativeString("OpenClaw thread"),
-                    metadata = session.updatedAtMs?.let(::commandRelativeTime) ?: nativeString("now"),
+                    metadata = session.updatedAtMs?.let(::relativeSessionTime) ?: nativeString("now"),
                   )
                 },
               onOpen = onOpenSession,
@@ -371,22 +371,4 @@ internal fun providerCommandSubtitle(
   if (readyProviderCount > 0) return nativeString("\$readyProviderCount providers ready", readyProviderCount)
   if (rows.any { it.availability == ProviderAvailability.Unknown }) return nativeString("Provider availability unknown")
   return nativeString("No ready providers")
-}
-
-/** Falls back to the canonical main-session label when gateway display names are blank. */
-private fun commandSessionTitle(displayName: String?): String = displayName?.takeIf { it.isNotBlank() } ?: nativeString("Main thread")
-
-/** Formats command-palette session timestamps for compact rows. */
-internal fun commandRelativeTime(
-  updatedAtMs: Long,
-  nowMs: Long = System.currentTimeMillis(),
-): String {
-  val deltaMs = (nowMs - updatedAtMs).coerceAtLeast(0L)
-  val minutes = deltaMs / 60_000L
-  if (minutes < 1) return nativeString("now")
-  if (minutes < 60) return nativeString("\${minutes}m", minutes)
-  val hours = minutes / 60
-  if (hours < 24) return nativeString("\${hours}h", hours)
-  val days = hours / 24
-  return nativeString("\${days}d", days)
 }

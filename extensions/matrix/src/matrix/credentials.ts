@@ -1,12 +1,12 @@
 // Matrix plugin module implements credentials behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { openMatrixCredentialsStore } from "./credentials-read.js";
 import {
   isMatrixCredentialRevocation,
   matrixCredentialsStoreKey,
   normalizeMatrixStoredCredentials,
-  openMatrixCredentialsStore,
-} from "./credentials-read.js";
-import type { MatrixStoredCredentialRecord, MatrixStoredCredentials } from "./credentials-read.js";
+} from "./credentials-state.js";
+import type { MatrixStoredCredentialRecord, MatrixStoredCredentials } from "./credentials-state.js";
 
 export {
   clearMatrixCredentials,
@@ -15,7 +15,7 @@ export {
   resolveMatrixCredentialsDir,
   resolveMatrixCredentialsPath,
 } from "./credentials-read.js";
-export type { MatrixStoredCredentials } from "./credentials-read.js";
+export type { MatrixStoredCredentials } from "./credentials-state.js";
 
 function requireCredentialStoreUpdate(
   store: ReturnType<typeof openMatrixCredentialsStore>,

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  createInitialNodesState,
+  createInitialDevicesState,
   loadExecApprovals,
   saveExecApprovals,
   updateExecApprovalsFormValue,
@@ -23,7 +23,7 @@ describe("host-native exec approvals state", () => {
       defaultAction: "deny",
       rules: [{ pattern: "hostname", action: "allow" }],
     });
-    const state = createInitialNodesState({ client: { request }, connected: true });
+    const state = createInitialDevicesState({ client: { request }, connected: true });
     const target = { kind: "node" as const, nodeId: "windows-node" };
 
     await loadExecApprovals(state, target);
@@ -48,7 +48,7 @@ describe("host-native exec approvals state", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise);
     const client = { request } as unknown as GatewayBrowserClient;
-    const state = createInitialNodesState({ client, connected: true });
+    const state = createInitialDevicesState({ client, connected: true });
 
     const staleLoad = loadExecApprovals(state);
     state.connected = false;

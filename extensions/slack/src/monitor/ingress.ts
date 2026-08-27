@@ -1,6 +1,7 @@
 // Slack plugin module owns durable Events API admission and replay.
 import type { App, Receiver, ReceiverEvent } from "@slack/bolt";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
@@ -10,6 +11,7 @@ import {
   extractErrorCode,
   formatErrorMessage,
 } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackRuntime } from "../runtime.js";
@@ -17,11 +19,6 @@ import { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 const SLACK_INGRESS_PAYLOAD_VERSION = 1;
 const SLACK_INGRESS_POLL_INTERVAL_MS = 1_000;
-const SLACK_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const SLACK_INGRESS_COMPLETED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const SLACK_INGRESS_COMPLETED_MAX_ENTRIES = 20_000;
-const SLACK_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const SLACK_INGRESS_FAILED_MAX_ENTRIES = 20_000;
 const SLACK_BOLT_AUTHORIZATION_ERROR = "slack_bolt_authorization_error";
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
@@ -29,7 +26,9 @@ const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 export type SlackIngressTurnLifecycle = Omit<
   ChannelIngressMonitorLifecycle,
   "onAdoptionFinalizing"
->;
+> & {
+  onSessionRouted?: (sessionKey: string) => Promise<void>;
+};
 
 type SlackIngressPayload = {
   version: number;
@@ -112,12 +111,7 @@ type SlackDurableIngress = {
   waitForIdle: () => Promise<void>;
 };
 
-class SlackIngressPayloadError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SlackIngressPayloadError";
-  }
-}
+const SlackIngressPayloadError = createChannelIngressError("SlackIngressPayloadError");
 
 function resolveSlackEventId(body: unknown): string | null {
   const eventId = asOptionalRecord(body)?.event_id;
@@ -135,7 +129,15 @@ function resolveSlackIngressLane(body: unknown, eventId: string): string {
       .find((value) => typeof value === "string" && value.trim())
       ?.toString()
       .trim() || "workspace";
-  const channelId = [event?.channel, event?.channel_id, item?.channel, assistantThread?.channel_id]
+  // New-channel traffic must stay behind channel_id_changed migration work.
+  // The new ID owns the post-change conversation lane, not the retired old ID.
+  const channelId = [
+    event?.channel,
+    event?.channel_id,
+    event?.new_channel_id,
+    item?.channel,
+    assistantThread?.channel_id,
+  ]
     .find((value) => typeof value === "string" && value.trim())
     ?.toString()
     .trim();
@@ -224,6 +226,8 @@ export function createSlackDurableIngress(
 ): SlackDurableIngress {
   let app: App | undefined;
   let relayDispatch: SlackRelayIngressDispatch | undefined;
+  const activeSessionTurns = new Map<string, Promise<void>>();
+  const activeChannelTurns = new Map<string, Set<Promise<void>>>();
   const monitor = createChannelIngressMonitor<
     SlackIngressRawEvent,
     SlackIngressBody,
@@ -273,40 +277,139 @@ export function createSlackDurableIngress(
         await raw.afterDurableAdmission?.();
       }
     },
-    deliver: async (raw, lifecycle) => {
-      if (raw.kind === "relay") {
-        if (!relayDispatch) {
-          // Transient by design: a claim recovered before the relay source
-          // reattaches must retry, not dead-letter, or restart recovery loses it.
-          throw new Error("Slack relay ingress dispatcher is not attached.");
-        }
-        await relayDispatch(raw.message, lifecycle);
-        return;
-      }
-      if (!app) {
-        throw new Error("Slack ingress receiver is not attached to a Bolt app.");
-      }
-      await app.processEvent({
-        body: raw.body as ReceiverEvent["body"],
-        ack: async () => {},
-        ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
-        ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
-        customProperties: {
-          [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: lifecycle,
+    deliver: async (raw, lifecycle, claim) => {
+      const laneKey = claim.laneKey ?? inspectSlackIngress(raw).laneKey;
+      let releaseSession: (() => void) | undefined;
+      let releaseChannel: (() => void) | undefined;
+      let routedSession: string | undefined;
+      let adoptOnCompletion = false;
+      const settleSession = () => {
+        adoptOnCompletion = false;
+        releaseSession?.();
+      };
+      const settleTurn = () => {
+        settleSession();
+        releaseChannel?.();
+        lifecycle.abortSignal.removeEventListener("abort", settleTurn);
+      };
+      const routedLifecycle: SlackIngressTurnLifecycle = {
+        ...lifecycle,
+        onSessionRouted: async (sessionKey) => {
+          if (routedSession !== undefined) {
+            if (routedSession !== sessionKey) {
+              throw new Error("Slack ingress session ownership changed after routing.");
+            }
+            return;
+          }
+          lifecycle.abortSignal.throwIfAborted();
+          routedSession = sessionKey;
+          adoptOnCompletion = true;
+          const previousTurn = activeSessionTurns.get(sessionKey);
+          const releasedCurrentTurn = createDeferred<void>();
+          const currentTurn = previousTurn
+            ? previousTurn.then(() => releasedCurrentTurn.promise)
+            : releasedCurrentTurn.promise;
+          activeSessionTurns.set(sessionKey, currentTurn);
+          const channelTurn = createDeferred<void>();
+          const channelTurns = activeChannelTurns.get(laneKey) ?? new Set<Promise<void>>();
+          channelTurns.add(channelTurn.promise);
+          activeChannelTurns.set(laneKey, channelTurns);
+          void currentTurn.then(() => {
+            if (activeSessionTurns.get(sessionKey) === currentTurn) {
+              activeSessionTurns.delete(sessionKey);
+            }
+          });
+          void channelTurn.promise.then(() => {
+            channelTurns.delete(channelTurn.promise);
+            if (channelTurns.size === 0 && activeChannelTurns.get(laneKey) === channelTurns) {
+              activeChannelTurns.delete(laneKey);
+            }
+          });
+          releaseSession = () => releasedCurrentTurn.resolve();
+          releaseChannel = () => channelTurn.resolve();
+          lifecycle.abortSignal.addEventListener("abort", settleTurn, { once: true });
+          // Preserve shipped channel lanes until the prepared route proves its
+          // session; channel-ID migration therefore still fences all traffic.
+          lifecycle.onDeferred();
+          if (previousTurn) {
+            // A queued session turn owns its durable claim; its predecessor may
+            // legitimately outlive the pre-adoption watchdog.
+            lifecycle.onAdoptionFinalizing();
+          }
+          monitor.requestDrain();
+          await previousTurn;
+          lifecycle.abortSignal.throwIfAborted();
         },
-      });
+        onAdopted: async () => {
+          try {
+            await lifecycle.onAdopted();
+          } finally {
+            settleTurn();
+          }
+        },
+        onDeferred: () => {
+          lifecycle.onDeferred();
+          // Reply handoff releases session order; migration remains fenced
+          // until the durable turn is actually adopted or abandoned.
+          settleSession();
+          monitor.requestDrain();
+        },
+        onAbandoned: async () => {
+          try {
+            await lifecycle.onAbandoned();
+          } finally {
+            settleTurn();
+          }
+        },
+      };
+      try {
+        const event = raw.kind === "events-api" ? asOptionalRecord(raw.body)?.event : undefined;
+        if (asOptionalRecord(event)?.type === "channel_id_changed") {
+          const channelTurns = activeChannelTurns.get(laneKey);
+          if (channelTurns && channelTurns.size > 0) {
+            // A migration owns the channel lane while earlier routed sessions
+            // settle; later channel traffic cannot overtake the config change.
+            adoptOnCompletion = true;
+            lifecycle.onAdoptionFinalizing();
+            await Promise.all(channelTurns);
+            lifecycle.abortSignal.throwIfAborted();
+          }
+        }
+        if (raw.kind === "relay") {
+          if (!relayDispatch) {
+            // Transient by design: a claim recovered before the relay source
+            // reattaches must retry, not dead-letter, or restart recovery loses it.
+            throw new Error("Slack relay ingress dispatcher is not attached.");
+          }
+          await relayDispatch(raw.message, routedLifecycle);
+        } else {
+          if (!app) {
+            throw new Error("Slack ingress receiver is not attached to a Bolt app.");
+          }
+          await app.processEvent({
+            body: raw.body as ReceiverEvent["body"],
+            ack: async () => {},
+            ...(raw.retryNum === undefined ? {} : { retryNum: raw.retryNum }),
+            ...(raw.retryReason === undefined ? {} : { retryReason: raw.retryReason }),
+            customProperties: {
+              [SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY]: routedLifecycle,
+            },
+          });
+        }
+        if (adoptOnCompletion) {
+          await routedLifecycle.onAdopted();
+        }
+      } catch (error) {
+        settleTurn();
+        throw error;
+      }
     },
     pollIntervalMs: options.pollIntervalMs ?? SLACK_INGRESS_POLL_INTERVAL_MS,
-    retention: {
-      pruneIntervalMs: SLACK_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: SLACK_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SLACK_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SLACK_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SLACK_INGRESS_FAILED_MAX_ENTRIES,
-    },
+    retention: "standard",
     appendRetryDelaysMs: [0],
     drain: {
       resolveNonRetryableFailure: resolveSlackIngressNonRetryableFailure,
+      deferredLaneOccupancy: "release",
       // Shipped Slack rows did not store lanes, so replay still derives them from payloads.
       deriveLaneKey: (record) =>
         record.payload.kind === "relay"

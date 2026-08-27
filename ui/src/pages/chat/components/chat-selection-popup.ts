@@ -1,7 +1,8 @@
-// Floating toolbar over selected chat text: "More details" fires an implicit
-// /btw side question; "Ask in side chat" pre-fills the composer with a /btw
-// draft quoting the selection. Mirrors the imperative reply-context-menu
-// pattern in chat-thread.ts (body-portaled fixed div, document-level dismiss).
+// Floating toolbar over selected chat text: "More details" asks the session
+// companion immediately; "Ask in side chat" pre-fills the session rail.
+// Mirrors the imperative reply-context-menu pattern in chat-thread.ts.
+
+import { t } from "../../../i18n/index.ts";
 
 type ChatSelectionPopupActions = {
   onMoreDetails: (selection: string) => void;
@@ -88,7 +89,7 @@ function showChatSelectionPopup(
   const popup = document.createElement("div");
   popup.className = "chat-selection-popup";
   popup.setAttribute("role", "toolbar");
-  popup.setAttribute("aria-label", "Selection actions");
+  popup.setAttribute("aria-label", t("chat.messages.selectionActions"));
   popup.addEventListener("pointerdown", (event) => event.preventDefault());
 
   const activate = (action: (selection: string) => void) => {
@@ -98,12 +99,12 @@ function showChatSelectionPopup(
   };
   popup.append(
     createSelectionPopupButton(
-      "More details",
+      t("chat.messages.moreDetails"),
       "M12 3v2m0 14v2M5.6 5.6l1.5 1.5m9.8 9.8 1.5 1.5M3 12h2m14 0h2M5.6 18.4l1.5-1.5m9.8-9.8 1.5-1.5",
       () => activate(actions.onMoreDetails),
     ),
     createSelectionPopupButton(
-      "Ask in side chat",
+      t("chat.messages.askInSideChat"),
       "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
       () => activate(actions.onAskSideChat),
     ),

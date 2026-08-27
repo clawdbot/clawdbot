@@ -4,20 +4,13 @@
  * Tests the hook runner methods directly since outbound delivery is deeply integrated.
  */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./types.js";
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
-}
 
 async function expectMessageHookCall(params: {
   hookName: "message_sending" | "message_sent";
@@ -76,7 +69,7 @@ describe("message_sending hook runner", () => {
     vi.useFakeTimers();
     try {
       const logger = { warn: vi.fn(), error: vi.fn() };
-      const firstStarted = createDeferred<void>();
+      const firstStarted = createDeferred();
       const first = vi.fn(() => {
         firstStarted.resolve();
         return new Promise<PluginHookMessageSendingResult>(() => {});

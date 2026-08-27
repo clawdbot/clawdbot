@@ -1,4 +1,6 @@
 import Foundation
+import OpenClawKit
+import SQLite3
 import Testing
 @testable import OpenClaw
 
@@ -6,32 +8,24 @@ import Testing
 @MainActor
 struct ExecApprovalsUIRollbackTests {
     @Test
-    func `quick mode recovers after initial approvals read is unavailable`() async throws {
-        try await self.withTempStateDir { stateDir in
-            _ = try ExecApprovalsStore.updateDefaults { defaults in
-                defaults.security = .full
-                defaults.ask = .off
-            }.get()
-            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
-            try Data("held".utf8).write(to: lockURL)
-            defer { try? FileManager().removeItem(at: lockURL) }
+    func `settings migration requirement surfaces without automatic retry`() async throws {
+        try await self.withTempStateDir { stateDirectoryURL in
+            let migrationError = ExecApprovalsLegacyMigrationRequiredError(
+                stateDirectoryURL: stateDirectoryURL,
+                legacyFileURL: stateDirectoryURL.appendingPathComponent("exec-approvals.json"))
+            var settingsReadCount = 0
+            let model = ExecApprovalsSettingsModel(
+                resolveApprovalsAsync: { _ in
+                    settingsReadCount += 1
+                    return .failure(.migrationRequired(migrationError))
+                },
+                readRetryDelay: .zero,
+                automaticReadRetryAttempts: 5)
 
-            let state = AppState(
-                preview: true,
-                execApprovalsReadRetryDelay: .zero)
+            await model.loadSettings(for: "main")
 
-            #expect(state.execApprovalPolicyLoadState == .loading)
-            await state.recoverExecApprovalModeRead(maxAttempts: 1)
-
-            #expect(!state.execApprovalPolicyAvailable)
-            #expect(state.execApprovalLoadError != nil)
-
-            try FileManager().removeItem(at: lockURL)
-            await state.recoverExecApprovalModeRead(maxAttempts: 1)
-
-            #expect(state.execApprovalPolicyAvailable)
-            #expect(state.execApprovalMode == .allow)
-            #expect(state.execApprovalLoadError == nil)
+            #expect(settingsReadCount == 1)
+            #expect(model.readErrorMessage == ExecApprovalsReadError.migrationRequired(migrationError).message)
         }
     }
 
@@ -45,15 +39,12 @@ struct ExecApprovalsUIRollbackTests {
             _ = try ExecApprovalsStore.addAllowlistEntry(
                 agentId: "main",
                 pattern: "/usr/bin/printf").get()
-            let lockURL = stateDir.appendingPathComponent("exec-approvals.json.lock")
-            try Data("held".utf8).write(to: lockURL)
-            defer { try? FileManager().removeItem(at: lockURL) }
+            let record = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: stateDir)
+            let rawJSON = try #require(record?.rawJSON)
+            try Self.replaceRawJSON("{", stateDirectoryURL: stateDir)
             let model = ExecApprovalsSettingsModel(
                 readRetryDelay: .zero,
                 automaticReadRetryAttempts: 0)
-            let previousMode = AppStateStore.shared.execApprovalMode
-            defer { AppStateStore.shared.syncExecApprovalMode(previousMode) }
-            AppStateStore.shared.syncExecApprovalMode(.ask)
 
             #expect(model.policyLoadState == .loading)
             #expect(model.readErrorMessage == nil)
@@ -62,7 +53,7 @@ struct ExecApprovalsUIRollbackTests {
             #expect(!model.policyAvailable)
             #expect(model.readErrorMessage != nil)
 
-            try FileManager().removeItem(at: lockURL)
+            try Self.replaceRawJSON(rawJSON, stateDirectoryURL: stateDir)
             await model.retryUnavailableSettings(maxAttempts: 1)
 
             #expect(model.policyAvailable)
@@ -70,12 +61,11 @@ struct ExecApprovalsUIRollbackTests {
             #expect(model.ask == .off)
             #expect(model.entries.map(\.pattern) == ["/usr/bin/printf"])
             #expect(model.readErrorMessage == nil)
-            #expect(AppStateStore.shared.execApprovalMode == .ask)
         }
     }
 
     @Test
-    func `defaults mutation refreshes quick mode through app state owner`() async throws {
+    func `defaults mutation preserves settings retry behavior`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateDefaults { defaults in
                 defaults.security = .allowlist
@@ -94,23 +84,17 @@ struct ExecApprovalsUIRollbackTests {
                 automaticReadRetryAttempts: 0)
             model.selectAgent("__defaults__")
             await model.waitForPendingSettingsRead()
-            let previousMode = AppStateStore.shared.execApprovalMode
-            defer { AppStateStore.shared.syncExecApprovalMode(previousMode) }
-            AppStateStore.shared.syncExecApprovalMode(.ask)
 
             model.setSecurity(.full)
             #expect(model.security == .full)
             await model.waitForPendingSettingsRead()
-            await AppStateStore.shared.waitForExecApprovalModeRead()
 
             #expect(!model.policyAvailable)
-            #expect(AppStateStore.shared.execApprovalMode == .allow)
 
             await model.retryUnavailableSettings(maxAttempts: 1)
 
             #expect(model.policyAvailable)
             #expect(model.security == .full)
-            #expect(AppStateStore.shared.execApprovalMode == .allow)
             #expect(readCount == 3)
         }
     }
@@ -161,24 +145,6 @@ struct ExecApprovalsUIRollbackTests {
     }
 
     @Test
-    func `quick mode failure keeps last known value`() async throws {
-        try await self.withTempStateDir { _ in
-            let state = AppState(preview: true)
-            state.syncExecApprovalMode(.ask)
-
-            state.applyExecApprovalModeMutation(.allow, result: .failure(.unavailable))
-
-            #expect(state.execApprovalMode == .ask)
-            #expect(state.execApprovalMutationError == ExecApprovalsMutationError.unavailable.message)
-
-            state.applyExecApprovalModeMutation(.allow, result: .success(()))
-
-            #expect(state.execApprovalMode == .allow)
-            #expect(state.execApprovalMutationError == nil)
-        }
-    }
-
-    @Test
     func `settings failure keeps last known policy`() async throws {
         try await self.withTempStateDir { _ in
             _ = try ExecApprovalsStore.updateAgentSettings(agentId: "main") { entry in
@@ -187,7 +153,11 @@ struct ExecApprovalsUIRollbackTests {
             }.get()
             let model = ExecApprovalsSettingsModel()
             await model.loadSettings(for: "main")
-            try Data("{".utf8).write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
+            try Self.replaceRawJSON(
+                "{",
+                stateDirectoryURL: ExecApprovalsStore.databaseURL()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent())
 
             model.setSecurity(.full)
 
@@ -213,7 +183,11 @@ struct ExecApprovalsUIRollbackTests {
             #expect(normalized == "/bin/echo")
             #expect(model.entry(for: entry.id)?.pattern == "/bin/echo")
 
-            try Data("{".utf8).write(to: ExecApprovalsStore.fileURL(), options: [.atomic])
+            try Self.replaceRawJSON(
+                "{",
+                stateDirectoryURL: ExecApprovalsStore.databaseURL()
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent())
             let rolledBack = model.updateEntry(pattern: "/bin/cat", id: entry.id)
 
             #expect(rolledBack == "/bin/echo")
@@ -246,16 +220,49 @@ struct ExecApprovalsUIRollbackTests {
     {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-approvals-ui-\(UUID().uuidString)", isDirectory: true)
-        let home = root.appendingPathComponent("home", isDirectory: true)
         let stateDir = root.appendingPathComponent("state", isDirectory: true)
         defer { try? FileManager().removeItem(at: root) }
 
-        return try await TestIsolation.withIsolatedState(env: [
-            "OPENCLAW_HOME": home.path,
-            "OPENCLAW_STATE_DIR": stateDir.path,
-        ]) {
+        return try await ExecApprovalsStore.withStateDirectory(stateDir) {
             try await body(stateDir)
         }
+    }
+
+    private static func replaceRawJSON(
+        _ rawJSON: String,
+        stateDirectoryURL: URL) throws
+    {
+        let databaseURL = ExecApprovalsSQLiteStore.databaseURL(
+            stateDirectoryURL: stateDirectoryURL)
+        var database: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &database) == SQLITE_OK, let database else {
+            throw SQLiteTestError.open
+        }
+        defer { sqlite3_close(database) }
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(
+            database,
+            "UPDATE exec_approvals_config SET raw_json = ? WHERE config_key = 'current'",
+            -1,
+            &statement,
+            nil) == SQLITE_OK,
+            let statement
+        else {
+            throw SQLiteTestError.prepare
+        }
+        defer { sqlite3_finalize(statement) }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        guard sqlite3_bind_text(statement, 1, rawJSON, -1, transient) == SQLITE_OK,
+              sqlite3_step(statement) == SQLITE_DONE
+        else {
+            throw SQLiteTestError.update
+        }
+    }
+
+    private enum SQLiteTestError: Error {
+        case open
+        case prepare
+        case update
     }
 }
 

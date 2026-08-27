@@ -7,9 +7,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 const transcodeAudioBufferToOpusMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
-  transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const { canonicalizeBase64 } = await import("@openclaw/media-core/base64");
+  return {
+    canonicalizeBase64,
+    transcodeAudioBufferToOpus: transcodeAudioBufferToOpusMock,
+  };
+});
 
 const {
   assertOkOrThrowProviderErrorMock,
@@ -27,7 +31,7 @@ beforeAll(async () => {
 
 installProviderHttpMockCleanup();
 
-function googleTtsResponse(pcm = Buffer.from([1, 0, 2, 0])) {
+function googleTtsResponse(audio: Buffer | string = Buffer.from([1, 0, 2, 0])) {
   return {
     ok: true,
     json: async () => ({
@@ -38,7 +42,7 @@ function googleTtsResponse(pcm = Buffer.from([1, 0, 2, 0])) {
               {
                 inlineData: {
                   mimeType: "audio/L16;codec=pcm;rate=24000",
-                  data: pcm.toString("base64"),
+                  data: typeof audio === "string" ? audio : audio.toString("base64"),
                 },
               },
             ],
@@ -347,6 +351,79 @@ describe("Google speech provider", () => {
     expect(result.audioBuffer.subarray(44)).toEqual(pcm);
   });
 
+  it("rejects Gemini audio with non-canonical base64 pad bits", async () => {
+    const malformedResponse = {
+      response: googleTtsResponse("ZE=="),
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Reject malformed audio.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
+    expect(requestSequence).toHaveBeenCalledTimes(2);
+  });
+
+  it("accepts Gemini audio with URL-safe base64", async () => {
+    const pcm = Buffer.from([0xfb, 0xff, 8, 0, 9, 0, 10, 0]);
+    const pcmBase64url = pcm.toString("base64url");
+    expect(pcmBase64url).toMatch(/[-_]/);
+    expect(pcmBase64url).not.toMatch(/[+/]/);
+    const response = {
+      response: googleTtsResponse(pcmBase64url),
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(response);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    const result = await provider.synthesize({
+      text: "Accept URL-safe audio.",
+      cfg: {},
+      providerConfig: {
+        apiKey: "google-test-key",
+      },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(result.audioBuffer.subarray(44)).toEqual(pcm);
+    expect(requestSequence).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects Gemini audio with a mixed base64 alphabet", async () => {
+    const malformedResponse = {
+      response: googleTtsResponse("aGVsbG8+_"),
+      release: vi.fn(async () => {}),
+    };
+    const requestSequence = vi.fn().mockResolvedValue(malformedResponse);
+    postJsonRequestMock.mockImplementation(requestSequence);
+    const provider = buildGoogleSpeechProvider();
+
+    await expect(
+      provider.synthesize({
+        text: "Reject mixed audio.",
+        cfg: {},
+        providerConfig: {
+          apiKey: "google-test-key",
+        },
+        target: "audio-file",
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow("Google TTS response returned malformed base64 audio data");
+    expect(requestSequence).toHaveBeenCalledTimes(2);
+  });
+
   it("retries once when Gemini TTS fetch aborts", async () => {
     const pcm = Buffer.from([7, 0, 8, 0]);
     const abortError = new Error("This operation was aborted");
@@ -424,6 +501,39 @@ describe("Google speech provider", () => {
     }) as { headers?: HeadersInit };
     expect(new Headers(request.headers).get("x-goog-api-key")).toBe("env-google-key");
   });
+
+  it.each([
+    ["empty", ""],
+    ["whitespace-only", "   "],
+  ])(
+    "uses the canonical endpoint for a %s Google model-provider base URL",
+    async (_label, baseUrl) => {
+      const requestMock = installGoogleTtsRequestMock();
+      const provider = buildGoogleSpeechProvider();
+
+      await provider.synthesize({
+        text: "Read this plainly.",
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        providerConfig: { apiKey: "google-test-key" },
+        target: "audio-file",
+        timeoutMs: 10_000,
+      });
+
+      const request = expectRecordFields(requireFirstRecordArg(requestMock, "Google TTS request"), {
+        url: "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-tts-preview:generateContent",
+      }) as { headers?: HeadersInit };
+      expect(new Headers(request.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
+    },
+  );
 
   it("can reuse a configured Google model-provider API key without auth profiles", async () => {
     const requestMock = installGoogleTtsRequestMock();
@@ -654,42 +764,20 @@ describe("Google speech provider", () => {
     );
   });
 
-  it("honors configured private-network opt-in for Google TTS", async () => {
-    installGoogleTtsRequestMock();
-
-    const provider = buildGoogleSpeechProvider();
-    await provider.synthesize({
-      text: "hello",
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              request: { allowPrivateNetwork: true },
-              models: [],
-            },
-          },
-        },
-      },
-      providerConfig: { apiKey: "google-test-key" },
+  it.each([
+    {
+      name: "honors configured private-network opt-in for Google TTS",
       target: "audio-file",
-      timeoutMs: 12_345,
-    });
-
-    const requestConfig = expectRecordFields(
-      requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),
-      {
-        allowPrivateNetwork: true,
-      },
-    );
-    expectRecordFields(requestConfig.request, { allowPrivateNetwork: true });
-  });
-
-  it("honors configured private-network opt-in for Google telephony TTS", async () => {
+    },
+    {
+      name: "honors configured private-network opt-in for Google telephony TTS",
+      target: "telephony",
+    },
+  ] as const)("$name", async ({ target }) => {
     installGoogleTtsRequestMock();
 
     const provider = buildGoogleSpeechProvider();
-    await provider.synthesizeTelephony?.({
+    const request = {
       text: "hello",
       cfg: {
         models: {
@@ -704,7 +792,12 @@ describe("Google speech provider", () => {
       },
       providerConfig: { apiKey: "google-test-key" },
       timeoutMs: 12_345,
-    });
+    };
+    if (target === "telephony") {
+      await provider.synthesizeTelephony?.(request);
+    } else {
+      await provider.synthesize({ ...request, target });
+    }
 
     const requestConfig = expectRecordFields(
       requireFirstRecordArg(resolveProviderHttpRequestConfigMock, "Google TTS HTTP config request"),

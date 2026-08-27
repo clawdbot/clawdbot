@@ -1,7 +1,7 @@
 /**
  * Reconciles orphaned trailing user prompts before provider submission.
  */
-import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
+import { mergeOrphanedTrailingUserPrompt } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 /** Inputs required to reconcile an active session leaf with the prompt about to be sent. */

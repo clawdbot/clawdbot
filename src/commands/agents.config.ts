@@ -8,15 +8,18 @@ import {
   listAgentEntries,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveLegacyCompatibilityAgentId,
+  toAgentEntriesRecord,
 } from "../agents/agent-scope.js";
 import { resolveAgentAvatarUrlFromSource } from "../agents/identity-avatar-file.js";
 import type { AgentIdentityFile } from "../agents/identity-file.js";
 import { identityHasValues, loadAgentIdentityFromWorkspace } from "../agents/identity-file.js";
+import { pinLegacyInheritedAuthOwnerForRosterTransition } from "../agents/legacy-inherited-auth-dir.js";
+import { pinSurvivorWorkspaceForRosterCollapse } from "../config/agent-workspace-roster-transition.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 
 export type AgentSummary = {
   id: string;
@@ -32,19 +35,13 @@ export type AgentSummary = {
   bindingDetails?: string[];
   routes?: string[];
   providers?: string[];
+  createdVia?: "operator" | "agent" | "claw";
+  creatorAgentId?: string | null;
+  createdAt?: number;
   isDefault: boolean;
 };
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
-
-function toAgentEntries(list: AgentEntry[]): Record<string, Omit<AgentEntry, "id">> {
-  return Object.fromEntries(
-    list.map((entry) => {
-      const { id, ...config } = entry;
-      return [id, config];
-    }),
-  );
-}
 
 export type AgentIdentity = AgentIdentityFile;
 export { listAgentEntries };
@@ -77,12 +74,14 @@ export function loadAgentIdentity(workspace: string): AgentIdentity | null {
 
 /** Build config-derived summaries for text/JSON agent listing. */
 export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
-  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const defaultAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
   const configuredAgents = listAgentEntries(cfg);
   const orderedIds =
     configuredAgents.length > 0
       ? configuredAgents.map((agent) => normalizeAgentId(agent.id))
-      : [defaultAgentId];
+      : defaultAgentId
+        ? [defaultAgentId]
+        : [];
   const bindingCounts = new Map<string, number>();
   for (const binding of listRouteBindings(cfg)) {
     const agentId = normalizeAgentId(binding.agentId);
@@ -121,7 +120,7 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
       agentDir: resolveAgentDir(cfg, id),
       model: resolveAgentModel(cfg, id),
       bindings: bindingCounts.get(id) ?? 0,
-      isDefault: id === defaultAgentId,
+      isDefault: defaultAgentId !== undefined && id === normalizeAgentId(defaultAgentId),
     };
     if (identityAvatarUrl) {
       summary.identityAvatarUrl = identityAvatarUrl;
@@ -130,7 +129,6 @@ export function buildAgentSummaries(cfg: OpenClawConfig): AgentSummary[] {
   });
 }
 
-/** Add or update one agent entry while preserving the default-agent placeholder when needed. */
 export function applyAgentConfig(
   cfg: OpenClawConfig,
   params: {
@@ -165,18 +163,36 @@ export function applyAgentConfig(
   if (index >= 0) {
     nextList[index] = nextEntry;
   } else {
-    if (nextList.length === 0 && agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))) {
-      nextList.push({ id: resolveDefaultAgentId(cfg) });
-    }
     nextList.push(nextEntry);
   }
-  return {
+  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
+  const nextConfig: OpenClawConfig = {
     ...cfg,
     agents: {
-      ...cfg.agents,
-      entries: toAgentEntries(nextList),
+      ...agentsConfig,
+      ...(nextList.length > 1 ? { ownership: "explicit" as const } : {}),
+      entries: toAgentEntriesRecord(nextList),
     },
   };
+  if (list.length !== 1 || nextList.length <= 1) {
+    return nextConfig;
+  }
+  const priorSystemAgentId = tryResolveLegacyCompatibilityAgentId(cfg);
+  const transitionedConfig =
+    priorSystemAgentId &&
+    !normalizeOptionalString(nextConfig.agents?.defaults?.systemAgent?.agentId)
+      ? {
+          ...nextConfig,
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              systemAgent: { agentId: priorSystemAgentId },
+            },
+          },
+        }
+      : nextConfig;
+  return pinLegacyInheritedAuthOwnerForRosterTransition(cfg, transitionedConfig);
 }
 
 /** Remove an agent and any config references that route or allow traffic to it. */
@@ -187,13 +203,28 @@ export function pruneAgentConfig(
   config: OpenClawConfig;
   removedBindings: number;
   removedAllow: number;
+  clearedOwnerRefs: string[];
 } {
   const id = normalizeAgentId(agentId);
+  const clearedOwnerRefs: string[] = [];
+  const targetsDeletedAgent = (candidate: string) => {
+    const normalized = normalizeAgentIdStrict(candidate);
+    return normalized.ok && normalized.value === id;
+  };
+  const clearOwnerRef = <T extends { agentId?: string }>(value: T | undefined, path: string) => {
+    const owner = normalizeOptionalString(value?.agentId);
+    if (!value || !owner || normalizeAgentId(owner) !== id) {
+      return value;
+    }
+    clearedOwnerRefs.push(path);
+    const { agentId: _agentId, ...rest } = value;
+    return Object.keys(rest).length > 0 ? (rest as T) : undefined;
+  };
   const agents = listAgentEntries(cfg);
   const pruneAllowAgents = (allowAgents: string[] | undefined) =>
     allowAgents?.filter((entry) => {
       const trimmed = entry.trim();
-      return !trimmed || trimmed === "*" || normalizeAgentId(trimmed) !== id;
+      return !trimmed || !targetsDeletedAgent(trimmed);
     });
   const nextAgentsList = [];
   for (const entry of agents) {
@@ -212,7 +243,7 @@ export function pruneAgentConfig(
         : entry,
     );
   }
-  const nextAgents = nextAgentsList.length > 0 ? toAgentEntries(nextAgentsList) : undefined;
+  const nextAgents = nextAgentsList.length > 0 ? toAgentEntriesRecord(nextAgentsList) : undefined;
 
   const bindings = cfg.bindings ?? [];
   const filteredBindings = bindings.filter((binding) => normalizeAgentId(binding.agentId) !== id);
@@ -220,7 +251,7 @@ export function pruneAgentConfig(
   const allow = cfg.tools?.agentToAgent?.allow ?? [];
   const filteredAllow = allow.filter((entry) => entry !== id);
 
-  const nextDefaults = cfg.agents?.defaults?.subagents?.allowAgents
+  const prunedDefaults = cfg.agents?.defaults?.subagents?.allowAgents
     ? {
         ...cfg.agents.defaults,
         subagents: {
@@ -229,10 +260,57 @@ export function pruneAgentConfig(
         },
       }
     : cfg.agents?.defaults;
+  const deletedAgentOwnedHeartbeat =
+    normalizeOptionalString(prunedDefaults?.heartbeat?.agentId) !== undefined &&
+    normalizeAgentId(prunedDefaults?.heartbeat?.agentId) === id;
+  const nextHeartbeat =
+    deletedAgentOwnedHeartbeat && nextAgentsList.length > 1
+      ? undefined
+      : clearOwnerRef(prunedDefaults?.heartbeat, "agents.defaults.heartbeat.agentId");
+  if (deletedAgentOwnedHeartbeat && nextAgentsList.length > 1) {
+    clearedOwnerRefs.push("agents.defaults.heartbeat");
+  }
+  const nextDefaults = prunedDefaults
+    ? {
+        ...prunedDefaults,
+        heartbeat: nextHeartbeat,
+        systemAgent: clearOwnerRef(
+          prunedDefaults.systemAgent,
+          "agents.defaults.systemAgent.agentId",
+        ),
+      }
+    : undefined;
+  const nextTalk = clearOwnerRef(cfg.talk, "talk.agentId");
+  const nextBroadcast = cfg.broadcast
+    ? Object.fromEntries(
+        Object.entries(cfg.broadcast).map(([peerId, value]) => [
+          peerId,
+          Array.isArray(value) ? value.filter((entry) => !targetsDeletedAgent(entry)) : value,
+        ]),
+      )
+    : undefined;
+  const nextHooks = cfg.hooks
+    ? {
+        ...cfg.hooks,
+        allowedAgentIds: cfg.hooks.allowedAgentIds?.filter((entry) => !targetsDeletedAgent(entry)),
+        mappings: cfg.hooks.mappings?.filter(
+          (mapping) => !mapping.agentId || !targetsDeletedAgent(mapping.agentId),
+        ),
+      }
+    : undefined;
+  const { list: _legacyList, ownership: _ownership, ...agentsConfig } = cfg.agents ?? {};
   const nextAgentsConfig = cfg.agents
-    ? { ...cfg.agents, defaults: nextDefaults, entries: nextAgents }
+    ? {
+        ...agentsConfig,
+        ...(nextAgentsList.length > 1 ? { ownership: "explicit" as const } : {}),
+        defaults: nextDefaults,
+        entries: nextAgents,
+      }
     : nextAgents
-      ? { entries: nextAgents }
+      ? {
+          ...(nextAgentsList.length > 1 ? { ownership: "explicit" as const } : {}),
+          entries: nextAgents,
+        }
       : undefined;
   const nextTools = cfg.tools?.agentToAgent
     ? {
@@ -244,14 +322,28 @@ export function pruneAgentConfig(
       }
     : cfg.tools;
 
+  const preliminaryConfig: OpenClawConfig = {
+    ...cfg,
+    agents: nextAgentsConfig,
+    bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+    broadcast: nextBroadcast,
+    hooks: nextHooks,
+    talk: nextTalk,
+    tools: nextTools,
+  };
+  const workspacePinnedConfig = pinSurvivorWorkspaceForRosterCollapse(
+    cfg,
+    preliminaryConfig,
+  ).config;
+  const transitionPinnedConfig =
+    agents.length > 1 && nextAgentsList.length === 1
+      ? pinLegacyInheritedAuthOwnerForRosterTransition(cfg, workspacePinnedConfig)
+      : workspacePinnedConfig;
+
   return {
-    config: {
-      ...cfg,
-      agents: nextAgentsConfig,
-      bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
-      tools: nextTools,
-    },
+    config: transitionPinnedConfig,
     removedBindings: bindings.length - filteredBindings.length,
     removedAllow: allow.length - filteredAllow.length,
+    clearedOwnerRefs,
   };
 }

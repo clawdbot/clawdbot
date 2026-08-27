@@ -1,10 +1,12 @@
 // Tests high-level reply flow decisions across commands and agent dispatch.
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   composeReplyDispatchBeforeDeliver,
   createReplyDispatcher,
+  createReplyDispatcherWithTyping,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
@@ -15,14 +17,6 @@ type DeliverMock = { mock: { calls: unknown[][] } };
 function deliveredText(deliver: DeliverMock, index = 0) {
   const payload = deliver.mock.calls[index]?.[0] as DeliverPayload | undefined;
   return payload?.text;
-}
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  return { promise, resolve };
 }
 
 describe("createReplyDispatcher", () => {
@@ -65,8 +59,12 @@ describe("createReplyDispatcher", () => {
 
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
 
-    await dispatcher.waitForIdle();
+    const receipt = await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
+    expect(receipt).toMatchObject({
+      anyVisibleDelivered: false,
+      counts: { final: { delivered: 0 } },
+    });
   });
 
   it("still drops exact NO_REPLY final payloads for group sessions where silence is allowed", async () => {
@@ -167,7 +165,7 @@ describe("createReplyDispatcher", () => {
   });
 
   it("waits for asynchronous delivery error cleanup before becoming idle", async () => {
-    const cleanup = createDeferred<void>();
+    const cleanup = createDeferred();
     const order: string[] = [];
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
@@ -194,7 +192,7 @@ describe("createReplyDispatcher", () => {
   it("releases the same dispatcher after a beforeDeliver timeout", async () => {
     vi.useFakeTimers();
     try {
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const delivered: string[] = [];
       const errors: string[] = [];
       let hookCalls = 0;
@@ -224,8 +222,6 @@ describe("createReplyDispatcher", () => {
 
       expect(delivered).toEqual(["follow-up final"]);
       expect(errors).toEqual(["beforeDeliver timed out after 15000ms"]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -235,7 +231,7 @@ describe("createReplyDispatcher", () => {
   it("bounds hooks appended after dispatcher construction", async () => {
     vi.useFakeTimers();
     try {
-      const hookStarted = createDeferred<void>();
+      const hookStarted = createDeferred();
       const delivered: string[] = [];
       let hookCalls = 0;
       const dispatcher = createReplyDispatcher({
@@ -260,8 +256,6 @@ describe("createReplyDispatcher", () => {
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["follow-up final"]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
-      expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -327,7 +321,6 @@ describe("createReplyDispatcher", () => {
 
       expect(delivered).toEqual(["final:constructor:appended"]);
       expect(errors).toEqual([]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -371,7 +364,6 @@ describe("createReplyDispatcher", () => {
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["final:owner:plugin"]);
-      expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -405,12 +397,10 @@ describe("createReplyDispatcher", () => {
       await vi.advanceTimersByTimeAsync(10_000);
       await vi.advanceTimersByTimeAsync(5_000);
       expect(delivered).toEqual([]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       await vi.advanceTimersByTimeAsync(5_000);
       await dispatcher.waitForIdle();
 
       expect(delivered).toEqual(["final:first:second"]);
-      expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -443,6 +433,42 @@ describe("createReplyDispatcher", () => {
     await Promise.resolve();
     expect(onIdle).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["onIdle", "onSettled"] as const)(
+    "releases deferred delivery finalization from %s before sealing",
+    async (settleHook) => {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      try {
+        let resolveFinalization!: (result: { visibleReplySent: true }) => void;
+        const finalization = new Promise<{ visibleReplySent: true }>((resolve) => {
+          resolveFinalization = resolve;
+        });
+        const settle = () => resolveFinalization({ visibleReplySent: true });
+        const { dispatcher } = createReplyDispatcherWithTyping({
+          deliver: async () => ({ visibleReplySent: false, finalization }),
+          ...(settleHook === "onIdle" ? { onIdle: settle } : { onSettled: settle }),
+        });
+
+        dispatcher.sendFinalReply({ text: "final" });
+        dispatcher.markComplete();
+        const receipt = dispatcher.waitForIdle();
+        const bounded = Promise.race([
+          receipt,
+          new Promise<"timed-out">((resolve) => {
+            setTimeout(() => resolve("timed-out"), 100);
+          }),
+        ]);
+        await vi.advanceTimersByTimeAsync(100);
+
+        await expect(bounded).resolves.toMatchObject({
+          anyVisibleDelivered: true,
+          counts: { final: { delivered: 1, deliveredNotVisible: 0 } },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("resolves an owner-declared follow-up admission barrier policy from queued deliveries", async () => {
     vi.useFakeTimers();
@@ -577,7 +603,7 @@ describe("createReplyToModeFilterForChannel", () => {
         expectedReplyToId: undefined,
       },
       {
-        filter: createReplyToModeFilterForChannel("off", "slack"),
+        filter: createReplyToModeFilterForChannel("off", "telegram"),
         input: { text: "hi", replyToId: "1", replyToTag: true },
         expectedReplyToId: "1",
       },

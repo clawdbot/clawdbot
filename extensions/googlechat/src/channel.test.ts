@@ -229,6 +229,49 @@ describe("googlechatPlugin outbound", () => {
     ]);
   });
 
+  it("records the API thread separately from the containing space", async () => {
+    const cfg = createGoogleChatCfg();
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-canonical",
+      threadName: "spaces/AAA/threads/canonical",
+    });
+
+    const canonical = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "canonical",
+      threadId: "threads/requested",
+    });
+
+    expect(canonical.receipt.threadId).toBe("spaces/AAA/threads/canonical");
+    expect(canonical.receipt.parts[0]?.threadId).toBe("spaces/AAA/threads/canonical");
+    expect(canonical.receipt.raw?.[0]).toMatchObject({
+      chatId: "spaces/AAA",
+      conversationId: "spaces/AAA",
+    });
+
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-fallback",
+    });
+    const fallback = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "fallback",
+      threadId: "threads/requested",
+    });
+    expect(fallback.receipt.threadId).toBe("threads/requested");
+
+    sendGoogleChatMessageMock.mockResolvedValueOnce({
+      messageName: "spaces/AAA/messages/msg-top-level",
+    });
+    const topLevel = await googlechatOutboundAdapter.attachedResults.sendText({
+      cfg,
+      to: "spaces/AAA",
+      text: "top level",
+    });
+    expect(topLevel.receipt.threadId).toBeUndefined();
+  });
+
   it("renders and chunks outbound text without requiring Google Chat runtime initialization", () => {
     const chunker = googlechatOutboundAdapter.base.chunker;
 

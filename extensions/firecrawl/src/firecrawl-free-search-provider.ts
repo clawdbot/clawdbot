@@ -1,17 +1,11 @@
 // Firecrawl provider module implements model/runtime integration.
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-contract";
 import { buildFirecrawlFreeWebSearchProviderBase } from "../web-search-shared.js";
 import { GenericFirecrawlSearchSchema } from "./firecrawl-search-provider.js";
 
-type FirecrawlClientModule = typeof import("./firecrawl-client.js");
-
-let firecrawlClientModulePromise: Promise<FirecrawlClientModule> | undefined;
-
-function loadFirecrawlClientModule(): Promise<FirecrawlClientModule> {
-  firecrawlClientModulePromise ??= import("./firecrawl-client.js");
-  return firecrawlClientModulePromise;
-}
+const loadFirecrawlClientModule = createLazyRuntimeModule(() => import("./firecrawl-client.js"));
 
 export function createFirecrawlFreeWebSearchProvider(): WebSearchProviderPlugin {
   return {
@@ -20,7 +14,8 @@ export function createFirecrawlFreeWebSearchProvider(): WebSearchProviderPlugin 
       description:
         "Search the web using Firecrawl's free hosted starter tier (no API key required). Returns structured results with snippets. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",
       parameters: GenericFirecrawlSearchSchema,
-      execute: async (args) => {
+      execute: async (args, executionContext) => {
+        executionContext?.signal?.throwIfAborted();
         const { runFirecrawlSearch } = await loadFirecrawlClientModule();
         return await runFirecrawlSearch({
           cfg: ctx.config,
@@ -30,6 +25,7 @@ export function createFirecrawlFreeWebSearchProvider(): WebSearchProviderPlugin 
             max: 10,
           }),
           access: "keyless",
+          ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
         });
       },
     }),

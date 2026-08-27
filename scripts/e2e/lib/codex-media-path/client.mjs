@@ -5,7 +5,7 @@ import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
 import { createGatewayWsClient } from "../../../lib/gateway-ws-client.ts";
 import { resolveGatewaySuccessPayload } from "../gateway-frame-payload.mjs";
-import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
+import { createJsonlRequestTailer } from "./jsonl-request-tail.mts";
 import { readPositiveIntEnv, readTcpPortEnv } from "./limits.mjs";
 
 const portText = process.env.PORT;

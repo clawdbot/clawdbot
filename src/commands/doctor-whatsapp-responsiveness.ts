@@ -5,8 +5,8 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import type { StatusSummary } from "../status/types.js";
 import { sleep } from "../utils/sleep.js";
-import type { StatusSummary } from "./status.types.js";
 
 type LocalTuiProcess = {
   pid: number;

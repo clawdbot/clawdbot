@@ -19,7 +19,7 @@ Use this for Control UI changes that need a real browser flow with deterministic
 - Target one E2E test in a Codex worktree:
 
 ```bash
-node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts
+node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts
 ```
 
 - Run the whole local lane in a normal checkout:
@@ -28,7 +28,10 @@ node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --c
 pnpm test:ui:e2e
 ```
 
-If dependencies are missing in a Codex worktree, install once with `pnpm install`; for broad GUI proof or dependency-heavy checks, use Testbox/Crabbox instead of running a wide local pnpm lane.
+Do not install dependencies into a linked/sparse worktree. For broad GUI proof
+or dependency-heavy checks, use a prepared normal checkout on the current
+dedicated Linux worker when it has browser support; otherwise use
+Testbox/Crabbox instead of running a wide lane on a workstation.
 
 ## Visual Proof Default
 

@@ -1,6 +1,13 @@
 {
   "id": "qa-lab",
   "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner.",
+  "cliCommands": [
+    {
+      "name": "qa",
+      "description": "Run QA scenarios and launch the private QA debugger UI",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false
   },

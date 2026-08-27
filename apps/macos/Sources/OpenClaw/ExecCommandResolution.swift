@@ -1,6 +1,51 @@
+import CryptoKit
 import Foundation
 
+struct ExecAllowAlwaysPattern: Sendable, Hashable {
+    let pattern: String
+    let argPattern: String?
+
+    init(pattern: String, argPattern: String? = nil) {
+        self.pattern = pattern
+        self.argPattern = argPattern
+    }
+}
+
+struct ExecApprovalCwdSnapshot: Sendable, Equatable {
+    let path: String
+    let device: UInt64
+    let inode: UInt64
+}
+
 struct ExecCommandResolution {
+    static let approvalCwdDriftDeniedMessage =
+        "SYSTEM_RUN_DENIED: approval cwd changed before execution"
+
+    static func canonicalApprovalCwd(_ cwd: String?) -> String {
+        URL(fileURLWithPath: cwd ?? FileManager.default.currentDirectoryPath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+    }
+
+    static func captureApprovalCwdSnapshot(_ cwd: String?) -> ExecApprovalCwdSnapshot? {
+        let canonicalPath = self.canonicalApprovalCwd(cwd)
+        guard self.canonicalApprovalCwd(canonicalPath) == canonicalPath,
+              let attributes = try? FileManager.default.attributesOfItem(atPath: canonicalPath),
+              attributes[.type] as? FileAttributeType == .typeDirectory,
+              let device = attributes[.systemNumber] as? NSNumber,
+              let inode = attributes[.systemFileNumber] as? NSNumber
+        else { return nil }
+        return ExecApprovalCwdSnapshot(
+            path: canonicalPath,
+            device: device.uint64Value,
+            inode: inode.uint64Value)
+    }
+
+    static func revalidateApprovalCwdSnapshot(_ snapshot: ExecApprovalCwdSnapshot) -> Bool {
+        self.captureApprovalCwdSnapshot(snapshot.path) == snapshot
+    }
+
     let rawExecutable: String
     let resolvedPath: String?
     let resolvedRealPath: String?
@@ -73,13 +118,14 @@ struct ExecCommandResolution {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        rawCommand: String? = nil) -> [String]
+        rawCommand: String? = nil) -> [ExecAllowAlwaysPattern]
     {
-        var patterns: [String] = []
-        var seen = Set<String>()
+        let effectiveCwd = self.canonicalApprovalCwd(cwd)
+        var patterns: [ExecAllowAlwaysPattern] = []
+        var seen = Set<ExecAllowAlwaysPattern>()
         self.collectAllowAlwaysPatterns(
             command: command,
-            cwd: cwd,
+            cwd: effectiveCwd,
             env: env,
             rawCommand: rawCommand,
             depth: 0,
@@ -273,8 +319,8 @@ struct ExecCommandResolution {
         env: [String: String]?,
         rawCommand: String?,
         depth: Int,
-        patterns: inout [String],
-        seen: inout Set<String>)
+        patterns: inout [ExecAllowAlwaysPattern],
+        seen: inout Set<ExecAllowAlwaysPattern>)
     {
         guard depth < 3, !command.isEmpty else {
             return
@@ -339,12 +385,28 @@ struct ExecCommandResolution {
 
         guard let resolution = resolve(command: command, cwd: cwd, env: env),
               !self.isInterpreterLikePersistentGrantTarget(resolution),
-              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution),
-              seen.insert(pattern).inserted
+              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
         else {
             return
         }
-        patterns.append(pattern)
+        let candidate = ExecAllowAlwaysPattern(
+            pattern: pattern,
+            argPattern: self.cwdBoundArgPattern(
+                argv: command,
+                cwd: cwd ?? FileManager.default.currentDirectoryPath))
+        guard seen.insert(candidate).inserted else { return }
+        patterns.append(candidate)
+    }
+
+    private static func cwdBoundArgPattern(argv: [String], cwd: String) -> String {
+        let normalizedCwd = self.canonicalApprovalCwd(cwd)
+        let arguments = Array(argv.dropFirst())
+        let argvSubject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
+        let subject = "\(normalizedCwd.data(using: .utf8)?.count ?? 0)\0\(normalizedCwd)\0\(argvSubject)"
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return "sha256:cwd-argv:v1:" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Path-only durable grants are too broad for tools that can execute code

@@ -7,11 +7,11 @@ import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   sessionStoreEntry,
-  setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();

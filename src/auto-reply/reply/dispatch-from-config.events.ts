@@ -3,6 +3,8 @@ import type { CommandSessionMetadataChange } from "./command-session-metadata.js
 import type { ReplySessionBinding } from "./get-reply.types.js";
 
 export type InternalReplyResolverOptions = {
+  onDeliberateSilentTerminalReply?: () => void;
+  onPendingContinuation?: () => void;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
@@ -24,10 +26,4 @@ export function createReplyDispatchEvent(
     enumerable: true,
     get: shouldSendToolSummaries,
   }) as PluginHookReplyDispatchEvent;
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.dispatchFromConfigTestApi")] = {
-    createReplyDispatchEvent,
-  };
 }

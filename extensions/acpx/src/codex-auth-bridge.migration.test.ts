@@ -1,27 +1,32 @@
 // ACPX tests cover codex auth bridge plugin behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolvePreferredOpenClawTmpDir,
+  tempWorkspace,
+  type TempWorkspace,
+} from "openclaw/plugin-sdk/temp-path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 
 const execFileAsync = promisify(execFile);
-const tempDirs: string[] = [];
+let testWorkspace: TempWorkspace;
 const previousEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
-async function makeTempDir(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-codex-auth-"));
-  tempDirs.push(dir);
-  return dir;
-}
+beforeEach(async () => {
+  testWorkspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-acpx-codex-auth-",
+  });
+});
 
 function quoteArg(value: string): string {
   return JSON.stringify(value);
@@ -71,14 +76,12 @@ afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
-  for (const dir of tempDirs.splice(0)) {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
+  await testWorkspace.cleanup();
 });
 
 describe("prepareAcpxCodexAuthConfig command migration", () => {
   it("migrates an explicitly configured Zed Codex ACP command to the local wrapper", async () => {
-    const root = await makeTempDir();
+    const root = testWorkspace.dir;
     const sourceCodexHome = path.join(root, "source-codex");
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
@@ -159,7 +162,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
   });
 
   it("forwards maintained Codex ACP config flags without legacy migration", async () => {
-    const root = await makeTempDir();
+    const root = testWorkspace.dir;
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
     const installedBinPath = path.join(root, "codex-acp.js");
@@ -220,7 +223,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
   });
 
   it("does not carry migrated MCP config across isolated Codex homes or rebuilds", async () => {
-    const root = await makeTempDir();
+    const root = testWorkspace.dir;
     const sourceCodexHome = path.join(root, "source-codex");
     const legacyStateDir = path.join(root, "legacy-state");
     const maintainedStateDir = path.join(root, "maintained-state");
@@ -269,7 +272,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
   });
 
   it("migrates config flags from a bare Codex ACP executable", async () => {
-    const root = await makeTempDir();
+    const root = testWorkspace.dir;
     const stateDir = path.join(root, "state");
     const generated = generatedCodexPaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
@@ -295,7 +298,7 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
   });
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
-    const root = await makeTempDir();
+    const root = testWorkspace.dir;
     const stateDir = path.join(root, "state");
     const generated = generatedClaudePaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
