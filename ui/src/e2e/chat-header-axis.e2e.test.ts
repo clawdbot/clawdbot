@@ -191,13 +191,14 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}new`);
+        await page.addStyleTag({ content: ":root { --safe-area-bottom: 34px !important; }" });
         const composer = page.locator(".new-session-page__composer");
         await composer.waitFor();
         const margins = await composer.evaluate((element) => {
           const style = getComputedStyle(element);
           return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
         });
-        expect(margins).toEqual({ bottom: "14px", left: "4px", right: "4px" });
+        expect(margins).toEqual({ bottom: "48px", left: "4px", right: "4px" });
       } finally {
         await suite.closeBrowserContext(context);
       }
