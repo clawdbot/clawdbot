@@ -146,6 +146,7 @@ class ResizableDivider extends OpenClawLitElement {
     for (const type of DRAG_END_EVENTS) {
       window.addEventListener(type, this.finishDragging);
     }
+    this.addEventListener("lostpointercapture", this.finishDragging);
 
     e.preventDefault();
   };
@@ -219,6 +220,9 @@ class ResizableDivider extends OpenClawLitElement {
       return;
     }
     this.classList.remove("dragging");
+    // Releasing capture can synchronously report capture loss. Remove the
+    // listener first so one owner end cannot emit resize-end twice.
+    this.removeEventListener("lostpointercapture", this.finishDragging);
     this.releaseActivePointer(pointerId);
     if (this.dragFrame) {
       cancelAnimationFrame(this.dragFrame);
