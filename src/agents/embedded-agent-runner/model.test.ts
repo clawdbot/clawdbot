@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "../../../extensions/openai/api.js";
+import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
+import type { ProviderPlugin } from "../../plugins/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
 import {
@@ -4481,76 +4482,82 @@ describe("resolveModel", () => {
     );
   });
 
-  it.each(["provider", "model"])("preserves authored %s transport and model overrides", (scope) => {
-    const provider = buildOpenAIProvider();
-    const modelId = "gpt-5.6-luna";
-    const route = { api: "openai-completions", baseUrl: "https://proxy.example/v1" } as const;
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.openai.com/v1",
-      ...(scope === "provider" ? route : {}),
-      headers: { "X-Provider-Route": "authored" },
-      models: [
-        {
-          id: modelId,
-          name: "Authored Luna",
-          ...(scope === "model" ? route : {}),
-          headers: { "X-Model-Route": "authored" },
-          compat: { codeMode: "capable", supportsTemperature: true },
-          reasoning: false,
-          input: ["text"],
-          contextWindow: 64_000,
-          maxTokens: 4_000,
-          cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+  it.each(["provider", "model"])(
+    "preserves authored %s transport and model overrides",
+    async (scope) => {
+      const { buildOpenAIProvider } = await loadBundledPluginPublicSurface<{
+        buildOpenAIProvider: () => ProviderPlugin;
+      }>({ pluginId: "openai", artifactBasename: "api.js" });
+      const provider = buildOpenAIProvider();
+      const modelId = "gpt-5.6-luna";
+      const route = { api: "openai-completions", baseUrl: "https://proxy.example/v1" } as const;
+      const providerConfig: ModelProviderConfig = {
+        baseUrl: "https://api.openai.com/v1",
+        ...(scope === "provider" ? route : {}),
+        headers: { "X-Provider-Route": "authored" },
+        models: [
+          {
+            id: modelId,
+            name: "Authored Luna",
+            ...(scope === "model" ? route : {}),
+            headers: { "X-Model-Route": "authored" },
+            compat: { codeMode: "capable", supportsTemperature: true },
+            reasoning: false,
+            input: ["text"],
+            contextWindow: 64_000,
+            maxTokens: 4_000,
+            cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      };
+      const config = { models: { providers: { openai: providerConfig } } };
+      const discoveredModel = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId,
+        providerConfig,
+        config,
+        modelRegistry: {
+          find: () => undefined,
+          getAll: () => [],
+          getAvailable: () => [],
+          hasConfiguredAuth: () => false,
         },
-      ],
-    };
-    const config = { models: { providers: { openai: providerConfig } } };
-    const discoveredModel = provider.resolveDynamicModel?.({
-      provider: "openai",
-      modelId,
-      providerConfig,
-      config,
-      modelRegistry: {
-        find: () => undefined,
-        getAll: () => [],
-        getAvailable: () => [],
-        hasConfiguredAuth: () => false,
-      },
-    });
-    if (!discoveredModel) {
-      throw new Error("expected the OpenAI dynamic model");
-    }
-    expect(discoveredModel.compat?.codeMode).toBe("preferred");
+      });
+      if (!discoveredModel) {
+        throw new Error("expected the OpenAI dynamic model");
+      }
+      expect(discoveredModel.compat?.codeMode).toBe("preferred");
 
-    const model = applyConfiguredProviderOverrides({
-      provider: "openai",
-      modelId,
-      discoveredModel,
-      providerConfig,
-      cfg: config,
-      manifestAlias: { provider: "openai" },
-      runtimeHooks: {
-        buildProviderUnknownModelHintWithPlugin: ({ context }) =>
-          provider.buildUnknownModelHint?.(context) ?? undefined,
-        prepareProviderDynamicModel: async () => undefined,
-        runProviderDynamicModel: ({ context }) => provider.resolveDynamicModel?.(context),
-        normalizeProviderResolvedModelWithPlugin: ({ context }) =>
-          provider.normalizeResolvedModel?.(context),
-        normalizeProviderTransportWithPlugin: ({ context }) =>
-          provider.normalizeTransport?.(context) ?? undefined,
-      },
-    });
-    expect(model).toMatchObject({
-      ...route,
-      headers: { "X-Provider-Route": "authored", "X-Model-Route": "authored" },
-      compat: { codeMode: "capable", supportsTemperature: true },
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 64_000,
-      maxTokens: 4_000,
-      cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
-    });
-  });
+      const model = applyConfiguredProviderOverrides({
+        provider: "openai",
+        modelId,
+        discoveredModel,
+        providerConfig,
+        cfg: config,
+        manifestAlias: { provider: "openai" },
+        runtimeHooks: {
+          buildProviderUnknownModelHintWithPlugin: ({ context }) =>
+            provider.buildUnknownModelHint?.(context) ?? undefined,
+          prepareProviderDynamicModel: async () => undefined,
+          runProviderDynamicModel: ({ context }) => provider.resolveDynamicModel?.(context),
+          normalizeProviderResolvedModelWithPlugin: ({ context }) =>
+            provider.normalizeResolvedModel?.(context),
+          normalizeProviderTransportWithPlugin: ({ context }) =>
+            provider.normalizeTransport?.(context) ?? undefined,
+        },
+      });
+      expect(model).toMatchObject({
+        ...route,
+        headers: { "X-Provider-Route": "authored", "X-Model-Route": "authored" },
+        compat: { codeMode: "capable", supportsTemperature: true },
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 64_000,
+        maxTokens: 4_000,
+        cost: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0 },
+      });
+    },
+  );
 
   it("applies provider overrides to openai gpt-5.4 forward-compat models", async () => {
     mockDiscoveredModel(discoverModels, {
