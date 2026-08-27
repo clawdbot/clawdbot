@@ -28,8 +28,9 @@ with at least 16 GiB of RAM.
 When local memory search is configured and chat setup is unavailable or
 declined, OpenClaw offers a separate embedding-only setup. After explicit
 consent, it installs only the server and EmbeddingGemma. It leaves the current
-chat model unchanged. Move any llama.cpp chat routes first. Remove an existing
-external server config before retrying embedding-only setup.
+chat model unchanged. Move any llama.cpp chat routes and remove its configured
+chat model entries first. Remove an existing external server config before
+retrying embedding-only setup.
 
 Custom GGUF models remain supported through `params.modelPath`. Rerun llama.cpp
 setup after changing the model so OpenClaw can verify the file and regenerate

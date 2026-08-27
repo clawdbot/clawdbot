@@ -48,10 +48,10 @@ managed server and EmbeddingGemma after explicit consent. It does not add a
 llama.cpp chat model or change the current chat model. Setup discovery remains
 read-only and never installs or downloads anything.
 
-If any chat route uses llama.cpp, embedding-only setup leaves it unchanged.
-Move those routes to another provider before retrying. An existing external
-llama.cpp server config must also be removed before OpenClaw can manage
-embeddings.
+If the llama.cpp provider has any configured chat models, embedding-only setup
+leaves it unchanged. Move any chat routes to another provider and remove those
+model entries before retrying. An existing external llama.cpp server config
+must also be removed before OpenClaw can manage embeddings.
 
 ### Use another managed GGUF
 
