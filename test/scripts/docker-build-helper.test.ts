@@ -3123,6 +3123,72 @@ fi
     );
   });
 
+  it("scopes candidate device identity doctor markers to the doctor process", () => {
+    const workDir = tempDirs.make("openclaw-upgrade-survivor-doctor-env-");
+    writeExecutables(join(workDir, "bin"), {
+      openclaw: `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$@" >"$CAPTURE_DIR/doctor-argv"
+{
+  printf 'OPENCLAW_UPDATE_IN_PROGRESS=%s\\n' "\${OPENCLAW_UPDATE_IN_PROGRESS-unset}"
+  printf 'OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=%s\\n' "\${OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR-unset}"
+  printf 'OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=%s\\n' "\${OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE-unset}"
+} >"$CAPTURE_DIR/doctor-env"
+exit 23
+`,
+    });
+
+    const script = repoShell(workDir)`
+export PATH="$TMPDIR/bin:$PATH"
+export CAPTURE_DIR="$TMPDIR"
+unset OPENCLAW_UPDATE_IN_PROGRESS
+unset OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR
+unset OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE
+source "$ROOT_DIR/${UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH}"
+install_update_restart_systemctl_shim() { :; }
+seed_update_restart_probe_device_auth() { :; }
+openclaw_e2e_maybe_timeout() {
+  shift
+  "$@"
+}
+if prepare_update_restart_probe_current_install 18789 "$TMPDIR/gateway.log" >/dev/null 2>&1; then
+  echo "doctor unexpectedly succeeded" >&2
+  exit 3
+fi
+{
+  printf 'OPENCLAW_UPDATE_IN_PROGRESS=%s\\n' "\${OPENCLAW_UPDATE_IN_PROGRESS-unset}"
+  printf 'OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=%s\\n' "\${OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR-unset}"
+  printf 'OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=%s\\n' "\${OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE-unset}"
+} >"$CAPTURE_DIR/parent-env"
+`;
+
+    const result = spawnSync("bash", ["-lc", script], { encoding: "utf8" });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(readFileSync(join(workDir, "doctor-argv"), "utf8").trimEnd().split("\n")).toEqual([
+      "doctor",
+      "--fix",
+      "--non-interactive",
+    ]);
+    expect(readFileSync(join(workDir, "doctor-env"), "utf8")).toBe(
+      [
+        "OPENCLAW_UPDATE_IN_PROGRESS=1",
+        "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=1",
+        "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1",
+        "",
+      ].join("\n"),
+    );
+    expect(readFileSync(join(workDir, "parent-env"), "utf8")).toBe(
+      [
+        "OPENCLAW_UPDATE_IN_PROGRESS=unset",
+        "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=unset",
+        "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=unset",
+        "",
+      ].join("\n"),
+    );
+  });
+
   it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const summaryDefaultIndex = runner.indexOf('startup_summary="n/a"');

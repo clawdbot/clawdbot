@@ -419,7 +419,15 @@ prepare_update_restart_probe_current_install() {
   echo "Preparing candidate-auth gateway for automatic update restart."
   install_update_restart_systemctl_shim
   seed_update_restart_probe_device_auth
-  if ! openclaw_e2e_maybe_timeout "$command_timeout" openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1; then
+  # This setup pass migrates candidate device identity while deferring plugin convergence.
+  # Parent-write support lets that migration persist before the real update begins.
+  if ! openclaw_e2e_maybe_timeout \
+    "$command_timeout" \
+    env \
+    OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=1 \
+    OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=1 \
+    openclaw doctor --fix --non-interactive >"$doctor_log" 2>&1; then
     echo "candidate device identity migration failed" >&2
     cat "$doctor_log" >&2 || true
     return 1
