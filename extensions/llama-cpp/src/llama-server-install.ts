@@ -175,22 +175,6 @@ export async function downloadVerifiedFile(params: {
   }
 }
 
-async function findExecutable(root: string, executable: string): Promise<string> {
-  for (const entry of await fsp.readdir(root, { withFileTypes: true })) {
-    const candidate = path.join(root, entry.name);
-    if (entry.isFile() && entry.name === executable) {
-      return candidate;
-    }
-    if (entry.isDirectory()) {
-      const nested = await findExecutable(candidate, executable).catch(() => undefined);
-      if (nested) {
-        return nested;
-      }
-    }
-  }
-  throw new Error(`llama-server archive does not contain ${executable}`);
-}
-
 async function runVersion(command: string): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(command, ["--version"], { timeout: VERSION_TIMEOUT_MS }, (error, stdout, stderr) => {
@@ -261,8 +245,11 @@ async function installLlamaServer(asset: LlamaServerAsset): Promise<string> {
       expectedSha256: asset.sha256,
     });
     await fsp.mkdir(extractDir, { recursive: true });
-    await extractLlamaServerArchive({ archivePath, destDir: extractDir, archive: asset.archive });
-    const extractedCommand = await findExecutable(extractDir, asset.executable);
+    const extractedCommand = await extractLlamaServerArchive({
+      archivePath,
+      destDir: extractDir,
+      asset,
+    });
     const extractedRoot = path.dirname(extractedCommand);
     await fsp.chmod(extractedCommand, 0o755);
     await validateInstalledServer(extractedCommand);

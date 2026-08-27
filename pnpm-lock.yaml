@@ -1286,10 +1286,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/llama-cpp:
-    dependencies:
-      tar:
-        specifier: 7.5.22
-        version: 7.5.22
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

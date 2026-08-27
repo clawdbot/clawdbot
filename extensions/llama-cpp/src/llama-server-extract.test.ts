@@ -2,24 +2,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import * as archiveSdk from "openclaw/plugin-sdk/archive";
 import * as tar from "tar";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { selectLlamaServerAsset, type LlamaServerAsset } from "./llama-server-assets.js";
 import { extractLlamaServerArchive } from "./llama-server-extract.js";
 
 const tempRoots: string[] = [];
 
-function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((promiseResolve) => {
-    resolve = promiseResolve;
-  });
-  return { promise, resolve };
-}
-
 afterEach(async () => {
-  vi.useRealTimers();
-  vi.restoreAllMocks();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -35,11 +25,12 @@ async function createTempRoot(): Promise<string> {
 
 async function createTarArchive(
   root: string,
-  build: (stageDir: string) => Promise<void>,
+  build: (buildDir: string) => Promise<void>,
 ): Promise<{ archivePath: string; destDir: string }> {
   const stageDir = path.join(root, "stage");
-  await fs.mkdir(path.join(stageDir, "llama-build"), { recursive: true });
-  await build(path.join(stageDir, "llama-build"));
+  const buildDir = path.join(stageDir, "llama-build");
+  await fs.mkdir(buildDir, { recursive: true });
+  await build(buildDir);
   const archivePath = path.join(root, "asset.tar.gz");
   await tar.c({ file: archivePath, cwd: stageDir, gzip: true }, ["llama-build"]);
   const destDir = path.join(root, "dest");
@@ -62,63 +53,70 @@ async function createZipArchive(
   return { archivePath, destDir };
 }
 
+function withoutAliases(asset: LlamaServerAsset): LlamaServerAsset {
+  return { ...asset, regularFileAliases: [] };
+}
+
 describe("extractLlamaServerArchive", () => {
-  it("materializes the SONAME aliases that the loader needs as regular files", async () => {
+  it("materializes the pinned SONAME manifest as regular files", async () => {
     const root = await createTempRoot();
+    const asset = selectLlamaServerAsset("linux", "x64");
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, "libllama.so.0.1.0"), "shared-object");
-      await fs.symlink("libllama.so.0.1.0", path.join(buildDir, "libllama.so.0"));
-      await fs.symlink("libllama.so.0", path.join(buildDir, "libllama.so"));
-      await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
+      for (const [source, aliases] of asset.regularFileAliases) {
+        await fs.writeFile(path.join(buildDir, source), `contents:${source}`);
+        for (const alias of aliases) {
+          await fs.symlink(source, path.join(buildDir, alias));
+        }
+      }
     });
 
-    await extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).resolves.toBe(
+      path.join(destDir, "llama-build", asset.executable),
+    );
 
     const buildDir = path.join(destDir, "llama-build");
-    expect((await fs.lstat(path.join(buildDir, "libllama.so.0"))).isFile()).toBe(true);
-    expect((await fs.lstat(path.join(buildDir, "libllama.so"))).isFile()).toBe(true);
-    expect(await fs.readFile(path.join(buildDir, "libllama.so"), "utf8")).toBe("shared-object");
+    for (const [source, aliases] of asset.regularFileAliases) {
+      for (const alias of aliases) {
+        expect((await fs.lstat(path.join(buildDir, alias))).isFile()).toBe(true);
+        expect(await fs.readFile(path.join(buildDir, alias), "utf8")).toBe(`contents:${source}`);
+      }
+    }
   });
 
-  it("rejects a tar symlink that points outside its own directory", async () => {
+  it("ignores archive-provided symlink targets outside the pinned manifest", async () => {
     const root = await createTempRoot();
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.symlink("../../../escape.txt", path.join(buildDir, "llama-server"));
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
+      await fs.symlink("../../../escape.txt", path.join(buildDir, "unexpected-link"));
     });
 
-    await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
-    ).rejects.toThrow(/unsafe link target/u);
-    await expect(fs.lstat(path.join(destDir, "llama-build", "llama-server"))).rejects.toThrow();
+    await extractLlamaServerArchive({ archivePath, destDir, asset });
+
+    await expect(fs.lstat(path.join(destDir, "llama-build", "unexpected-link"))).rejects.toThrow();
+    await expect(fs.lstat(path.join(root, "escape.txt"))).rejects.toThrow();
   });
 
-  it("rejects cyclic tar aliases instead of publishing filesystem links", async () => {
+  it("does not publish archive-provided hard links", async () => {
     const root = await createTempRoot();
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.symlink("alias-b", path.join(buildDir, "alias-a"));
-      await fs.symlink("alias-a", path.join(buildDir, "alias-b"));
+      const executable = path.join(buildDir, asset.executable);
+      await fs.writeFile(executable, "binary");
+      await fs.link(executable, path.join(buildDir, "unexpected-hardlink"));
     });
 
-    await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
-    ).rejects.toThrow(/cyclic alias/u);
-    expect(await fs.readdir(destDir)).toStrictEqual([]);
-  });
-
-  it("rejects a tar hard link instead of dropping it silently", async () => {
-    const root = await createTempRoot();
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
-      await fs.link(path.join(buildDir, "llama-server"), path.join(buildDir, "llama-server-alias"));
-    });
+    await extractLlamaServerArchive({ archivePath, destDir, asset });
 
     await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
-    ).rejects.toThrow(/unsupported hard link/u);
+      fs.lstat(path.join(destDir, "llama-build", "unexpected-hardlink")),
+    ).rejects.toThrow();
   });
 
-  it("rejects an oversized release archive before extracting it", async () => {
+  it("rejects archives that exceed the llama.cpp entry budget", async () => {
     const root = await createTempRoot();
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
       await Promise.all(
         Array.from({ length: 1_000 }, (_, index) =>
@@ -127,13 +125,13 @@ describe("extractLlamaServerArchive", () => {
       );
     });
 
-    await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
-    ).rejects.toThrow(/preflight entry limits/u);
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
+      /entry count exceeds limit/u,
+    );
     expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
-  it("rejects a malformed tar header without emitting an unhandled second error", async () => {
+  it("rejects malformed tar input through the shared archive owner", async () => {
     const root = await createTempRoot();
     const archivePath = path.join(root, "malformed.tar.gz");
     const invalidHeader = Buffer.alloc(512);
@@ -141,138 +139,93 @@ describe("extractLlamaServerArchive", () => {
     await fs.writeFile(archivePath, invalidHeader);
     const destDir = path.join(root, "dest");
     await fs.mkdir(destDir);
+    const asset = withoutAliases(selectLlamaServerAsset("linux", "x64"));
 
-    await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
-    ).rejects.toThrow(/checksum failure|TAR_ENTRY_INVALID/u);
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
+      /invalid TAR|checksum failure/u,
+    );
     expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
-  it("shares one deadline across tar preflight and extraction", async () => {
+  it("fails when a pinned regular-file alias source is absent", async () => {
     const root = await createTempRoot();
+    const baseAsset = selectLlamaServerAsset("linux", "x64");
+    const asset: LlamaServerAsset = {
+      ...baseAsset,
+      regularFileAliases: [["missing.so.1", ["missing.so"]]],
+    };
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
     });
-    const extractArchive = vi.spyOn(archiveSdk, "extractArchive").mockResolvedValueOnce();
-    const now = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(1_123);
 
-    try {
-      await extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
-    } finally {
-      now.mockRestore();
-    }
-
-    expect(extractArchive).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 10 * 60_000 - 123 }),
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
+      /does not contain regular alias source missing\.so\.1/u,
     );
   });
 
-  it("bounds an in-flight archive stat with the shared deadline", async () => {
+  it("rejects manifest alias names that are not basenames", async () => {
     const root = await createTempRoot();
+    const baseAsset = selectLlamaServerAsset("linux", "x64");
+    const asset: LlamaServerAsset = {
+      ...baseAsset,
+      regularFileAliases: [["../outside.so", ["alias.so"]]],
+    };
     const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, "llama-server"), "binary");
+      await fs.writeFile(path.join(buildDir, asset.executable), "binary");
     });
-    const enteredStat = createDeferred();
-    let rejection: unknown;
-    vi.useFakeTimers({ now: 1_000 });
-    vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
-      enteredStat.resolve();
-      return await new Promise<never>(() => {});
-    });
-    vi.spyOn(fs, "rm").mockResolvedValueOnce();
 
-    void extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }).catch(
-      (error: unknown) => {
-        rejection = error;
-      },
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
+      /invalid llama-server archive manifest filename/u,
     );
-    await enteredStat.promise;
-    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
-
-    expect(rejection).toEqual(new Error("llama-server archive extraction timed out"));
-    expect(await fs.readdir(destDir)).toStrictEqual([]);
-  });
-
-  it("does not materialize tar aliases after the shared deadline expires", async () => {
-    const root = await createTempRoot();
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
-      await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
-    });
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const realpath = vi.spyOn(fs, "realpath").mockImplementationOnce(async () => {
-      throw new Error("expired filesystem operation started");
-    });
-    vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
-      const buildDir = path.join(params.destDir, "llama-build");
-      await fs.mkdir(buildDir, { recursive: true });
-      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
-      now.mockReturnValue(10 * 60_000 + 1_001);
-    });
-
-    await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" }),
-    ).rejects.toThrow(/extraction timed out/u);
-    expect(realpath).not.toHaveBeenCalled();
-    await expect(fs.lstat(path.join(destDir, "llama-build", "libllama.so"))).rejects.toThrow();
-  });
-
-  it("does not publish an alias copy that finishes after the shared deadline", async () => {
-    const root = await createTempRoot();
-    const { archivePath, destDir } = await createTarArchive(root, async (buildDir) => {
-      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
-      await fs.symlink("libllama.so.1", path.join(buildDir, "libllama.so"));
-    });
-    const enteredCopy = createDeferred();
-    const realCopyFile = fs.copyFile.bind(fs);
-    vi.spyOn(archiveSdk, "extractArchive").mockImplementationOnce(async (params) => {
-      const buildDir = path.join(params.destDir, "llama-build");
-      await fs.mkdir(buildDir, { recursive: true });
-      await fs.writeFile(path.join(buildDir, "libllama.so.1"), "shared-object");
-    });
-    vi.useFakeTimers({ now: 1_000 });
-    vi.spyOn(fs, "copyFile").mockImplementationOnce(async (source, destination, mode) => {
-      enteredCopy.resolve();
-      await new Promise((resolve) => {
-        setTimeout(resolve, 10 * 60_000 + 1_000);
-      });
-      await realCopyFile(source, destination, mode);
-    });
-
-    const extraction = extractLlamaServerArchive({ archivePath, destDir, archive: "tar.gz" });
-    await enteredCopy.promise;
-    await vi.advanceTimersByTimeAsync(10 * 60_000 + 1_000);
-
-    await expect(extraction).rejects.toThrow(/extraction timed out/u);
-    expect(await fs.readdir(destDir)).toStrictEqual([]);
   });
 
   it("rejects a zip entry that escapes through Windows separators", async () => {
     const root = await createTempRoot();
+    const asset = selectLlamaServerAsset("win32", "x64");
     const { archivePath, destDir } = await createZipArchive(root, {
       "..\\..\\escape.txt": "owned",
-      "llama-server.exe": "binary",
+      [asset.executable]: "binary",
     });
 
-    await expect(
-      extractLlamaServerArchive({ archivePath, destDir, archive: "zip" }),
-    ).rejects.toThrow();
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow();
     expect(await fs.readdir(destDir)).toStrictEqual([]);
     await expect(fs.stat(path.join(root, "escape.txt"))).rejects.toThrow();
   });
 
   it("extracts the flat Windows zip layout", async () => {
     const root = await createTempRoot();
+    const asset = selectLlamaServerAsset("win32", "x64");
     const { archivePath, destDir } = await createZipArchive(root, {
-      "llama-server.exe": "binary",
+      [asset.executable]: "binary",
       "ggml-base.dll": "library",
     });
 
-    await extractLlamaServerArchive({ archivePath, destDir, archive: "zip" });
-
+    await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).resolves.toBe(
+      path.join(destDir, asset.executable),
+    );
     expect((await fs.readdir(destDir)).toSorted()).toStrictEqual([
       "ggml-base.dll",
-      "llama-server.exe",
+      asset.executable,
     ]);
+  });
+});
+
+describe("llama-server asset alias manifests", () => {
+  it.each([
+    ["darwin", "arm64"],
+    ["darwin", "x64"],
+    ["linux", "arm64"],
+    ["linux", "x64"],
+    ["win32", "arm64"],
+    ["win32", "x64"],
+  ] as const)("uses unique basename-only entries for %s/%s", (platform, arch) => {
+    const asset = selectLlamaServerAsset(platform, arch);
+    const names = asset.regularFileAliases.flatMap(([source, aliases]) => [source, ...aliases]);
+
+    expect(new Set(names).size).toBe(names.length);
+    expect(
+      names.every((name) => path.basename(name) === name && name !== "." && name !== ".."),
+    ).toBe(true);
+    expect(asset.archive === "zip" ? names.length === 0 : names.length > 0).toBe(true);
   });
 });
