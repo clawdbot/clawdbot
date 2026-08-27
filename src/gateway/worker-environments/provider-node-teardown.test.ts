@@ -160,20 +160,28 @@ describe("worker provider node teardown", () => {
   });
 
   it.each([
-    { isolation: "shared", sharedHost: true },
-    { isolation: "unknown", sharedHost: null },
-  ])(
-    "requires exact worker stop for a destroyed lease with $isolation host isolation",
-    async ({ sharedHost }) => {
+    { status: "destroyed", isolation: "shared", sharedHost: true },
+    { status: "destroyed", isolation: "unknown", sharedHost: null },
+    { status: "unknown", isolation: "shared", sharedHost: true },
+    { status: "unknown", isolation: "unknown", sharedHost: null },
+  ] as const)(
+    "requires exact worker stop for a $status lease with $isolation host isolation",
+    async ({ status, sharedHost }) => {
       const environmentId = "worker-inspected-destroyed-shared";
       const { attached, nodeTunnels, start, reconnect } = await disconnectedNodeOwner(
         environmentId,
         sharedHost,
       );
+      const destroy = vi.fn(async () => {});
+      const lastError =
+        status === "unknown"
+          ? "Worker provider no longer recognizes the lease"
+          : "Worker environment disappeared before teardown was requested";
       const service = support.createService(
         support.createProvider({
           supportedExecutionModes: ["worker-turn", "remote-exec"],
-          inspect: async () => ({ status: "destroyed" }),
+          inspect: async () => ({ status }),
+          destroy,
         }),
         { nodeTunnelManager: nodeTunnels },
       );
@@ -188,8 +196,11 @@ describe("worker provider node teardown", () => {
           nodeDeviceId: attached.nodeDeviceId,
           leaseId: attached.leaseId,
           destroyRequestedAtMs: support.testState.nowMs,
+          teardownTerminalState: "failed",
+          lastError,
         });
         expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+        expect(destroy).not.toHaveBeenCalled();
 
         reconnect();
         await service.reconcileOnce();
@@ -199,7 +210,9 @@ describe("worker provider node teardown", () => {
           attachedSessionIds: [],
           nodeDeviceId: null,
           leaseId: null,
+          lastError,
         });
+        expect(destroy).toHaveBeenCalledTimes(status === "unknown" ? 1 : 0);
       } finally {
         reconnect();
       }

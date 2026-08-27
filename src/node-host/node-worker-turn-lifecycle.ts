@@ -6,65 +6,13 @@ import type { WorkerProcessResult } from "../worker/worker-process-protocol.js";
 import type { NodeWorkerLaunchClaim, NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
 import { createNodeWorkerCredentialScrubber } from "./node-worker-output.js";
-import type {
-  NodeWorkerLaunchInput,
-  NodeWorkerSupervisorIdentity,
-} from "./node-worker-supervisor-contract.js";
-import type {
-  NodeWorkerRunningChild,
-  NodeWorkerStopState,
+import type { NodeWorkerSupervisorIdentity } from "./node-worker-supervisor-contract.js";
+import {
+  createNodeWorkerActiveTurn,
+  type NodeWorkerRunningChild,
+  type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
-
-export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironmentBinding>;
-
-/** Only environment facts survive a turn; descriptors contain disposable admission authority. */
-export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
-  const { admission, assignment } = input.descriptor;
-  return {
-    gatewayNamespace: input.gatewayNamespace,
-    environmentId: admission.environmentId,
-    sessionId: admission.sessionId,
-    ownerEpoch: admission.ownerEpoch,
-    placementGeneration: input.placementGeneration,
-    bundleHash: input.expectedBundleHash,
-    agentId: assignment.agentId,
-    workspaceDir: assignment.workspaceDir,
-    containmentRoot: assignment.workerContainmentRoot,
-    permissionMode: assignment.permissionMode,
-  };
-}
-
-export function nodeWorkerEnvironmentKey(
-  binding: Pick<NodeWorkerEnvironmentBinding, "gatewayNamespace" | "environmentId">,
-): string {
-  return JSON.stringify([binding.gatewayNamespace, binding.environmentId]);
-}
-
-export function nodeWorkerEnvironmentMatches(
-  binding: Pick<
-    NodeWorkerEnvironmentBinding,
-    "gatewayNamespace" | "environmentId" | "sessionId" | "ownerEpoch"
-  >,
-  expected: Pick<
-    NodeWorkerEnvironmentBinding,
-    "gatewayNamespace" | "environmentId" | "sessionId" | "ownerEpoch"
-  >,
-): boolean {
-  return (
-    binding.gatewayNamespace === expected.gatewayNamespace &&
-    binding.environmentId === expected.environmentId &&
-    binding.sessionId === expected.sessionId &&
-    binding.ownerEpoch === expected.ownerEpoch
-  );
-}
-
-export function createNodeWorkerActiveTurn(claim: NodeWorkerLaunchClaim) {
-  const { promise, resolve } = createDeferredCore();
-  return { claim, done: promise, settle: resolve, cancelled: false };
-}
-
-export type NodeWorkerActiveTurn = ReturnType<typeof createNodeWorkerActiveTurn>;
 
 /** Shutdown must be able to abort admission before it stops the retiring physical owner. */
 export async function waitForNodeWorkerRetirement(

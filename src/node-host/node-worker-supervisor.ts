@@ -36,8 +36,12 @@ import {
   type NodeWorkerSupervisorIdentity,
 } from "./node-worker-supervisor-contract.js";
 import {
+  nodeWorkerEnvironmentBinding,
+  nodeWorkerEnvironmentKey,
+  nodeWorkerEnvironmentMatches,
   nodeWorkerReceiptMatchesOwner,
   type NodeWorkerActiveOwnership,
+  type NodeWorkerEnvironmentBinding,
   type NodeWorkerObservedTerminal,
   type NodeWorkerRunningChild,
   type NodeWorkerStopState,
@@ -50,13 +54,9 @@ import {
   waitForOwnedNodeWorkerTreeDeath,
 } from "./node-worker-tree-control.js";
 import {
-  nodeWorkerEnvironmentBinding,
-  nodeWorkerEnvironmentKey,
-  nodeWorkerEnvironmentMatches,
   settleNodeWorkerTurn,
   startNodeWorkerTurn,
   waitForNodeWorkerRetirement,
-  type NodeWorkerEnvironmentBinding,
 } from "./node-worker-turn-lifecycle.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";

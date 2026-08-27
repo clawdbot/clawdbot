@@ -72,6 +72,11 @@ finishes with no live background commands, the worker exits. Moving or retiring
 the environment, replacing its ownership, or stopping the node also stops its
 processes. Process handles do not survive a worker or node restart.
 
+If the node's pairing is revoked or its provider no longer recognizes the lease,
+the session placement fails. Physical cleanup can remain pending until OpenClaw
+confirms that the exact worker has stopped; an unconfirmed stop does not release
+its ownership record.
+
 Worker completion does not currently wake the Gateway session automatically;
 use `process poll` in a later turn to inspect the result. Closing a portal closes
 its proxy, not the development server: stop the server with `process kill`.

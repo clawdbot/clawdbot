@@ -37,12 +37,8 @@ import { boundedWorkerError as boundedError } from "./worker-error.js";
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
 export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOptions) {
-  const { store, callBootstrap, callProvider } = options;
-  const inState = options.inState;
-  const move = options.move;
-  const saveError = options.saveError;
-  const serviceError = options.serviceError;
-  const withLock = options.withLock;
+  const { store, callBootstrap, callProvider, inState, move, saveError, serviceError, withLock } =
+    options;
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
   const { requireCurrentOwner, stopOwner } = createWorkerProviderOwnerLifecycle(options);
@@ -394,8 +390,9 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     // offline. Shared hosts retain the machine, so they still require the exact worker stop.
     const providerOwnsMachine = r.nodeDeviceId !== null && r.sharedHost === false;
     const stopped = await stopOwner(r, providerOwnsMachine ? "provider-destroying" : undefined);
+    const draining = providerOwnsMachine ? stopped : beginDrain(stopped);
     const owningProvider = provider ?? providerFor(r.providerId);
-    const destroying = providerOwnsMachine ? stopped : beginDestroy(stopped);
+    const destroying = providerOwnsMachine ? draining : beginDestroy(draining);
     try {
       await callProvider(r.environmentId, () => {
         requireCurrentOwner(destroying);
@@ -464,6 +461,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
     const { status } = inspection;
     const teardownExpected = record.destroyRequestedAtMs !== null || record.state === "destroying";
     if (status === "destroyed") {
+      requireCurrentOwner(record);
       const requested =
         record.destroyRequestedAtMs === null
           ? store.requestDestroy({
@@ -485,16 +483,18 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       return;
     }
     if (status === "unknown") {
-      if (teardownExpected) {
-        await finishDestroy(record, provider).catch(() => undefined);
-        return;
-      }
-      const stopped = await stopOwner(record);
-      const draining =
-        stopped.state === "draining"
-          ? stopped
-          : move(stopped, "draining", { lastError: ORPHANED_LEASE_ERROR });
-      move(draining, "orphaned", { lastError: ORPHANED_LEASE_ERROR });
+      requireCurrentOwner(record);
+      // Provider loss fences placement authority before remote cleanup, which may remain
+      // unreachable after node revocation. Preserve its exact attachment until stop is proven.
+      const requested = teardownExpected
+        ? record
+        : store.requestDestroy({
+            environmentId: record.environmentId,
+            state: record.state,
+            terminalState: "failed",
+            lastError: ORPHANED_LEASE_ERROR,
+          });
+      await finishDestroy(requested, provider).catch(() => undefined);
       return;
     }
     if (status === "dormant") {

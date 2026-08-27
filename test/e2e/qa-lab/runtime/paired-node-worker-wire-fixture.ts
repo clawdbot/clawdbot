@@ -278,6 +278,7 @@ type WireWorkerHostOptions = {
   bundlePrewarm?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
+  environmentSession?: boolean;
   onInvoke?: (frame: NodeInvokeRequestPayload) => void;
   afterInvoke?: (frame: NodeInvokeRequestPayload, host: PairedNodeWorkerHost) => Promise<void>;
 };
@@ -291,7 +292,7 @@ export type PairedNodeWorkerHost = {
   readonly bundleInstaller: NodeWorkerBundleInstaller;
   readonly workspace: NodeWorkerWorkspaceRuntime;
   readonly client: GatewayClient | undefined;
-  connect(): Promise<void>;
+  connect(options?: { environmentSession?: boolean }): Promise<void>;
   disconnect(): Promise<void>;
   publishInventory(): Promise<void>;
   waitForInvokes(): Promise<void>;
@@ -317,6 +318,7 @@ export async function createPairedNodeWorkerHost(
   const workspace = new NodeWorkerWorkspaceRuntime({ root: nodeHostRoot, env: nodeEnv });
   const bundleInstaller = new NodeWorkerBundleInstaller({ root: nodeHostRoot, env: nodeEnv });
   let capacity = { total: options.capacity ?? 2, available: 0 };
+  let environmentSession = options.environmentSession ?? true;
   let client: GatewayClient | undefined;
   let closing = false;
   const invokeTasks = new Set<Promise<void>>();
@@ -332,7 +334,9 @@ export async function createPairedNodeWorkerHost(
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
     workerHost: {
       enabled: true as const,
-      environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
+      ...(environmentSession
+        ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
+        : {}),
       capacity,
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
@@ -381,10 +385,11 @@ export async function createPairedNodeWorkerHost(
     invokeTasks.add(task);
   };
 
-  const connect = async () => {
+  const connect = async (connection?: { environmentSession?: boolean }) => {
     if (closing) {
       throw new Error("paired worker node is closing");
     }
+    environmentSession = connection?.environmentSession ?? environmentSession;
     const open = () =>
       connectWireClient({
         gateway: options.gateway,

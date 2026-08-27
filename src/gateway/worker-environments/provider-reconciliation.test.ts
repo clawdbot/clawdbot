@@ -279,7 +279,12 @@ describe("worker environment service", () => {
 
     await workerService.reconcileEnvironment(environmentId);
 
-    expect(support.testState.store.get(environmentId)?.state).toBe("orphaned");
+    expect(support.testState.store.get(environmentId)).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      destroyRequestedAtMs: support.testState.nowMs,
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
   });
 
@@ -589,7 +594,7 @@ describe("worker environment service", () => {
     });
   });
 
-  it("orphans unknown active leases and adopts unknown expected teardown", async () => {
+  it("fences unknown leases before stop and retries their durable teardown", async () => {
     const originalOwner = support.seedReady("worker-unknown");
     support.seedReady("worker-transient");
     support.seedReady("worker-destroyed-unknown");
@@ -640,6 +645,9 @@ describe("worker environment service", () => {
       ownerEpoch: originalOwner.ownerEpoch,
       leaseId: originalOwner.leaseId,
       attachedSessionIds: originalOwner.attachedSessionIds,
+      destroyRequestedAtMs: support.testState.nowMs,
+      teardownTerminalState: "failed",
+      lastError: "Worker provider no longer recognizes the lease",
     });
     expect(support.testState.store.get("worker-destroyed-unknown")?.state).toBe("destroying");
     expect(workerService.validateWorkerConnection(admitted.identity)).toBe("credential-replaced");
@@ -649,7 +657,11 @@ describe("worker environment service", () => {
     });
     await workerService.reconcileOnce();
     expect(tunnelManager.stop).toHaveBeenCalledTimes(4);
-    expect(support.testState.store.get("worker-unknown")?.state).toBe("orphaned");
+    expect(support.testState.store.get("worker-unknown")).toMatchObject({
+      state: "failed",
+      leaseId: null,
+      lastError: "Worker provider no longer recognizes the lease",
+    });
     expect(support.testState.store.get("worker-destroyed-unknown")).toMatchObject({
       state: "destroyed",
     });
@@ -884,7 +896,7 @@ describe("worker environment service", () => {
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
     const service = support.createService(
-      support.createProvider({ inspect: async () => ({ status: "unknown" }) }),
+      support.createProvider({ inspect: async () => ({ status: "active", sharedHost: true }) }),
       { tunnelManager },
     );
     const reconciling = service.reconcileOnce();

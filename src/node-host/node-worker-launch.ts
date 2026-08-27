@@ -24,16 +24,14 @@ import {
 } from "./node-worker-process-identity.js";
 import type { NodeWorkerLaunchInput } from "./node-worker-supervisor-contract.js";
 import {
+  createNodeWorkerActiveTurn,
   createNodeWorkerJournalGate,
+  nodeWorkerEnvironmentBinding,
   type NodeWorkerActiveOwnership,
   type NodeWorkerRunningChild,
   type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
-import {
-  createNodeWorkerActiveTurn,
-  nodeWorkerDescriptorSecrets,
-  nodeWorkerEnvironmentBinding,
-} from "./node-worker-turn-lifecycle.js";
+import { nodeWorkerDescriptorSecrets } from "./node-worker-turn-lifecycle.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 type NodeWorkerLaunchContext = {
