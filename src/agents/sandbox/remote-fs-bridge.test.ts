@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
-import { withFileMutationQueueKey } from "../sessions/tools/file-mutation-queue.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
@@ -129,13 +128,21 @@ describe("remote sandbox fs bridge", () => {
           bridge.resolveFileIdentity!({ filePath: hostPath, cwd: workspaceDir }),
         ).resolves.toBe(aliasIdentity);
 
-        const blockerStarted = createDeferred();
-        const releaseBlocker = createDeferred();
-        const blocker = withFileMutationQueueKey(`${workspaceDir}\0${aliasIdentity}`, async () => {
-          blockerStarted.resolve();
-          await releaseBlocker.promise;
+        const resolveFileIdentity = bridge.resolveFileIdentity!.bind(bridge);
+        const writeIdentityStarted = createDeferred();
+        const releaseWriteIdentity = createDeferred();
+        const readIdentityResolved = createDeferred();
+        vi.spyOn(bridge, "resolveFileIdentity").mockImplementation(async (params) => {
+          if (params.filePath === remotePath) {
+            writeIdentityStarted.resolve();
+            await releaseWriteIdentity.promise;
+          }
+          const identity = await resolveFileIdentity(params);
+          if (params.filePath === hostPath) {
+            readIdentityResolved.resolve();
+          }
+          return identity;
         });
-        await blockerStarted.promise;
         const statSpy = vi.spyOn(bridge, "stat");
         const writeTool = createSandboxedWriteTool({ root: workspaceDir, bridge });
         const readTool = createSandboxedReadTool({ root: workspaceDir, bridge });
@@ -143,15 +150,16 @@ describe("remote sandbox fs bridge", () => {
           path: remotePath,
           content: "remote snapshot",
         });
+        await writeIdentityStarted.promise;
         const readResult = readTool.execute("read", { path: hostPath });
         void readResult.catch(() => {});
+        await readIdentityResolved.promise;
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
         expect(statSpy).not.toHaveBeenCalled();
 
-        releaseBlocker.resolve();
-        await blocker;
+        releaseWriteIdentity.resolve();
         const [, result] = await Promise.all([writeResult, readResult]);
         expect(statSpy).toHaveBeenCalled();
         expect(result.content).toEqual(

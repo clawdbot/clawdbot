@@ -32,7 +32,10 @@ import {
   stripBom,
   validateNoOpEditTargets,
 } from "./edit-diff.js";
-import { resolveFileMutationQueueKey, withFileMutationQueueKey } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
@@ -97,7 +100,7 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
  */
 export interface EditOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
-  resolveQueueKey?: (absolutePath: string) => string | Promise<string>;
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Write content to a file */
@@ -409,9 +412,9 @@ export function createEditToolDefinition(
       void ctx;
       const { path, edits: originalEdits } = validateEditInput(input);
       const absolutePath = resolveToCwd(path, cwd);
-      const queueKey = await resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey);
+      const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
-      return withFileMutationQueueKey(queueKey, async () => {
+      return withFileMutationQueueKeyResolution(queueKey, async () => {
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }

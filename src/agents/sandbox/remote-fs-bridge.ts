@@ -65,12 +65,17 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     };
   }
 
-  async resolveFileIdentity(params: { filePath: string; cwd?: string }): Promise<string> {
+  async resolveFileIdentity(params: {
+    filePath: string;
+    cwd?: string;
+    signal?: AbortSignal;
+  }): Promise<string> {
     const target = this.resolveTarget(params);
     const { canonicalPath } = await this.resolveCanonicalPath({
       containerPath: target.containerPath,
       mountRootPath: target.mountRootPath,
       action: "identify files",
+      signal: params.signal,
     });
     return canonicalPath;
   }

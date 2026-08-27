@@ -6,12 +6,14 @@ export async function resolveSandboxFileMutationQueueKey(params: {
   root: string;
   filePath: string;
   cwd?: string;
+  signal?: AbortSignal;
 }): Promise<string> {
   let identity: string;
   if (params.bridge.resolveFileIdentity) {
     identity = await params.bridge.resolveFileIdentity({
       filePath: params.filePath,
       cwd: params.cwd,
+      signal: params.signal,
     });
   } else {
     // Shipped plugin bridges may predate physical identity support. Their resolved bridge path

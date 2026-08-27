@@ -20,7 +20,10 @@ import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { generateDiffString, generateUnifiedPatch } from "./edit-diff.js";
-import { resolveFileMutationQueueKey, withFileMutationQueueKey } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
@@ -73,7 +76,7 @@ const WriteToolOutputSchema = Type.Union([
  */
 export interface WriteOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
-  resolveQueueKey?: (absolutePath: string) => string | Promise<string>;
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Write content to a file */
   writeFile: (absolutePath: string, content: string) => Promise<void>;
   /** Create directory recursively */
@@ -541,8 +544,8 @@ export function createWriteToolDefinition(
       void ctx;
       const absolutePath = resolveToCwd(path, cwd);
       const dir = dirname(absolutePath);
-      const queueKey = await resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey);
-      return withFileMutationQueueKey(queueKey, async () => {
+      const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
+      return withFileMutationQueueKeyResolution(queueKey, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (signal?.aborted) {
           throw new Error("Operation aborted");

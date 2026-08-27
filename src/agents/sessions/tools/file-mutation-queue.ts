@@ -1,14 +1,19 @@
+import { getAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 /**
  * Per-file mutation queue.
  *
- * Serializes edits/writes targeting the same real file while allowing independent files to mutate in parallel.
+ * Serializes reads and mutations targeting the same real file while allowing independent files to run in parallel.
  */
 import { resolveIdentityPathViaExistingAncestorSync } from "../../../infra/boundary-path.js";
-import { resolveGlobalMap } from "../../../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 
 const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
   Symbol.for("openclaw.fileMutationTails"),
   "close-only",
+);
+const keyAdmissions = resolveGlobalSingleton(
+  Symbol.for("openclaw.fileMutationKeyAdmissions"),
+  () => ({ fallbackScope: {}, tails: new WeakMap<object, Promise<void>>() }),
 );
 
 function resolveLocalFileMutationQueueKey(filePath: string): string {
@@ -17,9 +22,50 @@ function resolveLocalFileMutationQueueKey(filePath: string): string {
 
 export async function resolveFileMutationQueueKey(
   filePath: string,
-  resolveQueueKey?: (absolutePath: string) => string | Promise<string>,
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>,
+  signal?: AbortSignal,
 ): Promise<string> {
-  return await (resolveQueueKey?.(filePath) ?? resolveLocalFileMutationQueueKey(filePath));
+  return await (resolveQueueKey?.(filePath, signal) ?? resolveLocalFileMutationQueueKey(filePath));
+}
+
+/**
+ * Preserve source-call admission while backend-owned physical identities resolve concurrently.
+ * Registration is ordered per assistant message; file operations still use only fileMutationTails.
+ */
+export async function withFileMutationQueueKeyResolution<T>(
+  keyResolution: Promise<string>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return await withFileMutationQueueKeyResolutions([keyResolution], fn);
+}
+
+export async function withFileMutationQueueKeyResolutions<T>(
+  keyResolutions: readonly Promise<string>[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const scope = getAgentToolExecutionContext()?.assistantMessage ?? keyAdmissions.fallbackScope;
+  const previousAdmission = keyAdmissions.tails.get(scope) ?? Promise.resolve();
+  for (const keyResolution of keyResolutions) {
+    void keyResolution.catch(() => undefined);
+  }
+  let operation!: Promise<T>;
+  const admission = previousAdmission.then(async () => {
+    const keys = await Promise.all(keyResolutions);
+    operation = enqueueFileMutationQueueKeys(keys, fn);
+  });
+  const tail = admission.then(
+    () => undefined,
+    () => undefined,
+  );
+  keyAdmissions.tails.set(scope, tail);
+  const cleanup = () => {
+    if (keyAdmissions.tails.get(scope) === tail) {
+      keyAdmissions.tails.delete(scope);
+    }
+  };
+  tail.then(cleanup, cleanup);
+  await admission;
+  return await operation;
 }
 
 /**
@@ -30,18 +76,14 @@ export async function withFileMutationQueue<T>(filePath: string, fn: () => Promi
   return await withFileMutationQueues([filePath], fn);
 }
 
-export async function withFileMutationQueueKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  return await withFileMutationQueueKeys([key], fn);
-}
-
 async function withFileMutationQueues<T>(
   filePaths: readonly string[],
   fn: () => Promise<T>,
 ): Promise<T> {
-  return await withFileMutationQueueKeys(filePaths.map(resolveLocalFileMutationQueueKey), fn);
+  return await enqueueFileMutationQueueKeys(filePaths.map(resolveLocalFileMutationQueueKey), fn);
 }
 
-export async function withFileMutationQueueKeys<T>(
+function enqueueFileMutationQueueKeys<T>(
   queueKeys: readonly string[],
   fn: () => Promise<T>,
 ): Promise<T> {
@@ -64,5 +106,5 @@ export async function withFileMutationQueueKeys<T>(
     }
   };
   tail.then(cleanup, cleanup);
-  return await current;
+  return current;
 }

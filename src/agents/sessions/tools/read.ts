@@ -31,7 +31,10 @@ import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import { resolveFileMutationQueueKey, withFileMutationQueueKey } from "./file-mutation-queue.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeyResolution,
+} from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
 import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
 import {
@@ -103,7 +106,7 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  */
 export interface ReadOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
-  resolveQueueKey?: (absolutePath: string) => string | Promise<string>;
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
@@ -524,11 +527,12 @@ export function createReadToolDefinition(
               // Share write/edit ordering through byte capture only. Decode the
               // immutable snapshot below after releasing the path queue.
               const absoluteInputPath = resolveToCwd(path, cwd);
-              const queueKey = await resolveFileMutationQueueKey(
+              const queueKey = resolveFileMutationQueueKey(
                 absoluteInputPath,
                 ops.resolveQueueKey,
+                signal,
               );
-              const snapshot = await withFileMutationQueueKey(queueKey, async () => {
+              const snapshot = await withFileMutationQueueKeyResolution(queueKey, async () => {
                 const resolved = await resolveReadToolPath(ops, path, cwd);
                 if (aborted) {
                   return undefined;

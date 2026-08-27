@@ -1243,7 +1243,8 @@ export function wrapReadToolWithSkillContent(
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
-    resolveQueueKey: (absolutePath: string) => resolveSandboxFileQueueKey(params, absolutePath),
+    resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+      resolveSandboxFileQueueKey(params, absolutePath, signal),
     resolvePath: (filePath: string) => {
       const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
       if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
@@ -1268,7 +1269,8 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
-      resolveQueueKey: (absolutePath: string) => resolveSandboxFileQueueKey(params, absolutePath),
+      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+        resolveSandboxFileQueueKey(params, absolutePath, signal),
       mkdir: async (dir: string) => {
         await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
       },
@@ -1287,7 +1289,8 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
-      resolveQueueKey: (absolutePath: string) => resolveSandboxFileQueueKey(params, absolutePath),
+      resolveQueueKey: (absolutePath: string, signal?: AbortSignal) =>
+        resolveSandboxFileQueueKey(params, absolutePath, signal),
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
@@ -1300,12 +1303,17 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   );
 }
 
-async function resolveSandboxFileQueueKey(params: SandboxToolParams, absolutePath: string) {
+async function resolveSandboxFileQueueKey(
+  params: SandboxToolParams,
+  absolutePath: string,
+  signal?: AbortSignal,
+) {
   return await resolveSandboxFileMutationQueueKey({
     bridge: params.bridge,
     root: params.root,
     filePath: absolutePath,
     cwd: params.root,
+    signal,
   });
 }
 

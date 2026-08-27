@@ -23,8 +23,8 @@ import { assertSandboxPath } from "./sandbox-paths.js";
 import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import {
   resolveFileMutationQueueKey,
-  withFileMutationQueueKey,
-  withFileMutationQueueKeys,
+  withFileMutationQueueKeyResolution,
+  withFileMutationQueueKeyResolutions,
 } from "./sessions/tools/file-mutation-queue.js";
 
 const BEGIN_PATCH_MARKER = "*** Begin Patch";
@@ -188,33 +188,58 @@ async function applyPatch(input: string, options: ApplyPatchOptions): Promise<Ap
     }
 
     if (hunk.kind === "add") {
-      const target = await resolvePatchPath(hunk.path, options);
-      await withFileMutationQueueKey(target.queueKey, async () => {
-        await assertPatchParentPath(hunk.path, options);
-        await ensureDir(target.resolved, fileOps);
-        await createPatchTarget({
-          target,
-          contents: hunk.contents,
-          ops: fileOps,
-          hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
-        });
-      });
+      const targetResolution = resolvePatchPath(hunk.path, options);
+      await withFileMutationQueueKeyResolution(
+        targetResolution.then((target) => target.queueKey),
+        async () => {
+          const target = await targetResolution;
+          await assertPatchParentPath(hunk.path, options);
+          await ensureDir(target.resolved, fileOps);
+          await createPatchTarget({
+            target,
+            contents: hunk.contents,
+            ops: fileOps,
+            hint: `Use "*** Update File: ${target.display}" to change it, or delete it earlier in the same patch.`,
+          });
+        },
+      );
+      const target = await targetResolution;
       recordSummary(summary, seen, "added", target.display);
       continue;
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
-      await withFileMutationQueueKey(target.queueKey, () => fileOps.remove(target.resolved));
+      const targetResolution = resolvePatchPath(
+        hunk.path,
+        options,
+        PATH_ALIAS_POLICIES.unlinkTarget,
+      );
+      await withFileMutationQueueKeyResolution(
+        targetResolution.then((target) => target.queueKey),
+        async () => {
+          const target = await targetResolution;
+          await fileOps.remove(target.resolved);
+        },
+      );
+      const target = await targetResolution;
       recordSummary(summary, seen, "deleted", target.display);
       continue;
     }
 
-    const target = await resolvePatchPath(hunk.path, options);
-    const moveTarget = hunk.movePath ? await resolvePatchPath(hunk.movePath, options) : undefined;
-    await withFileMutationQueueKeys(
-      [target.queueKey, ...(moveTarget ? [moveTarget.queueKey] : [])],
+    const targetResolution = resolvePatchPath(hunk.path, options);
+    const moveTargetResolution = hunk.movePath
+      ? resolvePatchPath(hunk.movePath, options)
+      : undefined;
+    await withFileMutationQueueKeyResolutions(
+      [
+        targetResolution.then((target) => target.queueKey),
+        ...(moveTargetResolution
+          ? [moveTargetResolution.then((moveTarget) => moveTarget.queueKey)]
+          : []),
+      ],
       async () => {
+        const target = await targetResolution;
+        const moveTarget = moveTargetResolution ? await moveTargetResolution : undefined;
         const applied = await applyUpdateHunk(target.resolved, hunk.chunks, {
           readFile: (pathLocal) => fileOps.readFile(pathLocal),
         });
@@ -391,6 +416,7 @@ async function resolvePatchPath(
         root: options.sandbox.root,
         filePath,
         cwd: options.cwd,
+        signal: options.signal,
       }),
       display: resolved.relativePath || resolved.containerPath,
     };
