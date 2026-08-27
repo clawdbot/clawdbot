@@ -165,7 +165,7 @@ function resolveConfiguredProviderFromAuthChange(params: {
   );
 }
 
-/** Build gateway auth config, preserving Tailscale allowance and generating missing tokens. */
+/** Preserve unrelated auth policy; replace mode-owned credentials and proxy settings. */
 export function buildGatewayAuthConfig(params: {
   existing?: GatewayAuthConfig;
   mode: GatewayAuthChoice;
@@ -177,11 +177,10 @@ export function buildGatewayAuthConfig(params: {
     allowUsers?: string[];
   };
 }): GatewayAuthConfig | undefined {
-  const allowTailscale = params.existing?.allowTailscale;
-  const base: GatewayAuthConfig = {};
-  if (typeof allowTailscale === "boolean") {
-    base.allowTailscale = allowTailscale;
-  }
+  const base: GatewayAuthConfig = { ...params.existing };
+  delete base.token;
+  delete base.password;
+  delete base.trustedProxy;
 
   if (params.mode === "token") {
     if (isSecretRef(params.token)) {

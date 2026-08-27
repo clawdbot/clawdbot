@@ -82,8 +82,13 @@ async function runGatewayPrompt(params: {
   mocks.password.mockImplementation(async () => params.textQueue.shift());
   mocks.randomToken.mockReturnValue(params.randomToken ?? "generated-token");
   mocks.confirm.mockResolvedValue(params.confirmResult ?? true);
+  const { buildGatewayAuthConfig } = await vi.importActual<
+    typeof import("./configure.gateway-auth.js")
+  >("./configure.gateway-auth.js");
   mocks.buildGatewayAuthConfig.mockImplementation((input) =>
-    params.authConfigFactory ? params.authConfigFactory(input as Record<string, unknown>) : input,
+    params.authConfigFactory
+      ? params.authConfigFactory(input as Record<string, unknown>)
+      : buildGatewayAuthConfig(input),
   );
 
   const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
@@ -110,6 +115,33 @@ async function runTrustedProxyPrompt(params: {
 }
 
 describe("promptGatewayConfig", () => {
+  it.each(["token", "trusted-proxy"] as const)(
+    "keeps existing auth policy through the real %s config builder",
+    async (mode) => {
+      const policy = {
+        allowTailscale: false,
+        rateLimit: { maxAttempts: 3, exemptLoopback: false },
+        identityScopes: { "operator@example.test": ["operator.read" as const] },
+      };
+      const { result } = await runGatewayPrompt({
+        baseConfig: { gateway: { auth: { ...policy, mode: "token", token: "old-token" } } },
+        selectQueue: ["loopback", mode, "off", "plaintext"],
+        textQueue:
+          mode === "token"
+            ? ["18789", "new-token"]
+            : ["18789", "x-forwarded-user", "", "", "10.0.0.1"],
+      });
+
+      expect(result.config.gateway?.auth).toEqual({
+        ...policy,
+        mode,
+        ...(mode === "token"
+          ? { token: "new-token" }
+          : { trustedProxy: { userHeader: "x-forwarded-user" } }),
+      });
+    },
+  );
+
   it("generates a token when the prompt returns undefined", async () => {
     const { result } = await runGatewayPrompt({
       selectQueue: ["loopback", "token", "off", "plaintext"],
