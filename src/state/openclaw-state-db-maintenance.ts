@@ -20,6 +20,8 @@ import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-stat
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const STATE_V6_ADDITIVE_TABLES = [
+  // v6-v12 databases may predate this former same-version lazy table.
+  "gateway_origin_device_tokens",
   ...LAZY_ADDITIVE_STATE_TABLES,
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",

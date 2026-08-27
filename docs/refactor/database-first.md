@@ -203,7 +203,7 @@ without exceptions outside doctor/import/export/debug boundaries.
 - No active session files.
 - No fake JSONL test fixtures except doctor legacy migration tests.
 - No raw SQLite access where Kysely is expected.
-- No new file-era runtime stores. The current global schema is version `12`, and
+- No new file-era runtime stores. The current global schema is version `13`, and
   the current per-agent schema is version `17`; older supported databases move
   through the bounded forward migrations listed in
   [Database schemas](/reference/database-schemas).
@@ -348,7 +348,7 @@ The branch already has a real shared SQLite base:
   site.
 - Global and per-agent databases record a `schema_meta` row with database role,
   schema version, timestamps, and agent id for agent databases. The global DB
-  currently uses `user_version = 9`; per-agent DBs use version `17`.
+  currently uses `user_version = 13`; per-agent DBs use version `17`.
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
@@ -481,7 +481,7 @@ The branch already has a real shared SQLite base:
   `device_identities` and `device_auth_tokens` rows. Gateway startup may import
   a valid retired primary identity under the startup migration lease; invalid
   canonical identity repair remains Doctor-only. Gateway-origin-scoped tokens
-  use the lazy additive `gateway_origin_device_tokens` table.
+  use the canonical `gateway_origin_device_tokens` table.
 - GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
   under `github-copilot/token-cache/default`. It is provider-owned cache state,
   so it intentionally does not add a host schema table.
@@ -1298,10 +1298,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Hermes secret migration plans and applies imported API-key profiles directly
   into the SQLite auth-profile store. It no longer writes or verifies
   `auth-profiles.json` as an intermediate target.
-- User-facing auth docs now describe
-  `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` instead of
-  telling users to inspect or copy `auth-profiles.json`; legacy OAuth/auth JSON
-  names remain documented only as doctor-import inputs.
+- User-facing auth docs distinguish shared auth snapshots in
+  `config_machine_state` under `authProfiles.store` and `authProfiles.state`
+  from the per-agent `auth_profile_store` and `auth_profile_state` tables.
+  Legacy OAuth/auth JSON names remain documented only as doctor-import inputs.
 - MCP OAuth sessions now use versioned `mcp_oauth_stores` rows in shared
   `state/openclaw.sqlite`. SDK-owned token, client-registration, and discovery
   objects remain one validated JSON payload so dependency extension fields
@@ -1352,9 +1352,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   state objects rather than file-shaped lockfile/origin abstractions. Doctor
   imports the legacy sidecars from configured agent workspaces and removes them
   after a clean import.
-- The installed plugin index now reads and writes the typed shared SQLite
-  `installed_plugin_index` singleton row instead of `plugins/installs.json`; the
-  legacy JSON file is only a doctor migration input and is removed after import.
+- The installed plugin index now reads and writes `config_machine_state` under
+  `plugins.installedIndex` instead of `plugins/installs.json`; the legacy JSON
+  file is only a doctor migration input and is removed after import.
 - The legacy `plugins/installs.json` path helper now lives in doctor legacy
   code. Runtime plugin-index modules expose only SQLite-backed persistence
   options, not a JSON file path.
@@ -1538,8 +1538,9 @@ backup_runs(id, created_at, archive_path, status, manifest_json)
 `clawhub.promotionsFeed`, `modelCatalog.remote`, `voicewake.triggers`,
 `voicewake.routing`, `onboarding.recommendations.<workspaceKey>`,
 `tui.lastSession.<scopeKey>`, `sidebar.sectionOrder`, `nodeHost.config`, and
-`webPush.vapidKeys` snapshots. Secret-excluding Git backups omit the `nodeHost.`
-and `webPush.vapidKeys` key prefixes without dropping other machine state.
+`webPush.vapidKeys` snapshots. Secret-excluding Git backups omit the
+`authProfiles.`, `nodeHost.`, and `webPush.vapidKeys` key prefixes without
+dropping other machine state.
 
 Agent database:
 
@@ -1955,7 +1956,7 @@ manifest asset from the verified extracted payload.
 
 1. Add database registry APIs.
    - Resolve global DB and per-agent DB paths.
-   - The global schema now uses `user_version = 9`; per-agent DBs use version
+   - The global schema now uses `user_version = 13`; per-agent DBs use version
      `17`, with bounded forward migrations from supported older versions.
    - Add close/checkpoint/integrity helpers used by tests, backup, and doctor.
 

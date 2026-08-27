@@ -2088,6 +2088,7 @@ describe("openclaw state database", () => {
       const { DatabaseSync } = requireNodeSqlite();
       const legacy = new DatabaseSync(databasePath);
       legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
+      legacy.exec("DROP TABLE gateway_origin_device_tokens;");
 
       const job = {
         id: "legacy-wide-job",
@@ -2257,6 +2258,9 @@ describe("openclaw state database", () => {
 
       const migrated = openOpenClawStateDatabase(options);
       expect(readSqliteNumberPragma(migrated.db, "user_version")).toBe(13);
+      expect(collectSqliteSchemaShape(migrated.db).gateway_origin_device_tokens).toEqual(
+        createInitialStateSchemaShape().gateway_origin_device_tokens,
+      );
       const cronColumns = migrated.db.prepare("PRAGMA table_info(cron_jobs)").all() as Array<{
         name: string;
       }>;
