@@ -494,6 +494,7 @@ describe("Code Mode swarm host bridge", () => {
   it("renews expired snapshots while agentWait remains pending", () => {
     const now = 10_000;
     testing.activeRuns.set("cm-pending-agent", {
+      releaseOwner: () => undefined,
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now + 120_000,
@@ -516,6 +517,7 @@ describe("Code Mode swarm host bridge", () => {
     const now = 10_000;
     const cancel = vi.fn();
     testing.activeRuns.set("cm-expired-agent", {
+      releaseOwner: () => undefined,
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now - 1,
