@@ -300,11 +300,16 @@ describe("restart health", () => {
     expect(snapshot.buildIdMismatch).toBeUndefined();
   });
 
-  it("does not require bundled build identity for a configured Control UI root", async () => {
+  it("rejects a stale Gateway build when the Control UI root is configured", async () => {
     probeGateway.mockResolvedValue({
       ok: true,
       close: null,
-      server: { version: "2026.4.24", controlUiBuildSource: "configured", connId: "new" },
+      server: {
+        version: "2026.4.24",
+        buildId: "old-build",
+        controlUiBuildSource: "configured",
+        connId: "old",
+      },
     });
 
     const snapshot = await inspectGatewayRestartWithSnapshot({
@@ -318,11 +323,11 @@ describe("restart health", () => {
       },
     });
 
-    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.healthy).toBe(false);
     expect(snapshot.controlUiBuildSource).toBe("configured");
-    expect(snapshot.gatewayBuildId).toBeNull();
-    expect(snapshot.expectedBuildId).toBeUndefined();
-    expect(snapshot.buildIdMismatch).toBeUndefined();
+    expect(snapshot.gatewayBuildId).toBe("old-build");
+    expect(snapshot.expectedBuildId).toBe("new-build");
+    expect(snapshot.buildIdMismatch).toEqual({ expected: "new-build", actual: "old-build" });
     expect(sleep).not.toHaveBeenCalled();
   });
 
