@@ -87,7 +87,9 @@ export async function compactWithSafetyTimeout<T>(
   };
   armTimer();
 
-  let timeoutListener: (() => void) | undefined;
+  const timeoutListener: () => void = () => {
+    cancel();
+  };
   let externalAbortListener: (() => void) | undefined;
   let externalAbortPromise: Promise<never> | undefined;
   const abortSignal = opts?.abortSignal;
@@ -95,9 +97,6 @@ export async function compactWithSafetyTimeout<T>(
     ? AbortSignal.any([timeoutAbortCtrl.signal, abortSignal])
     : timeoutAbortCtrl.signal;
 
-  timeoutListener = () => {
-    cancel();
-  };
   timeoutAbortCtrl.signal.addEventListener("abort", timeoutListener, { once: true });
   // A non-settling compaction must still reject on timeout, so the abort
   // itself is raced — not just signaled into an uncooperative callback.
