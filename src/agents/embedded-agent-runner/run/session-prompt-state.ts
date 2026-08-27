@@ -179,13 +179,16 @@ export function createEmbeddedRunSessionPromptState(input: {
     markOwnedTranscriptRetry: () => {
       settleOwnedTranscriptProjection = true;
     },
-    settleOwnedTranscriptProjection: async (target: AgentRunSessionTarget | undefined) => {
+    settleOwnedTranscriptProjection: async (
+      target: AgentRunSessionTarget | undefined,
+      abortSignal?: AbortSignal,
+    ) => {
       const sessionId = target?.sessionId ?? activeSessionId;
       if (settleOwnedTranscriptProjection && target && sessionId) {
         settleOwnedTranscriptProjection = false;
         const { waitForSessionTranscriptProjection } =
           await import("../../../config/sessions/session-transcript-reconcile.js");
-        await waitForSessionTranscriptProjection({ ...target, sessionId });
+        await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
     continueFromCurrentTranscript: () => {

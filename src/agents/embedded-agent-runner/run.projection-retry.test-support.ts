@@ -51,6 +51,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     const databaseOptions = sqliteScope.toDatabaseOptions(
       sqliteScope.resolveSqliteTranscriptReadScope(sessionTarget),
     );
+    const controller = new AbortController();
     const originalWaitForProjection = reconcile.waitForSessionTranscriptProjection;
     let ownedProjectionSettled = false;
     const waitForProjection = vi
@@ -119,11 +120,12 @@ describe("runEmbeddedAgent transcript projection retry", () => {
         sessionKey,
         sessionFile: sessionKey,
         sessionTarget,
+        abortSignal: controller.signal,
       });
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(waitForProjection).toHaveBeenCalledOnce();
-      expect(waitForProjection).toHaveBeenCalledWith(sessionTarget);
+      expect(waitForProjection).toHaveBeenCalledWith(sessionTarget, controller.signal);
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);

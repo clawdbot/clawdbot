@@ -85,14 +85,15 @@ describe("embedded run session prompt state", () => {
       .spyOn(reconcile, "waitForSessionTranscriptProjection")
       .mockResolvedValue();
     const state = createState();
+    const abortSignal = new AbortController().signal;
 
     try {
       await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
       expect(waitForProjection).not.toHaveBeenCalled();
 
       await state.prepareCompactedTranscriptRetry();
-      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
-      expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget);
+      await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget, abortSignal);
+      expect(waitForProjection).toHaveBeenCalledWith(BASE_RUN_PARAMS.sessionTarget, abortSignal);
 
       await state.settleOwnedTranscriptProjection(BASE_RUN_PARAMS.sessionTarget);
       expect(waitForProjection).toHaveBeenCalledOnce();
