@@ -201,7 +201,7 @@ describe("message action capability checks", () => {
     ).toHaveProperty("components");
   });
 
-  it("keeps all-configured schema visible from another current channel", () => {
+  it("keeps all-configured schema account-neutral from another current channel", () => {
     const schema: ChannelMessageToolSchemaContribution[] = [
       {
         actions: ["react"],
@@ -214,17 +214,21 @@ describe("message action capability checks", () => {
       },
     ];
     activateDiscoveredMessageActionPlugin({
-      id: "demo-cross-channel",
-      label: "Demo Cross Channel",
-      describeMessageTool: () => ({
-        actions: ["react", "send"],
-        schema,
-      }),
+      id: "discord",
+      label: "Discord",
+      describeMessageTool: ({ accountId }) =>
+        accountId
+          ? { actions: [], schema: null }
+          : {
+              actions: ["react", "send"],
+              schema,
+            },
     });
 
     const properties = resolveChannelMessageToolSchemaProperties({
       cfg: {} as OpenClawConfig,
-      channel: "other-current-channel",
+      channel: "slack",
+      accountId: "slack-workspace",
     });
     expect(properties).toHaveProperty("components");
     expect(properties).not.toHaveProperty("emoji");

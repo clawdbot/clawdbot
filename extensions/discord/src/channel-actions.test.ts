@@ -465,7 +465,7 @@ describe("discordMessageActions", () => {
         action: "send",
         cfg: {} as OpenClawConfig,
         params: {
-          components: {
+          components: JSON.stringify({
             text: "Choose",
             blocks: [
               {
@@ -473,7 +473,7 @@ describe("discordMessageActions", () => {
                 buttons: [{ label: "Yes", callbackData: "yes" }],
               },
             ],
-          },
+          }),
           embeds: undefined,
           filename: "photo.png",
         },
