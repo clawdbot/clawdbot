@@ -1530,6 +1530,8 @@ public struct PresenceEntry: Codable, Sendable {
     public let tags: [String]?
     public let text: String?
     public let ts: Int
+    public let onlinesince: Int?
+    public let lastactivityat: Int?
     public let deviceid: String?
     public let roles: [String]?
     public let scopes: [String]?
@@ -1551,6 +1553,8 @@ public struct PresenceEntry: Codable, Sendable {
         tags: [String]? = nil,
         text: String? = nil,
         ts: Int,
+        onlinesince: Int? = nil,
+        lastactivityat: Int? = nil,
         deviceid: String? = nil,
         roles: [String]? = nil,
         scopes: [String]? = nil,
@@ -1571,6 +1575,8 @@ public struct PresenceEntry: Codable, Sendable {
         self.tags = tags
         self.text = text
         self.ts = ts
+        self.onlinesince = onlinesince
+        self.lastactivityat = lastactivityat
         self.deviceid = deviceid
         self.roles = roles
         self.scopes = scopes
@@ -1593,6 +1599,8 @@ public struct PresenceEntry: Codable, Sendable {
         case tags
         case text
         case ts
+        case onlinesince = "onlineSince"
+        case lastactivityat = "lastActivityAt"
         case deviceid = "deviceId"
         case roles
         case scopes

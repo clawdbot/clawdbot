@@ -44,20 +44,26 @@ export function createPresenceRecipientProjection(params: {
     return targets.get(sessionKey);
   };
   return (client) => {
-    const canRead =
-      client?.connect != null &&
-      (client.connect.role ?? "operator") === "operator" &&
-      authorizeOperatorScopesForRequiredScope(READ_SCOPE, client.connect.scopes ?? []).allowed &&
+    // Match system-presence RPC access before projecting any rows: even idle
+    // people expose timing through ts and roster ordering, not just named fields.
+    if (
+      !client?.connect ||
+      (client.connect.role ?? "operator") !== "operator" ||
+      !authorizeOperatorScopesForRequiredScope(READ_SCOPE, client.connect.scopes ?? []).allowed
+    ) {
+      return [];
+    }
+    const canReadSessions =
       // Match session reads: an established admin grant does not depend on profile verification.
-      (isGatewayAdmin(client) || !isGatewayClientProfilePending(client));
-    const entryFilter = canRead
+      isGatewayAdmin(client) || !isGatewayClientProfilePending(client);
+    const entryFilter = canReadSessions
       ? createSessionListEntryFilter({ cfg: params.cfg, client })
       : undefined;
     return params.presence.map((row) => {
       if (!row.watchedSessions) {
         return row;
       }
-      const watchedSessions = canRead
+      const watchedSessions = canReadSessions
         ? row.watchedSessions.filter((key) => {
             const target = resolveTarget(key);
             return target && (entryFilter?.(target.canonicalKey, target.entry) ?? true);

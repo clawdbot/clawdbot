@@ -26,21 +26,25 @@ export const PresenceEntrySchema = closedObject({
   reason: Type.Optional(NonEmptyString),
   tags: Type.Optional(Type.Array(NonEmptyString)),
   text: Type.Optional(Type.String()),
+  /** Heartbeat freshness, not online duration or user activity. */
   ts: Type.Integer({ minimum: 0 }),
+  /** Server timestamps for the person's continuous online interval and last accepted activity. */
+  onlineSince: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastActivityAt: Type.Optional(Type.Integer({ minimum: 0 })),
   deviceId: Type.Optional(NonEmptyString),
   roles: Type.Optional(Type.Array(NonEmptyString)),
   scopes: Type.Optional(Type.Array(NonEmptyString)),
   instanceId: Type.Optional(NonEmptyString),
   user: Type.Optional(
     closedObject({
-      /** Opaque identity key: authenticated email today, durable profile id later. Clients group presence by this. */
+      /** Canonical profile id when resolved, otherwise authenticated identity. Clients group presence by this. */
       id: NonEmptyString,
       email: Type.Optional(NonEmptyString),
       name: Type.Optional(NonEmptyString),
       avatarUrl: Type.Optional(NonEmptyString),
     }),
   ),
-  /** Session keys this connection is actively subscribed to (watching). Sorted lexicographically for deterministic snapshots. */
+  /** Sessions this connection declares it is viewing, independent of transport subscriptions. Sorted lexicographically. */
   watchedSessions: Type.Optional(Type.Array(NonEmptyString)),
 });
 

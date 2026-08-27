@@ -1698,7 +1698,8 @@ async function createChatPickerScenario(
         ]
       : [];
   const workboardMocks = buildWorkboardMocks(baseTime);
-  const activitySessions = buildActivitySessionRows(Date.now());
+  const activityTime = Date.now();
+  const activitySessions = buildActivitySessionRows(activityTime);
   const sessions = [
     ...activitySessions,
     ...(fixture === "workboard"
@@ -2059,8 +2060,38 @@ async function createChatPickerScenario(
         name: selfProfile.displayName ?? undefined,
         email: selfProfile.emails[0],
       },
-      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
-      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review", "agent:main:main"],
+      },
+      {
+        id: "presence-colin",
+        name: "Colin",
+        email: "colin@example.com",
+        onlineSince: activityTime - 47 * 60_000,
+        lastActivityAt: activityTime - 2 * 60_000,
+        deviceFamily: "Mac",
+        platform: "macOS",
+        timeZone: "America/Los_Angeles",
+        watchedSessions: ["agent:activity:design-review"],
+      },
+      {
+        id: "presence-patricia",
+        email: "patricia.erichsen@example.com",
+        onlineSince: activityTime - 12 * 60_000,
+        lastActivityAt: activityTime - 30_000,
+        deviceFamily: "iPhone",
+        platform: "iOS",
+        timeZone: "Europe/Stockholm",
+        watchedSessions: ["agent:activity:support-handoff"],
+      },
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),

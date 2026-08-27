@@ -29,7 +29,6 @@ import {
 const OPEN_DELAY_MS = 450;
 const SWEEP_OPEN_DELAY_MS = 80;
 const SKIP_DELAY_MS = 300;
-const ROW_CARD_BRIDGE_MS = 220;
 const CLOSE_DELAY_MS = 100;
 const EXIT_DURATION_MS = 100;
 let nextHovercardId = 0;
@@ -221,17 +220,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
     if (event.relatedTarget instanceof Node && target.contains(event.relatedTarget)) {
       return;
     }
-    this.hovercard.pointerInside = false;
-    const card = this.hovercard.card;
-    const side = card?.dataset.side;
-    const rect = target.getBoundingClientRect();
-    const movingTowardCard =
-      (event.relatedTarget instanceof Node && card?.contains(event.relatedTarget)) ||
-      (side === "right" && event.clientX >= rect.right) ||
-      (side === "left" && event.clientX <= rect.left) ||
-      (side === "bottom" && event.clientY >= rect.bottom) ||
-      (side === "top" && event.clientY <= rect.top);
-    this.hovercard.scheduleClose(movingTowardCard ? ROW_CARD_BRIDGE_MS : CLOSE_DELAY_MS);
+    this.hovercard.schedulePointerExit(event, target);
   };
 
   private readonly handleFocusIn = (event: FocusEvent) => {
@@ -567,10 +556,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
   };
 
   private cardFocusables(): HTMLElement[] {
-    // Decorative link twins (avatars beside their labelled link) opt out with tabindex="-1".
-    return [
-      ...(this.hovercard.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? []),
-    ];
+    return this.hovercard.focusables();
   }
 
   private personActivity(): PersonActivityRouting | undefined {

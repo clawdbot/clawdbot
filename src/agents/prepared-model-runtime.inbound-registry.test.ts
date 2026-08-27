@@ -10,6 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -17,7 +18,6 @@ import {
   registerPreparedModelRuntimePublicationListener,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
-import { getPreparedPluginRuntimeLoadContext } from "./prepared-model-runtime.plugin-context.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 
@@ -197,7 +197,7 @@ describe("prepared reply dispatch runtime", () => {
       pluginGeneration: configuredRuntimeBefore.pluginGeneration,
     });
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
-    expect(getPreparedPluginRuntimeLoadContext(dynamicSelectedBefore)).toMatchObject({
+    expect(getPluginRuntimeLoadContext(dynamicSelectedBefore)).toMatchObject({
       preferBuiltPluginArtifacts: true,
     });
     dynamicLease.release();
