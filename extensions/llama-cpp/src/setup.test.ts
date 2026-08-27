@@ -25,7 +25,7 @@ vi.mock("./managed-server.js", async (importOriginal) => ({
 }));
 
 import {
-  DEFAULT_LLAMA_CPP_MODEL_REF,
+  DEFAULT_LLAMA_CPP_MODEL_ID,
   DEFAULT_LLAMA_CPP_MODEL_SHA256,
   DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
   DEFAULT_LLAMA_CPP_MODEL_URI,
@@ -205,7 +205,7 @@ describe("llama.cpp managed setup", () => {
     });
     expect(result.defaultModel).toBeUndefined();
     expect(result.configPatch?.models?.providers?.[LLAMA_CPP_PROVIDER_ID]?.models).toEqual([]);
-    expect(ctx.config.agents.defaults.model).toEqual({ primary: "openai/gpt-5.4" });
+    expect(ctx.config.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.4" });
     expect(
       mocks.ensureModel.mock.calls.filter(([options]) => options.download === true),
     ).toHaveLength(1);
@@ -320,7 +320,7 @@ describe("llama.cpp managed setup", () => {
 
     await expect(runLlamaCppSetup(ctx)).resolves.toMatchObject({
       profiles: [],
-      defaultModel: DEFAULT_LLAMA_CPP_MODEL_REF,
+      defaultModel: `${LLAMA_CPP_PROVIDER_ID}/${DEFAULT_LLAMA_CPP_MODEL_ID}`,
       configPatch: {
         models: {
           providers: {

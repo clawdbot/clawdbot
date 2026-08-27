@@ -207,9 +207,14 @@ describe("llama.cpp provider plugin", () => {
     const result = await catalog.run({
       config: options.config,
       env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     });
 
-    expect(result.provider?.models).toEqual([]);
+    if (!result || !("provider" in result)) {
+      throw new Error("managed catalog returned no provider");
+    }
+    expect(result.provider.models).toEqual([]);
   });
 
   it("registers local embeddings through the generic provider contract", () => {
