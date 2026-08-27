@@ -776,12 +776,14 @@ describe("slackOutbound", () => {
     );
     updateMessageSlackMock.mockResolvedValue({ ok: true });
 
+    const presentation = { blocks: [] as [] };
     const basePayload = {
       text: "Spoken summary of the deploy.",
       mediaUrl: "file:///tmp/tts/deploy.ogg",
       audioAsVoice: true,
       spokenText: "Spoken summary of the deploy.",
       trustedLocalMedia: true,
+      presentation,
       channelData: {
         askUser: { questionId: "q-1", optionValues: ["Yes"] },
         slack: {
@@ -800,23 +802,24 @@ describe("slackOutbound", () => {
         },
       },
     };
-    const rendered = slackOutbound.renderPresentation!({
+    const rendered = await slackOutbound.renderPresentation!({
       payload: basePayload,
-      presentation: basePayload.presentation,
+      presentation,
       ctx: { cfg, to: "C123", text: "", payload: basePayload },
     });
     // Sanity: renderPresentation must produce a signed resolution for the
     // finalization path to read back.
     expect(rendered).not.toBeNull();
-    const renderedSlackData = (rendered ?? basePayload).channelData?.slack as
+    const renderedPayload = rendered!;
+    const renderedSlackData = renderedPayload.channelData?.slack as
       | Record<string, unknown>
       | undefined;
     expect(renderedSlackData?.renderedPresentationSegments).toBeDefined();
 
     await slackOutbound.afterDeliverPayload!({
       cfg,
-      target: { to: "C123", accountId: "default" },
-      payload: rendered ?? basePayload,
+      target: { channel: "slack", to: "C123", accountId: "default" },
+      payload: renderedPayload,
       results: [
         {
           channel: "slack",
