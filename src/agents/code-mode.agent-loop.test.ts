@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import type { CodeModeSkill } from "./code-mode-skills.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   createCodeModeHarness,
@@ -51,8 +52,14 @@ function createAssistant(content: AssistantMessage["content"]): AssistantMessage
   };
 }
 
-async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAgentTool[] }) {
-  const { config, catalogRef, tools } = createCodeModeHarness();
+async function runCodeModeAgent(params: {
+  programs: string[];
+  hiddenTools: AnyAgentTool[];
+  codeModeSkills?: CodeModeSkill[];
+}) {
+  const { config, catalogRef, tools } = createCodeModeHarness({
+    codeModeSkills: params.codeModeSkills,
+  });
   applyCodeModeCatalog({
     tools: [...tools, ...params.hiddenTools],
     config,
@@ -60,6 +67,7 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
     sessionKey: "agent:main:main",
     runId: "run-code-mode",
     catalogRef,
+    codeModeSkills: params.codeModeSkills,
   });
   const providerContexts: Context[] = [];
   let reconciliationCandidates = 0;
@@ -102,6 +110,64 @@ async function runCodeModeAgent(params: { programs: string[]; hiddenTools: AnyAg
 
 describe("Code Mode agent-loop error recovery", () => {
   afterEach(() => resetCodeModeTestState());
+
+  it.each([
+    {
+      name: "catalog.search",
+      discovery: '(await catalog.search("complete_task")).map((tool) => tool.toolName)',
+      value: ["complete_task"],
+    },
+    {
+      name: "handle.describe",
+      discovery: "(await complete_task.describe()).name",
+      value: "complete_task",
+    },
+    {
+      name: "skills.list",
+      discovery: "(await skills.list()).map((skill) => skill.name)",
+      value: ["demo"],
+    },
+    { name: "skills.read", discovery: 'await skills.read("demo")', value: "Demo instructions" },
+  ])(
+    "continues ordinary recovery after $name metadata and a guest error",
+    async ({ discovery, value }) => {
+      const complete = pluginToolWithExecute("complete_task", "Complete the task", async () =>
+        jsonResult({ completed: true }),
+      );
+      const { agent, providerContexts, reconciliationCandidates } = await runCodeModeAgent({
+        hiddenTools: [complete],
+        codeModeSkills: [
+          {
+            name: "demo",
+            description: "Demo skill",
+            location: "/skills/demo/SKILL.md",
+            source: { filePath: "/skills/demo/SKILL.md", readContent: "Demo instructions" },
+          },
+        ],
+        programs: [`json(${discovery}); return missingFn();`, "return await complete_task({});"],
+      });
+
+      const failure = expect.objectContaining({
+        role: "toolResult",
+        toolName: "exec",
+        isError: true,
+        details: expect.objectContaining({
+          status: "failed",
+          error: expect.stringContaining("ReferenceError: missingFn is not defined"),
+          output: [{ type: "json", value }],
+          telemetry: expect.objectContaining({ callCount: 0 }),
+        }),
+      });
+      expect(agent.state.messages).toContainEqual(failure);
+      expect(providerContexts).toHaveLength(3);
+      expect(complete.execute).toHaveBeenCalledOnce();
+      expect(reconciliationCandidates).toBe(0);
+      expect(agent.state.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: "recovered" }],
+      });
+    },
+  );
 
   it("returns a trusted no-start tool failure to the model for ordinary recovery", async () => {
     const terminal = pluginToolWithExecute("terminal", "Open a terminal", async () =>
