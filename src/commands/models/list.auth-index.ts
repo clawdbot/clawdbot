@@ -8,6 +8,7 @@ import {
 } from "../../agents/model-auth-availability.js";
 import { resolveModelRuntimeAuthAvailability } from "../../agents/model-auth-runtime-fallback.js";
 import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
+import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
@@ -73,6 +74,9 @@ export function createModelListAuthIndex(
   const runtimeAvailability = new Map<string, boolean | undefined>();
   const resolveRuntimeProviderAvailability = (provider: string) => {
     const normalized = normalizeProviderId(provider);
+    if (!syntheticAuthProviderRefs.has(normalized)) {
+      return undefined;
+    }
     if (runtimeAvailability.has(normalized)) {
       return runtimeAvailability.get(normalized);
     }
@@ -86,7 +90,7 @@ export function createModelListAuthIndex(
         context: {
           config: params.cfg,
           provider: normalized,
-          providerConfig: params.cfg.models?.providers?.[normalized],
+          providerConfig: resolveMergedModelProviderConfig(params.cfg, normalized),
         },
       });
       available = Boolean(resolved?.apiKey?.trim());

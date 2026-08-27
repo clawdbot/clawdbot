@@ -289,6 +289,96 @@ describe("createModelListAuthIndex", () => {
     });
   });
 
+  it("does not probe a CLI runtime when metadata diagnostics invalidate its declaration", () => {
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      apiKey: "claude-cli-native-auth",
+      source: "Claude CLI native auth",
+      mode: "oauth",
+    });
+    const metadataSnapshot = {
+      registrySource: "provided",
+      registryDiagnostics: [
+        {
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message: "invalid plugin metadata",
+        },
+      ],
+      plugins: [],
+      index: { plugins: [{ enabled: true, syntheticAuthRefs: ["claude-cli"] }] },
+    } as unknown as PluginMetadataSnapshot;
+    const index = createTestModelListAuthIndex({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: {
+                "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          ],
+        },
+      },
+      authStore: emptyStore,
+      env: {},
+      metadataSnapshot,
+    });
+
+    expect(
+      index.evaluateModelAuth("anthropic", { modelId: "claude-opus-5" }).availability,
+    ).not.toBe(true);
+    expect(providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("passes mixed-case authored runtime provider config to the auth hook", () => {
+    providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation((params) =>
+      params.context.providerConfig?.apiKey === "runtime-config-marker"
+        ? { apiKey: "claude-cli-native-auth", source: "Claude CLI native auth", mode: "oauth" }
+        : undefined,
+    );
+    const index = createTestModelListAuthIndex({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              default: true,
+              models: {
+                "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          ],
+        },
+        models: {
+          providers: {
+            "Claude-CLI": {
+              baseUrl: "http://127.0.0.1:1",
+              api: "anthropic-messages",
+              apiKey: "runtime-config-marker",
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: emptyStore,
+      env: {},
+      syntheticAuthProviderRefs: ["claude-cli"],
+    });
+
+    expect(index.evaluateModelAuth("anthropic", { modelId: "claude-opus-5" }).availability).toBe(
+      true,
+    );
+    expect(providerRuntimeMocks.resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          providerConfig: expect.objectContaining({ apiKey: "runtime-config-marker" }),
+        }),
+      }),
+    );
+  });
+
   it("uses enabled synthetic refs from prepared persisted metadata", () => {
     const metadataSnapshot = {
       registrySource: "persisted",
