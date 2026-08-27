@@ -758,7 +758,7 @@ describe("runDiscordGatewayLifecycle", () => {
         await vi.advanceTimersByTimeAsync(60_000);
       });
 
-      const { lifecycleParams, statusSink } = createLifecycleHarness({ gateway });
+      const { lifecycleParams } = createLifecycleHarness({ gateway });
 
       await expect(runDiscordGatewayLifecycle(lifecycleParams)).rejects.toThrow(
         /discord gateway stayed disconnected/,
