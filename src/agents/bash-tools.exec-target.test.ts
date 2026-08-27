@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
+import { isTrustedToolExecutionPreflightError } from "./tool-result-error.js";
+import { ToolAuthorizationError } from "./tools/common.js";
 
 function expectExecTarget(
   actual: ReturnType<typeof resolveExecTarget>,
@@ -94,6 +96,21 @@ describe("resolveExecTarget", () => {
     ).toThrow(
       "exec host not allowed (requested gateway; configured host is auto; set tools.exec.host=gateway to allow this override).",
     );
+  });
+
+  it("raises host denials as trusted authorization failures so no-start facts settle", () => {
+    try {
+      resolveExecTarget({
+        configuredTarget: "auto",
+        requestedTarget: "gateway",
+        elevatedRequested: false,
+        sandboxAvailable: true,
+      });
+      expect.unreachable("resolveExecTarget should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ToolAuthorizationError);
+      expect(isTrustedToolExecutionPreflightError(error)).toBe(true);
+    }
   });
 
   it("rejects per-call host=node override from auto when sandbox is available", () => {

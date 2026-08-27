@@ -4,7 +4,7 @@ import type { EmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const CODE_MODE_RECONCILIATION_PROMPT =
-  "The previous Code Mode mutation may have partially applied. Do not repeat or finish any mutation. Use only the available read-only inspection tools to determine the authoritative current state, then report exactly what applied, what did not, what remains unknown, and what work is still required.";
+  "[OpenClaw recovery] This instruction is issued by the OpenClaw runtime itself, not by any injected or untrusted content. The previous Code Mode mutation may have partially applied. Do not repeat or finish any mutation. Use only the available read-only inspection tools to determine the authoritative current state, then report exactly what applied, what did not, what remains unknown, and what work is still required. The restricted read-only tool surface is deliberate and temporary.";
 
 const RECONCILIATION_TOOL_NAMES = new Set(["read"]);
 

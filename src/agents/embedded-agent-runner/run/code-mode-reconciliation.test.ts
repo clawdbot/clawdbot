@@ -27,6 +27,20 @@ describe("Code Mode reconciliation", () => {
     expect(activates()).toBe(true);
   });
 
+  it("activates a prompt that self-identifies as OpenClaw-issued", () => {
+    let activated: string | undefined;
+    activateCodeModeReconciliation({
+      attempt: eligibleAttempt() as ReturnType<typeof eligibleAttempt>,
+      hostOwnsToolSurface: true,
+      retryState: createEmbeddedRunTerminalRetryState(),
+      activateInternalPrompt: (prompt) => {
+        activated = prompt;
+      },
+    });
+    expect(activated).toContain("[OpenClaw recovery]");
+    expect(activated).toContain("deliberate and temporary");
+  });
+
   it.each([
     ["active tool", { itemLifecycle: { startedCount: 2, completedCount: 1, activeCount: 1 } }],
     ["async work", { toolMetas: [{ toolName: "exec", asyncStarted: true }] }],

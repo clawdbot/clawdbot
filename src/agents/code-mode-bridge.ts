@@ -29,6 +29,7 @@ import { resolveSwarmConfig } from "./subagents/swarm/swarm-config.js";
 import { isToolExecutionAllowed, TOOL_EXECUTION_GATED_MESSAGE } from "./tool-policy-shared.js";
 import {
   consumeTrustedToolNoStartError,
+  isTrustedToolExecutionPreflightError,
   registerTrustedToolNoStartError,
 } from "./tool-result-error.js";
 import { ToolSearchRuntime, type ToolSearchToolContext } from "./tool-search.js";
@@ -596,6 +597,10 @@ export async function runBridgeRequest(params: {
       error: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
     };
     if (consumeTrustedToolNoStartError(error)) {
+      registerTrustedToolNoStartError(settled);
+    } else if (isTrustedToolExecutionPreflightError(error)) {
+      // Host-owned policy denials never start work, so the outer settlement
+      // must also release the pending mutation reservation.
       registerTrustedToolNoStartError(settled);
     }
     return settled;

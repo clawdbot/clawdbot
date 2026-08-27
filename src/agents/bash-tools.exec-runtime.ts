@@ -31,6 +31,7 @@ import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
+import { ToolAuthorizationError } from "./tools/common.js";
 import {
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -263,7 +264,7 @@ export function resolveExecTarget(params: {
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
   const requestedTarget = params.requestedTarget ?? null;
   if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw new Error(
+    throw new ToolAuthorizationError(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
     );
   }
@@ -286,7 +287,7 @@ export function resolveExecTarget(params: {
             : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
-    throw new Error(
+    throw new ToolAuthorizationError(
       `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
         `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
         `set tools.exec.host=${allowedConfig} to allow this override).`,
