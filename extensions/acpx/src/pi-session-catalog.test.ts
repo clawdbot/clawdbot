@@ -648,9 +648,7 @@ describe("Pi session catalog", () => {
     await listLocalPiSessionPage({ limit: 20 });
 
     const content = await fs.readFile(file);
-    const growth = Buffer.alloc(
-      PI_SESSION_READ_LIMIT_BYTES - content.length + 1,
-    );
+    const growth = Buffer.alloc(PI_SESSION_READ_LIMIT_BYTES - content.length + 1);
     const buffers: Buffer[] = [];
     const actualOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
