@@ -9,4 +9,4 @@ export const TOGETHER_BASE_URL = TOGETHER_MANIFEST_CATALOG.baseUrl;
 export const TOGETHER_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: "together",
   catalog: TOGETHER_MANIFEST_CATALOG,
-}).models.map((model) => ({ ...model, api: "openai-completions" }));
+}).models.map((model) => Object.assign(model, { api: "openai-completions" }));

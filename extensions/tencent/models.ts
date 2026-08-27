@@ -13,7 +13,7 @@ const TOKENHUB_MANIFEST_CATALOG = manifest.modelCatalog.providers[TOKENHUB_PROVI
 export const TOKENHUB_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: TOKENHUB_PROVIDER_ID,
   catalog: TOKENHUB_MANIFEST_CATALOG,
-}).models.map((model) => ({ ...model, api: "openai-completions" }));
+}).models.map((model) => Object.assign(model, { api: "openai-completions" }));
 
 // ---------- TokenPlan provider ----------
 
@@ -25,4 +25,4 @@ const TOKENPLAN_MANIFEST_CATALOG = manifest.modelCatalog.providers[TOKENPLAN_PRO
 export const TOKENPLAN_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: TOKENPLAN_PROVIDER_ID,
   catalog: TOKENPLAN_MANIFEST_CATALOG,
-}).models.map((model) => ({ ...model, api: "openai-completions" }));
+}).models.map((model) => Object.assign(model, { api: "openai-completions" }));

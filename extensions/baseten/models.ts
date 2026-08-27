@@ -111,10 +111,7 @@ export function buildStaticBasetenModels(): ModelDefinitionConfig[] {
   return buildManifestModelProviderConfig({
     providerId: "baseten",
     catalog: BASETEN_MANIFEST_CATALOG,
-  }).models.map((normalized) => ({
-    ...normalized,
-    compat: buildBasetenModelCompat(normalized.id),
-  }));
+  }).models.map((model) => Object.assign(model, { compat: buildBasetenModelCompat(model.id) }));
 }
 
 type BasetenLiveModelRow = {

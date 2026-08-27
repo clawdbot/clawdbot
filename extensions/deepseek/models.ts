@@ -9,7 +9,7 @@ export const DEEPSEEK_BASE_URL = DEEPSEEK_MANIFEST_CATALOG.baseUrl;
 export const DEEPSEEK_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
   providerId: "deepseek",
   catalog: DEEPSEEK_MANIFEST_CATALOG,
-}).models.map((model) => ({ ...model, api: "openai-completions" }));
+}).models.map((model) => Object.assign(model, { api: "openai-completions" }));
 
 const DEEPSEEK_V4_MODEL_IDS = new Set(["deepseek-v4-flash", "deepseek-v4-pro"]);
 
