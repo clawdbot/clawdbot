@@ -64,11 +64,29 @@ describe.sequential("authenticated request connection liveness", () => {
     const held = new Promise<void>((resolve) => {
       releaseHandler = resolve;
     });
-    runtime.beforeHandler.mockReturnValue(held);
+    // dispatch() is fire-and-forget behind a lazy server-methods import, so the
+    // handler start and the response are awaited as events; a polling deadline
+    // here loses to a slow first module load and leaks the call into the
+    // sibling case.
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      handlerStarted = resolve;
+    });
+    runtime.beforeHandler.mockImplementation(() => {
+      handlerStarted();
+      return held;
+    });
     const state = createGatewayConnectionState({ cfg: {} });
     const client = createClient();
     state.clients.add(client);
-    const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
+    let respondedWith!: (frame: unknown) => void;
+    const responded = new Promise<unknown>((resolve) => {
+      respondedWith = resolve;
+    });
+    const send = vi.fn((frame: unknown) => {
+      respondedWith(frame);
+      return { kind: "sent" } as const;
+    });
     const context = {
       getRuntimeConfig: () => ({}),
       logGateway: { error: vi.fn() },
@@ -93,16 +111,15 @@ describe.sequential("authenticated request connection liveness", () => {
       { type: "req", id: testCase.method, method: testCase.method, params: testCase.params },
       client,
     );
-    await vi.waitFor(() => expect(runtime.beforeHandler).toHaveBeenCalledOnce());
+    await started;
+    expect(runtime.beforeHandler).toHaveBeenCalledOnce();
 
     state.clients.delete(client);
     state.sessionEventSubscribers.unsubscribe(client.connId);
     state.sessionMessageSubscribers.unsubscribeAll(client.connId);
     releaseHandler();
 
-    await vi.waitFor(() =>
-      expect(send).toHaveBeenCalledWith(expect.objectContaining({ id: testCase.method, ok: true })),
-    );
+    expect(await responded).toEqual(expect.objectContaining({ id: testCase.method, ok: true }));
     testCase.assertEmpty(state);
   });
 });

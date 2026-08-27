@@ -117,7 +117,8 @@ function mapImapAuthStrength(
   account: ImapAccountConfig,
 ): { strength: SenderStrength; reason: string; transient: boolean } {
   const dmarc = result?.dmarc && result.dmarc.status.result;
-  if (result?.dmarc && result.dmarc.alignment.dkim.underSized) {
+  // mailauth omits alignment when no DMARC policy exists or its DNS lookup fails.
+  if (result?.dmarc && result.dmarc.alignment?.dkim.underSized) {
     return { strength: "unverified", reason: "dkim-unsigned-body", transient: false };
   }
   if (dmarc === "pass") {

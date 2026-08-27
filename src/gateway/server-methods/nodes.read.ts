@@ -37,9 +37,10 @@ import {
   refreshClientPluginNodeCapability,
 } from "../plugin-node-capability.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function safeNodeReadProjection(
   node: NodeListNode,
@@ -281,12 +282,7 @@ export function refreshConnectedNodeSurfaceCaches(params: {
 
 export const nodeReadHandlers: GatewayRequestHandlers = {
   "node.list": async ({ params, respond, client, context }) => {
-    if (!validateNodeListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.list",
-        validator: validateNodeListParams,
-      });
+    if (!assertValidParams(params, validateNodeListParams, "node.list", respond)) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -309,15 +305,10 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     });
   },
   "node.describe": async ({ params, respond, client, context }) => {
-    if (!validateNodeDescribeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.describe",
-        validator: validateNodeDescribeParams,
-      });
+    if (!assertValidParams(params, validateNodeDescribeParams, "node.describe", respond)) {
       return;
     }
-    const { nodeId } = params as { nodeId: string };
+    const { nodeId } = params;
     const id = normalizeOptionalString(nodeId) ?? "";
     if (!id) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
@@ -357,12 +348,14 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
   "plugin.surface.refresh": handlePluginSurfaceRefresh,
   "node.pluginSurface.refresh": handlePluginSurfaceRefresh,
   "node.pluginTools.update": async ({ params, respond, client, context }) => {
-    if (!validateNodePluginToolsUpdateParams(params)) {
-      respondInvalidParams({
+    if (
+      !assertValidParams(
+        params,
+        validateNodePluginToolsUpdateParams,
+        "node.pluginTools.update",
         respond,
-        method: "node.pluginTools.update",
-        validator: validateNodePluginToolsUpdateParams,
-      });
+      )
+    ) {
       return;
     }
     const nodeId = normalizeOptionalString(
@@ -384,12 +377,7 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
     respond(true, { nodeId, tools: updated.nodePluginTools }, undefined);
   },
   "node.skills.update": async ({ params, respond, client, context }) => {
-    if (!validateNodeSkillsUpdateParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.skills.update",
-        validator: validateNodeSkillsUpdateParams,
-      });
+    if (!assertValidParams(params, validateNodeSkillsUpdateParams, "node.skills.update", respond)) {
       return;
     }
     const nodeId = normalizeOptionalString(

@@ -2114,6 +2114,7 @@
     "@shikijs/engine-oniguruma": "4.4.3",
     "@types/express": "5.0.6",
     "@types/hosted-git-info": "3.0.5",
+    "@types/jsdom": "30.0.0",
     "@types/markdown-it": "14.2.0",
     "@types/mdast": "4.0.4",
     "@types/ms": "2.1.0",
