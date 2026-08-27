@@ -1077,6 +1077,49 @@ describe("iMessage approval reactions", () => {
     ).resolves.toBeNull();
   });
 
+  it("keeps the durable claim alive on transient Gateway errors", async () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "pending-approval",
+      approvalId: "exec-pending",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    const gatewayError = new Error("Gateway 503 Service Unavailable");
+    resolverMocks.resolveApprovalOverGateway.mockRejectedValueOnce(gatewayError);
+    resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
+
+    const handled = await maybeResolveIMessageApprovalReaction({
+      cfg: {
+        channels: { imessage: { allowFrom: ["+15551230000"] } },
+      },
+      accountId: "default",
+      message: buildTapbackReactionPayload({
+        sender: "+15551230000",
+        reaction_emoji: "👍",
+        reacted_to_guid: "pending-approval",
+      }),
+      bodyText: "",
+    });
+
+    // Transient errors should return handled:false so the durable ingress
+    // while(true) loop retries via iMessageApprovalControlBindings.wait(),
+    // rather than committing the claim and losing the operator's click.
+    expect(handled).toBe(false);
+    expect(resolverMocks.resolveApprovalOverGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "exec-pending" }),
+    );
+    // The binding should NOT be cleared yet (not-found is the terminal case).
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "pending-approval",
+        reactionKey: "👍",
+      }),
+    ).resolves.toBeTruthy();
+  });
+
   it("clears a losing surface and reports the canonical first-answer outcome", async () => {
     registerIMessageApprovalReactionTarget({
       accountId: "default",
