@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type { ImageContent, TextContent } from "../../llm/types.js";
 import { attachRuntimePromptMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
@@ -8,6 +7,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { readBoundedSkillFile } from "../../skills/loading/bounded-skill-read.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
@@ -307,7 +307,10 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } // Unknown skill, pass through
 
     try {
-      const content = readFileSync(skill.filePath, "utf-8");
+      const content = readBoundedSkillFile(
+        skill.filePath,
+        this.sessionResourceLoader.getSkillFileSizeLimit(),
+      );
       const body = stripFrontmatter(content).trim();
       const skillBlock = `<skill name="${skill.name}" location="${skill.filePath}">\nReferences are relative to ${skill.baseDir}.\n\n${body}\n</skill>`;
       return args ? `${skillBlock}\n\n${args}` : skillBlock;

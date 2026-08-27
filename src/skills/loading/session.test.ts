@@ -1,14 +1,22 @@
+import { closeSync, fstatSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { parseSkillFrontmatter, resolveSkillManifestMetadata } from "./frontmatter.js";
 import { loadSkills } from "./session.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function loadSkillsFromPath(dir: string) {
-  return loadSkills({ cwd: dir, agentDir: dir, skillPaths: [dir], includeDefaults: false });
+function loadSkillsFromPath(dir: string, maxSkillFileBytes?: number) {
+  return loadSkills({
+    cwd: dir,
+    agentDir: dir,
+    skillPaths: [dir],
+    includeDefaults: false,
+    maxSkillFileBytes,
+  });
 }
 
 describe("loadSkills", () => {
@@ -125,5 +133,106 @@ description: Valid sibling
         message: expect.stringContaining("invalid frontmatter: BAD_INDENT"),
       }),
     ]);
+  });
+
+  it("rejects oversized SKILL.md files and emits a diagnostic", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "oversized");
+    await fs.mkdir(skillDir);
+    const skillFile = path.join(skillDir, "SKILL.md");
+    // Write content exceeding the default size limit (256 KB).
+    const oversizeBody = "x".repeat(260_000);
+    await fs.writeFile(
+      skillFile,
+      `---\nname: oversized\ndescription: This file is too big\n---\n${oversizeBody}`,
+      "utf-8",
+    );
+
+    const result = loadSkillsFromPath(tempDir);
+
+    expect(result.skills).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        type: "warning",
+        path: skillFile,
+        message: expect.stringContaining("exceeds"),
+      }),
+    ]);
+  });
+
+  it("honors a custom maxSkillFileBytes limit for discovery", async () => {
+    const tempDir = tempDirs.make("openclaw-skill-custom-limit-");
+    const acceptedDir = path.join(tempDir, "accepted");
+    const rejectedDir = path.join(tempDir, "rejected");
+    await fs.mkdir(acceptedDir);
+    await fs.mkdir(rejectedDir);
+    const acceptedFile = path.join(acceptedDir, "SKILL.md");
+    const rejectedFile = path.join(rejectedDir, "SKILL.md");
+    // 200 KB body is under a 300 KB custom limit but over a 100 KB one.
+    const body = "x".repeat(200_000);
+    const skillFrontmatter = (name: string) =>
+      `---\nname: ${name}\ndescription: limit probe\n---\n`;
+    await fs.writeFile(acceptedFile, `${skillFrontmatter("accepted")}${body}`, "utf-8");
+    await fs.writeFile(rejectedFile, `${skillFrontmatter("rejected")}${body}`, "utf-8");
+
+    const acceptedResult = loadSkillsFromPath(tempDir, 300_000);
+    expect(acceptedResult.skills).toHaveLength(2);
+    expect(acceptedResult.skills.map((skill) => skill.name)).toEqual(
+      expect.arrayContaining(["accepted", "rejected"]),
+    );
+    expect(acceptedResult.diagnostics).toEqual([]);
+
+    const rejectedResult = loadSkillsFromPath(tempDir, 100_000);
+    expect(rejectedResult.skills).toEqual([]);
+    expect(rejectedResult.diagnostics).toHaveLength(2);
+    expect(rejectedResult.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "warning",
+          path: acceptedFile,
+          message: expect.stringContaining("exceeds"),
+        }),
+        expect.objectContaining({
+          type: "warning",
+          path: rejectedFile,
+          message: expect.stringContaining("exceeds"),
+        }),
+      ]),
+    );
+  });
+
+  it("rejects files that grew after stat via the bounded descriptor reader (growth-race regression)", () => {
+    const tempDir = tempDirs.make("openclaw-skill-scan-");
+    const skillDir = path.join(tempDir, "grow-race");
+    mkdirSync(skillDir, { recursive: true });
+    const skillFile = path.join(skillDir, "SKILL.md");
+
+    // Write a file under the limit.
+    writeFileSync(
+      skillFile,
+      `---\nname: grow\ndescription: Grows post-stat\n---\n${"x".repeat(50_000)}`,
+      "utf-8",
+    );
+
+    // Open a read-only descriptor and verify the file is under the limit at
+    // open time — this mirrors what readBoundedSkillFile does internally.
+    const fd = openSync(skillFile, "r");
+    try {
+      const stats = fstatSync(fd);
+      expect(stats.size).toBeLessThan(256_000);
+
+      // Grow the file past the limit after the stat check. On Linux the
+      // kernel page cache is coherent, so the original read fd sees the new
+      // data; the bounded reader catches the growth and throws RangeError.
+      writeFileSync(
+        skillFile,
+        `---\nname: grow\ndescription: Grows post-stat\n---\n${"x".repeat(512_000)}`,
+        "utf-8",
+      );
+
+      expect(() => readFileDescriptorBoundedSync(fd, 256_000)).toThrow(RangeError);
+    } finally {
+      closeSync(fd);
+    }
   });
 });

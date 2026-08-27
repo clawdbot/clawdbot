@@ -54,6 +54,7 @@ function createResourceLoader(): ResourceLoader {
   return {
     getExtensions: () => extensionsResult,
     getSkills: () => ({ skills: [], diagnostics: [] }),
+    getSkillFileSizeLimit: () => 256_000,
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),

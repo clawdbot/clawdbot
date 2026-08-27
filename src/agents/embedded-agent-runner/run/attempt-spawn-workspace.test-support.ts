@@ -391,6 +391,9 @@ vi.mock("../../sessions/index.js", () => {
     constructor(...args: unknown[]) {
       hoisted.defaultResourceLoaderInitMock(...args);
     }
+    getSkillFileSizeLimit() {
+      return 256_000;
+    }
     async reload() {}
   }
   function ModelRegistry() {}
