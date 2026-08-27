@@ -39,21 +39,6 @@ type PlannedAlias = {
   size: number;
 };
 
-type ArchiveRegularFileAliasTestHooks = {
-  beforeCopy?: (params: { destinationPath: string; signal: AbortSignal }) => Promise<void>;
-};
-
-let testHooks: ArchiveRegularFileAliasTestHooks | undefined;
-
-export function setArchiveRegularFileAliasTestHooksForTest(
-  hooks: ArchiveRegularFileAliasTestHooks | undefined,
-): void {
-  if (hooks && process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
-    throw new Error("archive regular-file alias test hooks are only available in tests");
-  }
-  testHooks = hooks;
-}
-
 function createOperationDeadline(timeoutMs: number): OperationDeadline {
   const controller = new AbortController();
   const enabled = Number.isFinite(timeoutMs) && timeoutMs > 0;
@@ -273,12 +258,6 @@ function assertCombinedLimits(params: {
 }
 
 async function copyPlannedAlias(alias: PlannedAlias, deadline: OperationDeadline): Promise<void> {
-  const beforeCopy = testHooks?.beforeCopy;
-  if (beforeCopy) {
-    await deadline.wait(() =>
-      beforeCopy({ destinationPath: alias.destinationPath, signal: deadline.signal }),
-    );
-  }
   const readable = fsSync.createReadStream(alias.sourcePath);
   const writable = fsSync.createWriteStream(alias.destinationPath, {
     flags: "wx",

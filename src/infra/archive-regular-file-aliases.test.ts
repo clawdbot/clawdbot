@@ -1,17 +1,16 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  setArchiveRegularFileAliasTestHooksForTest,
-  extractArchiveInPrivateDestinationWithRegularFileAliases,
-} from "./archive-regular-file-aliases.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { extractArchiveInPrivateDestinationWithRegularFileAliases } from "./archive-regular-file-aliases.js";
 
 const tempRoots: string[] = [];
 
 afterEach(async () => {
-  setArchiveRegularFileAliasTestHooksForTest(undefined);
+  vi.restoreAllMocks();
   await Promise.all(
     tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
   );
@@ -42,6 +41,7 @@ function extractCase(params: {
   destination: string;
   timeoutMs?: number;
   maxExtractedBytes?: number;
+  regularFileAliases?: ReadonlyArray<readonly [string, readonly string[]]>;
 }) {
   return extractArchiveInPrivateDestinationWithRegularFileAliases({
     archivePath: params.archivePath,
@@ -53,7 +53,7 @@ function extractCase(params: {
     entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
     onFiltered: "skip-entry",
     regularFileAliasRoot: "package",
-    regularFileAliases: [["libexample.so.1", ["libexample.so"]]],
+    regularFileAliases: params.regularFileAliases ?? [["libexample.so.1", ["libexample.so"]]],
     requiredRegularFiles: ["server"],
   });
 }
@@ -116,18 +116,25 @@ describe("extractArchiveInPrivateDestinationWithRegularFileAliases", () => {
   it("aborts a stalled alias copy at the shared absolute deadline", async () => {
     const fixture = await createArchiveCase();
     let stalledCopies = 0;
-    setArchiveRegularFileAliasTestHooksForTest({
-      beforeCopy: async () => {
+    const destinations = ["libexample.so"];
+    Object.defineProperty(destinations, Symbol.iterator, {
+      *value() {
         stalledCopies += 1;
-        await new Promise<void>(() => {
-          // Intentionally unresolved: the shared absolute deadline must abort this phase.
-        });
+        const stalledStream = new PassThrough();
+        vi.spyOn(fsSync, "createReadStream").mockImplementation(
+          () => stalledStream as unknown as fsSync.ReadStream,
+        );
+        yield "libexample.so";
       },
     });
 
-    await expect(extractCase({ ...fixture, timeoutMs: 500 })).rejects.toThrow(
-      /regular-file aliases timed out/u,
-    );
+    await expect(
+      extractCase({
+        ...fixture,
+        timeoutMs: 500,
+        regularFileAliases: [["libexample.so.1", destinations]],
+      }),
+    ).rejects.toThrow(/regular-file aliases timed out/u);
     expect(stalledCopies).toBe(1);
     await expect(
       fs.lstat(path.join(fixture.destination, "package", "libexample.so")),

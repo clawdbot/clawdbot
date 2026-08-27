@@ -84,6 +84,14 @@ Package contract guardrails classify the supported bundled facades that remain
 public until generic contracts replace them. Those facades are deprecated for
 new code; see the per-row notes below.
 
+The `plugin-sdk/archive` subpath exposes ordinary bounded `extractArchive` and
+`readArchiveEntry` operations. Its specialized
+`extractArchiveInPrivateDestinationWithRegularFileAliases` operation requires an
+already-created empty directory that the caller keeps unpublished until success.
+The caller must discard that entire private directory after any error. The helper
+validates required regular files and creates only closed-manifest regular-file
+aliases within the shared extraction deadline and output limits.
+
 <AccordionGroup>
   <Accordion title="Channel subpaths">
     | Subpath | Key exports |
@@ -95,7 +103,7 @@ new code; see the per-row notes below.
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `defineChannelSetupContract`, `createSetupTranslator`, `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
-    | `plugin-sdk/archive` | `extractArchive`, `readArchiveEntry`, archive limits and entry kinds |
+    | `plugin-sdk/archive` | `extractArchive`, `extractArchiveInPrivateDestinationWithRegularFileAliases`, `readArchiveEntry`, archive limits and entry kinds |
     | `plugin-sdk/root-walk` | `walkRootDirectory`, root-walk options and entries |
     | `plugin-sdk/secret-file` | `createSecretFileAtomic`, synchronous and asynchronous secret reads |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
