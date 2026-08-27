@@ -354,16 +354,17 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     // ownership and message transport naming different plugins, the split the cede plan exists to
     // close. Claimants stay admissible even when they are not the winner: a set-aside declaration
     // deliberately leaves every member registering, and the first registrant keeps the channel.
-    // What counts as a claim has to match `channelPluginIdBelongsToManifest`, the loader's own
-    // answer to the same question: a plugin whose id is the channel id claims it even with no
-    // `channels` entry, so reading `channelIds` alone would reject that plugin's own channel.
-    // `channelIds` comes from the manifest the claimant list is built from, so testing it is
-    // equivalent to testing membership of that list; the list is needed only to know a declaration
-    // contests this channel, and to name the claimants in the diagnostic.
+    // A claim here means `record.channels`, matching `collectChannelClaimants` and
+    // `collectConfiguredChannelCandidateSet`. `channelPluginIdBelongsToManifest` also accepts a
+    // plugin whose id is the channel id, but that check guards the setup-entry load path -- whether
+    // a channel plugin object belongs to the manifest that shipped it -- not who owns a contested
+    // channel. `plugin-auto-enable.prefer-over.ts` states the ownership rule directly: a plugin
+    // whose id matches a channel id must never have that read as a channel claim, or it carries the
+    // channel's replacement authority into a plugin that never configured the channel. Honouring
+    // the id here would let a namesake keep a channel the declaration gave to someone else.
     const declaredClaimants = declaredChannelClaimants.get(cededChannelId);
     if (
       declaredClaimants &&
-      normalizeCededChannelId(record.id) !== cededChannelId &&
       !record.channelIds.some((claimed) => normalizeCededChannelId(claimed) === cededChannelId)
     ) {
       pushDiagnostic({

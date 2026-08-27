@@ -934,10 +934,16 @@ describe("plugin loader preferOver cede", () => {
     ).toMatchObject({ level: "error", pluginId: "zz-squatter" });
   });
 
-  // `channelPluginIdBelongsToManifest` treats a plugin whose own id is the channel id as claiming
-  // it even with no `channels` entry. Admission has to agree, or this plugin loses its own channel
-  // -- and, through the registration-conflict set, its tools with it.
-  it("admits a plugin whose own id is the contested channel id and declares no channels", () => {
+  // Codex P1 3871231327 and the round that followed it. `channelPluginIdBelongsToManifest` accepts
+  // a plugin whose own id is the channel id, and an earlier version of this guard exempted such a
+  // plugin on that basis. That helper guards the setup-entry load path -- whether a channel plugin
+  // object belongs to the manifest that shipped it -- and is not an ownership claim:
+  // `plugin-auto-enable.prefer-over.ts` documents that a plugin id matching a channel id must never
+  // be read as a claim, and all three claimant builders use `record.channels` alone. Exempting the
+  // namesake let it keep a contested channel the declaration had given to the replacement, with
+  // validation and the Control UI naming the replacement. It is turned away like any other
+  // non-claimant; declaring the channel in `channels` is what buys a seat in the contest.
+  it("turns away a namesake plugin that never declared the contested channel", () => {
     const root = makePluginLoaderTempDir();
     const selfDir = writeMultiChannelPlugin({
       rootDir: root,
@@ -984,7 +990,10 @@ describe("plugin loader preferOver cede", () => {
       registry.diagnostics.find(
         (diag) => diag.pluginId === "zzalpha" && diag.message.includes("is declared by"),
       ),
-    ).toBeUndefined();
+    ).toMatchObject({ level: "error" });
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).toBe(
+      "zz-replacement",
+    );
   });
 
   // The contract admission inherits, pinned with no squatter in the picture: when the declared
