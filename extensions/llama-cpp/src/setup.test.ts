@@ -212,6 +212,38 @@ describe("llama.cpp managed setup", () => {
     ).toHaveLength(1);
   });
 
+  it("does not replace an active external llama.cpp chat provider for embeddings", async () => {
+    vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
+    const ctx = authContext(true);
+    ctx.config.memory = { search: { provider: "local" } };
+    ctx.config.agents = { defaults: { model: { primary: "llama-cpp/external-chat" } } };
+    const provider = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+    if (!provider) {
+      throw new Error("missing external provider fixture");
+    }
+    provider.models = [
+      {
+        id: "external-chat",
+        name: "External chat",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 2048,
+      },
+    ];
+
+    await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+
+    expect(ctx.prompter.confirm).not.toHaveBeenCalled();
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringContaining("llama-cpp/external-chat"),
+      "Setup skipped",
+    );
+    expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
+    expect(ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID]).toBe(provider);
+  });
+
   it("requires consent before installing and downloading", async () => {
     const ctx = authContext(false);
 

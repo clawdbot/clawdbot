@@ -241,6 +241,15 @@ async function resolveSetupPlan(
     return undefined;
   }
 
+  const primaryModel = readPrimaryModel(ctx.config);
+  if (hasLocalMemoryIntent(ctx.config) && primaryModel?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)) {
+    await ctx.prompter.note(
+      `Embedding-only setup cannot replace the provider while ${primaryModel} is your current chat model. Choose another chat model, then retry llama.cpp setup.`,
+      "Setup skipped",
+    );
+    return undefined;
+  }
+
   if (hasLocalMemoryIntent(ctx.config)) {
     const consent = await ctx.prompter.confirm({
       message:
