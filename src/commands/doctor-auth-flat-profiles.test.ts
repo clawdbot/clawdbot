@@ -780,6 +780,72 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expectMigratedArchive(statePath);
   });
 
+  it("canonicalizes stale openai-codex rotation state on the config-backed state-only path (#130018)", async () => {
+    const state = await makeTestState();
+    const namedLegacy = [
+      "openai-codex:alpha",
+      "openai-codex:bravo",
+      "openai-codex:charlie",
+      "openai-codex:delta",
+      "openai-codex:echo",
+    ] as const;
+    // Config-backed state-only path (#130018): no legacy auth-profiles.json exists,
+    // so the credential-store guard in canonicalizeLegacyOpenAIAuthStore early-returns
+    // and (pre-fix) skips the standalone auth-state.json, leaving stale openai-codex
+    // rotation ids that resolveExplicitAuthOrderSelection cannot select. In the full
+    // doctor flow, repair-sequencing collects this collision-aware map from legacy
+    // config and canonicalizes config profiles (maybeRepairOpenAICodexAuthConfig)
+    // before this migration runs; this case passes that precomputed map directly to
+    // isolate the state-only rewrite the P1 fix adds.
+    const profileIdMap = new Map<string, string>([
+      ["openai-codex:alpha", "openai:alpha"],
+      ["openai-codex:bravo", "openai:bravo"],
+      ["openai-codex:charlie", "openai:charlie"],
+      ["openai-codex:delta", "openai:delta"],
+      ["openai-codex:echo", "openai:echo"],
+    ]);
+    const statePath = await state.writeText(
+      "agents/main/agent/auth-state.json",
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": [...namedLegacy] },
+        lastGood: { "openai-codex": namedLegacy[0] },
+        usageStats: { [namedLegacy[0]]: { lastUsed: 123 } },
+      })}\n`,
+    );
+    const canonicalNamed = namedLegacy.map((id) => profileIdMap.get(id) ?? "");
+    const firstCanonical = profileIdMap.get(namedLegacy[0]) ?? "";
+    for (const canonical of canonicalNamed) {
+      expect(canonical).toMatch(/^openai:(?!codex)/);
+    }
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+      openAICodexAuthProfileIdMap: profileIdMap,
+      now: () => 790,
+    });
+
+    expect(result.detected).toEqual([statePath]);
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded).toBeDefined();
+    // No credentials existed to migrate; profiles stay empty.
+    expect(loaded!.profiles).toEqual({});
+    // Stale openai-codex rotation namespace did not survive the state-only path.
+    expect(loaded!.order?.["openai-codex"]).toBeUndefined();
+    expect(loaded!.lastGood?.["openai-codex"]).toBeUndefined();
+    expect(Object.keys(loaded!.usageStats ?? {})).toEqual(
+      expect.not.arrayContaining([expect.stringMatching(/^openai-codex/)]),
+    );
+    // Rotation state canonicalized onto the same openai ids as the map.
+    expect(loaded!.order?.openai ?? []).toEqual(canonicalNamed);
+    expect(loaded!.lastGood?.openai).toBe(firstCanonical);
+    expect(loaded!.usageStats?.[firstCanonical]).toMatchObject({ lastUsed: 123 });
+    expect(fs.existsSync(statePath)).toBe(false);
+    expectMigratedArchive(statePath);
+  });
+
   it("imports a valid legacy auth sibling when auth-profiles.json is malformed", async () => {
     const state = await makeTestState();
     const authPath = await state.writeText(

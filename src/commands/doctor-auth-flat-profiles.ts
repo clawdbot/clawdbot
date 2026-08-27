@@ -1703,7 +1703,14 @@ function canonicalizeLegacyOpenAIAuthStore(
   stateRaw: unknown,
   profileIdMap: ReadonlyMap<string, string>,
 ): number | null {
+  // No credential store: still canonicalize the standalone rotation state so the
+  // config-backed path (#130018, credentials in config, rotation in auth-state.json)
+  // drops stale openai-codex ids. Copy the static map (rotation helpers mutate
+  // it); return null — no credentials migrated, so the credential warning stays off.
   if (!isRecord(raw) || !isRecord(raw.profiles)) {
+    if (isRecord(stateRaw)) {
+      canonicalizeOpenAIAuthRotationState(stateRaw, new Map(profileIdMap));
+    }
     return null;
   }
   const rewrite = canonicalizeOpenAIProfileEntries(raw.profiles, { profileIdMap });
