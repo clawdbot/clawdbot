@@ -3123,7 +3123,7 @@ button.chat-pr__diff {
   --chat-composer-chip-height: 30px;
   --chat-composer-chip-gap: 6px;
   --chat-composer-chip-padding-inline: 8px;
-  --chat-composer-chip-text: var(--control-ui-text-sm);
+  --chat-composer-chip-text: var(--control-ui-text-md);
   --chat-composer-chip-icon: 16px;
   /* Menu-row family: every option row inside a composer popover (model, effort,
      permission, plus menu, attach, microphone) shares one box, icon size, and
@@ -3145,7 +3145,7 @@ button.chat-pr__diff {
   --chat-composer-editor-inset-block: 6px;
   /* Draft text and its surrounding labels share one semantic UI size. The
      coarse-pointer floor in base.css still prevents iOS focus zoom. */
-  --chat-composer-editor-size: var(--control-ui-text-sm);
+  --chat-composer-editor-size: var(--control-ui-text-md);
   /* One editor line. The single-line box centres a line of exactly this height,
      and the multiline editor never gets shorter than one of them. Derived, so a
      scaled-up editor keeps its leading instead of crowding its own descenders. */
