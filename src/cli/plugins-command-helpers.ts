@@ -4,6 +4,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { HOOK_INSTALL_ERROR_CODE } from "../hooks/install.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { formatCliCommand } from "./command-format.js";
 export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
@@ -85,9 +86,8 @@ export function formatPluginInstallWithHookFallbackError(
   hookFallback: { error: string; code?: string },
 ): string {
   const formattedPluginError = formatPluginInstallAttemptError(pluginError);
-  const formattedHookError = formatPluginInstallAttemptError(hookFallback.error);
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
-    return `${formattedPluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+    return `${formattedPluginError}\nUse \`${formatCliCommand("openclaw plugins update <id-or-npm-spec>")}\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
   if (
     pluginError.startsWith("Invalid extensions directory:") ||
@@ -98,7 +98,7 @@ export function formatPluginInstallWithHookFallbackError(
   if (hookFallback.code === HOOK_INSTALL_ERROR_CODE.MISSING_OPENCLAW_HOOKS) {
     return formattedPluginError;
   }
-  return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
+  return `${formattedPluginError}\nAlso not a valid hook pack: ${formatPluginInstallAttemptError(hookFallback.error)}`;
 }
 
 const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =

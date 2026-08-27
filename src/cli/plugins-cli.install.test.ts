@@ -12,6 +12,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
@@ -2550,28 +2551,61 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().mode).toBe("update");
   });
 
-  it("suggests update or --force when npm plugin install target already exists", async () => {
-    pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
-    mockClawHubPackageNotFound("@example/lossless-claw");
-    installPluginFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      error:
-        "plugin already exists: /home/openclaw/.openclaw/extensions/lossless-claw (delete it first)",
-    });
-    installHooksFromNpmSpecMock.mockResolvedValue({
-      ok: false,
-      error: "package.json missing openclaw.hooks",
-    });
+  it.each([
+    {
+      context: "default",
+      profile: undefined,
+      container: undefined,
+      command: "openclaw plugins update <id-or-npm-spec>",
+    },
+    {
+      context: "profile",
+      profile: "work",
+      container: undefined,
+      command: "openclaw --profile work plugins update <id-or-npm-spec>",
+    },
+    {
+      context: "container",
+      profile: undefined,
+      container: "staging",
+      command: "openclaw --container staging plugins update <id-or-npm-spec>",
+    },
+    {
+      context: "container over profile",
+      profile: "work",
+      container: "staging",
+      command: "openclaw --container staging plugins update <id-or-npm-spec>",
+    },
+  ])(
+    "suggests a $context update when the npm plugin install target already exists",
+    async ({ profile, container, command }) => {
+      pluginCliConfigMock.mockReturnValue({} as OpenClawConfig);
+      mockClawHubPackageNotFound("@example/lossless-claw");
+      installPluginFromNpmSpecMock.mockResolvedValue({
+        ok: false,
+        error:
+          "plugin already exists: /home/openclaw/.openclaw/extensions/lossless-claw (delete it first)",
+      });
+      installHooksFromNpmSpecMock.mockResolvedValue({
+        ok: false,
+        error: "package.json missing openclaw.hooks",
+      });
 
-    await expect(
-      runAcknowledgedPluginsInstallCommand(["plugins", "install", "@example/lossless-claw"]),
-    ).rejects.toThrow("__exit__:1");
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: container },
+        async () => {
+          await expect(
+            runAcknowledgedPluginsInstallCommand(["plugins", "install", "@example/lossless-claw"]),
+          ).rejects.toThrow("__exit__:1");
+        },
+      );
 
-    expect(runtimeErrors.at(-1)).toContain(
-      "Use `openclaw plugins update <id-or-npm-spec>` to upgrade the tracked plugin, or rerun install with `--force` to replace it.",
-    );
-    expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
-  });
+      expect(runtimeErrors.at(-1)).toContain(
+        `Use \`${command}\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`,
+      );
+      expect(runtimeErrors.at(-1)).not.toContain("Also not a valid hook pack");
+    },
+  );
 
   it("does not append hook-pack fallback details for managed extensions boundary failures", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-local-plugin-"));
