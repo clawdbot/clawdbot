@@ -150,6 +150,7 @@ describe("structured state integrity findings", () => {
     setTestEnvValue("HOME", tempHome);
     setTestEnvValue("OPENCLAW_HOME", tempHome);
     setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
+    noteMock.mockClear();
   });
 
   afterEach(() => {
@@ -265,6 +266,75 @@ describe("structured state integrity findings", () => {
         expect.objectContaining({
           checkId: "core/doctor/state-integrity",
           message: expect.stringContaining("runtime directory is missing"),
+        }),
+      ]),
+    );
+  });
+
+  it("accepts missing session directories on a fresh RPC-onboarded profile", () => {
+    const stateDir = path.join(tempHome, ".openclaw");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const cfg = withMainAgentRoster({});
+
+    const sessionIssues = detectStateIntegrityHealthIssues(cfg).filter(
+      (issue) =>
+        "label" in issue && (issue.label === "Sessions dir" || issue.label === "Session store dir"),
+    );
+
+    expect(sessionIssues).toEqual([]);
+  });
+
+  it("does not warn or prompt for missing session directories", async () => {
+    const stateDir = path.join(tempHome, ".openclaw");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    const confirmRuntimeRepair = vi.fn(async () => false);
+
+    await noteStateIntegrityRaw(withMainAgentRoster({}), {
+      confirmRuntimeRepair,
+      note: noteMock,
+    });
+
+    expect(stateIntegrityText()).not.toMatch(
+      /CRITICAL: (?:Sessions dir|Session store dir) missing/,
+    );
+    expect(repairPromptCalls(confirmRuntimeRepair)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          message: expect.stringMatching(/^Create (?:Sessions dir|Session store dir) at/),
+        }),
+      ]),
+    );
+  });
+
+  it("reports an existing session directory that is not writable", () => {
+    const stateDir = path.join(tempHome, ".openclaw");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    const storePath = path.join(stateDir, "custom-store", "sessions.json");
+    fs.mkdirSync(sessionsDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.dirname(storePath), { recursive: true, mode: 0o700 });
+    const accessSync = fs.accessSync;
+    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation((target, mode) => {
+      if (target === sessionsDir) {
+        throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+      }
+      return accessSync(target, mode);
+    });
+
+    let issues: ReturnType<typeof detectStateIntegrityHealthIssues>;
+    try {
+      issues = detectStateIntegrityHealthIssues(
+        withMainAgentRoster({ session: { store: storePath } }),
+      );
+    } finally {
+      accessSpy.mockRestore();
+    }
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "runtime-dir-not-writable",
+          label: "Sessions dir",
+          path: sessionsDir,
         }),
       ]),
     );
