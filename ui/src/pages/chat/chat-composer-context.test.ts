@@ -354,10 +354,8 @@ describe("renderChatComposer context usage", () => {
     expect(container.textContent).not.toContain("Model:");
   });
 
-  it("warns on fresh high usage but keeps stale usage approximate and nonactionable", () => {
-    const onCompact = vi.fn();
+  it("warns on fresh high usage but keeps stale usage approximate", () => {
     let container = renderComposer({
-      onCompact,
       sessions: {
         sessions: [
           {
@@ -371,17 +369,14 @@ describe("renderChatComposer context usage", () => {
         defaults: { contextTokens: 200_000 },
       } as never,
     });
-    const compact = container.querySelector<HTMLButtonElement>(".context-ring__compact");
-    expect(compact?.getAttribute("aria-label")).toContain(
+    const contextRing = container.querySelector(".context-ring");
+    expect(contextRing?.getAttribute("aria-label")).toBe(
       "Session context usage: 190k of 200k (95%)",
     );
-    expect(container.querySelector(".context-ring")).toBeNull();
-    expect(compact?.textContent).toContain("Compact");
-    compact?.click();
-    expect(onCompact).toHaveBeenCalledOnce();
+    expect(contextRing?.classList).toContain("context-ring--warning");
+    expect(container.textContent).not.toContain("Compact");
 
     container = renderComposer({
-      onCompact,
       sessions: {
         sessions: [
           {
@@ -402,6 +397,5 @@ describe("renderChatComposer context usage", () => {
     expect(container.querySelector(".context-ring")?.classList).not.toContain(
       "context-ring--warning",
     );
-    expect(container.querySelector(".context-ring__compact")).toBeNull();
   });
 });

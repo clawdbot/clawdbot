@@ -1132,46 +1132,6 @@ openclaw-chat-page {
   font-weight: 650;
 }
 
-.context-ring__compact {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 9px 0 5px;
-  border-radius: var(--radius-full);
-  border: 0;
-  background: color-mix(in srgb, var(--warn) 10%, transparent);
-  color: color-mix(in srgb, var(--warn) 88%, var(--text));
-  font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1;
-  cursor: var(--cursor-action);
-  transition:
-    background 150ms ease-out,
-    color 150ms ease-out,
-    opacity 150ms ease-out;
-}
-
-.context-ring__compact:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--warn) 15%, transparent);
-  color: color-mix(in srgb, var(--warn) 94%, var(--text-strong));
-}
-
-.context-ring__compact:active:not(:disabled) {
-  background: color-mix(in srgb, var(--warn) 19%, transparent);
-}
-
-.context-ring__compact:disabled {
-  cursor: not-allowed;
-  opacity: 0.65;
-}
-
-.context-ring__compact--busy .context-ring__dial {
-  animation: compaction-spin 1s linear infinite;
-}
-
 /* Message images (sent images displayed in chat) */
 .chat-message-images {
   display: flex;

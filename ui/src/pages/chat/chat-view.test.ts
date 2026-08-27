@@ -701,7 +701,6 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onDraftChange: () => undefined,
     onRequestUpdate: () => undefined,
     onSend: () => undefined,
-    onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
     onDismissError: () => undefined,
@@ -3167,7 +3166,6 @@ describe("chat loading skeleton", () => {
             },
           ],
         },
-        onCompact: () => undefined,
       });
 
       expect(
