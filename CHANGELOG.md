@@ -70,7 +70,6 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Control UI Gateway labels:** keep the discovered machine name through recovery initialization and refresh open folder-browser labels when name discovery finishes.
-- **Installer JSON output:** preserve accented, CJK, and emoji text in NDJSON paths and errors when using macOS's built-in Bash.
 - **Android settings:** keep form fields and actions reachable above the keyboard, and respect bottom system insets without duplicating navigation padding.
 - **Nextcloud Talk diagnostics:** redact reflected credentials before displaying send, reaction, and bot-preflight errors, and suppress incomplete error bodies. (#119976) Thanks @xialonglee.
 - **Control UI config drafts:** preserve external changes and newer Form or Raw edits across reconnects, including saves whose acknowledgments were lost, by keeping the draft's original document and write revision together.
