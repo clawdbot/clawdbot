@@ -1,11 +1,20 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   createUpdateConfigSnapshot: vi.fn(async () => undefined),
+  doctorCommand: vi.fn<typeof import("../../commands/doctor.js").doctorCommand>(),
+  runDaemonInstall: vi.fn<typeof import("../daemon-cli.js").runDaemonInstall>(),
+  runDaemonRestart: vi.fn<typeof import("../daemon-cli.js").runDaemonRestart>(),
   runRestartScript: vi.fn(async () => undefined),
   waitForGatewayHealthyRestart: vi.fn(),
+}));
+
+vi.mock("../../commands/doctor.js", () => ({ doctorCommand: mocks.doctorCommand }));
+vi.mock("../daemon-cli.js", () => ({
+  runDaemonInstall: mocks.runDaemonInstall,
+  runDaemonRestart: mocks.runDaemonRestart,
 }));
 
 vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
@@ -31,6 +40,12 @@ vi.mock("./update-command-config.js", async (importOriginal) => ({
 import { maybeRestartService } from "./update-command-service.js";
 
 describe("maybeRestartService", () => {
+  afterEach(() => {
+    expect(mocks.doctorCommand).not.toHaveBeenCalled();
+    expect(mocks.runDaemonInstall).not.toHaveBeenCalled();
+    expect(mocks.runDaemonRestart).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({
