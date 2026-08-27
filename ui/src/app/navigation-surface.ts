@@ -22,6 +22,28 @@ export function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): voi
   }
 }
 
+export function moveToastToNavDrawer(host: HTMLElement): void {
+  const drawer = host.querySelector<HTMLElement>(".shell-nav");
+  const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
+  if (drawer && toastHost && toastHost.parentElement !== drawer) {
+    drawer.moveBefore(toastHost, null);
+  }
+}
+
+export function restoreToastFromNavDrawer(host: HTMLElement): void {
+  const shell = host.querySelector<HTMLElement>(".shell");
+  const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
+  if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
+    shell.moveBefore(toastHost, null);
+  }
+}
+
+export function visibleNavDrawerToggle(host: HTMLElement): HTMLElement | undefined {
+  return [...host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle")].find(
+    (candidate) => candidate.checkVisibility(),
+  );
+}
+
 export function navigationSurfaceIsHidden(params: {
   onboarding: boolean;
   navCollapsed: boolean;

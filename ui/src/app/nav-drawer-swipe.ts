@@ -72,21 +72,12 @@ export class NavDrawerSwipeOwner {
       }
       this.reset();
       const drawer = this.host.querySelector<HTMLElement>(".shell-nav");
-      const toastHost = this.host.querySelector<HTMLElement>("openclaw-toast-host");
-      if (drawer && toastHost && toastHost.parentElement !== drawer) {
-        drawer.moveBefore(toastHost, null);
-      }
       (this.focusable()[0] ?? drawer)?.focus({ preventScroll: true });
     });
   }
 
   closed(): void {
     this.reset();
-    const shell = this.host.querySelector<HTMLElement>(".shell");
-    const toastHost = this.host.querySelector<HTMLElement>("openclaw-toast-host");
-    if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
-      shell.moveBefore(toastHost, null);
-    }
   }
 
   private focusable(): HTMLElement[] {

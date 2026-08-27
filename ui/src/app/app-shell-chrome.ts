@@ -51,7 +51,12 @@ import {
   type NativeHistoryState,
 } from "./native-web-chrome.ts";
 import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.ts";
-import { trapNavDrawerFocus } from "./navigation-surface.ts";
+import {
+  moveToastToNavDrawer,
+  restoreToastFromNavDrawer,
+  trapNavDrawerFocus,
+  visibleNavDrawerToggle,
+} from "./navigation-surface.ts";
 import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 
@@ -104,7 +109,6 @@ export class ShellChromeOwner {
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
   private navDrawerSwipeOwner?: NavDrawerSwipeOwner;
-
   constructor(private readonly host: ShellChromeHost) {
     void import("./nav-drawer-swipe.ts").then(({ NavDrawerSwipeOwner }) => {
       const owner = new NavDrawerSwipeOwner(host, () => this.toggleNavigationSurface());
@@ -196,8 +200,9 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      host.navDrawerTrigger = trigger ?? this.visibleNavDrawerToggle() ?? null;
+      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
       host.navDrawerOpen = true;
+      moveToastToNavDrawer(host);
       if (this.navDrawerSwipeOwner) {
         this.navDrawerSwipeOwner.opened();
       } else {
@@ -227,19 +232,11 @@ export class ShellChromeOwner {
   }
 
   /** Native Mac chrome hides in-page toggles, so restoration falls back to content. */
-  restoreFocusTo(target: HTMLElement | null | undefined): void {
-    const resolved =
-      target?.isConnected && target.checkVisibility()
-        ? target
-        : this.host.querySelector<HTMLElement>(".content");
-    resolved?.focus();
-  }
-
-  visibleNavDrawerToggle(): HTMLElement | undefined {
-    return [
-      ...this.host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle"),
-    ].find((candidate) => candidate.checkVisibility());
-  }
+  restoreFocusTo = (target: HTMLElement | null | undefined): void =>
+    (target?.isConnected && target.checkVisibility()
+      ? target
+      : this.host.querySelector<HTMLElement>(".content")
+    )?.focus();
 
   closeNavDrawer(options: { restoreFocus?: boolean } = {}): void {
     const host = this.host;
@@ -247,6 +244,7 @@ export class ShellChromeOwner {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipeOwner?.closed();
     }
+    restoreToastFromNavDrawer(host);
     const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
@@ -359,7 +357,7 @@ export class ShellChromeOwner {
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => {
-          this.restoreFocusTo(this.visibleNavDrawerToggle());
+          this.restoreFocusTo(visibleNavDrawerToggle(host));
         });
       }
     });
@@ -395,6 +393,23 @@ export class ShellChromeOwner {
 
   readonly handleDocumentKeydown = (event: KeyboardEvent): void => {
     const host = this.host;
+    if (host.navDrawerOpen && isMobileNavLayout()) {
+      if (document.openClawModalLayers?.size) {
+        return;
+      }
+      if (
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) ||
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)
+      ) {
+        event.preventDefault();
+        host.closeNavDrawer({ restoreFocus: true });
+      } else if (event.key === "Tab") {
+        trapNavDrawerFocus(host, event);
+      } else {
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
     if (!host.commandPalette && isCommandPaletteShortcut(event)) {
       event.preventDefault();
       this.togglePalette();
@@ -410,21 +425,6 @@ export class ShellChromeOwner {
       return;
     }
     if (event.defaultPrevented) {
-      return;
-    }
-    if (host.navDrawerOpen && isMobileNavLayout()) {
-      if (document.openClawModalLayers?.size) {
-        return;
-      }
-      if (
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) ||
-        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)
-      ) {
-        event.preventDefault();
-        host.closeNavDrawer({ restoreFocus: true });
-      } else if (event.key === "Tab") {
-        trapNavDrawerFocus(host, event);
-      }
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
