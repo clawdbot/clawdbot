@@ -3,6 +3,7 @@ import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   formatInboundMediaUnavailableText,
   recordChannelBotPairLoopAndCheckSuppression,
+  createChannelInboundEnvelopeBuilder,
   resolveChannelInboundRouteEnvelope,
   toInboundMediaFactsWithMetadata,
   type ChannelBotLoopProtectionFacts,
@@ -12,6 +13,7 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveWebhookPath } from "../runtime-api.js";
@@ -227,7 +229,8 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+  const replyThreadName = isGroup ? message.thread?.name : undefined;
+  const resolvedRoute = resolveChannelInboundRouteEnvelope({
     cfg: config,
     channel: "googlechat",
     accountId: account.accountId,
@@ -236,6 +239,18 @@ async function processMessageWithPipeline(params: {
       id: spaceId,
     },
   });
+  const threadKeys = resolveThreadSessionKeys({
+    baseSessionKey: resolvedRoute.route.sessionKey,
+    threadId: replyThreadName,
+  });
+  const route =
+    threadKeys.sessionKey === resolvedRoute.route.sessionKey
+      ? resolvedRoute.route
+      : { ...resolvedRoute.route, sessionKey: threadKeys.sessionKey, lastRoutePolicy: "session" };
+  const buildEnvelope =
+    route === resolvedRoute.route
+      ? resolvedRoute.buildEnvelope
+      : createChannelInboundEnvelopeBuilder({ cfg: config, route });
 
   const access = await applyGoogleChatInboundAccessPolicy({
     account,
@@ -332,7 +347,6 @@ async function processMessageWithPipeline(params: {
     body: rawBody,
   });
 
-  const replyThreadName = isGroup ? message.thread?.name : undefined;
   const ctxPayload = core.channel.inbound.buildContext({
     channelIngress: access.channelIngress,
     channel: "googlechat",

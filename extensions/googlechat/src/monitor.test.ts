@@ -41,6 +41,7 @@ const routingMocks = vi.hoisted(() => ({
 
 const inboundMocks = vi.hoisted(() => ({
   buildEnvelope: vi.fn(({ body }: { body: string }) => body),
+  createChannelInboundEnvelopeBuilder: vi.fn(),
   resolveChannelInboundRouteEnvelope: vi.fn(),
   toInboundMediaFactsWithMetadata: vi.fn(),
 }));
@@ -52,6 +53,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   );
   return {
     ...actual,
+    createChannelInboundEnvelopeBuilder: inboundMocks.createChannelInboundEnvelopeBuilder,
     resolveChannelInboundRouteEnvelope: inboundMocks.resolveChannelInboundRouteEnvelope,
     toInboundMediaFactsWithMetadata: inboundMocks.toInboundMediaFactsWithMetadata,
   };
@@ -90,6 +92,9 @@ beforeEach(() => {
   apiMocks.updateGoogleChatMessage.mockReset().mockResolvedValue({});
   accessMocks.applyGoogleChatInboundAccessPolicy.mockReset();
   inboundMocks.buildEnvelope.mockReset().mockImplementation(({ body }: { body: string }) => body);
+  inboundMocks.createChannelInboundEnvelopeBuilder
+    .mockReset()
+    .mockReturnValue(inboundMocks.buildEnvelope);
   inboundMocks.resolveChannelInboundRouteEnvelope
     .mockReset()
     .mockImplementation(({ accountId }: { accountId: string }) => ({
@@ -252,6 +257,58 @@ describe("googlechat monitor bot loop protection", () => {
     expect(apiMocks.sendGoogleChatMessage).not.toHaveBeenCalled();
     expect(apiMocks.downloadGoogleChatMedia).not.toHaveBeenCalled();
     expect(runTurn).not.toHaveBeenCalled();
+  });
+});
+
+describe("googlechat monitor thread sessions", () => {
+  it("isolates distinct threads while keeping an unthreaded space message in its base session", async () => {
+    const { buildContext, core } = createInboundClassificationHarness();
+    const account = {
+      accountId: "work",
+      config: { typingIndicator: "none" },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    for (const [messageId, threadName] of [
+      ["first", "spaces/CLASSIFY/threads/first"],
+      ["second", "spaces/CLASSIFY/threads/second"],
+      ["root", undefined],
+    ]) {
+      await processGoogleChatTestEvent({
+        event: {
+          type: "MESSAGE",
+          space: { name: "spaces/CLASSIFY", spaceType: "SPACE" },
+          message: {
+            name: `spaces/CLASSIFY/messages/${messageId}`,
+            text: "hello",
+            ...(threadName ? { thread: { name: threadName } } : {}),
+            sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+          },
+        } satisfies GoogleChatEvent,
+        account,
+        config: {},
+        runtime: { error: vi.fn(), log: vi.fn() },
+        core,
+        mediaMaxMb: 10,
+      });
+    }
+
+    expect(
+      buildContext.mock.calls.map(
+        ([payload]) => (payload as { route: { routeSessionKey: string } }).route.routeSessionKey,
+      ),
+    ).toEqual([
+      "session-1:thread:spaces/classify/threads/first",
+      "session-1:thread:spaces/classify/threads/second",
+      "session-1",
+    ]);
   });
 });
 
