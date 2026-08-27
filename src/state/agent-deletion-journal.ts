@@ -57,14 +57,16 @@ export type AgentDeletionJournalCleanupPath = {
   note?: string;
 };
 
+/** Stable prefix of the deleted-agent availability error for callers that must recognize it. */
+export const AGENT_DB_DELETED_AGENT_MESSAGE_PREFIX =
+  "OpenClaw agent database is unavailable while agent";
+
 export function assertAgentDeletionIdentityClaimAllowed(
   claimAgentId: string,
   deletedAgentId: string | undefined,
 ): void {
   if (deletedAgentId && normalizeAgentId(claimAgentId) === normalizeAgentId(deletedAgentId)) {
-    throw new Error(
-      `OpenClaw agent database is unavailable while agent ${normalizeAgentId(deletedAgentId)} is deleted.`,
-    );
+    throw new Error(`${AGENT_DB_DELETED_AGENT_MESSAGE_PREFIX} ${normalizeAgentId(deletedAgentId)} is deleted.`);
   }
 }
 

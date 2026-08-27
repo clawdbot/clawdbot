@@ -10,6 +10,7 @@ import { runSessionRegistryMaintenance } from "./tasks-session-registry-maintena
 
 const mocks = vi.hoisted(() => ({
   cronStoreLoadError: undefined as Error | undefined,
+  storeMaintenanceThrow: undefined as Error | undefined,
 }));
 
 vi.mock("../cron/store.js", async (importOriginal) => {
@@ -25,9 +26,33 @@ vi.mock("../cron/store.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveAllAgentSessionStoreTargetsSync: (cfg: never, params?: never) => {
+      const targets = actual.resolveAllAgentSessionStoreTargetsSync(cfg, params);
+      if (mocks.storeMaintenanceThrow) {
+        return [
+          { agentId: "deleted-agent", storePath: "/tmp/deleted-agent/sessions.json" },
+          ...targets,
+        ];
+      }
+      return targets;
+    },
+    runSessionRegistryMaintenanceForStore: (params: { storePath: string }) => {
+      if (mocks.storeMaintenanceThrow && params.storePath.includes("deleted-agent")) {
+        throw mocks.storeMaintenanceThrow;
+      }
+      return actual.runSessionRegistryMaintenanceForStore(params);
+    },
+  };
+});
+
 describe("runSessionRegistryMaintenance", () => {
   afterEach(() => {
     mocks.cronStoreLoadError = undefined;
+    mocks.storeMaintenanceThrow = undefined;
     resetConfigRuntimeState();
     closeOpenClawAgentDatabasesForTest();
   });
@@ -72,6 +97,36 @@ describe("runSessionRegistryMaintenance", () => {
         expect(summary.skippedReason).toBeUndefined();
         expect(summary.pruned).toBe(1);
         expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
+      },
+    );
+  });
+
+  it("records a retained deleted-agent store as skipped and keeps maintaining other stores", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-session-registry-maintenance-" },
+      async (state) => {
+        resetConfigRuntimeState();
+        const storePath = path.join(state.sessionsDir("main"), "sessions.json");
+        const staleKey = "agent:main:cron:done-job:run:old-run";
+        await replaceSessionEntry(
+          { sessionKey: staleKey, storePath },
+          { sessionId: "old-run", updatedAt: Date.now() - 8 * 24 * 60 * 60_000 },
+        );
+
+        // Simulate a target whose retained deleted-agent journal refuses to open.
+        mocks.storeMaintenanceThrow = new Error(
+          "OpenClaw agent database is unavailable while agent deleted-agent is deleted.",
+        );
+
+        const summary = await runSessionRegistryMaintenance({ apply: true });
+
+        expect(summary.skippedReason).toBeUndefined();
+        expect(summary.stores.map((store) => store.agentId)).toContain("main");
+        expect(summary.pruned).toBe(1);
+        expect(loadSessionEntry({ sessionKey: staleKey, storePath })).toBeUndefined();
+        expect(summary.skippedDeletedAgents).toEqual([
+          { agentId: "deleted-agent", storePath: "/tmp/deleted-agent/sessions.json" },
+        ]);
       },
     );
   });

@@ -7,6 +7,7 @@ import {
 } from "../config/sessions.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { AGENT_DB_DELETED_AGENT_MESSAGE_PREFIX } from "../state/agent-deletion-journal.js";
 
 const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
@@ -24,6 +25,8 @@ type SessionRegistryMaintenanceSummary = {
   runningCronJobs: number;
   pruned: number;
   stores: SessionRegistryMaintenanceStoreSummary[];
+  /** Stores that refused to open because their agent is deleted; the sweep ran everywhere else. */
+  skippedDeletedAgents: Array<{ agentId: string; storePath: string }>;
   /** Set when the sweep did not run; pruning without cron facts would archive live transcripts. */
   skippedReason?: string;
 };
@@ -79,30 +82,47 @@ export async function runSessionRegistryMaintenance(params: {
       runningCronJobs: 0,
       pruned: 0,
       stores: [],
+      skippedDeletedAgents: [],
       skippedReason: `cron store unreadable: ${runningCronJobs.reason}`,
     };
   }
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
+  const skippedDeletedAgents: Array<{ agentId: string; storePath: string }> = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    const result = await runSessionRegistryMaintenanceForStore({
-      apply: params.apply,
-      retentionMs: SESSION_REGISTRY_RETENTION_MS,
-      runningCronJobIds: runningCronJobs.ids,
-      storePath: target.storePath,
-    });
-    stores.push({
-      agentId: target.agentId,
-      storePath: target.storePath,
-      beforeCount: result.beforeCount,
-      afterCount: result.afterCount,
-      pruned: result.pruned,
-      preservedRunning: result.preservedRunning,
-    });
+    try {
+      const result = await runSessionRegistryMaintenanceForStore({
+        apply: params.apply,
+        retentionMs: SESSION_REGISTRY_RETENTION_MS,
+        runningCronJobIds: runningCronJobs.ids,
+        storePath: target.storePath,
+      });
+      stores.push({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        beforeCount: result.beforeCount,
+        afterCount: result.afterCount,
+        pruned: result.pruned,
+        preservedRunning: result.preservedRunning,
+      });
+    } catch (err) {
+      // A retained (completed) deleted-agent store must not abort the sweep:
+      // the deletion fence makes it permanently unopenable, so record it and
+      // keep maintaining every other store. Unrelated errors stay fatal.
+      if (
+        err instanceof Error &&
+        err.message.startsWith(AGENT_DB_DELETED_AGENT_MESSAGE_PREFIX)
+      ) {
+        skippedDeletedAgents.push({ agentId: target.agentId, storePath: target.storePath });
+        continue;
+      }
+      throw err;
+    }
   }
   return {
     retentionMs: SESSION_REGISTRY_RETENTION_MS,
     runningCronJobs: runningCronJobs.count,
     pruned: stores.reduce((total, store) => total + store.pruned, 0),
     stores,
+    skippedDeletedAgents,
   };
 }
