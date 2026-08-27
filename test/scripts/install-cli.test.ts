@@ -1011,12 +1011,17 @@ describe("install-cli.sh", () => {
     expect(script).not.toContain('git -C "$repo_dir" fetch --no-tags origin main');
     expect(script).not.toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
 
+    const releaseTagProbeIndex = script.indexOf(
+      'ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}"',
+    );
     const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
-    const tagFetchIndex = script.indexOf(
+    const tagFetchIndex = script.lastIndexOf(
       'fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"',
     );
+    expect(releaseTagProbeIndex).toBeGreaterThan(-1);
     expect(branchCheckIndex).toBeGreaterThan(-1);
     expect(tagFetchIndex).toBeGreaterThan(-1);
+    expect(releaseTagProbeIndex).toBeLessThan(branchCheckIndex);
     expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
     expect(script).toContain('git_install_lockfile_flag "$repo_dir" "$git_ref" "$GIT_REF_KIND"');
   });
@@ -1050,6 +1055,44 @@ describe("install-cli.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("checkout=refs/tags/v2026.5.12");
+  });
+
+  it("prefers a release tag over a same-named branch", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      tmp="$(mktemp -d)"
+      remote="$tmp/remote.git"
+      seed="$tmp/seed"
+      repo="$tmp/repo"
+      ref=v2026.5.12
+      git init --bare -q "$remote"
+      git init -q --initial-branch=main "$seed"
+      git -C "$seed" config user.email test@example.invalid
+      git -C "$seed" config user.name test
+      printf 'tag\n' > "$seed/state.txt"
+      git -C "$seed" add state.txt
+      git -C "$seed" commit -qm tag
+      tag_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" remote add origin "$remote"
+      git -C "$seed" push -q -u origin main
+      git -C "$seed" tag "$ref"
+      git -C "$seed" push -q origin "refs/tags/$ref"
+      git -C "$seed" checkout -qb "$ref"
+      printf 'branch\n' > "$seed/state.txt"
+      git -C "$seed" commit -qam branch
+      branch_head="$(git -C "$seed" rev-parse HEAD)"
+      git -C "$seed" push -q origin "refs/heads/$ref"
+      git clone -q "$remote" "$repo"
+      checkout_git_openclaw_ref "$repo" "$ref"
+      selected="$(git -C "$repo" rev-parse HEAD)"
+      printf 'selected=%s tag=%s branch=%s kind=%s\n' "$selected" "$tag_head" "$branch_head" "$GIT_REF_KIND"
+      [[ "$selected" == "$tag_head" && "$selected" != "$branch_head" && "$GIT_REF_KIND" == "immutable" ]]
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("kind=immutable");
+    expect(result.stdout).toContain("selected=");
   });
 
   it("updates a stale existing main checkout from the remote tracking ref", () => {

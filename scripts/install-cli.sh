@@ -1082,6 +1082,38 @@ checkout_git_openclaw_ref() {
     return 0
   fi
 
+  # A normalized release selector names an immutable tag. Resolve that tag
+  # before looking for an arbitrary branch with the same short name.
+  if [[ "$ref" == v[0-9]* ]]; then
+    if git -C "$repo_dir" ls-remote --exit-code --tags origin "refs/tags/${ref}" "refs/tags/${ref}^{}" >/dev/null 2>&1; then
+      tag_probe_status=0
+    else
+      tag_probe_status=$?
+    fi
+
+    if (( tag_probe_status == 2 )); then
+      fail "Requested git version not found: ${ref}"
+    fi
+    if (( tag_probe_status != 0 )); then
+      fail "Could not resolve requested git tag: ${ref}"
+    fi
+
+    if ! git -C "$repo_dir" fetch --no-tags origin "refs/tags/${ref}:refs/tags/${ref}"; then
+      fail "Could not fetch requested git tag: ${ref}"
+    fi
+    if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
+      git -C "$repo_dir" checkout --detach "refs/tags/${ref}"
+      GIT_REF_KIND="immutable"
+      return 0
+    fi
+    if git -C "$repo_dir" rev-parse --verify --quiet "${ref}^{commit}" >/dev/null; then
+      git -C "$repo_dir" checkout --detach "$ref"
+      GIT_REF_KIND="immutable"
+      return 0
+    fi
+    fail "Requested git version not found: ${ref}"
+  fi
+
   if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
     git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
     git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
