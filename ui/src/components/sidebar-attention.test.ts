@@ -263,11 +263,11 @@ describe("sidebar attention refresh ownership", () => {
     );
     element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!.click();
 
-    await waitForFast(() => {
-      const panel = element.querySelector(".sidebar-issues-panel");
-      expect(panel).not.toBeNull();
-      expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
-    });
+    await import("./sidebar-attention-panel.runtime.ts");
+    await element.updateComplete;
+    const panel = element.querySelector(".sidebar-issues-panel");
+    expect(panel).not.toBeNull();
+    expect(panel?.closest("openclaw-menu-surface")).not.toBeNull();
   });
 
   it("keeps the latest refresh when an older load on the same client finishes last", async () => {

@@ -441,7 +441,13 @@ async function executeJobCoreWithTimeoutUnfinalized(
 export function authorCronRunCompletion<
   T extends Pick<
     CronJobRunResult,
-    "status" | "error" | "deliveryError" | "delivery" | "delivered" | "deliveryAttempted"
+    | "status"
+    | "error"
+    | "deliveryError"
+    | "deliverySuppressionReason"
+    | "delivery"
+    | "delivered"
+    | "deliveryAttempted"
   >,
 >(_state: CronServiceState, job: CronJob, result: T) {
   const deliveryState = resolveDeliveryState({
@@ -451,6 +457,7 @@ export function authorCronRunCompletion<
     delivered: result.delivered,
     deliveryAttempted: result.deliveryAttempted,
     error: result.deliveryError ?? result.error,
+    deliverySuppressionReason: result.deliverySuppressionReason,
   });
   return {
     ...result,

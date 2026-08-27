@@ -1251,6 +1251,8 @@ jobs:
           sparse-checkout: |
             scripts/full-release-validation-state.mjs
             scripts/full-release-validation-policy.mjs
+            scripts/release-ci-summary.mjs
+            scripts/lib/plain-gh.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 

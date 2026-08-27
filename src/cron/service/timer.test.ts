@@ -331,7 +331,7 @@ describe("cron service timer seam coverage", () => {
       .mockImplementation((params) => {
         const persistedJob = openOpenClawStateDatabase()
           .db.prepare(
-            "SELECT running_at_ms AS runningAtMs, next_run_at_ms AS nextRunAtMs FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+            "SELECT json_extract(state_json, '$.runningAtMs') AS runningAtMs, json_extract(state_json, '$.nextRunAtMs') AS nextRunAtMs FROM cron_jobs WHERE store_key = ? AND job_id = ?",
           )
           .get(cronStoreKey(storePath), job.id) as {
           runningAtMs: number | null;

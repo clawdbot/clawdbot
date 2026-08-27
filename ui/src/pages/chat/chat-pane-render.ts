@@ -72,6 +72,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     }
     void this.ensureTaskSuggestionCloudProfiles();
     const selectedSession = selectedChatSessionRow(state);
+    const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
       state.sessionKey,
@@ -96,7 +97,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       Boolean(placement) && placement?.state !== "local" && !hasAbortableSessionRun(state);
     const canPublishPullRequest =
       Boolean(publishClient) &&
-      Boolean(selectedSession?.key) &&
+      Boolean(selectedSession?.key && !selectedSessionArchived) &&
       !hasAbortableSessionRun(state) &&
       publicationHasDirectPlacement &&
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
@@ -165,7 +166,6 @@ export class ChatPane extends ChatPaneLayoutRender {
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: agentDefaultModel,
     });
-    const selectedSessionArchived = this.isCurrentSessionArchived(state);
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
     const placementStartupPending =
       placementStartup !== null && placementStartup.phase !== "failed";
@@ -198,15 +198,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       selectedSession.sharingRole === "viewer" &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
-    // Every composer-disabling gate needs a visible reason here or a banner in
-    // sessionDisabledBanner; a silently disabled composer is a silent failure.
+    // Placement progress already explains its gate in the transcript. Other
+    // gates need a reason here or a sessionDisabledBanner.
     const disabledReason = modelUnavailable
       ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
       : sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : placementStartupPending
-          ? t("newSession.starting")
-          : null;
+        : null;
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
@@ -268,12 +266,16 @@ export class ChatPane extends ChatPaneLayoutRender {
       hasLocalRun: () => Boolean(state.chatRunId),
       sessionParticipationBlocked,
       onDenied: (reason) => this.publishHeaderError(reason),
-      onCompact: () => void state.handleSendChat("/compact"),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
       onReset: () => void clearChatHistory(state),
     });
+    const setReply: NonNullable<ChatProps["onSetReply"]> = (target) => {
+      state.chatReplyTarget = target;
+      state.requestUpdate?.();
+    };
+    const replyMessageAccess = this.currentReplyMessageAccess(state.sessionKey);
     const composerControls = catalogKey
       ? undefined
       : renderChatPaneComposerControls({
@@ -564,7 +566,6 @@ export class ChatPane extends ChatPaneLayoutRender {
                 followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
                 submissionAction,
               ),
-      onCompact: sessionActionCallbacks.onCompact,
       // Checkpoint deep-link carries the archived filter so the row stays findable.
       onOpenSessionCheckpoints: () => {
         const status = selectedSessionArchived ? "&status=archived" : "";
@@ -606,12 +607,9 @@ export class ChatPane extends ChatPaneLayoutRender {
         state.chatReplyTarget = null;
         state.requestUpdate?.();
       },
-      onSetReply: (target) => {
-        state.chatReplyTarget = target;
-        state.requestUpdate?.();
-      },
-      replyMessageAccess: catalogKey ? undefined : this.currentReplyMessageAccess(state.sessionKey),
-      onRewindMessage: sessionActionCallbacks.onRewindMessage,
+      onSetReply: selectedSessionArchived ? undefined : setReply,
+      replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
+      onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       onForkMessage: sessionActionCallbacks.onForkMessage,
       onClearHistory: sessionActionCallbacks.onClearHistory,
       agentsList: state.agentsList,

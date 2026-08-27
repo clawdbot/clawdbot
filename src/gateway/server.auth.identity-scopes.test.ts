@@ -1,18 +1,24 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, test } from "vitest";
+import { PresenceEntrySchema } from "../../packages/gateway-protocol/src/schema/snapshot.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   NODE_CLIENT,
+  onceMessage,
   openTailscaleWs,
   openWs,
   rpcReq,
@@ -59,6 +65,190 @@ function responseScopes(response: Awaited<ReturnType<typeof connectReq>>): strin
 }
 
 describe("gateway identity scope grants", () => {
+  test("projects watched sessions for each authenticated presence recipient across hello, RPC, and events", async () => {
+    await configureGatewayAuth(
+      {
+        mode: "trusted-proxy",
+        identityScopes: { "admin@example.com": ["operator.admin"] },
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+          allowLoopback: true,
+        },
+      },
+      {
+        roles: {
+          default: "reader",
+          definitions: {
+            reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            maintainer: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+            pairing: { sessions: { others: "none" }, agents: [], scopes: ["operator.pairing"] },
+          },
+        },
+      },
+    );
+    const creator = ensureProfileForEmail("creator@example.com");
+    const restricted = ensureProfileForEmail("restricted@example.com");
+    setUserProfileRole(restricted.id, "restricted");
+    setUserProfileRole(ensureProfileForEmail("admin@example.com").id, "maintainer");
+    setUserProfileRole(ensureProfileForEmail("pairing@example.com").id, "pairing");
+    const sharedKey = "agent:main:presence-shared";
+    const draftKey = "agent:main:presence-draft";
+    const incognitoKey = "agent:main:dashboard:incognito-presence";
+    const restrictedKey = "agent:main:presence-restricted-draft";
+    const missingKey = "agent:main:presence-missing";
+    const watchedKeys = [sharedKey, draftKey, incognitoKey, restrictedKey, missingKey].toSorted();
+    const watcherInstanceId = `presence-watcher-${randomUUID()}`;
+    const identityDir = tempDirs.make("openclaw-presence-identities-");
+
+    await withGatewayServer(async ({ port }) => {
+      for (const [sessionKey, profileId, visibility, incognito] of [
+        [sharedKey, creator.id, "shared", false],
+        [draftKey, creator.id, "draft", false],
+        [incognitoKey, creator.id, "shared", true],
+        [restrictedKey, restricted.id, "draft", false],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: randomUUID(),
+            updatedAt: Date.now(),
+            createdActor: { type: "human", id: profileId },
+            visibility,
+            ...(incognito ? { incognito: true } : {}),
+          },
+        );
+      }
+      const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
+      const openRecipient = async (
+        name: string,
+        scopes: string[],
+        role: "operator" | "node" = "operator",
+      ) => {
+        const ws = await openWs(port, {
+          ...TRUSTED_PROXY_HEADERS,
+          "x-forwarded-user": `${name}@example.com`,
+        });
+        sockets.push(ws);
+        const connected = await connectReq(ws, {
+          skipDefaultAuth: true,
+          prePairDevice: true,
+          scopes,
+          role,
+          client: {
+            ...(role === "node" ? NODE_CLIENT : CONTROL_UI_CLIENT),
+            instanceId: sockets.length === 1 ? watcherInstanceId : `presence-${name}`,
+          },
+          deviceIdentityPath: path.join(identityDir, `${name}-${sockets.length}.sqlite`),
+          browserOrigin: BROWSER_ORIGIN,
+        });
+        expect(connected.ok, `${name} connect: ${JSON.stringify(connected.error)}`).toBe(true);
+        expect(responseScopes(connected), `${name} effective scopes`).toEqual(scopes);
+        return {
+          ws,
+          hello: connected.payload as { snapshot: { presence: SystemPresence[] } },
+        };
+      };
+      try {
+        const watcher = await openRecipient("admin", ["operator.admin"]);
+        const declared = await rpcReq(watcher.ws, "sessions.viewers.set", {
+          sessionKeys: watchedKeys,
+        });
+        expect(declared).toMatchObject({ ok: true, payload: { sessionKeys: watchedKeys } });
+        const rawWatcher = listSystemPresence().find(
+          (entry) => entry.instanceId === watcherInstanceId,
+        );
+        expect(rawWatcher?.watchedSessions).toEqual(watchedKeys);
+        const { watchedSessions: _watchedSessions, ...person } = rawWatcher!;
+        expect(person.user?.id).toBe(ensureProfileForEmail("admin@example.com").id);
+        expect(person.ts).toBeGreaterThan(0);
+
+        const recipients = [];
+        for (const scenario of [
+          { name: "creator", scopes: ["operator.read"], allowed: [sharedKey, draftKey] },
+          { name: "reader", scopes: ["operator.read"], allowed: [sharedKey] },
+          { name: "restricted", scopes: ["operator.read"], allowed: [restrictedKey] },
+          {
+            name: "admin",
+            scopes: ["operator.admin"],
+            allowed: [sharedKey, draftKey, incognitoKey, restrictedKey],
+          },
+          { name: "pairing", scopes: ["operator.pairing"], allowed: [] },
+          { name: "node", scopes: [], allowed: [] },
+        ]) {
+          const recipient = await openRecipient(
+            scenario.name,
+            scenario.scopes,
+            scenario.name === "node" ? "node" : "operator",
+          );
+          const canRead = scenario.name !== "pairing" && scenario.name !== "node";
+          const listed = await rpcReq<{ sessions: Array<{ key: string }> }>(
+            recipient.ws,
+            "sessions.list",
+            { agentId: "main" },
+          );
+          expect(listed.ok, `${scenario.name} sessions.list scope`).toBe(canRead);
+          if (canRead) {
+            expect(
+              listed.payload?.sessions
+                .map((entry) => entry.key)
+                .filter((key) => watchedKeys.includes(key))
+                .toSorted(),
+              `${scenario.name} canonical sessions.list visibility`,
+            ).toEqual(scenario.allowed.toSorted());
+          }
+          const presence = await rpcReq(recipient.ws, "system-presence");
+          expect(presence.ok, `${scenario.name} system-presence scope`).toBe(canRead);
+          recipients.push({ ...recipient, ...scenario, canRead, rpcPresence: presence.payload });
+        }
+
+        const eventPromises = recipients.map(({ ws }) =>
+          onceMessage<{ type: string; event: string; payload: { presence: SystemPresence[] } }>(
+            ws,
+            (frame) => frame.type === "event" && frame.event === "presence",
+          ),
+        );
+        expect(
+          await rpcReq(watcher.ws, "system-event", { text: "presence recipient repro" }),
+        ).toMatchObject({ ok: true });
+        const events = await Promise.all(eventPromises);
+        for (const [index, recipient] of recipients.entries()) {
+          for (const [surface, rows] of [
+            ["hello", recipient.hello.snapshot.presence],
+            ["system-presence", recipient.rpcPresence],
+            ["presence event", events[index]!.payload.presence],
+          ] as const) {
+            if (surface === "system-presence" && !recipient.canRead) {
+              continue; // The RPC is rejected for pairing-only operators and nodes.
+            }
+            if (!Value.Check(Type.Array(PresenceEntrySchema), rows)) {
+              throw new Error(`${recipient.name} ${surface} returned invalid presence rows`);
+            }
+            const received = rows.find((entry) => entry.instanceId === watcherInstanceId);
+            const { watchedSessions, ...receivedPerson } = received ?? {};
+            expect
+              .soft(
+                receivedPerson,
+                `${recipient.name} ${surface} preserves the person and timestamp without hidden counts`,
+              )
+              .toEqual(person);
+            expect
+              .soft(
+                watchedSessions ?? [],
+                `${recipient.name} ${surface} watched session disclosure`,
+              )
+              .toEqual(recipient.allowed.toSorted());
+          }
+        }
+      } finally {
+        for (const ws of sockets) {
+          ws.close();
+        }
+      }
+    });
+  });
+
   test.each([
     {
       label: "unassigned default guest",

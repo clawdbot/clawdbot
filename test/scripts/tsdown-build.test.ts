@@ -28,6 +28,7 @@ import {
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mts";
+import { createDeferred } from "../helpers/promise.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -2275,6 +2276,47 @@ describe("runTsdownBuildInvocation", () => {
     };
   }
 
+  function startTimeoutFixture(parentScript: string, output: ReturnType<typeof createWriteSink>) {
+    const ready = createDeferred();
+    const schedule = globalThis.setTimeout;
+    // Keep the real watchdog delay, but hold its callback until the child is ready.
+    // Restore before yielding so grace and process-group polling use real timers.
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, ms, ...args) =>
+        schedule(() => {
+          void ready.promise.then(() => callback(...args));
+        }, ms),
+      );
+    try {
+      return {
+        runPromise: runTsdownBuildInvocation(
+          {
+            command: process.execPath,
+            args: ["-e", parentScript],
+            options: {
+              stdio: ["ignore", "pipe", "pipe"],
+              shell: false,
+              env: process.env,
+            },
+          },
+          {
+            stdout: output.sink,
+            stderr: output.sink,
+            env: {
+              ...process.env,
+              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
+              OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
+            },
+          },
+        ),
+        releaseTimeout: ready.resolve,
+      };
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  }
+
   it("streams child output while preserving diagnostics for post-run checks", async () => {
     const output = createWriteSink();
     const result = await runTsdownBuildInvocation(
@@ -2382,50 +2424,40 @@ describe("runTsdownBuildInvocation", () => {
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-");
       const childPidPath = path.join(rootDir, "child.pid");
-      const timeoutMs = 250;
-      let childPid: number | undefined;
-      const childScript = "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);";
-      const parentScript = [
-        "const { spawn } = require('node:child_process');",
+      const termPath = path.join(rootDir, "child.term");
+      const childScript = [
         "const fs = require('node:fs');",
-        `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(child.pid));`,
-        "process.on('SIGTERM', () => process.exit(0));",
+        `process.on('SIGTERM', () => fs.writeFileSync(${JSON.stringify(termPath)}, 'SIGTERM'));`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        "process.on('SIGTERM', () => process.exit(0));",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+        "setInterval(() => {}, 1000);",
+      ].join("");
+      const output = createWriteSink();
+      const run = startTimeoutFixture(parentScript, output);
+      let childPid: number | undefined;
 
       try {
-        const output = createWriteSink();
-        const runPromise = runTsdownBuildInvocation(
-          {
-            command: process.execPath,
-            args: ["-e", parentScript],
-            options: {
-              stdio: ["ignore", "pipe", "pipe"],
-              shell: false,
-              env: process.env,
-            },
-          },
-          {
-            stdout: output.sink,
-            stderr: output.sink,
-            env: {
-              ...process.env,
-              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: String(timeoutMs),
-            },
-          },
-        );
-
-        childPid = await waitForPidFile(childPidPath, timeoutMs);
+        // The descendant publishes its PID only after installing its SIGTERM handler.
+        childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
-        const result = await runPromise;
+        run.releaseTimeout();
+        const result = await run.runPromise;
 
-        expect(result.timedOut).toBe(true);
+        expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
+        expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
+        expect(output.chunks.join("")).toContain("forcing SIGKILL");
         await waitForDead(childPid, 2_000);
       } finally {
+        run.releaseTimeout();
+        await run.runPromise;
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+          await waitForDead(childPid, 2_000);
         }
       }
     },
@@ -2435,64 +2467,47 @@ describe("runTsdownBuildInvocation", () => {
     "preserves timeout grace when descendant processes exit cleanly",
     async () => {
       const rootDir = createTempDir("openclaw-tsdown-timeout-clean-");
-      const readyPath = path.join(rootDir, "child.ready");
       const cleanupPath = path.join(rootDir, "child.cleanup");
       const childPidPath = path.join(rootDir, "child.pid");
       const childScript = [
         "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "process.on('SIGTERM', () => {",
         "  setTimeout(() => {",
         `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, 'clean');`,
         "    process.exit(0);",
         "  }, 50);",
         "});",
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
         "setInterval(() => {}, 1000);",
       ].join("");
       const parentScript = [
         "const { spawn } = require('node:child_process');",
-        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "process.on('SIGTERM', () => process.exit(0));",
+        `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
         "setInterval(() => {}, 1000);",
       ].join("");
-      let childPid = 0;
+      const output = createWriteSink();
+      const run = startTimeoutFixture(parentScript, output);
+      let childPid: number | undefined;
 
       try {
-        const output = createWriteSink();
-        const startedAt = Date.now();
-        const runPromise = runTsdownBuildInvocation(
-          {
-            command: process.execPath,
-            args: ["-e", parentScript],
-            options: {
-              stdio: ["ignore", "pipe", "pipe"],
-              shell: false,
-              env: process.env,
-            },
-          },
-          {
-            stdout: output.sink,
-            stderr: output.sink,
-            env: {
-              ...process.env,
-              OPENCLAW_TSDOWN_HEARTBEAT_MS: "0",
-              OPENCLAW_TSDOWN_TIMEOUT_MS: "250",
-            },
-          },
-        );
-
-        await waitForFile(readyPath, 2_000);
+        // The descendant publishes its PID only after installing its SIGTERM handler.
         childPid = await waitForPidFile(childPidPath, 2_000);
-        const result = await runPromise;
+        const startedAt = Date.now();
+        run.releaseTimeout();
+        const result = await run.runPromise;
 
-        expect(result.timedOut).toBe(true);
+        expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
         expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
+        expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
         expect(Date.now() - startedAt).toBeLessThan(900);
         await waitForDead(childPid, 2_000);
       } finally {
-        if (childPid && isProcessAlive(childPid)) {
+        run.releaseTimeout();
+        await run.runPromise;
+        if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
+          await waitForDead(childPid, 2_000);
         }
       }
     },

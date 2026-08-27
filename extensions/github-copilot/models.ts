@@ -3,23 +3,20 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  normalizeModelCompat,
-  supportsClaudeAdaptiveThinking,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   asPositiveSafeInteger,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveCopilotModelCompat,
+  resolveCopilotThinkingLevelMap,
   resolveCopilotTransportApi,
   resolveStaticCopilotModelOverride,
 } from "./model-metadata.js";
-import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 export const PROVIDER_ID = "github-copilot";
 
@@ -233,28 +230,12 @@ function mergeCopilotCompat(
         ),
       ]
     : [];
-  if (supportedReasoningEfforts.length === 0) {
+  if (!Array.isArray(reasoningEfforts)) {
     return base;
   }
   return {
     ...base,
     supportedReasoningEfforts,
-  };
-}
-
-function resolveCopilotThinkingLevelMap(
-  api: ModelDefinitionConfig["api"],
-  modelId: string,
-  compat: ModelDefinitionConfig["compat"] | undefined,
-): ModelDefinitionConfig["thinkingLevelMap"] | undefined {
-  const efforts = compat?.supportedReasoningEfforts;
-  if (api !== "anthropic-messages" || !Array.isArray(efforts)) {
-    return undefined;
-  }
-  const supportsAdaptiveEffort = supportsClaudeAdaptiveThinking({ id: modelId });
-  return {
-    xhigh: supportsAdaptiveEffort && efforts.includes("xhigh") ? "xhigh" : null,
-    max: supportsAdaptiveEffort && efforts.includes("max") ? "max" : null,
   };
 }
 
@@ -290,7 +271,7 @@ function mapCopilotApiModelToDefinition(
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
   const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
   const api = resolveCopilotApiForVendor(entry.vendor, id);
-  const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
+  const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api);
 
   const definition: CopilotCatalogModel = {
     id,
@@ -328,6 +309,7 @@ type FetchCopilotModelCatalogParams = {
   copilotApiToken: string;
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
+  headers?: Record<string, string>;
   /** Optional fetch override for testing. */
   fetchImpl?: typeof fetch;
   /** Optional AbortSignal; defaults to a 10s timeout. */
@@ -365,9 +347,8 @@ export async function fetchCopilotModelCatalog(
       method: "GET",
       headers: {
         Accept: "application/json",
+        ...buildCopilotRuntimeHeaders({ headers: params.headers }),
         Authorization: `Bearer ${params.copilotApiToken}`,
-        ...buildCopilotIdeHeaders(),
-        "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
       },
       signal: params.signal ?? controller?.signal,
     });

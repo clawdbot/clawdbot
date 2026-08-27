@@ -322,9 +322,8 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains("Button(action: gatewayAction)"))
     }
 
-    @Test func `approval notification routing suppresses the active prompt and preserves navigation history`() throws {
+    @Test func `root approval routing tracks prompt ownership and navigation path`() throws {
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let settingsTabSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
         let approvalSuppression = try Self.extract(
             rootSource,
             from: "private var activeExecApprovalPromptSuppression: NodeAppModel.ExecApprovalInboxKey?",
@@ -337,16 +336,6 @@ struct RootTabsSourceGuardTests {
             rootSource,
             from: "private func handleSettingsRouteChange(_ route: SettingsRoute?)",
             to: "private func showSidebar()")
-        let approvalNotificationsRoute = try Self.extract(
-            settingsTabSource,
-            from: "func openNotificationsRouteFromApprovals()",
-            to: "private func applyInitialRouteIfNeeded()")
-        let suppressionCapture = try #require(
-            approvalNotificationsRoute.range(of: "self.onApprovalNotificationsRoute?(approvalID)"))
-        let externalNavigation = try #require(
-            approvalNotificationsRoute.range(of: "navigateToRoute(.notifications)"))
-        let ownedNavigation = try #require(
-            approvalNotificationsRoute.range(of: "self.navigationPath.append(.notifications)"))
 
         #expect(rootSource.contains("@State private var suppressedExecApprovalForNotificationSettings"))
         #expect(rootSource.contains(
@@ -375,18 +364,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("navigateToRoute: pushSidebarSettingsRoute"))
         #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
         #expect(rootSource.contains("self.sidebarNavigationPath.append(route)"))
-        #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))
-        #expect(settingsTabSource.contains("let onApprovalNotificationsRoute: ((String) -> Void)?"))
-        #expect(suppressionCapture.lowerBound < externalNavigation.lowerBound)
-        #expect(suppressionCapture.lowerBound < ownedNavigation.lowerBound)
-        #expect(settingsTabSource.contains("navigateToRoute(.notifications)"))
-        // Cross-route settings shortcuts push so Back returns to the origin
-        // screen; replacing the path resets Back to the Settings root.
-        #expect(settingsTabSource.contains("self.navigationPath.append(.notifications)"))
-        #expect(!settingsTabSource.contains("self.navigationPath = [.notifications]"))
         #expect(rootSource.contains("private func handleSettingsRouteChange(_ route: SettingsRoute?)"))
-        #expect(settingsTabSource.contains("let onRouteChange: ((SettingsRoute?) -> Void)?"))
-        #expect(settingsTabSource.contains("self.onRouteChange?(self.navigationPath.last)"))
     }
 
     @Test func `push enrollment stays behind notification disclosure flow`() throws {

@@ -73,7 +73,7 @@ type PersistedLifecycleSessionShape = Pick<
   | "lifecycleRunId"
 >;
 
-type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
+type GatewaySessionLifecycleSnapshot = Partial<Pick<SessionEntry, keyof LifecycleSessionShape>>;
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
 
@@ -176,8 +176,8 @@ function resolveRuntimeMs(params: {
   return undefined;
 }
 
-function deriveGatewaySessionLifecycleSnapshot(params: {
-  session?: Partial<LifecycleSessionShape> | null;
+export function deriveGatewaySessionLifecycleSnapshot(params: {
+  session?: GatewaySessionLifecycleSnapshot | null;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const phase = resolveLifecyclePhase(params.event);

@@ -14,6 +14,7 @@ import {
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
 import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -4587,6 +4588,50 @@ describe("activateSetupInference", () => {
     );
   });
 
+  it.each([
+    { outcome: "succeeds", errorType: PreparedModelRuntimePublicationSupersededError },
+    { outcome: "remains indeterminate", errorType: Error },
+  ])(
+    "$outcome after a committed Codex catalog refresh rejects with $errorType.name",
+    async ({ errorType }) => {
+      const configHarness = createPreRosterConfigTransformHarness();
+      const refreshError = new errorType("prepared model runtime publication was superseded");
+      const refreshPreparedModelRuntimeSnapshots = vi.fn(async () => {
+        expect(configHarness.current().agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+        throw refreshError;
+      });
+      const activation = activateCodexSetup({
+        workspace: "/tmp/work",
+        deps: {
+          readConfigFileSnapshot: configHarness.readSnapshot as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          refreshPreparedModelRuntimeSnapshots,
+        },
+      });
+
+      if (errorType === PreparedModelRuntimePublicationSupersededError) {
+        await expect(activation).resolves.toMatchObject({
+          ok: true,
+          modelRef: "openai/gpt-5.6-sol",
+          lines: ["Inference verified: openai/gpt-5.6-sol"],
+        });
+        expect(mocks.appendAudit).toHaveBeenCalledOnce();
+      } else {
+        await expect(activation).rejects.toBeInstanceOf(SetupInferenceActivationIndeterminateError);
+        await expect(activation).rejects.toThrow(
+          new SetupInferenceActivationIndeterminateError(
+            `Inference activation committed, but the prepared model catalog could not be refreshed (${refreshError.message}). Restart the Gateway before using the new inference route.`,
+          ),
+        );
+        expect(mocks.appendAudit).not.toHaveBeenCalled();
+      }
+      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
+        configHarness.currentRuntime(),
+      );
+    },
+  );
+
   it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
     const oldRegistry = createEmptyPluginRegistry();
     const stagedRegistry = createEmptyPluginRegistry();
@@ -5717,6 +5762,74 @@ describe("verifySetupInference", () => {
       authProfileId: "openai:p2",
       authProfileIdSource: "user",
     });
+  });
+
+  it("binds Claude native login when a retired profile remains in the store", async () => {
+    const authProfileId = "anthropic:claude-cli";
+    const config = {
+      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+    } satisfies OpenClawConfig;
+    const profiles = {
+      [authProfileId]: {
+        type: "oauth" as const,
+        provider: "claude-cli",
+        access: "retired-access",
+        refresh: "retired-refresh",
+        expires: Date.now() - 60_000,
+      },
+    };
+    const nativeRuntimeOwner = "native-claude-runtime-owner";
+    const resolveCliRuntimeOwnerFingerprint = vi.fn(async (params: { authProfileId?: string }) =>
+      params.authProfileId ? "retired-profile-owner" : nativeRuntimeOwner,
+    );
+    const runCliAgent = vi.fn(
+      async (params: {
+        authProfileId?: string;
+        onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+      }) => {
+        params.onSuccessfulAuthBinding?.({
+          runtimeOwnerFingerprint: nativeRuntimeOwner,
+          runtimeOwnerKind: "cli-runtime",
+          runtimeOwnerId: "claude-cli",
+          runtimeArtifactFingerprint: testCliRuntimeArtifactFingerprint,
+          runtimeArtifactId: "claude-cli",
+        });
+        return {
+          meta: {
+            finalAssistantVisibleText: "OK",
+            executionTrace: {
+              winnerProvider: "claude-cli",
+              winnerModel: "claude-opus-5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await verifySetupInference({
+      bindSession: true,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({ exists: true, valid: true, config })) as never,
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+        ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles })) as never,
+        createSystemAgentVerifiedInferenceBinding,
+        resolveCliRuntimeArtifactFingerprint: vi.fn(async () => testCliRuntimeArtifactFingerprint),
+        resolveCliRuntimeOwnerFingerprint: resolveCliRuntimeOwnerFingerprint as never,
+        runCliAgent: runCliAgent as never,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      binding: {
+        auth: { authFingerprint: nativeRuntimeOwner, proofKind: "runtime-owner" },
+        execution: { provider: "claude-cli", model: "claude-opus-5" },
+      },
+    });
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runCliAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+    expect(resolveCliRuntimeOwnerFingerprint).toHaveBeenCalledOnce();
+    expect(resolveCliRuntimeOwnerFingerprint.mock.calls[0]?.[0].authProfileId).toBeUndefined();
   });
 
   it("rejects an owner plugin replacement during the live inference turn", async () => {

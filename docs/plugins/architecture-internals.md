@@ -1017,10 +1017,11 @@ plugin index entry with `source: "path"` and a workspace-relative
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `installed_plugin_index` SQLite table is the install
-source of truth and can be refreshed without loading plugin runtime modules.
-Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` payload is a rebuildable manifest view.
+surface. The persisted `config_machine_state` value under
+`plugins.installedIndex` is the install source of truth and can be refreshed
+without loading plugin runtime modules. Its `installRecords` map is durable
+even when a plugin manifest is missing or invalid; its `plugins` payload is a
+rebuildable manifest view.
 
 ## Context engine plugins
 

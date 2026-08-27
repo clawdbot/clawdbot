@@ -2065,10 +2065,12 @@ describe("processResponsesStream", () => {
         responseEvents([
           {
             type: "response.output_item.added",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "" },
           },
           {
             type: "response.output_item.done",
+            output_index: 0,
             item: { type: "function_call", name: "computer", arguments: "{}" },
           },
           { type: "response.completed", response: { id: "resp_idless", status: "completed" } },
@@ -2473,7 +2475,7 @@ describe("processResponsesStream", () => {
         stream,
         nativeOpenAIModel,
       ),
-    ).rejects.toThrow("Responses stream completed with unresolved tool calls");
+    ).rejects.toThrow("Responses stream changed output item identity");
     expect(events.map((event) => event.type)).toEqual(["toolcall_start", "toolcall_delta"]);
   });
 

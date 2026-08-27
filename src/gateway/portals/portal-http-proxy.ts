@@ -319,6 +319,9 @@ export function handlePortalProxyRequest(params: {
         res.setHeader("Referrer-Policy", PORTAL_REFERRER_POLICY);
         res.statusCode = proxyRes.statusCode ?? 502;
         proxyRes.once("error", () => res.destroy());
+        // Streaming apps may wait for the client's open event before producing data.
+        // Preserve the upstream header boundary instead of waiting for the first chunk.
+        res.flushHeaders();
         proxyRes.pipe(res);
       });
       proxyReq.once("error", () => {

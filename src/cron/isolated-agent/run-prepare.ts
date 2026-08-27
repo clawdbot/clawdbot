@@ -293,7 +293,7 @@ export async function prepareCronRunContext(params: {
           upserts: [
             {
               sessionKey,
-              resetBoundaryReason,
+              resetBoundary: { context: "preserve-tail", reason: resetBoundaryReason },
               buildEntry: ({ currentEntry }) => update(currentEntry),
             },
           ],

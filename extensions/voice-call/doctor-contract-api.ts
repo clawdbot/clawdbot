@@ -143,13 +143,15 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
     case "audit-events-v2":
       return "audit event ledger -> versioned message lifecycle schema";
     case "commitments-retirement-v7":
-      return "retired commitments storage -> removed table and indexes";
+      return "retired commitments storage -> discarded rows, table, and indexes";
     case "state-table-retirement-v10":
       return "retired shared-state tables -> removed tables and indexes";
     case "state-table-retirement-v11":
       return "retired skill curator tables -> removed tables and indexes";
     case "singleton-state-foldin-v12":
       return "singleton state tables -> shared configuration state";
+    case "state-consolidation-v13":
+      return "cron jobs and subagent runs -> canonical JSON storage";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":

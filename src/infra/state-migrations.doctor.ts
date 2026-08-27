@@ -21,26 +21,22 @@ import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  createPluginStateKeyedStore,
-  getPluginStateCapacity as resolvePluginStateCapacity,
-  importPluginStateEntriesForDoctor,
-  type OpenKeyedStoreOptions,
-} from "../plugin-state/plugin-state-store.js";
-import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorSessionStoreAgentIds,
   listPluginDoctorStateMigrationEntries,
-  type PluginDoctorStateMigrationContext,
+  type PluginDoctorStateMigration,
   type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
 import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   DEFAULT_ACCOUNT_ID,
   DEFAULT_MAIN_KEY,
   LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
 } from "../routing/session-key.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
 import {
   detectOpenClawStateDatabaseSchemaMigrations,
   repairOpenClawStateDatabaseSchema,
@@ -62,6 +58,10 @@ import {
   detectLegacyChannelPairingState,
   migrateLegacyChannelPairingState,
 } from "./state-migrations.channel-pairing.js";
+import {
+  detectLegacyCommitments,
+  migrateLegacyCommitments,
+} from "./state-migrations.commitments.js";
 import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
@@ -100,6 +100,10 @@ import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
 } from "./state-migrations.node-host.js";
+import {
+  createPluginDoctorStateMigrationContext,
+  type PluginDoctorRepairAuthority,
+} from "./state-migrations.plugin-doctor-context.js";
 import {
   migrateLegacyInstalledPluginIndex,
   migrateLegacyPluginStateSidecar,
@@ -186,7 +190,7 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
     case "audit-events-v2":
       return "audit event ledger → versioned message lifecycle schema";
     case "commitments-retirement-v7":
-      return "retired commitments storage → removed table and indexes";
+      return "retired commitments storage → discarded rows, table, and indexes";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements → execution-mode claims";
     case "agent-databases-relative-paths-v9":
@@ -197,6 +201,8 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
       return "retired skill curator tables → removed tables and indexes";
     case "singleton-state-foldin-v12":
       return "singleton state tables → shared configuration state";
+    case "state-consolidation-v13":
+      return "cron jobs and subagent runs → canonical JSON storage";
     case "operator-approvals-system-agent":
       return "operator approvals → OpenClaw system changes";
     case "session-watch-cursor-provenance-v4":
@@ -226,6 +232,8 @@ async function collectPluginDoctorStateMigrationPlans(params: {
   stateDir: string;
   oauthDir: string;
   includeDoctorOnly?: boolean;
+  phase?: PluginDoctorStateMigration["phase"];
+  repairAuthority?: PluginDoctorRepairAuthority;
   warnings?: string[];
 }): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
@@ -234,7 +242,10 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     config,
     env: params.env,
   })) {
-    if (entry.migration.doctorOnly === true && params.includeDoctorOnly !== true) {
+    if (
+      entry.migration.phase !== params.phase ||
+      (entry.migration.doctorOnly === true && params.includeDoctorOnly !== true)
+    ) {
       continue;
     }
     let detected: PluginDoctorStateMigrationDetection | null;
@@ -244,7 +255,12 @@ async function collectPluginDoctorStateMigrationPlans(params: {
         env: params.env,
         stateDir: params.stateDir,
         oauthDir: params.oauthDir,
-        context: createPluginDoctorStateMigrationContext(entry.pluginId, params.env),
+        context: createPluginDoctorStateMigrationContext({
+          pluginId: entry.pluginId,
+          env: params.env,
+          config,
+          repairAuthority: params.repairAuthority,
+        }),
       });
     } catch (err) {
       params.warnings?.push(`Failed detecting ${entry.migration.label}: ${String(err)}`);
@@ -259,29 +275,6 @@ async function collectPluginDoctorStateMigrationPlans(params: {
     }
   }
   return plans;
-}
-
-function createPluginDoctorStateMigrationContext(
-  pluginId: string,
-  env: NodeJS.ProcessEnv,
-): PluginDoctorStateMigrationContext {
-  return {
-    getPluginStateCapacity() {
-      return resolvePluginStateCapacity(pluginId, env);
-    },
-    importPluginStateEntries(
-      options: OpenKeyedStoreOptions,
-      entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
-    ) {
-      importPluginStateEntriesForDoctor(pluginId, { ...options, env: options.env ?? env }, entries);
-    },
-    openPluginStateKeyedStore<T>(options: OpenKeyedStoreOptions) {
-      return createPluginStateKeyedStore<T>(pluginId, {
-        ...options,
-        env: options.env ?? env,
-      });
-    },
-  };
 }
 
 function tryResolveDoctorStateMigrationAgentId(cfg: OpenClawConfig): string | undefined {
@@ -534,6 +527,11 @@ export async function detectLegacyStateMigrations(params: {
   ): TDetection =>
     detect({ stateDir, doctorOnlyStateMigrations: params.doctorOnlyStateMigrations });
   const tuiLastSessions = detectDoctorOwnedState(detectLegacyTuiLastSessions);
+  const commitments = await detectLegacyCommitments({
+    stateDir,
+    env,
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
+  });
   const auditLogs = detectDoctorOwnedState(detectLegacyAuditLogs);
   const acpReplayLedger = detectDoctorOwnedState(detectLegacyAcpReplayLedger);
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
@@ -751,6 +749,10 @@ export async function detectLegacyStateMigrations(params: {
       tuiLastSessions.hasLegacy,
       "- TUI last-session pointers: legacy JSON file → shared SQLite state",
     ],
+    [
+      commitments.hasLegacy,
+      "- Commitments: discard retired commitments/commitments.json rows without import, archive, or export",
+    ],
     ...auditLogs.sources.map((source): readonly [boolean, string] => [
       true,
       `- ${source.label}: legacy JSONL file → shared SQLite state`,
@@ -871,6 +873,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasCurrentConversationBindings,
     },
     tuiLastSessions,
+    commitments,
     auditLogs,
     acpReplayLedger,
     managedOutgoingImages,
@@ -935,12 +938,44 @@ async function migratePluginDoctorStatePlans(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
+  repairAuthority?: PluginDoctorRepairAuthority;
 }): Promise<MigrationMessages> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const notices: string[] = [];
   if (params.plans.length === 0) {
     return { changes, warnings };
+  }
+
+  const migrate = async () => {
+    for (const plan of params.plans) {
+      try {
+        params.repairAuthority?.assertCurrent();
+        const result = await plan.migration.migrateLegacyState({
+          config: params.config,
+          env: params.env,
+          stateDir: params.stateDir,
+          oauthDir: params.oauthDir,
+          context: createPluginDoctorStateMigrationContext({
+            pluginId: plan.pluginId,
+            env: params.env,
+            config: params.config,
+            repairAuthority: params.repairAuthority,
+          }),
+        });
+        params.repairAuthority?.assertCurrent();
+        changes.push(...result.changes);
+        warnings.push(...result.warnings);
+        notices.push(...(result.notices ?? []));
+      } catch (err) {
+        warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
+      }
+    }
+    return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+  };
+  // Session repair already holds the Gateway lock and cross-process database fences.
+  if (params.repairAuthority) {
+    return migrate();
   }
 
   let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
@@ -972,26 +1007,93 @@ async function migratePluginDoctorStatePlans(params: {
   try {
     // Plugin migrations may claim retired files after verified import. Keep the
     // predecessor Gateway excluded for the full read, import, and archive window.
-    for (const plan of params.plans) {
-      try {
-        const result = await plan.migration.migrateLegacyState({
-          config: params.config,
-          env: params.env,
-          stateDir: params.stateDir,
-          oauthDir: params.oauthDir,
-          context: createPluginDoctorStateMigrationContext(plan.pluginId, params.env),
-        });
-        changes.push(...result.changes);
-        warnings.push(...result.warnings);
-        notices.push(...(result.notices ?? []));
-      } catch (err) {
-        warnings.push(`Failed migrating ${plan.migration.label}: ${String(err)}`);
-      }
-    }
+    return await migrate();
   } finally {
     await lock.release();
   }
-  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+}
+
+/** Detect after canonical inspection; destructive repair also requires offline maintenance ownership. */
+export async function runPostSessionPluginDoctorStateRepairs(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  maintenanceAuthority?: { assertCurrent(): void };
+}): Promise<MigrationMessages> {
+  const stateDir = resolveStateDir(params.env);
+  const options = {
+    config: params.config,
+    env: params.env,
+    stateDir,
+    oauthDir: resolveOAuthDir(params.env, stateDir),
+  };
+  const run = async (repairAuthority?: PluginDoctorRepairAuthority): Promise<MigrationMessages> => {
+    const warnings: string[] = [];
+    repairAuthority?.assertCurrent();
+    const plans = await collectPluginDoctorStateMigrationPlans({
+      ...options,
+      cfg: params.config,
+      includeDoctorOnly: true,
+      phase: "after-session-repair",
+      repairAuthority,
+      warnings,
+    });
+    if (!repairAuthority) {
+      return {
+        changes: [],
+        warnings: [
+          ...warnings,
+          ...plans.flatMap((plan) => plan.preview),
+          ...(plans.length
+            ? ['Run "openclaw doctor --fix" to repair plugin session ownership.']
+            : []),
+        ],
+      };
+    }
+    const result = await migratePluginDoctorStatePlans({ ...options, plans, repairAuthority });
+    return { ...result, warnings: [...warnings, ...result.warnings] };
+  };
+  const maintenance = params.maintenanceAuthority;
+  if (!maintenance) {
+    return run();
+  }
+  maintenance.assertCurrent();
+  try {
+    return await withAgentDatabaseMaintenanceLease({ env: params.env }, async (agentLease) =>
+      withPluginLifecycleLease({ env: params.env, waitMs: 5_000 }, async (pluginLease) => {
+        let active = true;
+        const assertCurrent = () => {
+          if (!active) {
+            throw new Error("Plugin Doctor repair authority has expired.");
+          }
+          maintenance.assertCurrent();
+        };
+        const authority: PluginDoctorRepairAuthority = {
+          assertCurrent() {
+            assertCurrent();
+            agentLease.assertOwned();
+            pluginLease.assertOwned();
+          },
+          assertOwnedInTransaction(database) {
+            assertCurrent();
+            agentLease.assertOwnedInTransaction(database);
+            pluginLease.assertOwnedInTransaction(database);
+          },
+        };
+        try {
+          return await run(authority);
+        } finally {
+          active = false;
+        }
+      }),
+    );
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [
+        `Skipped plugin session repair: ${String(error)}. Stop active agents and run openclaw doctor --fix again.`,
+      ],
+    };
+  }
 }
 
 export async function autoMigrateLegacyPluginDoctorState(params: {
@@ -1173,6 +1275,9 @@ function buildLegacyStateMigrationSteps(
   const doctorStateSteps: LegacyStateMigrationStep[] = isDoctor
     ? [
         ownerStep(detected.tuiLastSessions, migrateLegacyTuiLastSessions),
+        ...(detected.commitments
+          ? [ownerStep(detected.commitments, migrateLegacyCommitments)]
+          : []),
         ownerStep(detected.auditLogs, migrateLegacyAuditLogs),
         ownerStep(detected.acpReplayLedger, migrateLegacyAcpReplayLedger),
         ownerStep(detected.managedOutgoingImages, migrateLegacyManagedOutgoingImages),

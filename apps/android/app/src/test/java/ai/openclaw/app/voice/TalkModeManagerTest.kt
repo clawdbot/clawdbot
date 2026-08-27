@@ -12,10 +12,12 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
 import android.os.Bundle
+import android.os.Looper
 import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +49,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowTextToSpeech
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -813,6 +817,57 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun localFallbackKeepsWholeReplyAndBalancesCallbacksOnCompletionOrStop() =
+    runTest {
+      for (stopAfterFirst in listOf(false, true)) {
+        val callbacks = mutableListOf<String>()
+        val synthesizer = FakeTalkSpeechSynthesizer()
+        synthesizer.result.complete(TalkSpeakResult.FallbackToLocal("Gateway TTS unavailable"))
+        val manager =
+          createManager(
+            talkSpeakClient = synthesizer,
+            scope = this,
+            onBeforeSpeak = { callbacks += "before" },
+            onAfterSpeak = { callbacks += "after" },
+          )
+        setPrivateField(manager, "configLoaded", true)
+        ShadowTextToSpeech.addLanguageAvailability(Locale.GERMAN)
+        withMain(cleanup = { manager.stopAllCapture() }) {
+          val reply = "Ein Wort. ".repeat(500).trim()
+          val speech = launch { manager.speakAssistantReply("{\"language\":\"de\",\"speed\":1.25}\n$reply") }
+          runCurrent()
+          val shadow = shadowOf(checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance()))
+          shadow.onInitListener.onInit(TextToSpeech.SUCCESS)
+          runCurrent()
+
+          assertEquals(listOf("before"), callbacks)
+          assertTrue(manager.isSpeaking.value)
+          assertEquals(Locale.GERMAN, shadow.currentLanguage)
+          assertEquals(1, shadow.spokenTextList.size)
+          if (stopAfterFirst) manager.stopTts()
+          while (!speech.isCompleted) {
+            val submitted = shadow.spokenTextList.size
+            shadowOf(Looper.getMainLooper()).idle()
+            runCurrent()
+            assertEquals(submitted + if (speech.isCompleted) 0 else 1, shadow.spokenTextList.size)
+          }
+
+          assertEquals(listOf("before", "after"), callbacks)
+          assertFalse(manager.isSpeaking.value)
+          val submittedText = shadow.spokenTextList.joinToString("")
+          if (stopAfterFirst) {
+            assertEquals(1, shadow.spokenTextList.size)
+            assertTrue(reply.startsWith(submittedText) && submittedText.length < reply.length)
+          } else {
+            assertEquals(reply, submittedText)
+          }
+          assertTrue(shadow.spokenTextList.all { it.length <= TextToSpeech.getMaxSpeechInputLength() })
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+      }
+    }
+
+  @Test
   fun realtimeAudioFramesStreamUntilPlaybackOrCancellationStarts() {
     val manager = createManager()
 
@@ -1139,6 +1194,8 @@ class TalkModeManagerTest {
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
+    onBeforeSpeak: suspend () -> Unit = {},
+    onAfterSpeak: suspend () -> Unit = {},
     onStoppedByRelay: () -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -1159,6 +1216,8 @@ class TalkModeManagerTest {
       scope = scope,
       session = session,
       isConnected = isConnected,
+      onBeforeSpeak = onBeforeSpeak,
+      onAfterSpeak = onAfterSpeak,
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),

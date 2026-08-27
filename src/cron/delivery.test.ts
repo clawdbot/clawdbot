@@ -579,6 +579,22 @@ describe("resolveFailureDestination", () => {
       },
       expected: null,
     },
+    {
+      name: "JSON-null clear-only override",
+      failureDestination: {
+        channel: null as never,
+        to: null as never,
+        accountId: null as never,
+        mode: null as never,
+      },
+      globalConfig: {
+        channel: "telegram",
+        to: "group-abc",
+        accountId: "global-account",
+        mode: "announce" as const,
+      },
+      expected: null,
+    },
   ])("resolves $name", ({ failureDestination, globalConfig, expected }) => {
     expect(
       resolveFailureDestination(

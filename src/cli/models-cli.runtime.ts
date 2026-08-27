@@ -27,7 +27,8 @@ export type GlobalOnlyModelCommandName =
   | "scan"
   | "aliases list"
   | "aliases add"
-  | "aliases remove";
+  | "aliases remove"
+  | "refresh";
 
 export function rejectAgentScopedModelCommand(
   command: Command,

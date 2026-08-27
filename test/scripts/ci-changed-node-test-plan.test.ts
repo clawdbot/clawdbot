@@ -17,11 +17,15 @@ import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
-import { hasImportGraphImpactOnTargets } from "../../scripts/test-projects.test-support.mts";
+import {
+  hasImportGraphImpactOnTargets,
+  resolveChangedTestTargetPlan,
+} from "../../scripts/test-projects.test-support.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh";
 
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,
@@ -401,6 +405,42 @@ describe("CI changed Node test plan", () => {
   it("does not create extension fallback shards for docs-only diffs", () => {
     expect(createChangedExtensionFallbackShards(["docs/ci.md"])).toEqual([]);
   });
+
+  it.each([
+    { name: "helper alone", changedPaths: [githubActivityHelper] },
+    {
+      name: "helper trio",
+      changedPaths: [
+        githubActivityHelper,
+        ".agents/skills/openclaw-pr-maintainer/SKILL.md",
+        "test/scripts/github-activity-helper.test.ts",
+      ],
+    },
+  ])(
+    "keeps hidden maintainer helper targets and compact core fallback for $name",
+    ({ changedPaths }) => {
+      expect(hasCoreExtensionImpact(changedPaths)).toBe(false);
+      expect(createChangedExtensionFallbackShards(changedPaths)).toEqual([]);
+      expect(resolveChangedTestTargetPlan(changedPaths, { broad: true })).toMatchObject({
+        mode: "targets",
+        targets: expect.arrayContaining(["test/scripts/github-activity-helper.test.ts"]),
+      });
+      expect(createChangedNodeTestShards(changedPaths)).toBeNull();
+    },
+  );
+
+  it.each([
+    "src/plugin-sdk/core.ts",
+    ".agents/skills/openclaw-pr-maintainer/scripts/unknown-helper.sh",
+  ])(
+    "retains all extension configs for the hidden maintainer helper mixed with %s",
+    (changedPath) => {
+      const paths = [githubActivityHelper, changedPath];
+      expect(hasCoreExtensionImpact(paths)).toBe(true);
+      expect(createChangedNodeTestShards(paths)).toBeNull();
+      expectAllExtensionConfigs(createChangedExtensionFallbackShards(paths));
+    },
+  );
 
   it.each([
     {

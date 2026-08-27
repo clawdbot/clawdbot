@@ -197,12 +197,6 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     'format: String(localized: "Recognizer error: %@")',
     'self.statusText = String(localized: "Triggered")',
   ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    "subtitle: .verbatim(self.agentTotalText)",
-    'AttributedString(localized: "^[\\(count) agent](inflect: true) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: OpenClawTextValue,\n        detail: OpenClawTextValue",
-    "func metricTile(\n        icon: String,\n        title: OpenClawTextValue,\n        value: String,\n        detail: OpenClawTextValue",
-  ],
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(\n        _ title: OpenClawTextValue,\n        copyLabel: LocalizedStringKey",
     "private func nodeListCard(title: OpenClawTextValue, values: [String])",
@@ -323,11 +317,6 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
     "Text(self.entry.detailText)",
     "Text(account.displayName)",
     "Text(account.detailText)",
-  ],
-  "apps/ios/Sources/Design/AgentProTab+Overview.swift": [
-    'subtitle: .verbatim("\\(self.sortedAgents.count) total")',
-    "func agentMenuRow(\n        icon: String,\n        title: String",
-    "func metricTile(\n        icon: String,\n        title: String",
   ],
   "apps/ios/Sources/Design/AgentProNodesDestination.swift": [
     "private func nodeDetailRow(_ title: String",

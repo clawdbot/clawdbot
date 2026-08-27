@@ -91,7 +91,6 @@ type WorkspaceStateDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "workspace_setup_state"
   | "workspace_path_aliases"
-  | "workspace_attestations"
   | "workspace_generated_bootstrap_hashes"
   | "migration_runs"
   | "migration_sources"
@@ -237,27 +236,26 @@ function readSnapshotFromDatabase(params: {
       .selectAll()
       .where("workspace_key", "=", identity.workspaceKey),
   );
-  if (setupRow && setupRow.workspace_path !== identity.workspacePath) {
+  // A NULL path marks a legacy orphan attestation; the first live access to a
+  // matching workspace adopts it, so only a differing recorded path collides.
+  if (setupRow?.workspace_path != null && setupRow.workspace_path !== identity.workspacePath) {
     throw new Error("workspace state key collision");
   }
-  if (setupRow && setupRow.version !== WORKSPACE_SETUP_STATE_VERSION) {
+  if (setupRow?.version != null && setupRow.version !== WORKSPACE_SETUP_STATE_VERSION) {
     throw new Error("workspace setup state version requires openclaw doctor --fix");
   }
-  if (setupRow) {
+  if (setupRow?.version != null) {
     assertCanonicalTimestamp(setupRow.bootstrap_seeded_at, "bootstrap seeded");
     assertCanonicalTimestamp(setupRow.setup_completed_at, "setup completed");
+    if (setupRow.updated_at == null) {
+      throw new Error("workspace setup update timestamp is invalid");
+    }
     assertCanonicalIntegerTimestamp(setupRow.updated_at, "setup update");
   }
-  const attestationRow = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    kysely
-      .selectFrom("workspace_attestations")
-      .selectAll()
-      .where("workspace_key", "=", identity.workspaceKey),
-  );
+  const attestationPresent = setupRow?.attested_at_ms != null;
   const generatedHashes = new Map<string, string>();
-  if (attestationRow) {
-    assertCanonicalIntegerTimestamp(attestationRow.attested_at_ms, "attestation");
+  if (setupRow && attestationPresent) {
+    assertCanonicalIntegerTimestamp(setupRow.attested_at_ms!, "attestation");
     const hashRows = executeSqliteQuerySync(
       params.database.db,
       kysely
@@ -278,19 +276,22 @@ function readSnapshotFromDatabase(params: {
       generatedHashes.set(row.filename, row.sha256);
     }
   }
+  const setupExists = setupRow?.version != null;
   return {
     identity,
-    setupExists: Boolean(setupRow),
-    ...(setupRow ? { setupUpdatedAtMs: setupRow.updated_at } : {}),
+    setupExists,
+    ...(setupExists && setupRow?.updated_at != null
+      ? { setupUpdatedAtMs: setupRow.updated_at }
+      : {}),
     setup: {
       version: WORKSPACE_SETUP_STATE_VERSION,
       ...(setupRow?.bootstrap_seeded_at ? { bootstrapSeededAt: setupRow.bootstrap_seeded_at } : {}),
       ...(setupRow?.setup_completed_at ? { setupCompletedAt: setupRow.setup_completed_at } : {}),
     },
-    ...(attestationRow
+    ...(attestationPresent
       ? {
           attestation: {
-            attestedAtMs: attestationRow.attested_at_ms,
+            attestedAtMs: setupRow!.attested_at_ms!,
             generatedHashes,
           },
         }
@@ -470,16 +471,19 @@ export function replaceWorkspaceAttestation(params: {
     executeSqliteQuerySync(
       database.db,
       kysely
-        .insertInto("workspace_attestations")
+        .insertInto("workspace_setup_state")
         .values({
           workspace_key: identity.workspaceKey,
+          workspace_path: identity.workspacePath,
           attested_at_ms: params.attestedAtMs,
-          updated_at_ms: updatedAtMs,
+          attestation_updated_at_ms: updatedAtMs,
         })
         .onConflict((conflict) =>
           conflict.column("workspace_key").doUpdateSet({
+            // Heals the NULL path on adopted legacy orphan attestation rows.
+            workspace_path: identity.workspacePath,
             attested_at_ms: params.attestedAtMs,
-            updated_at_ms: updatedAtMs,
+            attestation_updated_at_ms: updatedAtMs,
           }),
         ),
     );
@@ -562,10 +566,6 @@ function deleteWorkspaceRows(
     kysely
       .deleteFrom("workspace_generated_bootstrap_hashes")
       .where("workspace_key", "=", workspaceKey),
-  );
-  executeSqliteQuerySync(
-    database.db,
-    kysely.deleteFrom("workspace_attestations").where("workspace_key", "=", workspaceKey),
   );
   executeSqliteQuerySync(
     database.db,

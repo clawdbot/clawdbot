@@ -630,11 +630,9 @@ describe("renderSessionsCard", () => {
     copyButton?.click();
     await vi.waitFor(() => {
       expect(copyButton?.textContent?.trim()).toBe(feedback);
-      expect(copyButton?.getAttribute("aria-label")).toBe(feedback);
+      expect(copyButton?.getAttribute("aria-label")).toBeNull();
     });
     expect(writeText).toHaveBeenCalledWith("Selected thread");
-    expect(copyButton?.dataset[copied ? "copied" : "error"]).toBe("1");
-    expect(copyButton?.dataset[copied ? "error" : "copied"]).toBeUndefined();
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
     expect(onSelectSession).toHaveBeenCalledWith(

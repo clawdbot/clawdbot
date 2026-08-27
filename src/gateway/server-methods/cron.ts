@@ -213,6 +213,7 @@ function cronJobReadView(job: CronJob) {
     lastDelivered: job.state.lastDelivered,
     lastDeliveryStatus: job.state.lastDeliveryStatus,
     lastDeliveryError: job.state.lastDeliveryError,
+    deliverySuppressionReason: job.state.deliverySuppressionReason,
     lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
     lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
     lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
@@ -241,6 +242,9 @@ function compactCronListJob(job: CronJob) {
       : {}),
     ...(job.state.lastDeliveryError !== undefined
       ? { lastDeliveryError: job.state.lastDeliveryError }
+      : {}),
+    ...(job.state.deliverySuppressionReason !== undefined
+      ? { deliverySuppressionReason: job.state.deliverySuppressionReason }
       : {}),
     ...(job.state.lastFailureNotificationDelivered !== undefined
       ? { lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered }

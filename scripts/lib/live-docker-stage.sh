@@ -135,7 +135,7 @@ try {
   db = new DatabaseSync(dbPath);
   try {
     db.exec("PRAGMA secure_delete = ON;");
-    db.prepare("DELETE FROM installed_plugin_index WHERE index_key = ?").run("installed-plugin-index");
+    db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run("plugins.installedIndex");
     db.exec("PRAGMA wal_checkpoint(TRUNCATE);");
     db.exec("VACUUM;");
   } catch (err) {
@@ -158,7 +158,7 @@ openclaw_live_stage_state_dir() {
     # Sandbox workspaces can accumulate root-owned artifacts from prior Docker
     # runs. Persisted plugin registry state contains host-absolute paths that
     # are not portable into Linux containers. Live-test auth/config staging does
-    # not need the old JSON source or the SQLite installed_plugin_index row.
+    # not need the old JSON source or the SQLite plugins.installedIndex machine-state row.
     set +e
     tar -C "$source_dir" \
       --warning=no-file-changed \

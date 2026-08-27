@@ -5,6 +5,7 @@ const retiredRegistries = new WeakSet<PluginRegistry>();
 const activatedRegistries = new WeakSet<PluginRegistry>();
 const registryEpochs = new WeakMap<PluginRegistry, object>();
 const recordEpochs = new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>();
+const revokedRecordEpoch = Object.freeze({});
 
 export type PluginRegistryLifecycleEpoch = object;
 type PluginRecordLifecycleEpoch = object;
@@ -82,7 +83,9 @@ export function revokePluginRecordLifecycleEpoch(
   registry: PluginRegistry,
   record: PluginRecord,
 ): void {
-  recordEpochs.get(registry)?.delete(record);
+  const epochs = recordEpochs.get(registry) ?? new WeakMap<PluginRecord, object>();
+  epochs.set(record, revokedRecordEpoch);
+  recordEpochs.set(registry, epochs);
 }
 
 /** True when a registry has been activated for runtime use. */
@@ -93,4 +96,29 @@ export function isPluginRegistryActivated(registry: PluginRegistry): boolean {
 /** True when a registry has been retired by a newer active registry. */
 export function isPluginRegistryRetired(registry: PluginRegistry): boolean {
   return retiredRegistries.has(registry);
+}
+
+/** Capture an activation; reactivating the same objects must not revive an old operation. */
+export function capturePluginLifecycleAuthority(
+  registry: PluginRegistry,
+  record?: PluginRecord,
+  options?: { scopedRuntime?: boolean },
+): (() => boolean) | undefined {
+  const epoch = registryEpochs.get(registry);
+  const recordEpoch = record && recordEpochs.get(registry)?.get(record);
+  if (
+    (!epoch && !options?.scopedRuntime) ||
+    retiredRegistries.has(registry) ||
+    recordEpoch === revokedRecordEpoch
+  ) {
+    return undefined;
+  }
+  return () =>
+    registryEpochs.get(registry) === epoch &&
+    !retiredRegistries.has(registry) &&
+    (!record ||
+      (registry.plugins.includes(record) &&
+        record.enabled &&
+        record.status === "loaded" &&
+        recordEpochs.get(registry)?.get(record) === recordEpoch));
 }

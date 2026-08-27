@@ -160,6 +160,11 @@ export function getGatewayToolCallerIdentity(): GatewayToolCallerIdentity | unde
   return gatewayToolCallerStorage.getStore();
 }
 
+/** Process-owned work must not retain the turn that authorized its launch. */
+export function withoutGatewayToolCallerIdentity<T>(run: () => T): T {
+  return gatewayToolCallerStorage.exit(run);
+}
+
 export async function withGatewayToolCallerIdentity<T>(
   identity: GatewayToolCallerIdentity | undefined,
   run: () => Promise<T> | T,

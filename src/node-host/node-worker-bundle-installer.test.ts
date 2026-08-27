@@ -180,6 +180,31 @@ describe("node worker bundle installer", () => {
     await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
   });
 
+  it("prewarms bundles with managed cache behind a host compile-cache fence", async () => {
+    const prewarmMarker = path.join(root, "worker-prewarmed-with-managed-cache");
+    const fixture = await bundleFixture({
+      prewarmMarker,
+      bundlePrewarm: 1,
+      compileCacheDisabled: false,
+    });
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({
+      root,
+      env: {
+        ...process.env,
+        NODE_COMPILE_CACHE: "/tmp/ambient-host-compile-cache",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
+        OPENCLAW_SERVICE_KIND: "node",
+      },
+    });
+
+    await expect(
+      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(fixture.input.build);
+    await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
+  });
+
   it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);

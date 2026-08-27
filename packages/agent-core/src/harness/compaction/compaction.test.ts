@@ -365,11 +365,36 @@ describe("session-entry compaction budgeting", () => {
     expect(preparation.value).toMatchObject({
       firstKeptEntryId: "entry-3",
       isSplitTurn: true,
+      splitTurnCompleted: true,
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
+  });
+
+  it("binds split-turn completion to the cut turn instead of a newer retained turn", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "boundary request", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("boundary complete", createUsage(10), 2), 1),
+      createMessageEntry({ role: "user", content: "newer unresolved request", timestamp: 3 }, 2),
+    ];
+
+    const preparation = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 8,
+    });
+
+    expect(preparation.ok).toBe(true);
+    if (!preparation.ok || !preparation.value) {
+      throw new Error("expected the boundary turn to be split");
+    }
+    expect(preparation.value).toMatchObject({
+      firstKeptEntryId: "entry-1",
+      isSplitTurn: true,
+      splitTurnCompleted: true,
+    });
   });
 
   it("applies the shared common-CJK budget heuristic", () => {

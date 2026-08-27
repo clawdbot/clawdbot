@@ -369,6 +369,20 @@ catalog, API-key auth, and dynamic model resolution.
     upstream response is not an OpenAI-compatible `{ data: [{ id, object }] }`
     shape.
 
+    For a separate authoritative metadata feed, the same
+    `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:
+    each entry pairs a runtime model with its lifecycle status.
+    `projectUpstreamProviderCatalogSnapshot` rebuilds that snapshot from a
+    trusted seed and accepted upstream rows, dropping withdrawn upstream-only
+    models. `projectProviderCatalogSnapshotRows` intersects advertised IDs with
+    active snapshot entries, deduplicating in endpoint order;
+    `listProviderCatalogSnapshotEntries` projects the same lifecycle facts for
+    catalog consumers. Keep seed lifecycle policy and model-specific decoration
+    in the owning plugin. Derive static fallback eligibility after refreshing
+    metadata so the first failed or fully filtered discovery uses current status.
+    Public metadata never establishes account entitlement or expands the
+    credential scope of discovery.
+
     When `ctx.providerIds` is present, it contains the normalized provider
     identities selected for that catalog owner. Return `null` before resolving
     credentials or making network requests when the hook serves none of them;
@@ -959,6 +973,17 @@ catalog, API-key auth, and dynamic model resolution.
         general embedding contract for reusable vector generation, including
         memory search. The retired memory-specific registrar and manifest
         contract are no longer accepted.
+
+        Providers that accept model aliases can expose
+        `normalizeModel(options): string`. Memory uses this synchronous hook for
+        both creation options and cold index identity checks. Keep it configuration-only:
+        do not authenticate or access the network. Make normalization idempotent and
+        reuse it in `create`, which may receive an already-normalized model or be
+        called outside memory. Return an empty string only when the
+        model remains unknown until discovery; do not turn an invalid explicit
+        model into an omitted selection. For an exact pre-initialization identity,
+        `resolveIndexIdentity(options)` additionally supplies the required
+        `cacheKeyData` and any equivalent persisted aliases.
       </Tab>
       <Tab title="Image and video generation">
         Image and video capabilities use a **mode-aware** shape. Image

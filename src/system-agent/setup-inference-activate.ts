@@ -6,6 +6,7 @@ import {
   type CodexCliApiKeyCredential,
   readCodexCliActiveApiKey,
 } from "../agents/cli-credentials.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { applyAutoLocalModelLean } from "../config/local-model-lean-auto.js";
 import { createMergePatch } from "../config/merge-patch.js";
@@ -40,6 +41,7 @@ import {
   SetupInferenceOwnerDriftError,
   invalidSetupConfigError,
   resolveSetupInferenceWorkspace,
+  setupInferenceLog,
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
 import { revalidateStableSetupInferenceOwner } from "./setup-inference-owner.js";
@@ -629,8 +631,15 @@ async function activateSetupInferenceUnredacted(
             .refreshPreparedModelRuntimeSnapshots;
         await refreshPreparedModelRuntimeSnapshots(codexReloadedRuntimeConfig);
       } catch (error) {
-        throw new SetupInferenceActivationIndeterminateError(
-          `Inference activation committed, but the prepared model catalog could not be refreshed (${error instanceof Error ? error.message : String(error)}). Restart the Gateway before using the new inference route.`,
+        if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+          throw new SetupInferenceActivationIndeterminateError(
+            `Inference activation committed, but the prepared model catalog could not be refreshed (${error instanceof Error ? error.message : String(error)}). Restart the Gateway before using the new inference route.`,
+          );
+        }
+        // Our config commit can trigger a hot reload of the same or newer config.
+        // That lifecycle publication owns the refresh; losing ownership is not activation failure.
+        setupInferenceLog.info(
+          "Prepared model catalog refresh superseded by a newer publication; activation proceeding.",
         );
       }
     }

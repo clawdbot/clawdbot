@@ -34,6 +34,32 @@ Presence entries are structured objects with fields like:
 - `reason`: free-form client-supplied string; the Gateway itself only emits `self`, `connect`, and `disconnect`
 - `deviceId`, `roles`, `scopes`: device identity and role/scope hints from the connect handshake
 - `ts`: last update timestamp (ms since epoch)
+- `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
+
+### Watched session references
+
+Hello snapshots, `system-presence`, and `presence` events include only watched
+session references that the recipient can see under the current session-list
+visibility rules. Drafts, incognito sessions, and operator role restrictions
+follow those same rules. Missing or deleted sessions are omitted, including for
+admins. Keys retain their agent scope, including agent-qualified `global` and
+`unknown` references.
+
+Session references require an operator connection with read access
+(`operator.read`, `operator.write`, or `operator.admin`). Nodes, pairing-only
+clients, and non-admin clients awaiting authenticated profile verification still
+receive the non-session presence roster in hello snapshots and events, without
+watched references. An established admin grant does not depend on profile
+verification. `system-presence` itself requires operator read access.
+
+Filtering preserves the connection and person metadata and the presence timestamp.
+When no references are visible, `watchedSessions` is omitted, just as when the
+client declares no watches; there are no hidden-session counts or markers.
+Message subscriptions alone do not declare viewer presence.
+
+These are coordination features within a shared agent, not isolation between
+mutually untrusted users. Everyone operating an agent shares that agent's
+capabilities. See [Multi-user trust boundary](/concepts/multi-user#trust-boundary).
 
 ## Producers (where presence comes from)
 
@@ -73,16 +99,17 @@ is sampled for this compatibility value.
 When a node connects over the Gateway WebSocket with `role: node`, the Gateway
 upserts a presence entry for that node (same flow as other WS clients).
 
-## Merge + dedupe rules (why `instanceId` matters)
+## Connection rows and beacon deduplication
 
-Presence entries are stored in a single in-memory map, keyed case-insensitively
-by the first available of, in order: a paired device id, `connect.client.instanceId`,
-or the per-connection id as a last resort.
+Presence entries are stored in a single in-memory map with case-insensitive keys.
+User WebSocket clients have one row per connection, so two tabs watching different
+sessions cannot overwrite each other. Node connections use their device id,
+then `connect.client.instanceId`, then the connection id.
 
-Ephemeral control-plane clients are excluded from tracking entirely (see
-above), so their connection ids never become keys. For every other client, the
-connection id fallback means a client that reconnects without a stable
-`instanceId` shows up as a **duplicate** row.
+`system-event` beacons merge by device id or instance id when supplied, otherwise
+by parsed host or other beacon metadata. A stable `instanceId` helps consumers
+associate rows with the same client; it does not merge separate user WebSocket
+connections. Ephemeral control-plane clients are excluded from tracking entirely.
 
 ## TTL and bounded size
 
@@ -116,11 +143,11 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 
 ## Debugging tips
 
-- To see the raw list, call `system-presence` against the Gateway.
+- To see the list projected for your connection, call `system-presence` against the Gateway.
 - If you see duplicates:
   - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
-  - check whether the connection-derived entry is missing `instanceId` (duplicates are expected)
+  - check for multiple tabs or reconnects; separate user connections have separate rows, and old rows expire after the TTL
 
 ## Related
 

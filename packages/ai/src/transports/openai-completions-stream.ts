@@ -610,7 +610,16 @@ export async function processCompletionsStream(
             }
           }
           currentBlock = block;
-          if (toolCall.function?.name && (!directMode || !block.name)) {
+          // Mirror the pinned OpenAI SDK and the managed transport: a nonempty
+          // function-name snapshot replaces the stored name so fragmented or
+          // corrected streamed names cannot freeze on the first fragment. In
+          // direct mode the first tool identity is authoritative, so only a
+          // continuation whose id explicitly conflicts with the established
+          // block keeps the first name; an absent id is treated as a
+          // continuation (the block was already resolved by index or id above),
+          // matching how the pinned SDK accumulates a later name-only frame.
+          const conflictingId = directMode && block.id && toolCall.id && block.id !== toolCall.id;
+          if (toolCall.function?.name && !conflictingId) {
             block.name = toolCall.function.name;
           }
           const deltaSig = directMode ? undefined : extractToolCallThoughtSignature(toolCall);

@@ -28,6 +28,11 @@ scheduled-owner identity never enter the worker envelope.
 The credential is never accepted through command-line arguments, and this page
 intentionally provides no credential or hand-authored envelope example.
 
+The node supervisor uses a private managed entry point that can admit successive
+turns into the same environment while background processes remain. Each turn
+still receives a fresh bounded envelope, Gateway connection, and tool authority.
+The standalone command above remains a single-turn entry point.
+
 Admission fails closed if the envelope is invalid, the credential is rejected,
 the bundle or protocol features do not match, or the session and owner epoch are
 no longer current. Missing, duplicate, or unknown tool names also invalidate the
@@ -61,6 +66,10 @@ The process runs the normal embedded agent loop with a restricted backend:
 Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
 no standing provider or forge credentials.
+
+The worker loads workspace `AGENTS.md` through the bounded bootstrap loader and
+appends Gateway-supplied system instructions as literal text. It does not discover
+`SYSTEM.md` or `APPEND_SYSTEM.md` from the workspace or agent state directory.
 
 Worker-to-worker session dispatch is not exposed in this mode. Placement and
 dispatch remain gateway-owned: an operator can dispatch an existing local,

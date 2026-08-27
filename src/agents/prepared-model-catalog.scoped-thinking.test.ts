@@ -1,5 +1,4 @@
-// Boundary proof for the turn-path thinking fallback: manifest first, then a provider-scoped
-// static catalog, then scoped live discovery only for runtime-only models (e.g. Ollama).
+// Turn-path thinking reuses published facts before manifest/scoped discovery fallback.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
@@ -90,6 +89,7 @@ describe("loadProviderScopedThinkingCatalog", () => {
     });
 
     expect(catalog[0]?.compat?.supportedReasoningEfforts).toContain("ultra");
+    expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedStaticMock).not.toHaveBeenCalled();
     expect(scopedLiveMock).not.toHaveBeenCalled();
   });

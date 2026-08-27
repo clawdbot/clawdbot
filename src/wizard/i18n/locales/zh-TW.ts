@@ -1104,8 +1104,6 @@ export const zh_TW = {
       gatewayServiceRestarted: "Gateway 服務已重新啟動。",
       gatewayServiceRestarting: "正在重新啟動 Gateway 服務...",
       gatewayServiceRestartScheduled: "Gateway 服務重新啟動已排程。",
-      gatewayServiceUninstalled: "Gateway 服務已解除安裝。",
-      gatewayServiceUninstalling: "正在解除安裝 Gateway 服務...",
       gatewayTokenGenerate: "產生權杖：{command}",
       gatewayTokenShared: "Gateway 權杖：Gateway 和 Control UI 的共享認證。",
       gatewayTokenStored:

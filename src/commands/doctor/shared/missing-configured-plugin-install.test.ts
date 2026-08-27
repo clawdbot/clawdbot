@@ -708,6 +708,106 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toStrictEqual([]);
   });
 
+  it("falls back to the operator selector when no beta release is published", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      update: { channel: "beta" },
+      channels: {
+        matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+      },
+    } satisfies OpenClawConfig;
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: { npmSpec: "@openclaw/plugin-matrix" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: false,
+      code: "npm_package_not_found",
+      error: "Package not found on npm: @openclaw/plugin-matrix@beta.",
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({ cfg, env: {} });
+
+    expect(mockCallArg(mocks.installPluginFromNpmSpec, 0)).toMatchObject({
+      spec: "@openclaw/plugin-matrix@beta",
+    });
+    expect(mockCallArg(mocks.installPluginFromNpmSpec, 1)).toMatchObject({
+      spec: "@openclaw/plugin-matrix",
+    });
+    expect(result.notices).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("No @openclaw/plugin-matrix@beta release is published"),
+      ]),
+    );
+  });
+
+  it("retries the operator ClawHub selector when no beta release is published", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      update: { channel: "beta" },
+      channels: {
+        matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+      },
+    } satisfies OpenClawConfig;
+    mocks.installPluginFromClawHub
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "version_not_found",
+        error: "Version not found on ClawHub: @openclaw/plugin-matrix@beta.",
+      })
+      .mockResolvedValue({
+        ok: true,
+        pluginId: "matrix",
+        targetDir: "/tmp/openclaw-plugins/matrix",
+        version: "1.2.3",
+        clawhub: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "@openclaw/plugin-matrix",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          version: "1.2.3",
+          integrity: "sha256-clawhub",
+          resolvedAt: "2026-05-01T00:00:00.000Z",
+          clawpackSha256: "0".repeat(64),
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256: "1".repeat(64),
+          clawpackSize: 1234,
+        },
+      });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: { clawhubSpec: "clawhub:@openclaw/plugin-matrix" },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({ cfg, env: {} });
+
+    expect(mockCallArg(mocks.installPluginFromClawHub, 0)).toMatchObject({
+      spec: "clawhub:@openclaw/plugin-matrix@beta",
+    });
+    expect(mockCallArg(mocks.installPluginFromClawHub, 1)).toMatchObject({
+      spec: "clawhub:@openclaw/plugin-matrix",
+    });
+    expect(result.notices).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("No clawhub:@openclaw/plugin-matrix@beta release is published"),
+      ]),
+    );
+  });
+
   it("uses an explicit ClawHub install spec before npm", async () => {
     const cfg = {
       security: { installPolicy: { enabled: true } },

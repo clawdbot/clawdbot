@@ -265,7 +265,7 @@ Notes:
   interception is available for managed Playwright profiles; existing-session
   profiles return an unsupported-operation error.
 - Prefer atomic chooser uploads: pass the trigger `--ref` with the upload so OpenClaw arms and clicks in one request. Paths-only `upload` remains supported when a later trigger is intentional. Use `--input-ref` or `--element` to set a file input directly. `dialog` is an arming call; run it before the click/press that triggers the dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
-- `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
+- `click`/`type`/etc require a `ref` from `snapshot` (for example, Playwright ref `f1e12`, role ref `e12`, or actionable ARIA ref `ax12`). Copy the returned ref unchanged, including any frame prefix. CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
 - Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
 - `upload` accepts files from the OpenClaw temp uploads root and
   OpenClaw-managed inbound media. Managed inbound media can be referenced as
@@ -282,7 +282,7 @@ volatile; prefer `suggestedTargetId` from `tabs` in scripts.
 
 Snapshot flags at a glance:
 
-- `--format ai` (default with Playwright): AI snapshot with numeric refs (`aria-ref="<n>"`).
+- `--format ai` (default with Playwright): AI snapshot with native Playwright refs, including frame-qualified refs such as `f1e12`.
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
@@ -298,17 +298,18 @@ Snapshot flags at a glance:
 
 ## Snapshots and refs
 
-OpenClaw supports two "snapshot" styles:
+OpenClaw supports three "snapshot" styles:
 
-- **AI snapshot (numeric refs)**: `openclaw browser snapshot` (default; `--format ai`)
-  - Output: a text snapshot that includes numeric refs.
-  - Actions: `openclaw browser click 12`, `openclaw browser type 23 "hello"`.
+- **AI snapshot (native refs)**: `openclaw browser snapshot` (default; `--format ai`)
+  - Output: a text snapshot with refs such as `f1e12` and matching `refs` metadata.
+  - Actions: `openclaw browser click f1e12`, `openclaw browser type f1e23 "hello"` (use your snapshot's refs).
   - Internally, the ref is resolved via Playwright's `aria-ref`.
 
 - **Role snapshot (role refs like `e12`)**: `openclaw browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
   - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
   - Actions: `openclaw browser click e12`, `openclaw browser highlight e12`.
   - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
+  - Names containing quotes, backslashes, or YAML punctuation remain actionable; use the ref rather than reconstructing a locator from the displayed name.
   - Add `--labels` to include a screenshot with overlayed `e12` labels. On
     Playwright-backed profiles this also returns per-ref bounding-box metadata
     (`annotations[]`).
@@ -383,6 +384,10 @@ profiles; send actions individually there.
   `stopOnError` is the default, the array ends at the first failure; with
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero; pass `--json` to preserve the full ordered response for scripts.
+- Nested batches occupy one parent result. If a child action fails, that result
+  reports the first child error. Each batch applies its own `stopOnError`:
+  continuing inside a nested batch does not make it successful or make its
+  parent continue.
 
 ## Wait power-ups
 

@@ -182,12 +182,20 @@ export function readSessionTranscriptBoundedActiveContextCore(
       database: projection.database,
       ...projection.resolved,
     });
+    // Migrated transcripts may place a delivery mirror before the header or lack the auxiliary
+    // identity rows entirely. Select the canonical stored event by type so runtime keeps its version.
     const header = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
         .selectFrom("transcript_events")
         .select("event_json")
         .where("session_id", "=", projection.resolved.sessionId)
+        .where(
+          /* kysely-allow-raw: the canonical transcript event type is stored inside event_json. */
+          sql<string>`json_extract(event_json, '$.type')`,
+          "=",
+          "session",
+        )
         .orderBy("seq", "asc")
         .limit(1),
     );

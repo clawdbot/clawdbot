@@ -2,12 +2,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
   createManagerIndexFixture,
   type ManagerIndexFixtureConfig,
 } from "./manager-index.test-support.js";
+import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -61,6 +63,82 @@ describe("memory index", () => {
     },
   ])("finds keyword matches via hybrid search when $name", async ({ config }) => {
     await expectHybridKeywordSearchFindsMemory(createCfg(config));
+  });
+
+  it("preserves semantic results when a concurrent reindex publishes before KNN returns", async () => {
+    const manager = await getPersistentManager(
+      createCfg({
+        vectorEnabled: true,
+        minScore: 0,
+        hybrid: { enabled: true, vectorWeight: 1, textWeight: 0 },
+      }),
+    );
+    await manager.sync({ reason: "test" });
+    const fields = manager as unknown as {
+      db: DatabaseSync;
+      provider: EmbeddingProvider;
+      syncMemoryFiles: (params: { needsFullReindex: boolean }) => Promise<unknown>;
+    };
+    const queryStarted = createDeferred<void>();
+    const releaseQuery = createDeferred<void>();
+    const shadowReady = createDeferred<void>();
+    const releaseReindex = createDeferred<void>();
+    const childReady = createDeferred<void>();
+    const releaseChild = createDeferred<void>();
+    const publishedDb = fields.db;
+    const publishedChunks = manager.status().chunks;
+    let shadowDb: DatabaseSync | undefined;
+    const syncMemoryFiles = fields.syncMemoryFiles.bind(manager);
+    const runKnn = knnSubprocess.runVectorKnnInSubprocess;
+    const querySpy = vi.spyOn(fields.provider, "embed").mockImplementation(async () => {
+      queryStarted.resolve();
+      await releaseQuery.promise;
+      return [1, 0, 0, 0];
+    });
+    const syncSpy = vi.spyOn(fields, "syncMemoryFiles").mockImplementation(async (params) => {
+      shadowDb = fields.db;
+      expect(manager.status().chunks).toBe(publishedChunks);
+      const lexical = await manager.search("zebra", { lexicalOnly: true, minScore: 0 });
+      expect(lexical.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+      const result = await syncMemoryFiles(params);
+      shadowReady.resolve();
+      await releaseReindex.promise;
+      return result;
+    });
+    const childSpy = vi
+      .spyOn(knnSubprocess, "runVectorKnnInSubprocess")
+      .mockImplementation(async (params) => {
+        const result = await runKnn(params);
+        expect(result.rows.length).toBeGreaterThan(0);
+        childReady.resolve();
+        await releaseChild.promise;
+        return result;
+      });
+    let search: ReturnType<typeof manager.search> | undefined;
+    let reindex: ReturnType<typeof manager.sync> | undefined;
+    try {
+      search = manager.search("semantic needle without lexical overlap");
+      await queryStarted.promise;
+      reindex = manager.sync({ reason: "test", force: true });
+      await shadowReady.promise;
+      expect(fields.db).toBe(publishedDb);
+      releaseQuery.resolve();
+      await childReady.promise;
+      releaseReindex.resolve();
+      await reindex;
+      expect(shadowDb?.isOpen).toBe(false);
+      releaseChild.resolve();
+      const results = await search;
+      expect(results.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+    } finally {
+      releaseQuery.resolve();
+      releaseReindex.resolve();
+      releaseChild.resolve();
+      await Promise.allSettled([search, reindex]);
+      childSpy.mockRestore();
+      syncSpy.mockRestore();
+      querySpy.mockRestore();
+    }
   });
 
   it("retries transient query embedding transport failures during search", async () => {
@@ -350,7 +428,7 @@ describe("memory index", () => {
     );
     await fs.writeFile(
       path.join(fixture.paths.memory, "alpha.md"),
-      "Unrelated path-only candidate.",
+      "Unrelated beta path-only candidate.",
     );
     await manager.sync({ reason: "test" });
 

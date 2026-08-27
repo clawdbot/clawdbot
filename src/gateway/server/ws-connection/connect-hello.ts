@@ -101,6 +101,7 @@ export async function sendGatewayHello(
       : undefined;
   const canMigrateRecovery = role === "operator" && !authenticatedPrincipal && Boolean(deviceToken);
   const snapshot = buildGatewaySnapshot({
+    client: context.handler.getClient(),
     includeSensitive: scopes.includes(ADMIN_SCOPE),
     includeUpdateDetails: canReadDetailedUpdateMetadata(role, scopes),
     revisionProjector: buildRequestContext().configRevisionProjector,
@@ -140,6 +141,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,

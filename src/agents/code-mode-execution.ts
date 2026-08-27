@@ -84,6 +84,7 @@ export async function runCodeModeExec(params: {
   }
   const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
     prepareInput: true,
+    validateInput: true,
   });
   params.onRuntime?.(runtime);
   const bridgeDispatch = createCodeModeBridgeDispatchState();

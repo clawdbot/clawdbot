@@ -23,6 +23,9 @@ import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
   createCodexTestBindingStore,
+  createCodexTestBindingStateStore,
+  createCodexAppServerBindingStore,
+  bindingStoreKey,
   sessionBindingIdentity,
   testCodexAppServerBindingStore,
 } from "./src/app-server/session-binding.test-helpers.js";
@@ -579,8 +582,9 @@ describe("Codex agent harness reset()", () => {
     }
   });
 
-  it("keeps deleted session generations retired", async () => {
-    const bindingStore = createCodexTestBindingStore();
+  it("removes deleted session bindings before the post-delete reset event", async () => {
+    const state = createCodexTestBindingStateStore();
+    const bindingStore = createCodexAppServerBindingStore(state);
     const identity = sessionBindingIdentity({
       agentId: "worker",
       sessionId: "session-1",
@@ -592,6 +596,19 @@ describe("Codex agent harness reset()", () => {
     });
     const harness = createCodexAppServerAgentHarness({ bindingStore });
 
+    await harness.withSessionDeletion?.(
+      {
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey: "agent:worker:main",
+        assertCurrent() {},
+      },
+      async (mutation) => {
+        mutation.commit();
+        expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+      },
+    );
+
     await harness.reset?.({
       agentId: "worker",
       sessionId: "session-1",
@@ -599,12 +616,46 @@ describe("Codex agent harness reset()", () => {
       reason: "deleted",
     });
 
+    expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+  });
+
+  it("rejects supervised deletion before invoking the session transaction", async () => {
+    const bindingStore = createCodexTestBindingStore();
+    const identity = sessionBindingIdentity({
+      agentId: "worker",
+      sessionId: "supervised",
+      sessionKey: "agent:worker:main",
+    });
+    await bindingStore.mutate(identity, {
+      kind: "set",
+      binding: {
+        threadId: "thread-supervised",
+        cwd: "/repo",
+        connectionScope: "supervision",
+        supervisionSourceThreadId: "thread-source",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        preserveNativeModel: true,
+        conversationSourceTransferComplete: true,
+      },
+    });
+    const harness = createCodexAppServerAgentHarness({ bindingStore });
+    const run = vi.fn();
     await expect(
-      bindingStore.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-stale", cwd: "/repo" },
-      }),
-    ).resolves.toBe(false);
+      harness.withSessionDeletion?.(
+        {
+          agentId: "worker",
+          sessionId: "supervised",
+          sessionKey: "agent:worker:main",
+          assertCurrent() {},
+        },
+        run,
+      ),
+    ).rejects.toThrow("owned by supervision");
+    expect(run).not.toHaveBeenCalled();
+    await expect(bindingStore.read(identity)).resolves.toMatchObject({
+      threadId: "thread-supervised",
+    });
   });
 });
 

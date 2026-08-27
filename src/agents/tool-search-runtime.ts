@@ -12,8 +12,6 @@ import { levenshteinDistance } from "../shared/levenshtein-distance.js";
 import {
   getBeforeToolCallFailureDisposition,
   isPreExecutionBlockedToolResult,
-  isToolWrappedWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
@@ -25,6 +23,7 @@ import {
 } from "./tool-result-error.js";
 import {
   compactToolSearchCatalogEntry,
+  prepareToolSearchCatalogExecutionTool,
   resolveCatalog,
   visibleCatalogEntries,
 } from "./tool-search-catalog.js";
@@ -597,7 +596,9 @@ export class ToolSearchRuntime {
     }
     const pluginMeta = getPluginToolMeta(entry.tool as Parameters<typeof getPluginToolMeta>[0]);
     if (pluginMeta) {
-      return pluginMeta.mcp ? false : pluginMeta.replaySafe === true;
+      return pluginMeta.mcp
+        ? false
+        : pluginMeta.replaySafe === true && pluginMeta.sideEffecting !== true;
     }
     if (getChannelAgentToolMeta(entry.tool as never)) {
       return false;
@@ -644,15 +645,7 @@ export class ToolSearchRuntime {
       return snapshot;
     };
     const validateInput = this.options.validateInput && entry.source === "openclaw";
-    const prepareInput =
-      this.options.prepareInput &&
-      entry.source === "openclaw" &&
-      "prepareBeforeToolCallParams" in entry.tool &&
-      typeof entry.tool.prepareBeforeToolCallParams === "function";
-    const executionTool =
-      (prepareInput || validateInput) && !isToolWrappedWithBeforeToolCallHook(entry.tool as never)
-        ? wrapToolWithBeforeToolCallHook(entry.tool as never)
-        : entry.tool;
+    const executionTool = prepareToolSearchCatalogExecutionTool(entry, this.options);
     const runExecution = async () => {
       const parentToolCallId = options?.parentToolCallId ?? toolCallId;
       const signal = options?.signal ?? this.ctx.abortSignal;
@@ -707,11 +700,10 @@ export class ToolSearchRuntime {
         )
       : await runExecution();
     const acceptedResult = await acceptResultBeforeProjection(result);
-    const parentToolCallId = options?.parentToolCallId;
-    if (parentToolCallId) {
+    if (options?.parentToolCallId) {
       this.terminalTargetBatchByParent.set(
-        parentToolCallId,
-        this.terminalTargetBatchByParent.get(parentToolCallId) !== false &&
+        options.parentToolCallId,
+        this.terminalTargetBatchByParent.get(options.parentToolCallId) !== false &&
           acceptedResult.terminate === true,
       );
     }

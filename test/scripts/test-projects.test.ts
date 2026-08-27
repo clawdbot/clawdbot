@@ -294,6 +294,8 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -309,6 +311,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/agents/system-prompt.test.ts",
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -323,6 +327,8 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -338,6 +344,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -1669,18 +1677,22 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("prints wrapper help without starting a broad local suite", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/test-projects.mts", "--help"],
-      {
-        encoding: "utf8",
-        timeout: 5_000,
-      },
-    );
+    withTinyFileTree({}, (tempDir) => {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/test-projects.mts", "--help"],
+        {
+          encoding: "utf8",
+          // Own the child's tsx cache so unrelated host transforms cannot delay help.
+          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+          timeout: 5_000,
+        },
+      );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
-    expect(result.stderr).not.toContain("[test] starting");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+      expect(result.stderr).not.toContain("[test] starting");
+    });
   });
 
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
@@ -2525,11 +2537,30 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
         "extensions/slack/src/monitor.tool-result.test.ts",
         "src/auto-reply/reply/effective-reply-route.test.ts",
+      ],
+    );
+  });
+
+  it("routes effective reply changes through every dispatch entrypoint", () => {
+    expectChangedTargets(
+      ["src/auto-reply/reply/effective-reply-route.ts"],
+      [
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
       ],
     );
   });

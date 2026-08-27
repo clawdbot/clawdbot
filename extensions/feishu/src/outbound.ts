@@ -9,10 +9,7 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import {
-  renderMessagePresentationFallbackText,
-  resolveLegacyInteractiveTextFallback,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { resolveLegacyInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import {
@@ -53,9 +50,10 @@ import {
 } from "./native-card.js";
 import {
   assertFeishuCardWithinEnvelope,
-  buildFeishuCommentPresentationFallback,
+  buildFeishuPresentationFallback,
   buildFeishuPresentationCardElements,
   isFeishuCardWithinEnvelope,
+  renderFeishuPresentationFallbackText,
   resolveFeishuRichReply,
 } from "./presentation-card.js";
 import {
@@ -194,11 +192,15 @@ async function reportFeishuOutboundDelivery<T extends { messageId: string; chatI
 
 function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload): {
   payload: FeishuOutboundPayload;
-  presentationFallback: boolean;
+  presentationFallback?: { hasVisibleContent: boolean };
 } {
   const feishuData = isRecord(payload.channelData?.feishu) ? payload.channelData.feishu : undefined;
-  if (feishuData?.[FEISHU_PRESENTATION_FALLBACK_MARKER] !== true) {
-    return { payload, presentationFallback: false };
+  const presentationFallback = feishuData?.[FEISHU_PRESENTATION_FALLBACK_MARKER];
+  if (
+    !isRecord(presentationFallback) ||
+    typeof presentationFallback.hasVisibleContent !== "boolean"
+  ) {
+    return { payload };
   }
   const nextFeishuData = { ...feishuData };
   delete nextFeishuData[FEISHU_PRESENTATION_FALLBACK_MARKER];
@@ -213,7 +215,7 @@ function consumeFeishuPresentationFallbackMarker(payload: FeishuOutboundPayload)
       ...payload,
       channelData: Object.keys(nextChannelData).length > 0 ? nextChannelData : undefined,
     },
-    presentationFallback: true,
+    presentationFallback: { hasVisibleContent: presentationFallback.hasVisibleContent },
   };
 }
 
@@ -258,7 +260,7 @@ function buildFeishuPayloadCard(params: {
   const rawText = params.text ?? params.payload.text;
   const textCard = readNativeFeishuCardJson(rawText);
   const { interactive, presentation } = resolveFeishuRichReply(params.payload);
-  if (!presentation && !interactive) {
+  if (!presentation) {
     if (!textCard) {
       return undefined;
     }
@@ -272,14 +274,7 @@ function buildFeishuPayloadCard(params: {
         text: rawText,
         interactive,
       });
-  const elements = presentation
-    ? buildFeishuPresentationCardElements({ presentation, fallbackText: text })
-    : [
-        {
-          tag: "markdown",
-          content: renderMessagePresentationFallbackText({ text, presentation }),
-        },
-      ];
+  const elements = buildFeishuPresentationCardElements({ presentation, fallbackText: text });
 
   const identityTitle = resolveFeishuIdentityHeaderTitle(params.identity);
   const title = presentation?.title ?? identityTitle;
@@ -315,9 +310,10 @@ function renderFeishuPresentationPayload({
   ctx,
 }: Parameters<NonNullable<ChannelOutboundAdapter["renderPresentation"]>>[0]) {
   const textCard = readNativeFeishuCardJson(payload.text);
-  const { fallbackText, fallbackHasCommand } = buildFeishuCommentPresentationFallback({
+  const { fallbackText, fallbackHasCommand } = buildFeishuPresentationFallback({
     text: textCard ? undefined : payload.text,
     presentation,
+    textFormat: parseFeishuCommentTarget(ctx.to) ? "plain" : "markdown",
   });
   const card = buildFeishuPayloadCard({
     payload,
@@ -328,8 +324,8 @@ function renderFeishuPresentationPayload({
     ? payload.channelData.feishu
     : undefined;
   if (!card) {
-    // The marker keeps core on sendPayload after it strips presentation; that path
-    // consumes it and fans out text instead of using the whole fallback as a caption.
+    // Core strips presentation from this post-queue transport copy. Preserve its
+    // own visible contribution separately from prose already delivered by streaming.
     return {
       ...payload,
       text: fallbackText,
@@ -337,7 +333,11 @@ function renderFeishuPresentationPayload({
         ...payload.channelData,
         feishu: {
           ...existingFeishuData,
-          [FEISHU_PRESENTATION_FALLBACK_MARKER]: true,
+          [FEISHU_PRESENTATION_FALLBACK_MARKER]: {
+            hasVisibleContent: Boolean(
+              renderFeishuPresentationFallbackText({ presentation }).trim(),
+            ),
+          },
           ...(fallbackHasCommand ? { fallbackHasCommand: true } : {}),
         },
       },
@@ -582,6 +582,7 @@ async function sendFeishuTtsSupplementPayload(params: {
   ctx: FeishuSendPayloadContext;
   payload: FeishuOutboundPayload;
   supplement: NonNullable<ReturnType<typeof getReplyPayloadTtsSupplement>>;
+  hasVisiblePresentationFallback?: boolean;
   sendVisiblePayload?: (
     replyToId: string | undefined,
   ) => ReturnType<NonNullable<ChannelOutboundAdapter["sendText"]>>;
@@ -609,7 +610,10 @@ async function sendFeishuTtsSupplementPayload(params: {
   if (params.sendVisiblePayload) {
     lastResult = await params.sendVisiblePayload(nextReplyToId());
     await ctx.onDeliveryResult?.(lastResult);
-  } else if (params.supplement.visibleTextAlreadyDelivered !== true) {
+  } else if (
+    params.hasVisiblePresentationFallback ||
+    params.supplement.visibleTextAlreadyDelivered !== true
+  ) {
     const text = params.payload.text?.trim() ? params.payload.text : params.supplement.spokenText;
     for (const chunk of chunkFeishuMarkdown(text, FEISHU_TEXT_CHUNK_LIMIT)) {
       lastResult = await sendText({
@@ -675,7 +679,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       // validating card limits so unused native card data cannot block delivery.
       const textCard = readNativeFeishuCardJson(payload.text);
       const fallbackSourceText = textCard ? undefined : payload.text;
-      const { text, fallbackText } = buildFeishuCommentPresentationFallback({
+      const { commentText: text, fallbackText } = buildFeishuPresentationFallback({
         text: fallbackSourceText,
         presentation,
         fallbackHasCommand:
@@ -716,25 +720,36 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       identity: ctx.identity,
     });
     if (!card) {
-      if (ttsSupplement) {
-        return await sendFeishuTtsSupplementPayload({ ctx, payload, supplement: ttsSupplement });
-      }
       const { presentation } = resolveFeishuRichReply(payload);
       const fallbackPayload = presentation
         ? {
             ...payload,
-            text: renderMessagePresentationFallbackText({
-              text: readNativeFeishuCardJson(payload.text) ? undefined : payload.text,
-              presentation,
-            }),
+            text: renderFeishuPresentationFallbackText(
+              {
+                text: readNativeFeishuCardJson(payload.text) ? undefined : payload.text,
+                presentation,
+              },
+              "markdown",
+            ),
             presentation: undefined,
             interactive: undefined,
           }
         : payload;
+      if (ttsSupplement) {
+        return await sendFeishuTtsSupplementPayload({
+          ctx,
+          payload: fallbackPayload,
+          supplement: ttsSupplement,
+          // Empty structural presentations must not replay already-streamed prose.
+          hasVisiblePresentationFallback:
+            presentationFallback?.hasVisibleContent ??
+            Boolean(renderFeishuPresentationFallbackText({ presentation }).trim()),
+        });
+      }
       return await sendFeishuFallbackPayload({
         ctx,
         payload: fallbackPayload,
-        separateMediaAndText: presentationFallback || presentation !== undefined,
+        separateMediaAndText: presentationFallback !== undefined || presentation !== undefined,
       });
     }
 

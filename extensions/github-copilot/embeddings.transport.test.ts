@@ -34,16 +34,19 @@ const DISCOVERY_MODELS_BODY = JSON.stringify({
 
 async function startCopilotServer(handle: {
   models: { status: number; body: string } | ((response: ServerResponse) => void);
-  embeddings?: { status: number; body: string };
+  embeddings?: { status: number; body: string } | ((response: ServerResponse) => void);
+  observeRequest?: (request: IncomingMessage, body: string) => void;
 }): Promise<CopilotServer> {
   const requests: CopilotServer["requests"] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       // Drain the request body so keep-alive sockets close cleanly.
-      await new Promise<void>((resolve) => {
-        req.resume();
-        req.on("end", resolve);
+      const body = await new Promise<string>((resolve) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
       });
+      handle.observeRequest?.(req, body);
       requests.push({ method: req.method, url: req.url });
       const isEmbeddings = req.method === "POST" && req.url === "/embeddings";
       const route = isEmbeddings && handle.embeddings ? handle.embeddings : handle.models;
@@ -241,25 +244,75 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     }
   });
 
-  it("returns embedding vectors on a successful response over real transport", async () => {
-    const server = await startCopilotServer({
-      models: { status: 200, body: DISCOVERY_MODELS_BODY },
-      embeddings: {
-        status: 200,
-        body: JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] }),
-      },
-    });
-    pointTokenAt(server.baseUrl);
+  it.each(["profile", "custom"])(
+    "preserves %s authentication and embedding wire requests",
+    async (auth) => {
+      const observed: Array<{
+        authorization: string | undefined;
+        integration: unknown;
+        custom: unknown;
+        body: string;
+      }> = [];
+      const server = await startCopilotServer({
+        models: { status: 200, body: DISCOVERY_MODELS_BODY },
+        observeRequest: (request, body) => {
+          observed.push({
+            authorization: request.headers.authorization,
+            integration: request.headers["copilot-integration-id"],
+            custom: request.headers["x-proof"],
+            body,
+          });
+        },
+        embeddings: (response) => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(
+            JSON.stringify({
+              data:
+                server.requests.length === 2
+                  ? [{ index: 0, embedding: [3, 4] }]
+                  : [
+                      { index: 1, embedding: [0, 2] },
+                      { index: 0, embedding: [3, 0] },
+                    ],
+            }),
+          );
+        },
+      });
+      pointTokenAt(server.baseUrl);
 
-    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    const vector = await result.provider?.embed("hello", { inputType: "query" });
+      const result = await githubCopilotMemoryEmbeddingProviderAdapter.create({
+        ...defaultCreateOptions(),
+        remote: {
+          ...(auth === "custom" ? { baseUrl: server.baseUrl, apiKey: "explicit-test-token" } : {}),
+          headers: { Authorization: "replaced-test-token", "X-Proof": "forwarded" },
+        },
+      });
+      expect(await result.provider?.embed("hello", { inputType: "query" })).toEqual([0.6, 0.8]);
+      expect(await result.provider?.embedBatch(["first", { text: "second" }])).toEqual([
+        [1, 0],
+        [0, 1],
+      ]);
 
-    expect(server.requests).toEqual([
-      { method: "GET", url: "/models" },
-      { method: "POST", url: "/embeddings" },
-    ]);
-    expect(Array.isArray(vector)).toBe(true);
-    expect(vector).toHaveLength(3);
-    expect(vector?.every((value) => typeof value === "number")).toBe(true);
-  });
+      expect(server.requests).toEqual([
+        { method: "GET", url: "/models" },
+        { method: "POST", url: "/embeddings" },
+        { method: "POST", url: "/embeddings" },
+      ]);
+      const authorization = `Bearer ${auth === "custom" ? "explicit-test-token" : "copilot_test_token_abc"}`;
+      expect(observed).toEqual(
+        [
+          "",
+          JSON.stringify({ model: "text-embedding-3-small", input: ["hello"] }),
+          JSON.stringify({ model: "text-embedding-3-small", input: ["first", "second"] }),
+        ].map((body) => ({
+          authorization,
+          integration: "copilot-developer-cli",
+          custom: "forwarded",
+          body,
+        })),
+      );
+      expect(resolveFirstGithubTokenMock).toHaveBeenCalledTimes(auth === "custom" ? 0 : 1);
+      expect(resolveCopilotRuntimeAuthMock).toHaveBeenCalledTimes(auth === "custom" ? 0 : 1);
+    },
+  );
 });

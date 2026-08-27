@@ -34,10 +34,11 @@ export function controlUiSessionUrl(baseUrl: string, sessionKey: string): string
 }
 
 export async function navigateToControlUiSession(page: Page, sessionKey: string): Promise<void> {
-  await page.evaluate((pathname) => {
+  const expectedPathname = await page.evaluate((sessionPath) => {
     const app = document.querySelector("openclaw-app") as HTMLElement & {
       runtime?: {
         context: {
+          basePath: string;
           navigate: (routeId: string, options: { pathname: string }) => void;
         };
       };
@@ -45,9 +46,13 @@ export async function navigateToControlUiSession(page: Page, sessionKey: string)
     if (!app.runtime) {
       throw new Error("OpenClaw application runtime is unavailable");
     }
+    const pathname = `${app.runtime.context.basePath}${sessionPath}`;
+    const url = new URL(window.location.href);
+    url.pathname = pathname;
     app.runtime.context.navigate("chat", { pathname });
+    return url.pathname;
   }, controlUiSessionPath(sessionKey));
-  await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
+  await page.waitForURL((url) => url.pathname === expectedPathname);
   await page.waitForFunction(
     (targetSessionKey) =>
       [...document.querySelectorAll<HTMLElement>("openclaw-chat-pane")].some(
@@ -109,13 +114,22 @@ export async function waitForControlUiRoute(page: Page, target: ControlUiRouteTa
         };
         const state = app.runtime?.router.getState();
         const pathname = window.location.pathname;
+        // Router paths retain literal characters that browser history percent-encodes.
+        // Serialize as a pathname; decoding would alias encoded delimiters and percent data.
+        const browserPathname = (value: string) => {
+          const url = new URL(window.location.href);
+          url.pathname = value;
+          return url.pathname;
+        };
         return (
           state?.status === "success" &&
           state.matches[0]?.routeId === expected.routeId &&
-          state.resolvedLocation?.pathname === pathname &&
+          state.resolvedLocation !== null &&
+          browserPathname(state.resolvedLocation.pathname) === pathname &&
           state.pendingMatches.length === 0 &&
-          (expected.pathname === undefined || pathname === expected.pathname) &&
-          (expected.pathnamePrefix === undefined || pathname.startsWith(expected.pathnamePrefix)) &&
+          (expected.pathname === undefined || pathname === browserPathname(expected.pathname)) &&
+          (expected.pathnamePrefix === undefined ||
+            pathname.startsWith(browserPathname(expected.pathnamePrefix))) &&
           (expected.search === undefined || window.location.search === expected.search) &&
           (expected.hash === undefined || window.location.hash === expected.hash)
         );
