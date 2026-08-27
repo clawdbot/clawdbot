@@ -116,35 +116,50 @@ describe("browser tab discovery poll abort", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("cancels the opened-target discovery timer", async () => {
-    vi.useFakeTimers();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
-      targetId: "PENDING",
-      finalUrl: "about:blank",
-    });
-    const fetchMock = vi.fn(async (url: unknown) => {
-      if (!String(url).includes("/json/list")) {
-        throw new Error(`unexpected fetch: ${String(url)}`);
-      }
-      return { ok: true, json: async () => [] } as unknown as Response;
-    });
-    globalThis.fetch = withBrowserFetchPreconnect(fetchMock);
-    const state = makeState("openclaw");
-    const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile(
-      "openclaw",
-    );
-    const controller = new AbortController();
-    const openPromise = openclaw.openTab("about:blank", { signal: controller.signal });
+  it.each([false, true])(
+    "cancels opened-target discovery and closes the target (close fails: %s)",
+    async (closeFails) => {
+      vi.useFakeTimers();
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({
+        targetId: "PENDING",
+        finalUrl: "about:blank",
+      });
+      const closeRequests: string[] = [];
+      const closeSignalsAborted: Array<boolean | undefined> = [];
+      const fetchMock = vi.fn(async (url: unknown, init?: RequestInit) => {
+        if (String(url).includes("/json/close/")) {
+          closeRequests.push(String(url));
+          closeSignalsAborted.push(init?.signal?.aborted);
+          if (closeFails) {
+            throw new Error("close request failed");
+          }
+          return { ok: true } as Response;
+        }
+        if (!String(url).includes("/json/list")) {
+          throw new Error(`unexpected fetch: ${String(url)}`);
+        }
+        return { ok: true, json: async () => [] } as unknown as Response;
+      });
+      globalThis.fetch = withBrowserFetchPreconnect(fetchMock);
+      const state = makeState("openclaw");
+      const openclaw = createTestBrowserRouteContext({ getState: () => state }).forProfile(
+        "openclaw",
+      );
+      const controller = new AbortController();
+      const openPromise = openclaw.openTab("about:blank", { signal: controller.signal });
 
-    await vi.advanceTimersByTimeAsync(0);
-    expect(setTimeoutSpy.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS)).toBe(
-      true,
-    );
-    expect(vi.getTimerCount()).toBe(1);
-    controller.abort();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(setTimeoutSpy.mock.calls.some((call) => call[1] === OPEN_TAB_DISCOVERY_POLL_MS)).toBe(
+        true,
+      );
+      expect(vi.getTimerCount()).toBe(1);
+      controller.abort();
 
-    await expect(openPromise).rejects.toThrow(/aborted/i);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      await expect(openPromise).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
+      expect(closeRequests).toEqual(["http://127.0.0.1:18800/json/close/PENDING"]);
+      expect(closeSignalsAborted).toEqual([false]);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });
