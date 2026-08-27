@@ -169,7 +169,7 @@ describe("chat pane composer controls", () => {
       ".chat-controls__permission-learn-more",
     );
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/tools/permission-modes");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/gateway/permission-modes");
     expect(docsLink?.target).toBe("_blank");
     expect(docsLink?.rel.split(/\s+/).toSorted()).toEqual(["noopener", "noreferrer"]);
   });

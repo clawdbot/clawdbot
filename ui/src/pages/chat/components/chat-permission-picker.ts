@@ -5,7 +5,7 @@ import { t } from "../../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { restorePointerOpenedChatComposerTrigger } from "./chat-picker-overlay.ts";
 
-const PERMISSION_MODES_DOCS_URL = "https://docs.openclaw.ai/tools/permission-modes";
+const PERMISSION_MODES_DOCS_URL = "https://docs.openclaw.ai/gateway/permission-modes";
 const PERMISSION_MODES = ["read-only", "guarded", "workspace", "full"] as const;
 const DEFAULT_PERMISSION_VALUE = "default";
 const PERMISSION_OPTIONS = [null, ...PERMISSION_MODES] as const;
