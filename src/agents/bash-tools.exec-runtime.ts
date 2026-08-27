@@ -266,10 +266,14 @@ export function resolveExecTarget(params: {
 }) {
   const sandboxRequired = params.sandboxRequired === true;
   if (sandboxRequired && !params.sandboxAvailable) {
-    throw new Error("This session requires a sandbox, but its sandbox runtime is unavailable.");
+    throw deniedBeforeStart(
+      "This session requires a sandbox, but its sandbox runtime is unavailable.",
+    );
   }
   if (sandboxRequired && params.elevatedRequested) {
-    throw new Error("Elevated execution is unavailable because this session requires a sandbox.");
+    throw deniedBeforeStart(
+      "Elevated execution is unavailable because this session requires a sandbox.",
+    );
   }
   // Session isolation outranks every agent, session, and request-scoped host preference.
   const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
