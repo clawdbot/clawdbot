@@ -47,6 +47,7 @@ export function resolveHeartbeatWakePayloadFlags(params: {
       source === "session-state" ||
       source === "background-task" ||
       source === "background-task-blocked" ||
+      source === "followup-queue-restore" ||
       reason === "wake",
   };
 }
@@ -81,6 +82,8 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
     case "background-task":
     case "background-task-blocked":
       return params.intent === "immediate";
+    case "followup-queue-restore":
+      return hasSessionTarget;
     default:
       return false;
   }

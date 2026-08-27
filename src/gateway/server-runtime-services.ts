@@ -29,6 +29,7 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { scheduleRestoredFollowupQueueRecovery } from "./server-followup-queue-recovery.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import {
@@ -336,6 +337,11 @@ function startPendingSessionDeliveryRuntime(params: {
   };
 }
 
+function recoverRestoredFollowupQueues(params: { log: GatewayRuntimeServiceLogger }): () => void {
+  return scheduleRestoredFollowupQueueRecovery({
+    log: params.log.child("followup-queue-recovery"),
+  });
+}
 /** Activates background gateway services after core runtime startup is ready. */
 export function activateGatewayScheduledServices(params: {
   minimalTestGateway: boolean;
@@ -419,9 +425,11 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  const stopFollowupQueueRecovery = recoverRestoredFollowupQueues({ log: params.log });
   const heartbeatRunnerWithUpstreamMonitor: HeartbeatRunner = {
     updateConfig: heartbeatRunner.updateConfig,
     stop: () => {
+      stopFollowupQueueRecovery();
       void stopOutboundDeliveryRecovery();
       stopSessionDeliveryRuntime();
       sessionUpstreamMonitor.stop();

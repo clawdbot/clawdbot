@@ -1484,6 +1484,15 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_target
   ON delivery_queue_entries(queue_name, status, channel, target, enqueued_at, id)
   WHERE channel IS NOT NULL AND target IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS followup_queue_entries (
+  queue_key TEXT NOT NULL PRIMARY KEY,
+  queue_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_followup_queue_entries_updated
+  ON followup_queue_entries(updated_at DESC, queue_key);
+
 CREATE TABLE IF NOT EXISTS task_runs (
   task_id TEXT NOT NULL PRIMARY KEY,
   runtime TEXT NOT NULL,

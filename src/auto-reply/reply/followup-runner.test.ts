@@ -47,15 +47,30 @@ vi.mock("./followup-delivery.js", () => ({
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
 }));
 
-vi.mock("./queue.js", () => ({
-  completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
-  FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
-}));
+vi.mock("./queue.js", () => {
+  class FollowupRunDeferredError extends Error {
+    constructor(message?: string) {
+      super(message);
+      this.name = "FollowupRunDeferredError";
+    }
+  }
+  class FollowupTerminalDeliveryError extends Error {
+    constructor(message?: string, options?: { cause?: unknown }) {
+      super(message, options);
+      this.name = "FollowupTerminalDeliveryError";
+    }
+  }
+  return {
+    completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
+    FollowupRunDeferredError,
+    FollowupTerminalDeliveryError,
+  };
+});
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
-const { FollowupRunDeferredError } = await import("./queue.js");
+const { FollowupRunDeferredError, FollowupTerminalDeliveryError } = await import("./queue.js");
 
 function createQueuedRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return {
@@ -235,9 +250,9 @@ describe("createFollowupRunner", () => {
     });
     state.deliver.mockRejectedValue(failure);
 
-    await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      turn.queued,
-    );
+    await expect(
+      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(turn.queued),
+    ).rejects.toBeInstanceOf(FollowupTerminalDeliveryError);
 
     expect(state.execute).toHaveBeenCalledOnce();
     expect(state.account).toHaveBeenCalledOnce();

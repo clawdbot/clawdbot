@@ -217,4 +217,32 @@ describe("runHeartbeatOnce heartbeat typing", () => {
       expect(sendTyping).not.toHaveBeenCalled();
     });
   });
+
+  it("does not type for followup-queue restore carrier wakes", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const sendTyping = vi.fn(async () => undefined);
+      const clearTyping = vi.fn(async () => undefined);
+      installHeartbeatTypingPlugin({ sendTyping, clearTyping });
+      const cfg = createHeartbeatConfig({ tmpDir, storePath });
+      await seedTelegramSession(storePath, cfg);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      await runHeartbeatOnce({
+        cfg,
+        source: "followup-queue-restore",
+        intent: "immediate",
+        reason: "restored-followup-queue",
+        sessionKey: "agent:main:main",
+        deps: {
+          getReplyFromConfig: replySpy,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendTyping).not.toHaveBeenCalled();
+      expect(clearTyping).not.toHaveBeenCalled();
+    });
+  });
 });

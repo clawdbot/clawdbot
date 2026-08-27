@@ -529,6 +529,75 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
+  it("still runs followup-queue restore wakes when visibility disables all output", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+        visibility: { showOk: false, showAlerts: false, useIndicator: false },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: WHATSAPP_GROUP,
+      });
+
+      const sendWhatsApp = createMessageSendSpy();
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "followup-queue-restore",
+        intent: "immediate",
+        reason: "restored-followup-queue",
+        sessionKey: "agent:main:main",
+        deps: {
+          ...makeWhatsAppDeps({ sendWhatsApp }),
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(result.status).not.toBe("skipped");
+    });
+  });
+
+  it("does not send HEARTBEAT_OK for followup-queue restore wakes when showOk is true", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createWhatsAppHeartbeatConfig({
+        tmpDir,
+        storePath,
+        visibility: { showOk: true },
+      });
+
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: WHATSAPP_GROUP,
+      });
+
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+      const sendWhatsApp = createMessageSendSpy();
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        source: "followup-queue-restore",
+        intent: "immediate",
+        reason: "restored-followup-queue",
+        sessionKey: "agent:main:main",
+        deps: {
+          ...makeWhatsAppDeps({ sendWhatsApp }),
+          getReplyFromConfig: replySpy,
+        },
+      });
+
+      expect(replySpy).toHaveBeenCalled();
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      expect(result.status).not.toBe("skipped");
+    });
+  });
+
   it("skips delivery for markup-wrapped HEARTBEAT_OK", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = await createSeededWhatsAppHeartbeatConfig({

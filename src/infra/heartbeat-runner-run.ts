@@ -46,14 +46,19 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   const { outboundPolicySessionKey, hasRelayableExecCompletion } = prepared;
 
   if (!visibility.showAlerts && !visibility.showOk && !visibility.useIndicator) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: "alerts-disabled",
-      durationMs: Date.now() - startedAt,
-      channel: delivery.channel !== "none" ? delivery.channel : undefined,
-      accountId: delivery.accountId,
-    });
-    return { status: "skipped", reason: "alerts-disabled" };
+    // Restored follow-up recovery uses a heartbeat wake only to reach agent-runner
+    // drain registration. Presentation-suppressed heartbeats must still run that
+    // path; channel delivery of HEARTBEAT_OK/alerts stays gated below.
+    if (wake.wakeSource !== "followup-queue-restore") {
+      emitHeartbeatEvent({
+        status: "skipped",
+        reason: "alerts-disabled",
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+      });
+      return { status: "skipped", reason: "alerts-disabled" };
+    }
   }
   const resolveHeartbeatResponsePrefix = () =>
     resolveResponsePrefixTemplate(
@@ -71,11 +76,15 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     policySessionKey: outboundPolicySessionKey,
   });
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, agentId);
+  const isRestoreOnlyCarrierWake = wake.wakeSource === "followup-queue-restore";
   const canAttemptHeartbeatOk = Boolean(
-    visibility.showOk && delivery.channel !== "none" && delivery.to,
+    !isRestoreOnlyCarrierWake && visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
   const hasChatDelivery = Boolean(
-    delivery.channel !== "none" && delivery.to && (visibility.showAlerts || visibility.showOk),
+    !isRestoreOnlyCarrierWake &&
+    delivery.channel !== "none" &&
+    delivery.to &&
+    (visibility.showAlerts || visibility.showOk),
   );
   const heartbeatTypingIntervalSeconds = resolveHeartbeatTypingIntervalSeconds(cfg);
   const heartbeatChannelPlugin =
