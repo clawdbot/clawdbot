@@ -58,6 +58,7 @@ import { listPiSummaryPage } from "./pi-session-store.js";
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
+const PI_SESSION_READ_LIMIT_BYTES = 32 * 1024 * 1024;
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -647,6 +648,7 @@ describe("Pi session catalog", () => {
     await listLocalPiSessionPage({ limit: 20 });
 
     const content = await fs.readFile(file);
+    const growth = Buffer.alloc(PI_SESSION_READ_LIMIT_BYTES - content.length + 1);
     const buffers: Buffer[] = [];
     const actualOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
@@ -656,7 +658,7 @@ describe("Pi session catalog", () => {
       const actualHandle = await actualOpen(target, flags);
       return {
         stat: async () => {
-          await fs.appendFile(file, "\n");
+          await fs.appendFile(file, growth);
           return { isFile: () => true, size: content.length };
         },
         read: async (buffer: Buffer, offset: number, length: number) => {
@@ -674,6 +676,7 @@ describe("Pi session catalog", () => {
       ]);
       expect(new Set(buffers).size).toBe(1);
       expect(buffers[0]?.length).toBe(content.length);
+      expect((await fs.stat(file)).size).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
     } finally {
       openSpy.mockRestore();
     }
