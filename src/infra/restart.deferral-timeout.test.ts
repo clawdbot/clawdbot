@@ -436,7 +436,9 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
       emitHooks: { beforeEmit, emitRestart },
     });
 
-    await vi.advanceTimersByTimeAsync(150);
+    // Each takeover waits a full preparation budget (maxWaitMs here), so the second
+    // supersession lands at ~200ms.
+    await vi.advanceTimersByTimeAsync(250);
 
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
     // Three real preparations: idle (hung), first forced (hung), second forced (settles).
@@ -445,10 +447,13 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     expect(emitRestart).toHaveBeenCalledOnce();
   });
 
-  // The takeover is bounded: an attempt that has not yet outlived a full poll interval is
-  // still preparing legitimately and must be left alone, or every post-deadline tick would
-  // thrash a merely-slow preflight into a fresh one.
-  it("does not supersede a forced preparation still within its first poll interval", async () => {
+  // codex review: an earlier draft bounded the takeover to one POLL INTERVAL, which is a
+  // cadence, not a preparation deadline — a beforeEmit that legitimately runs longer than
+  // one interval (a config reload awaiting prepareRuntimeConfig exceeds the 500ms
+  // production poll easily) would be superseded on every tick, thrashing fresh
+  // preparations forever and never emitting. That traded a wedge for a livelock. The
+  // budget is the deferral's own, so a slow preparation spanning many polls still lands.
+  it("does not supersede a slow forced preparation that spans several poll intervals", async () => {
     const hooks: RestartDeferralHooks = { onTimeout: vi.fn() };
     const emitRestart = vi.fn(() => ({ status: "emitted" as const }));
     let beforeEmitCalls = 0;
@@ -476,9 +481,10 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(beforeEmitCalls).toBe(2);
 
-    // Only half a poll interval later: the forced attempt has not outlived its bound, so
-    // it must not be replaced yet.
-    await vi.advanceTimersByTimeAsync(5);
+    // Five further poll intervals elapse while the forced preparation is still running.
+    // Under the rejected poll-interval bound this would have restarted it five times;
+    // within its real budget it must be left completely alone.
+    await vi.advanceTimersByTimeAsync(50);
     expect(beforeEmitCalls).toBe(2);
 
     releaseForced?.();

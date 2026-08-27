@@ -700,10 +700,19 @@ export function deferGatewayRestartUntilIdle(opts: {
       ? Math.max(pollMs, Math.floor(opts.maxWaitMs))
       : undefined;
 
+  // How long a preparation may run before a post-deadline tick may supersede it. Poll
+  // cadence is NOT a preparation deadline: a beforeEmit that legitimately runs longer than
+  // one interval (a config reload awaiting prepareRuntimeConfig easily exceeds the 500 ms
+  // production poll) would then be replaced on every tick, thrashing fresh preparations
+  // forever without ever emitting. Reusing the deferral's own budget keeps the takeover
+  // strictly slower than the patience the caller already declared, so a hung preparation
+  // stays bounded while a slow one still gets to finish.
+  const preparationBudgetMs = Math.max(pollMs, maxWaitMs ?? 0);
+
   let cancelled = false;
   let attemptingEmission = false;
-  // When the in-flight attempt began. The post-deadline takeover uses it to supersede
-  // only a preparation that already failed to settle across a full poll interval.
+  // When the in-flight attempt began, so the takeover can tell a hung preparation from a
+  // slow one.
   let emissionStartedAt = 0;
   let cancelEmissionFence: (() => void) | null = null;
   let timedOutNotified = false;
@@ -840,8 +849,8 @@ export function deferGatewayRestartUntilIdle(opts: {
       // indefinitely — and that is true of a FORCED attempt started by an earlier
       // timeout tick just as much as of the idle-triggered one, so a once-only takeover
       // simply moves the permanent wedge one attempt along. Superseding is bounded to an
-      // attempt that already failed to settle across a full poll interval, so a merely
-      // slow preparation is retried rather than thrashed. Roll back its fence (safe
+      // attempt that already outlived preparationBudgetMs, so a merely slow preparation
+      // finishes rather than being thrashed. Roll back its fence (safe
       // no-op if a signal already fired) and drop the guard so the attempt below claims
       // a fresh attempt id and runs a real beforeEmit of its own — never skipped, so a
       // caller's safety preflight can't look like it already ran. If the stuck slot is
@@ -850,7 +859,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       // — but on unfixed main the same stuck slot already defeats BOTH that session's
       // restart and this bound forever, so nothing reachable from here is lost that
       // wasn't lost already.
-      if (attemptingEmission && Date.now() - emissionStartedAt >= pollMs) {
+      if (attemptingEmission && Date.now() - emissionStartedAt >= preparationBudgetMs) {
         cancelEmissionFence?.();
         cancelEmissionFence = null;
         attemptingEmission = false;
