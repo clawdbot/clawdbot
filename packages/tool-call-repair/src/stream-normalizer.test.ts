@@ -820,6 +820,43 @@ describe("normalizePlainTextToolCallStreamEvents over-cap XML", () => {
     expect(textDeltas(events).join("")).toBe(fenced);
   });
 
+  it("keeps protection resolution bounded when every delta carries a cumulative partial", async () => {
+    let resolverCalls = 0;
+    // OpenAI-completions and Mistral attach a growing cumulative snapshot to every
+    // text_delta via `partial`. resolvePartialProtectionCheck validates against exactly
+    // that shape and, when it validates, still does a full Markdown parse of the
+    // snapshot — so if it ran ahead of the carried-fence-state fast path, the fast path
+    // would never get a chance to answer and the quadratic parse would persist even
+    // with protectedRangesFenceCompatible set.
+    const fenced = [
+      "```toml",
+      ...Array.from({ length: 300 }, (_, index) => `[read.section.${index}]\nname = "svc"`),
+      "```",
+      "",
+    ].join("\n");
+    const deltas = fenced.split(/(?<=\[)/);
+    let accumulated = "";
+    const events = await collectNormalizedEvents(
+      deltas.map((delta) => {
+        accumulated += delta;
+        return streamTextDelta(delta, 0, assistantMessage(textContent(accumulated)));
+      }),
+      {
+        matcher,
+        createPromotedToolCallEvents: () => [],
+        normalizeTerminalMessage: () => undefined,
+        protectedRangesFenceCompatible: true,
+        resolveProtectedRanges: (text) => {
+          resolverCalls += 1;
+          return resolveTestFenceRanges(text);
+        },
+      },
+    );
+
+    expect(resolverCalls).toBeLessThanOrEqual(3);
+    expect(textDeltas(events).join("")).toBe(fenced);
+  });
+
   it("still protects an unfenced caller-defined range when the fast path is not opted in", async () => {
     // The carried fence scan only ever proves fence state. A resolver whose protected
     // ranges are not fences at all (unlike resolveTestFenceRanges/findCodeRegions) would be

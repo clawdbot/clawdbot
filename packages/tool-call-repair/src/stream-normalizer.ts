@@ -1367,26 +1367,33 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // authoritative terminal snapshot decide instead of deleting literal content.
                 callStart = null;
               } else {
-                const partialProtection = resolvePartialProtectionCheck({
-                  authoritative,
-                  contentIndex: eventContentIndex(incomingRecord),
-                  incoming,
-                  partial: incomingRecord.partial,
-                  resolveProtectedRanges: options.resolveProtectedRanges,
-                });
                 // Candidate-shaped text is rare in prose but constant in bracket-dense
                 // answers, so materializing and re-parsing the whole response here is
                 // quadratic. Ask the carried fence state first; it answers only what it
-                // can prove and yields to the full parse for everything else. Only a caller
+                // can prove and yields to a full parse for everything else. Only a caller
                 // that opted in has promised its resolver's protection is exactly fence
                 // state, so an un-opted-in resolver always takes the full-parse path below
                 // and stays authoritative — the fast path must never silently stand in for it.
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
-                let isProtectedAt =
-                  partialProtection ??
-                  (protectionContextOverflow || !options.protectedRangesFenceCompatible
-                    ? undefined
-                    : resolveProtectionFastPath(carriedScan, incoming));
+                let isProtectedAt: ((offset: number) => boolean) | undefined =
+                  options.protectedRangesFenceCompatible
+                    ? resolveProtectionFastPath(carriedScan, incoming)
+                    : undefined;
+                if (!isProtectedAt) {
+                  // The fast path could not prove the verdict from carried state (an
+                  // un-opted-in resolver, or a delimiter it cannot classify). Recover from
+                  // the provider's own cumulative "partial" snapshot when one validates
+                  // against this exact delta — providers like OpenAI-completions and
+                  // Mistral attach it to every text delta, but this is still a full parse,
+                  // so it must never run ahead of the fast path above on the common case.
+                  isProtectedAt = resolvePartialProtectionCheck({
+                    authoritative,
+                    contentIndex: eventContentIndex(incomingRecord),
+                    incoming,
+                    partial: incomingRecord.partial,
+                    resolveProtectedRanges: options.resolveProtectedRanges,
+                  });
+                }
                 if (!isProtectedAt) {
                   const protectionPrefix = materializeProtectionPrefix(authoritative);
                   const protectedRanges = options.resolveProtectedRanges(
