@@ -1,3 +1,5 @@
+import { controlUiAccentInk } from "./accent-contrast.ts";
+
 const ACCENT_CSS_VARIABLES = [
   "--ring",
   "--accent",
@@ -16,8 +18,6 @@ const ACCENT_CSS_VARIABLES = [
 
 let operatorSeamColor: string | undefined;
 let userAccentOverride: string | undefined;
-
-import { controlUiAccentInk } from "./accent-contrast.ts";
 
 export function applyControlUiAccent(userAccent?: string): void {
   userAccentOverride = userAccent;
