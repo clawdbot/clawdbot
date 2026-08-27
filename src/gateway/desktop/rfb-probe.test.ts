@@ -148,11 +148,14 @@ describe("RFB server probe", () => {
 });
 
 describe("RFB security classification", () => {
-  it("classifies supported security with password auth preferred over ARD", () => {
+  it("classifies the first browser-supported security type in server preference order", () => {
     expect(classifyRfbSecurity([1])).toBe("none");
     expect(classifyRfbSecurity([30])).toBe("ard-account");
     expect(classifyRfbSecurity([19])).toBe("unsupported");
-    expect(classifyRfbSecurity([30, 2])).toBe("vnc-password");
+    expect(classifyRfbSecurity([30, 2])).toBe("ard-account");
+    expect(classifyRfbSecurity([2, 30])).toBe("vnc-password");
+    expect(classifyRfbSecurity([33, 2])).toBe("vnc-password");
+    expect(classifyRfbSecurity([19, 2])).toBe("unsupported");
     expect(classifyRfbSecurity([30, 33, 36, 35])).toBe("ard-account");
   });
 });

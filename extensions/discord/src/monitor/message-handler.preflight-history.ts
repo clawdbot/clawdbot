@@ -5,7 +5,7 @@ import {
   type DiscordHistoryEntry,
 } from "./message-handler.history.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
-import { resolveDiscordMessageHistoryText } from "./message-utils.js";
+import { resolveDiscordMessageHistoryText } from "./message-text.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 
 export function buildDiscordPreflightHistoryEntry(params: {

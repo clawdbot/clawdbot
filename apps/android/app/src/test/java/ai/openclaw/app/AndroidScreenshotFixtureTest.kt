@@ -50,7 +50,7 @@ class AndroidScreenshotFixtureTest {
         ?.content,
     )
     assertEquals(1, metadata["models"]?.jsonArray?.size)
-    assertEquals(1, metadata["commands"]?.jsonArray?.size)
+    assertEquals(6, metadata["commands"]?.jsonArray?.size)
     assertEquals(
       AndroidScreenshotFixture.cronJobName,
       cronJobs

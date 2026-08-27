@@ -1,13 +1,22 @@
 // Assertions for Bun global install E2E validation.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
+import {
+  assertAgentReplyContainsMarker,
+  assertOpenAiRequestLogUsed,
+} from "../agent-turn-output.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 30_000;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 
 const usage = () => {
   console.error(
-    "Usage: assertions.mjs <run-with-timeout|assert-image-providers|assert-release-versions> [...]",
+    "Usage: assertions.mjs <run-with-timeout|assert-bun-version|assert-image-providers|assert-openclaw-trusted|assert-release-versions|configure-runtime|assert-agent-turn> [...]",
   );
   process.exit(2);
 };
@@ -181,6 +190,20 @@ if (mode === "run-with-timeout") {
   await runWithTimeout(timeout, command, commandArgs);
 }
 
+if (mode === "assert-bun-version") {
+  const [version] = args;
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/u.exec(version ?? "");
+  if (!match) {
+    throw new Error(`invalid Bun version: ${version ?? "<missing>"}`);
+  }
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  if (major < 1 || (major === 1 && minor < 4)) {
+    throw new Error(`Bun 1.4 or newer is required; found ${version}`);
+  }
+  process.exit(0);
+}
+
 if (mode === "assert-image-providers") {
   const raw = process.env.OPENCLAW_IMAGE_PROVIDERS_JSON ?? "";
   let parsed;
@@ -228,6 +251,57 @@ if (mode === "assert-release-versions") {
     );
   }
   process.stdout.write(aiVersion);
+  process.exit(0);
+}
+
+if (mode === "assert-openclaw-trusted") {
+  const [packageRoot, globalManifestPath, untrustedOutputPath] = args;
+  if (!packageRoot || !globalManifestPath || !untrustedOutputPath) {
+    usage();
+  }
+  const globalManifest = JSON.parse(fs.readFileSync(globalManifestPath, "utf8"));
+  if (!globalManifest.trustedDependencies?.includes?.("openclaw")) {
+    throw new Error("Bun global manifest does not trust OpenClaw lifecycle scripts");
+  }
+  const untrustedOutput = fs.readFileSync(untrustedOutputPath, "utf8");
+  if (/(?:^|\s)(?:\.?[\\/])?node_modules[\\/]openclaw(?:\s|@|$)/imu.test(untrustedOutput)) {
+    throw new Error(`OpenClaw lifecycle scripts remain blocked by Bun:\n${untrustedOutput}`);
+  }
+  const installGuardPath = path.join(packageRoot, "dist", "openclaw-install-guard");
+  if (fs.existsSync(installGuardPath)) {
+    throw new Error(`OpenClaw preinstall lifecycle did not remove ${installGuardPath}`);
+  }
+  process.exit(0);
+}
+
+if (mode === "configure-runtime") {
+  const [configPath, mockPortValue, gatewayPortValue] = args;
+  if (!configPath || !mockPortValue || !gatewayPortValue) {
+    usage();
+  }
+  const mockPort = parseMockOpenAiPort(mockPortValue);
+  const gatewayPort = parseMockOpenAiPort(gatewayPortValue, "Gateway port");
+  const config = {
+    gateway: {
+      mode: "local",
+      bind: "loopback",
+      port: gatewayPort,
+      auth: { mode: "token" },
+    },
+  };
+  applyMockOpenAiModelConfig(config, { mockPort });
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  process.exit(0);
+}
+
+if (mode === "assert-agent-turn") {
+  const [marker, outputPath, requestLogPath] = args;
+  if (!marker || !outputPath || !requestLogPath) {
+    usage();
+  }
+  assertAgentReplyContainsMarker(marker, outputPath);
+  assertOpenAiRequestLogUsed(requestLogPath);
   process.exit(0);
 }
 

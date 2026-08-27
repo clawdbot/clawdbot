@@ -69,7 +69,7 @@ export function formatPluginLine(plugin: PluginRecord, verbose = false): string 
         : (plugin.activationSource ?? (plugin.activated ? "active" : "inactive"));
     parts.push(`  activation: ${activationSummary}`);
   }
-  if (plugin.error) {
+  if (plugin.status === "error" && plugin.error) {
     parts.push(theme.error(`  error: ${plugin.error}`));
   }
   return parts.join("\n");

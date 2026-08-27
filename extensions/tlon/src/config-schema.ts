@@ -53,6 +53,7 @@ const TlonAccountSchema = z.object({
 
 const TlonConfigSchema = z.object({
   ...tlonCommonConfigFields,
+  historyLimit: z.number().int().min(0).optional(),
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
   accounts: z.record(z.string(), TlonAccountSchema).optional(),

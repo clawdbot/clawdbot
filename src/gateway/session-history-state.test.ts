@@ -384,6 +384,50 @@ describe("SessionHistorySseState", () => {
     expect(oldest.nextCursor).toBeUndefined();
   });
 
+  test("keeps commentary fallback rows reachable across cursor pages and SSE state", () => {
+    const rawMessages = [
+      userTextMessage("check the workspace", 1),
+      {
+        role: "assistant" as const,
+        content: [
+          {
+            type: "text" as const,
+            text: "Checking the workspace before answering.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg_commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+      assistantTextMessage("Done.", 3),
+    ];
+
+    const newest = buildSessionHistorySnapshot({ rawMessages, limit: 1 }).history;
+    expect(newest.nextCursor).toBe("3");
+
+    const middle = newState(rawMessages, { limit: 1, cursor: newest.nextCursor }).snapshot();
+    expect(middle.hasMore).toBe(true);
+    expect(middle.nextCursor).toBe("2");
+    expect(middle.messages).toMatchObject([
+      {
+        content: [{ text: "Checking the workspace before answering." }],
+        openclawStreamFallback: { itemId: "msg_commentary" },
+        __openclaw: { seq: 2 },
+      },
+    ]);
+
+    const oldest = buildSessionHistorySnapshot({
+      rawMessages,
+      limit: 1,
+      cursor: middle.nextCursor,
+    }).history;
+    expect(oldest.messages).toEqual([userTextMessage("check the workspace", 1)]);
+    expect(oldest.hasMore).toBe(false);
+  });
+
   test("does not coerce partial cursor values", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
@@ -581,36 +625,52 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(99);
   });
 
-  test("refreshes limited SSE history from bounded async tail reads", async () => {
-    const fullReadSpy = vi
-      .spyOn(sessionTranscriptReaders, "readSessionMessagesAsync")
-      .mockResolvedValue([]);
-    const tailReadSpy = vi
-      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
-      .mockResolvedValueOnce({
-        messages: [assistantTextMessage("tail two", 8)],
-        totalMessages: 8,
-      });
-    try {
-      const state = newState([assistantTextMessage("tail one", 7)], {
-        rawTranscriptSeq: 7,
-        totalRawMessages: 7,
-        limit: 1,
-      });
+  test.each([
+    { name: "latest page", cursor: undefined, expectedSeq: 8 },
+    { name: "older cursor page", cursor: "8", expectedSeq: 7 },
+  ])(
+    "refreshes limited SSE history from bounded async reads ($name)",
+    async ({ cursor, expectedSeq }) => {
+      const fullReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readSessionMessagesWithSourceAsync")
+        .mockResolvedValue({ messages: [] });
+      const tailReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
+        .mockResolvedValueOnce({
+          messages: [assistantTextMessage("tail two", expectedSeq)],
+          totalMessages: 8,
+        });
+      const pageReadSpy = vi
+        .spyOn(sessionTranscriptReaders, "readSessionMessagesPageWithStatsAsync")
+        .mockResolvedValueOnce({ messages: [], totalMessages: 8 })
+        .mockResolvedValueOnce({
+          messages: [assistantTextMessage("tail two", expectedSeq)],
+          totalMessages: 8,
+        });
+      try {
+        const state = newState([assistantTextMessage("tail one", 7)], {
+          rawTranscriptSeq: 7,
+          totalRawMessages: 7,
+          limit: 1,
+          cursor,
+        });
 
-      expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
-      const refreshed = await state.refreshAsync();
+        expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
+        const refreshed = await state.refreshAsync();
 
-      expect(refreshed.hasMore).toBe(true);
-      expect(refreshed.nextCursor).toBe("8");
-      expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(8);
-      expect(tailReadSpy).toHaveBeenCalledTimes(1);
-      expect(fullReadSpy).not.toHaveBeenCalled();
-    } finally {
-      fullReadSpy.mockRestore();
-      tailReadSpy.mockRestore();
-    }
-  });
+        expect(refreshed.hasMore).toBe(true);
+        expect(refreshed.nextCursor).toBe(String(expectedSeq));
+        expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(expectedSeq);
+        expect(tailReadSpy).toHaveBeenCalledTimes(cursor ? 0 : 1);
+        expect(pageReadSpy).toHaveBeenCalledTimes(cursor ? 2 : 0);
+        expect(fullReadSpy).not.toHaveBeenCalled();
+      } finally {
+        fullReadSpy.mockRestore();
+        tailReadSpy.mockRestore();
+        pageReadSpy.mockRestore();
+      }
+    },
+  );
 
   test("strips legacy internal envelopes before exposing history", () => {
     const snapshot = buildSessionHistorySnapshot({

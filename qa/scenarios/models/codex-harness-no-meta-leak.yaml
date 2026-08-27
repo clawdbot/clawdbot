@@ -36,8 +36,8 @@ scenario:
       expectedReply: QA_LEAK_OK
       internalMarker: QA_INTERNAL_PLAN_DO_NOT_SEND
       prompt: |-
-        First call update_plan with one pending step whose text is exactly QA_INTERNAL_PLAN_DO_NOT_SEND.
-        Keep that plan and any reasoning or coordination text internal.
+        First call progress_card with one pending step whose text is exactly QA_INTERNAL_PLAN_DO_NOT_SEND.
+        Keep that plan and any reasoning or coordination text out of your visible reply.
 
         Reply with exactly one line:
         QA_LEAK_OK
@@ -115,12 +115,24 @@ flow:
         - set: appServerTurn
           value:
             expr: "assistantMirror.identity.slice(0, -':assistant'.length)"
+        - assert:
+            expr: "(transcript.successfulToolCallCounts.progress_card ?? 0) > 0"
+            message: missing successful current-attempt progress_card update
+        - set: progressCard
+          value:
+            expr: "(await env.gateway.call('progressCard.get', { sessionKey: 'agent:qa:codex-meta-leak' })).card"
+        - assert:
+            expr: "progressCard?.steps?.some((step) => step.step === config.internalMarker)"
+            message: missing marked durable progress_card evidence
         - set: internalMirrors
           value:
-            expr: "(transcript.assistantMirrors ?? []).filter((mirror) => mirror.identity.startsWith(appServerTurn + ':') && (mirror.identity.endsWith(':reasoning') || mirror.identity.endsWith(':plan')))"
+            expr: "(transcript.assistantMirrors ?? []).filter((mirror) => mirror.identity === appServerTurn + ':reasoning')"
+        - set: visibleHistory
+          value:
+            expr: "(await env.gateway.call('chat.history', { sessionKey: 'agent:qa:codex-meta-leak', limit: 100 })).messages ?? []"
         - assert:
-            expr: "internalMirrors.some((mirror) => mirror.text.includes(config.internalMarker))"
-            message: missing marked Codex internal plan/reasoning mirror evidence
+            expr: "!visibleHistory.some((message) => message.role === 'assistant' && (typeof message.content === 'string' ? message.content : (message.content ?? []).filter((part) => part.type === 'text').map((part) => part.text).join('\\n')).startsWith('Codex plan:\\n'))"
+            message: Codex plan leaked into visible Gateway history
         - set: outboundLower
           value:
             expr: normalizeLowercaseStringOrEmpty(outbound.text)
@@ -150,4 +162,4 @@ flow:
                   expr: "!outboundLower.includes(normalizeLowercaseStringOrEmpty(forbidden))"
                   message:
                     expr: "`visible reply leaked internal meta text (${forbidden}): ${outbound.text}`"
-      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${config.harnessRuntime} agentRun=${turn.started.runId} appServerTurn=${appServerTurn} internalMirrors=${internalMirrors.map((mirror) => mirror.identity).join(',')} planSignal=${internalMirrors.find((mirror) => mirror.identity.endsWith(':plan'))?.identity ?? 'n/a'} artifact=n/a visibleReply=${JSON.stringify(outbound.text)}`"
+      detailsExpr: "`provider=${selected?.provider} model=${selected?.model} runtime=${config.harnessRuntime} agentRun=${turn.started.runId} appServerTurn=${appServerTurn} internalMirrors=${internalMirrors.map((mirror) => mirror.identity).join(',')} planSignal=progress_card:revision:${progressCard.revision} artifact=n/a visibleReply=${JSON.stringify(outbound.text)}`"

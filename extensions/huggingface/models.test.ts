@@ -37,6 +37,179 @@ describe("huggingface models", () => {
     const models = await discoverHuggingfaceModels("");
     expect(models).toHaveLength(HUGGINGFACE_MODEL_CATALOG.length);
     expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+    expect(models[0]?.contextWindow).toBe(131072);
+    expect(models[0]?.compat).toBeUndefined();
+  });
+
+  it("uses the live route context for bundled models while preserving their catalog metadata", async () => {
+    const bundledModel = HUGGINGFACE_MODEL_CATALOG[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: [
+            {
+              id: bundledModel.id,
+              name: "Upstream name must not replace bundled metadata",
+              architecture: { input_modalities: ["text", "image"] },
+              providers: [{ context_length: 64000, supports_tools: true }],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models).toEqual([{ ...bundledModel, contextWindow: 64000 }]);
+  });
+
+  it("limits discovered models to every available route regardless of provider order", async () => {
+    const bundledModel = HUGGINGFACE_MODEL_CATALOG[0]!;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: [
+            {
+              id: "Qwen/Qwen3.8-2.4T-A95B",
+              providers: [{ context_length: 1010000 }, { context_length: 262144 }],
+            },
+            {
+              id: "test/reversed-provider-order",
+              providers: [{ context_length: 262144 }, { context_length: 1010000 }],
+            },
+            {
+              id: bundledModel.id,
+              providers: [
+                { status: "error", context_length: 16000 },
+                { context_length: 96000 },
+                { context_length: 0 },
+                { context_length: 64000 },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.map(({ id, contextWindow }) => ({ id, contextWindow }))).toEqual([
+      { id: "Qwen/Qwen3.8-2.4T-A95B", contextWindow: 262144 },
+      { id: "test/reversed-provider-order", contextWindow: 262144 },
+      { id: bundledModel.id, contextWindow: 64000 },
+    ]);
+  });
+
+  it("disables tools whenever an available route explicitly rejects them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: [
+            {
+              id: "test/no-tools-vision",
+              architecture: { input_modalities: ["text", "image"] },
+              providers: [
+                { context_length: 96000, supports_tools: false },
+                { context_length: 64000, supports_tools: false },
+              ],
+            },
+            {
+              id: "test/mixed-routes",
+              providers: [{ supports_tools: false }, { supports_tools: true }],
+            },
+            {
+              id: "test/reversed-mixed-routes",
+              providers: [{ supports_tools: true }, { supports_tools: false }],
+            },
+            {
+              id: "test/unknown-route",
+              providers: [{ supports_tools: false }, { context_length: 48000 }],
+            },
+            {
+              id: "test/errored-route",
+              providers: [
+                { status: "error", context_length: 262144, supports_tools: true },
+                { status: "live", context_length: 32000, supports_tools: false },
+              ],
+            },
+            {
+              id: "test/errored-unsupported-route",
+              providers: [
+                { status: "error", supports_tools: false },
+                { status: "live", supports_tools: true },
+              ],
+            },
+            { id: "test/no-routes" },
+            { id: "test/unknown-only", providers: [{}] },
+            { id: "test/tools", providers: [{ supports_tools: true }] },
+          ],
+        }),
+      ),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(
+      models.map(({ id, input, contextWindow, compat }) => ({ id, input, contextWindow, compat })),
+    ).toEqual([
+      {
+        id: "test/no-tools-vision",
+        input: ["text", "image"],
+        contextWindow: 64000,
+        compat: { supportsTools: false },
+      },
+      {
+        id: "test/mixed-routes",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: { supportsTools: false },
+      },
+      {
+        id: "test/reversed-mixed-routes",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: { supportsTools: false },
+      },
+      {
+        id: "test/unknown-route",
+        input: ["text"],
+        contextWindow: 48000,
+        compat: { supportsTools: false },
+      },
+      {
+        id: "test/errored-route",
+        input: ["text"],
+        contextWindow: 32000,
+        compat: { supportsTools: false },
+      },
+      {
+        id: "test/errored-unsupported-route",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: undefined,
+      },
+      {
+        id: "test/no-routes",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: undefined,
+      },
+      {
+        id: "test/unknown-only",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: undefined,
+      },
+      {
+        id: "test/tools",
+        input: ["text"],
+        contextWindow: 131072,
+        compat: undefined,
+      },
+    ]);
   });
 
   it("uses the default discovery timeout for live Hugging Face fetches", async () => {

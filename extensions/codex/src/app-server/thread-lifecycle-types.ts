@@ -2,11 +2,21 @@ import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "ope
 import type { CodexAppServerLiveThreadOwnership } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
+import type { CodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import type { CodexPluginThreadConfig } from "./plugin-thread-config.js";
 import type { CodexDynamicToolSpec, CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
-import type { CodexAppServerBindingStore, CodexAppServerThreadBinding } from "./session-binding.js";
+import type {
+  CodexAppServerBindingIdentity,
+  CodexAppServerBindingStore,
+  CodexAppServerContextEngineBinding,
+  CodexAppServerThreadBinding,
+} from "./session-binding.js";
 import type { CodexContextEngineThreadBootstrapProjection } from "./thread-context-engine.js";
-import type { CodexThreadLifecycleTimingOptions } from "./thread-lifecycle-timing.js";
+import type {
+  CodexThreadLifecycleTimingTracker,
+  CodexThreadLifecycleTimingOptions,
+} from "./thread-lifecycle-timing.js";
+import type { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 type CodexAppServerThreadLifecycle = {
@@ -68,6 +78,8 @@ export type CodexStartOrResumeThreadParams = {
     decision: CodexThreadFinalConfigPatchDecision,
   ) => CodexThreadFinalConfigPatchResult;
   nativeHookRelayGeneration?: string;
+  /** Session-layer PreToolUse hooks must survive authoritative managed hook requirements. */
+  nativeHookRelayRequired?: boolean;
   nativeCodeModeEnabled?: boolean;
   nativeProviderWebSearchSupport?: CodexNativeWebSearchSupport;
   nativeCodeModeOnlyEnabled?: boolean;
@@ -83,4 +95,32 @@ export type CodexStartOrResumeThreadParams = {
   signal?: AbortSignal;
   timing?: CodexThreadLifecycleTimingOptions;
   hostSystemAgentActive?: boolean;
+};
+
+export type CodexThreadRequestContext = {
+  bindingIdentity: CodexAppServerBindingIdentity;
+  startModelSelection: ReturnType<typeof resolveCodexAppServerThreadModelSelection>;
+  startModelProvider?: string;
+  userMcpServersConfigPatch?: JsonObject;
+  dynamicToolsFingerprint: string;
+  dynamicToolsContainDeferred: boolean;
+  webSearchThreadConfigFingerprint?: string;
+  nativeSkillIsolationFingerprint?: string;
+  userMcpServersFingerprint?: string;
+  ringZeroConfigFingerprint?: string;
+  ringZeroClientInstanceId?: string;
+  networkProxyConfigFingerprint?: string;
+  contextEngineBinding?: CodexAppServerContextEngineBinding;
+  environmentSelectionFingerprint?: string;
+  hostSystemAgentActive: boolean;
+  ringZeroActive: boolean;
+  restrictedToolSurface: boolean;
+  restrictedToolSurfaceInheritedMcpServerNames: string[];
+  nativeSkillIsolation?: CodexNativeSkillIsolation;
+  lifecycleTiming: CodexThreadLifecycleTimingTracker;
+  normalizeBindingModelProvider: (
+    authProfileId: string | undefined,
+    modelProvider: string | undefined,
+  ) => string | undefined;
+  throwIfAborted: () => void;
 };

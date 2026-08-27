@@ -244,6 +244,23 @@ export function createBoardWidgetPutSnapshot(
     layout.tabs.push({ tabId: "main", title: "Main", position: 0, chatDock: "right" });
   }
   const existing = layout.widgets.find((widget) => widget.name === params.name);
+  if (
+    existing &&
+    (existing.contentOwner !== params.content.kind ||
+      ((params.content.kind === "plugin" || params.content.kind === "registered") &&
+        (existing.pluginKind !== params.content.pluginKind ||
+          (params.content.kind === "registered" &&
+            existing.registeredContentKind !== params.content.contentKind))))
+  ) {
+    const incomingOwner =
+      params.content.kind === "plugin" || params.content.kind === "registered"
+        ? params.content.pluginKind
+        : params.content.kind;
+    throw new BoardValidationError(
+      "invalid_operation",
+      `board widget ${params.name} contains ${existing.pluginKind ?? existing.contentOwner} content; update it with the same content kind or remove it before replacing it with ${incomingOwner} content`,
+    );
+  }
   if (!existing && layout.widgets.length >= BOARD_MAX_WIDGETS) {
     throw new BoardValidationError(
       "invalid_operation",
@@ -287,6 +304,10 @@ export function createBoardWidgetPutSnapshot(
           ? { title: existing.title }
           : {}),
       contentKind: params.content.kind === "registered" ? "plugin" : params.content.kind,
+      contentOwner: params.content.kind,
+      ...(params.content.kind === "registered"
+        ? { registeredContentKind: params.content.contentKind }
+        : {}),
       ...(params.presentation !== undefined
         ? { presentation: params.presentation }
         : existing?.presentation !== undefined

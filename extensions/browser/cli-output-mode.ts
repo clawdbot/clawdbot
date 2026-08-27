@@ -89,7 +89,7 @@ export function isBrowserMachineOutput(params: { argv: readonly string[] }): boo
     (path[0] === "storage" && ["local", "session"].includes(path[1] ?? "") && path[2] === "get") ||
     (path[0] === "extension" && path[1] === "native-host") ||
     (path[0] === "extension" &&
-      ["install", "status", "uninstall-host"].includes(path[1] ?? "") &&
+      ["install", "status", "uninstall-host", "pair", "cdp"].includes(path[1] ?? "") &&
       params.argv.includes("--json"))
   );
 }

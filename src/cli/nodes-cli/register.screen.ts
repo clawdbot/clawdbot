@@ -39,7 +39,6 @@ export function registerNodesScreenCommands(nodes: Command) {
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
       .action(async (opts: NodesRpcOpts & { out?: string }) => {
         await runNodesCommand("screen record", async () => {
-          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const durationMs = parseDurationMs(opts.duration ?? "");
           const screenIndex = parseOptionalNodeNonNegativeInteger(opts.screen ?? "0", "--screen");
           const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
@@ -49,6 +48,7 @@ export function registerNodesScreenCommands(nodes: Command) {
             opts.invokeTimeout,
             "--invoke-timeout",
           );
+          const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
 
           const invokeParams = buildNodeInvokeParams({
             nodeId,

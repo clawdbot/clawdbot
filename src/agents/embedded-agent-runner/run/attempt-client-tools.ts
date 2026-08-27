@@ -6,6 +6,7 @@ import {
 } from "../../agent-tool-definition-adapter.js";
 import { resolveToolLoopDetectionConfig } from "../../agent-tools.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
+import { isCodeModeExecTool } from "../../code-mode-control-tools.js";
 import { addClientToolsToCodeModeCatalog } from "../../code-mode.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
@@ -82,6 +83,12 @@ export function prepareEmbeddedAttemptClientTools(params: {
   const replaySafeToolNames = collectReplaySafeToolNames(
     params.uncompactedEffectiveTools,
     params.replaySafetyOptions,
+  );
+  // Only the marked Code Mode exec owns a resumable run; a plain shell exec of
+  // the same name must never be mistaken for one at tool completion. The marked
+  // controls exist only on the post-catalog `effectiveTools` surface.
+  const codeModeExecToolNames = new Set(
+    params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
   );
   const clientConflictToolNames = params.deferredDirectoryToolsCallable
     ? builtinToolNames
@@ -187,9 +194,9 @@ export function prepareEmbeddedAttemptClientTools(params: {
     coreReadAuthorized,
     clientToolCallSlots,
     clientToolDefs,
-    clientToolLoopDetection,
     replaySafeToolNames,
     replaySafeTools,
+    codeModeExecToolNames,
     sideEffectToolOwners,
     sessionToolAllowlist,
   };

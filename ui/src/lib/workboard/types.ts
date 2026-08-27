@@ -97,7 +97,9 @@ export type WorkboardUiState = {
   activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";
-  hideEmptyColumns: boolean;
+  emptyColumnMode: "show" | "collapse" | "hide";
+  collapsedStatuses: Set<WorkboardStatus>;
+  expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;
   lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;

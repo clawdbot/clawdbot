@@ -16,6 +16,7 @@ import {
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export async function authorizeSessionCatalogThread(params: {
+  access: "read" | "mutate";
   agentId: string;
   client: GatewayClient | null;
   context: GatewayRequestContext;
@@ -25,9 +26,11 @@ export async function authorizeSessionCatalogThread(params: {
 }): Promise<{ allowProcessHomeFallback: boolean } | null> {
   const config = params.context.getRuntimeConfig();
   const allowHomeFallback = allowProcessHomeFallback(params.context.logGateway);
-  const visibility = resolveSessionCatalogVisibility(params.client);
+  const visibility = resolveSessionCatalogVisibility(params.client, config);
   const visible = await isSessionCatalogThreadVisible({
+    access: params.access,
     allowProcessHomeFallback: allowHomeFallback,
+    client: params.client,
     config,
     fallbackAgentId: params.agentId,
     hostId: params.request.hostId,

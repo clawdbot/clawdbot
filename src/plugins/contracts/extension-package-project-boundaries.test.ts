@@ -1,18 +1,8 @@
 // Extension package boundary tests cover package/project boundaries for bundled extensions.
 import fs from "node:fs";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  collectExtensionsWithTsconfig,
-  collectOptInExtensionPackageBoundaries,
-  EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS,
-  EXTENSION_PACKAGE_BOUNDARY_EXCLUDE,
-  EXTENSION_PACKAGE_BOUNDARY_INCLUDE,
-  EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS,
-  isOptInExtensionPackageBoundaryTsconfig,
-  readExtensionPackageBoundaryPackageJson,
-  readExtensionPackageBoundaryTsconfig,
-} from "../../../scripts/lib/extension-package-boundary.ts";
+import { privateLocalOnlyPluginSdkEntrypoints } from "../../../scripts/lib/plugin-sdk-entries.mts";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
@@ -21,12 +11,28 @@ const EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG =
   "extensions/tsconfig.package-boundary.paths.json" as const;
 const EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG =
   "extensions/tsconfig.package-boundary.base.json" as const;
+const XAI_OMITTED_BOUNDARY_PATHS = {
+  "openclaw/plugin-sdk/channel-secret-basic-runtime": [
+    "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/channel-secret-owner-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-owner-runtime.d.ts",
+  ],
+  "openclaw/plugin-sdk/channel-secret-tts-runtime": [
+    "../packages/plugin-sdk/dist/src/plugin-sdk/channel-secret-tts-runtime.d.ts",
+  ],
+  "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
+  "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
+  "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
+  "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+} as const;
 const trackedCodeFilesByRoot = new Map<string, readonly string[] | null>();
 
 type TsConfigJson = {
   extends?: unknown;
   compilerOptions?: {
-    paths?: unknown;
+    paths?: Record<string, string[]>;
     rootDir?: unknown;
     outDir?: unknown;
     declaration?: unknown;
@@ -57,6 +63,8 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  // Type-only alias to the canonical embedding provider contract.
+  "packages/memory-host-sdk/src/host/embeddings.types.ts",
   "packages/memory-host-sdk/src/host/error-utils.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-kysely.ts",
@@ -75,6 +83,27 @@ const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
 function readJsonFile<T>(relativePath: string): T {
   return JSON.parse(fs.readFileSync(resolve(REPO_ROOT, relativePath), "utf8")) as T;
+}
+
+function readExtensionTsconfig(extensionName: string): TsConfigJson {
+  return readJsonFile<TsConfigJson>(`extensions/${extensionName}/tsconfig.json`);
+}
+
+function isContainedPackageBoundaryTarget(target: string): boolean {
+  const root = /^\.\.\/(dist|packages|extensions)\//u.exec(target)?.[1];
+  return root !== undefined && posix.normalize(target).startsWith(`../${root}/`);
+}
+
+function collectExtensionsWithTsconfig(): string[] {
+  return fs
+    .readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        fs.existsSync(resolve(REPO_ROOT, "extensions", entry.name, "tsconfig.json")),
+    )
+    .map((entry) => entry.name)
+    .toSorted();
 }
 
 function listTrackedCodeFiles(relativeDir: string): string[] | null {
@@ -146,7 +175,40 @@ describe("opt-in extension package boundaries", () => {
   it("keeps package boundaries and path aliases in shared configs", () => {
     const pathsConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG);
     expect(pathsConfig.extends).toBe("../tsconfig.json");
-    expect(pathsConfig.compilerOptions?.paths).toEqual(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS);
+    const paths = pathsConfig.compilerOptions?.paths;
+    expect(paths).toBeDefined();
+    if (!paths) {
+      throw new Error("Missing shared extension package boundary aliases");
+    }
+    expect(paths["openclaw/plugin-sdk/*"]).toEqual(["../dist/plugin-sdk/*.d.ts"]);
+    for (const [specifier, targets] of Object.entries(XAI_OMITTED_BOUNDARY_PATHS)) {
+      expect(paths[specifier], specifier).toEqual(targets);
+    }
+    for (const entrypoint of privateLocalOnlyPluginSdkEntrypoints) {
+      expect(paths[`openclaw/plugin-sdk/${entrypoint}`], entrypoint).toEqual([
+        `../packages/plugin-sdk/dist/src/plugin-sdk/${entrypoint}.d.ts`,
+      ]);
+    }
+    const acpPackage = readJsonFile<{
+      exports: Record<string, string | { import?: string }>;
+    }>("packages/acp-core/package.json");
+    for (const [exportKey, value] of Object.entries(acpPackage.exports)) {
+      const importPath = typeof value === "string" ? value : value.import;
+      if (!importPath?.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+        continue;
+      }
+      const subpath = exportKey === "." ? "" : exportKey.slice(2);
+      const specifier = subpath ? `@openclaw/acp-core/${subpath}` : "@openclaw/acp-core";
+      expect(paths[specifier], specifier).toEqual([
+        `../dist/plugin-sdk/packages/acp-core/src/${subpath || "index"}.d.ts`,
+      ]);
+    }
+    for (const [specifier, targets] of Object.entries(paths)) {
+      expect(targets.length, specifier).toBeGreaterThan(0);
+      for (const target of targets) {
+        expect(isContainedPackageBoundaryTarget(target), specifier).toBe(true);
+      }
+    }
 
     const baseConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_BASE_CONFIG);
     expect(baseConfig.extends).toBe("./tsconfig.package-boundary.paths.json");
@@ -154,37 +216,44 @@ describe("opt-in extension package boundaries", () => {
       ignoreDeprecations: "6.0",
       rootDir: "${configDir}",
     });
-    const asPackageRelativeTemplate = (entry: string) => entry.replace(/^\.\//u, "${configDir}/");
-    expect(baseConfig.include).toEqual(
-      EXTENSION_PACKAGE_BOUNDARY_INCLUDE.map(asPackageRelativeTemplate),
-    );
-    expect(baseConfig.exclude).toEqual(
-      EXTENSION_PACKAGE_BOUNDARY_EXCLUDE.map(asPackageRelativeTemplate),
-    );
+    expect(baseConfig.include).toEqual(["${configDir}/*.ts", "${configDir}/src/**/*.ts"]);
+    expect(baseConfig.exclude).toEqual([
+      "${configDir}/**/*.test.ts",
+      "${configDir}/dist/**",
+      "${configDir}/node_modules/**",
+      "${configDir}/src/test-support/**",
+      "${configDir}/src/**/*test-helpers.ts",
+      "${configDir}/src/**/*test-harness.ts",
+      "${configDir}/src/**/*test-support.ts",
+    ]);
+  });
+
+  it("rejects package aliases that escape their declared declaration root", () => {
+    for (const target of [
+      "../dist/../src/gateway/auth.ts",
+      "../packages/../../src/gateway/auth.ts",
+      "../extensions/../src/gateway/auth.ts",
+    ]) {
+      expect(isContainedPackageBoundaryTarget(target), target).toBe(false);
+    }
   });
 
   it("keeps every opt-in extension rooted inside its package and on the package sdk", () => {
-    const extensionsWithTsconfig = collectExtensionsWithTsconfig(REPO_ROOT);
-    const optInExtensions = collectOptInExtensionPackageBoundaries(REPO_ROOT);
-
-    expect(extensionsWithTsconfig).toEqual(optInExtensions);
-
-    for (const extensionName of optInExtensions) {
-      const tsconfig = readExtensionPackageBoundaryTsconfig(extensionName, REPO_ROOT);
-      expect(isOptInExtensionPackageBoundaryTsconfig(tsconfig)).toBe(true);
+    for (const extensionName of collectExtensionsWithTsconfig()) {
+      const tsconfig = readExtensionTsconfig(extensionName);
+      expect(tsconfig.extends, extensionName).toBe("../tsconfig.package-boundary.base.json");
       expect(tsconfig.compilerOptions?.rootDir).toBeUndefined();
       expect(tsconfig.include).toBeUndefined();
       expect(tsconfig.exclude).toBeUndefined();
 
-      const packageJson = readExtensionPackageBoundaryPackageJson(extensionName, REPO_ROOT);
+      const packageJson = readJsonFile<PackageJson>(`extensions/${extensionName}/package.json`);
       expect(packageJson.devDependencies?.["@openclaw/plugin-sdk"]).toBe("workspace:*");
     }
   });
 
   it("keeps xai as the only opt-in extension with custom path overrides", () => {
-    const optInExtensions = collectOptInExtensionPackageBoundaries(REPO_ROOT);
-    const extensionsWithCustomPaths = optInExtensions.filter((extensionName) => {
-      const tsconfig = readExtensionPackageBoundaryTsconfig(extensionName, REPO_ROOT);
+    const extensionsWithCustomPaths = collectExtensionsWithTsconfig().filter((extensionName) => {
+      const tsconfig = readExtensionTsconfig(extensionName);
       return tsconfig.compilerOptions?.paths !== undefined;
     });
 
@@ -192,8 +261,36 @@ describe("opt-in extension package boundaries", () => {
   });
 
   it("keeps xai's boundary-specific path overrides derived from the shared package boundary map", () => {
-    const tsconfig = readExtensionPackageBoundaryTsconfig("xai", REPO_ROOT);
-    expect(tsconfig.compilerOptions?.paths).toEqual(EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS);
+    const pathsConfig = readJsonFile<TsConfigJson>(EXTENSION_PACKAGE_BOUNDARY_PATHS_CONFIG);
+    const paths = pathsConfig.compilerOptions?.paths;
+    if (!paths) {
+      throw new Error("Missing shared extension package boundary aliases");
+    }
+    const omitted = new Set(Object.keys(XAI_OMITTED_BOUNDARY_PATHS));
+    const expectedPaths = Object.fromEntries(
+      Object.entries(paths)
+        .filter(([specifier]) => !omitted.has(specifier))
+        .map(([specifier, targets]) => [
+          specifier,
+          targets.map((target) => posix.join("../", target)),
+        ]),
+    );
+    Object.assign(expectedPaths, {
+      "openclaw/plugin-sdk/channel-entry-contract": [
+        "../../dist/plugin-sdk/channel-entry-contract.d.ts",
+      ],
+      "openclaw/plugin-sdk/browser-maintenance": [
+        "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
+      ],
+      "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+      "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
+      "@openclaw/*": ["../*"],
+      "@openclaw/plugin-sdk/*": ["../../dist/plugin-sdk/*.d.ts"],
+      "@openclaw/anthropic-vertex/api.js": ["./.boundary-stubs/anthropic-vertex-api.d.ts"],
+      "@openclaw/ollama/api.js": ["./.boundary-stubs/ollama-api.d.ts"],
+      "@openclaw/ollama/runtime-api.js": ["./.boundary-stubs/ollama-runtime-api.d.ts"],
+    });
+    expect(readExtensionTsconfig("xai").compilerOptions?.paths).toEqual(expectedPaths);
   });
 
   it("keeps plugin-sdk package types generated from the package build, not a hand-maintained types bridge", () => {

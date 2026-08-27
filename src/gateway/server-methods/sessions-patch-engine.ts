@@ -3,7 +3,6 @@ import {
   errorShape,
   type ErrorShape,
   type SessionsPatchManyResult,
-  type SessionsPatchManyTarget,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -18,6 +17,7 @@ import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
@@ -34,6 +34,8 @@ import {
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
   type SessionPatchArchivePreparation,
@@ -47,10 +49,8 @@ import type {
   SessionMutationAuthorization,
 } from "./types.js";
 
-type PatchTargetIdentity = Pick<
-  SessionsPatchManyTarget,
-  "agentId" | "expectedLifecycleRevision" | "expectedSessionId" | "key"
->;
+type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
+const { resolveSessionUnreadAck, validateSessionUnreadAck } = sessionUnreadAck;
 
 type MutationTarget = PatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
@@ -71,7 +71,9 @@ type PreparedPatchTarget = {
   targetAgentId: string;
 };
 
-type MutationOutcome = { ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape };
+type MutationOutcome =
+  | { ok: true; applied: boolean; entry: SessionEntry }
+  | { ok: false; error: ErrorShape };
 
 type ModelCatalog = Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>;
 
@@ -87,13 +89,8 @@ type MutationCoreResult =
 
 function unexpectedPatchError(key: string, error: unknown): ErrorShape {
   sessionLog.warn(`sessions.patch: target failed for ${key}: ${formatErrorMessage(error)}`);
-  return errorShape(
-    ErrorCodes.UNAVAILABLE,
-    "Session patch failed unexpectedly. Retry the request.",
-    {
-      retryable: true,
-    },
-  );
+  const message = "Session patch failed unexpectedly. Retry the request.";
+  return errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true });
 }
 
 function sessionChangedError(key: string): ErrorShape {
@@ -102,16 +99,16 @@ function sessionChangedError(key: string): ErrorShape {
   });
 }
 
-function pluginOwnershipError(params: {
-  client: GatewayClient | null;
-  entry: SessionEntry | undefined;
-  key: string;
-}): ErrorShape | undefined {
+function pluginOwnershipError(
+  client: GatewayClient | null,
+  entry: SessionEntry | undefined,
+  key: string,
+): ErrorShape | undefined {
   return resolvePluginSessionOwnershipError({
     action: "patch",
-    entry: params.entry,
-    key: params.key,
-    pluginOwnerId: params.client?.internal?.pluginRuntimeOwnerId,
+    entry,
+    key,
+    pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
   });
 }
 
@@ -134,13 +131,15 @@ async function executeSessionPatchMutations(params: {
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
 }): Promise<MutationCoreResult> {
+  const { client } = params;
   const cfg = params.context.getRuntimeConfig();
-  const archiveActor = gatewayClientSessionCreator(params.client);
-  const callerScopes = Array.isArray(params.client?.connect?.scopes)
-    ? params.client.connect.scopes
-    : [];
-  const callerCanManageCron = params.client === null || callerScopes.includes(ADMIN_SCOPE);
-  const pluginOwnerId = params.client?.internal?.pluginRuntimeOwnerId;
+  const operatorCreation = resolveOperatorSessionCreation(client);
+  const sandbox = resolveCreatorSandbox(cfg, operatorCreation);
+  const creation = { ...operatorCreation, ...(sandbox ? { sandbox } : {}) };
+  const archiveActor = gatewayClientSessionCreator(client);
+  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  const callerCanManageCron = client === null || callerScopes.includes(ADMIN_SCOPE);
+  const pluginOwnerId = client?.internal?.pluginRuntimeOwnerId;
   const targetDiscoveryCache = new Map();
   const preflightTargets = params.targets.map((input) => {
     const key = input.key.trim();
@@ -172,14 +171,20 @@ async function executeSessionPatchMutations(params: {
     logicalTargets.add(logicalId);
   }
 
-  const outcomes: Array<MutationOutcome | undefined> = Array.from({
-    length: params.targets.length,
-  });
+  const outcomes = Array.from<MutationOutcome | undefined>({ length: params.targets.length });
   const prepared: PreparedPatchTarget[] = [];
-  const preparedByIndex: Array<PreparedPatchTarget | undefined> = Array.from({
+  const preparedByIndex = Array.from<PreparedPatchTarget | undefined>({
     length: params.targets.length,
   });
   for (const [index, { input, key, requestedAgent, resolved }] of preflightTargets.entries()) {
+    const unreadAckError = validateSessionUnreadAck(params.patch, input);
+    if (unreadAckError) {
+      outcomes[index] = {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, unreadAckError),
+      };
+      continue;
+    }
     if (!requestedAgent.ok) {
       outcomes[index] = requestedAgent;
       continue;
@@ -201,11 +206,13 @@ async function executeSessionPatchMutations(params: {
       outcomes[index] = { ok: false, error: unexpectedPatchError(key, error) };
       continue;
     }
-    const ownershipError = pluginOwnershipError({
-      client: params.client,
-      entry: initialEntry,
-      key: canonicalKey,
-    });
+    const creationError =
+      !initialEntry && authorizeGatewaySessionCreation({ cfg, client, agentId: resolved.agentId });
+    if (creationError) {
+      outcomes[index] = { ok: false, error: creationError };
+      continue;
+    }
+    const ownershipError = pluginOwnershipError(client, initialEntry, canonicalKey);
     if (ownershipError) {
       outcomes[index] = { ok: false, error: ownershipError };
       continue;
@@ -369,12 +376,23 @@ async function executeSessionPatchMutations(params: {
                           store: workingStore,
                           ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                         });
+                        const creationError =
+                          !existingEntry &&
+                          authorizeGatewaySessionCreation({
+                            cfg,
+                            client,
+                            agentId: target.targetAgentId,
+                          });
+                        if (creationError) {
+                          projectedOutcomes.push({ ok: false, error: creationError });
+                          continue;
+                        }
                         const candidateKeys = currentTarget.storeKeys;
-                        const ownershipError = pluginOwnershipError({
-                          client: params.client,
-                          entry: existingEntry,
-                          key: primaryKey,
-                        });
+                        const ownershipError = pluginOwnershipError(
+                          client,
+                          existingEntry,
+                          primaryKey,
+                        );
                         if (ownershipError) {
                           projectedOutcomes.push({ ok: false, error: ownershipError });
                           continue;
@@ -424,8 +442,31 @@ async function executeSessionPatchMutations(params: {
                             continue;
                           }
                         }
+                        const unreadAck = resolveSessionUnreadAck(existingEntry, target.fullPatch);
+                        if (unreadAck.kind === "missing") {
+                          projectedOutcomes.push({
+                            ok: false,
+                            error: sessionChangedError(target.key),
+                          });
+                          continue;
+                        }
+                        if (unreadAck.kind === "stale") {
+                          const authorizationFailure = params.targets[target.index]!.commitGuard();
+                          if (authorizationFailure) {
+                            projectedOutcomes.push({ ok: false, error: authorizationFailure });
+                            continue;
+                          }
+                          // A newer explicit marker owns the session until a later activation.
+                          projectedOutcomes.push({
+                            ok: true,
+                            applied: false,
+                            entry: unreadAck.entry,
+                          });
+                          continue;
+                        }
                         const projected = await projectSessionsPatchEntry({
                           cfg,
+                          creation,
                           existingEntry,
                           isLabelInUse: (label) => labelOwners.isLabelInUse(label, candidateKeys),
                           storeKey: primaryKey,
@@ -475,6 +516,7 @@ async function executeSessionPatchMutations(params: {
                         );
                         projectedOutcomes.push({
                           ok: true,
+                          applied: true,
                           entry: cloned,
                         });
                       } catch (error) {
@@ -519,7 +561,7 @@ async function executeSessionPatchMutations(params: {
   const archivedSessionKeys = new Set<string>();
   for (const target of prepared) {
     const outcome = outcomes[target.index];
-    if (!outcome?.ok) {
+    if (!outcome?.ok || !outcome.applied) {
       continue;
     }
     triggerSessionPatchHook({
@@ -646,6 +688,7 @@ export async function executeSessionPatch(params: {
     ...(params.patch.expectedLifecycleRevision !== undefined
       ? { expectedLifecycleRevision: params.patch.expectedLifecycleRevision }
       : {}),
+    expectedMarkedUnreadAt: params.patch.expectedMarkedUnreadAt,
   };
   const executed = await executeSessionPatchMutations({
     client: params.client,

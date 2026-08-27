@@ -496,6 +496,16 @@ describe("openclaw launcher", () => {
 
   it.each([
     {
+      name: "container env with root --help",
+      args: ["--help"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
+      name: "container env with root -h",
+      args: ["-h"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
       name: "container env",
       args: ["browser", "--help"],
       env: { OPENCLAW_CONTAINER: "demo" },
@@ -514,7 +524,10 @@ describe("openclaw launcher", () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
-      JSON.stringify({ browserHelpText: "PRECOMPUTED browser help\n" }),
+      JSON.stringify({
+        rootHelpText: "PRECOMPUTED root help\n",
+        browserHelpText: "PRECOMPUTED browser help\n",
+      }),
       "utf8",
     );
     await fs.writeFile(
@@ -626,6 +639,38 @@ describe("openclaw launcher", () => {
     const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
       cwd: fixtureRoot,
       env: launcherEnv({ OPENCLAW_HOME: openclawHome }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("keeps literal $ patterns in HOME when expanding a tilde OPENCLAW_HOME", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const home = path.join(fixtureRoot, "home$&d");
+    const configDir = path.join(home, "oc", ".openclaw");
+    await fs.mkdir(configDir, { recursive: true });
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ rootHelpText: "PRECOMPUTED memory help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(configDir, "openclaw.json"),
+      JSON.stringify({ plugins: { slots: { memory: "memory-lancedb" } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv({ HOME: home, OPENCLAW_HOME: "~/oc" }),
       encoding: "utf8",
     });
 

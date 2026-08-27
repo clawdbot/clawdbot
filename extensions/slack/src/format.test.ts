@@ -1,7 +1,59 @@
 // Slack tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwnChunks, normalizeSlackOutboundText } from "./format.js";
+import {
+  chunkSlackMrkdwnText,
+  markdownToSlackMrkdwnChunks,
+  normalizeSlackOutboundText,
+} from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
+
+describe("chunkSlackMrkdwnText", () => {
+  it("preserves ordinary whitespace at Slack section boundaries", () => {
+    const text = `${"x".repeat(2_998)}  tail`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it("keeps short inline-code spans together until the actual section boundary", () => {
+    const text = `${"a`b`".repeat(750)}x`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it.each(["`", "```"])("balances long %s code sections without losing their content", (marker) => {
+    const content = "x".repeat(3_100);
+    const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(true);
+    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
+      content,
+    );
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it.each([
+    ["inline", "`", [1, 2]],
+    ["fenced", "```", [1, 5, 6]],
+  ] as const)("preserves content when a %s code wrapper cannot fit", (_name, marker, limits) => {
+    for (const limit of limits) {
+      expect(chunkSlackMrkdwnText(`${marker}x${marker}`, limit)).toEqual(["x"]);
+    }
+  });
+
+  it.each(["`", "```"])("does not emit marker-only sections for oversized %s links", (marker) => {
+    const token = `<https://example.com/${"x".repeat(3_000)}>`;
+    const chunks = chunkSlackMrkdwnText(`${marker}${token}${marker}`, 3_000);
+
+    expect(chunks.every((chunk) => chunk.length > marker.length * 2)).toBe(true);
+    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(token);
+  });
+});
 
 describe("normalizeSlackOutboundText", () => {
   it("marks assistant-authored transcript role headers after parsing Markdown", () => {

@@ -19,7 +19,10 @@ import {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import {
+  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
+  registerPluginMetadataSnapshotReaders,
+} from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -117,6 +120,18 @@ function indexesMatch(
     resolveInstalledManifestRegistryIndexFingerprint(left) ===
     resolveInstalledManifestRegistryIndexFingerprint(right)
   );
+}
+
+/** Restores process-local behavior and immutability after a snapshot crosses a worker boundary. */
+export function restorePluginMetadataSnapshot(
+  snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
+): PluginMetadataSnapshot {
+  return freezeSnapshotValue({
+    ...snapshot,
+    normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, {
+      manifestRegistry: snapshot.manifestRegistry,
+    }),
+  });
 }
 
 function resolvePluginMetadataSnapshotPluginIds(params: {
@@ -305,7 +320,7 @@ export function loadPluginMetadataSnapshot(
   );
   return measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.freeze",
-    () => freezeSnapshotValue(snapshot),
+    () => restorePluginMetadataSnapshot(snapshot),
     {
       phase: activeTimelineSpan?.phase ?? "startup",
       config: params.config,
@@ -329,11 +344,31 @@ export function completePluginMetadataSnapshot(params: {
     return params.snapshot;
   }
   const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
-  return loadPluginMetadataSnapshot({
+  const manifestStartedAt = performance.now();
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: params.snapshot.index,
     config: params.config,
     env: params.env ?? process.env,
-    index: params.snapshot.index,
     ...(workspaceDir ? { workspaceDir } : {}),
+    includeDisabled: true,
+  });
+  const manifestRegistryMs = performance.now() - manifestStartedAt;
+  const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
+  const { pluginIds: _pluginIds, ...unscoped } = completed;
+  return freezeSnapshotValue({
+    ...unscoped,
+    configFingerprint: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      index: completed.index,
+      policyHash: completed.policyHash,
+      workspaceDir,
+    }),
+    metrics: {
+      ...completed.metrics,
+      manifestRegistryMs,
+      totalMs: completed.metrics.totalMs + manifestRegistryMs,
+    },
   });
 }
 
@@ -357,7 +392,19 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
-      return loadPluginMetadataSnapshot(params);
+      const snapshot = loadPluginMetadataSnapshot(params);
+      // Scoped or caller-owned discovery must never become process-wide metadata.
+      if (
+        params.index === undefined &&
+        params.workspaceDir === undefined &&
+        params.pluginIds === undefined &&
+        params.pluginIdScope === undefined &&
+        snapshot.workspaceDir === undefined &&
+        snapshot.pluginIds === undefined
+      ) {
+        adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(snapshot, params);
+      }
+      return snapshot;
     }
     if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;
@@ -382,7 +429,7 @@ export function resolvePluginMetadataSnapshot(
 
 function loadPluginMetadataSnapshotImpl(
   params: LoadPluginMetadataSnapshotParams,
-): PluginMetadataSnapshot {
+): Omit<PluginMetadataSnapshot, "normalizePluginId"> {
   const totalStartedAt = performance.now();
   const registryStartedAt = performance.now();
   const registryResult = loadPluginRegistrySnapshotWithMetadata({
@@ -413,7 +460,6 @@ function loadPluginMetadataSnapshotImpl(
     includeDisabled: true,
   });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
-  const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
   const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
   const ownerMapsStartedAt = performance.now();
   const owners = buildPluginMetadataOwnerMaps(manifestRegistry.plugins);
@@ -438,7 +484,6 @@ function loadPluginMetadataSnapshotImpl(
     plugins: manifestRegistry.plugins,
     diagnostics: manifestRegistry.diagnostics,
     byPluginId,
-    normalizePluginId,
     owners,
     metrics: {
       registrySnapshotMs,

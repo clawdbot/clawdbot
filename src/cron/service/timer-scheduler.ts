@@ -146,6 +146,7 @@ function requestIndependentImmediateCronRecheck(
 
 /** Handles one cron timer tick under the process-wide root work admission. */
 export async function onTimer(state: CronServiceState) {
+  const lifecycleGeneration = state.lifecycleGeneration;
   let admission;
   try {
     // A restart signal can be rejected after temporarily closing admission.
@@ -158,7 +159,10 @@ export async function onTimer(state: CronServiceState) {
     throw err;
   }
   try {
-    await admission.run(async () => await onAdmittedTimer(state));
+    // Reopening admission cannot transfer a retired tick to a restarted scheduler.
+    if (state.lifecycleGeneration === lifecycleGeneration) {
+      await admission.run(async () => await onAdmittedTimer(state));
+    }
   } finally {
     admission.release();
   }
