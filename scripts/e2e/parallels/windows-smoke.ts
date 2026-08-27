@@ -678,10 +678,11 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
     const start = Date.now();
     while (Date.now() < deadline) {
       const probe = this.guestPowerShell(
-        "Invoke-OpenClaw gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json",
+        "Invoke-OpenClaw gateway status --deep --require-rpc --timeout 30000 --json",
         { check: false, timeoutMs: 60_000 },
       );
-      if (/"ok"\s*:\s*true/.test(probe)) {
+      const status = JSON.parse(probe || "{}") as { rpc?: { ok?: boolean } };
+      if (status.rpc?.ok === true) {
         return;
       }
       if (!recoveryTried && Date.now() - start >= this.gatewayRecoveryAfterMs) {
