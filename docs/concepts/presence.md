@@ -33,7 +33,9 @@ Presence entries are structured objects with fields like:
 - `lastInputSeconds`: seconds since last user input, if known
 - `reason`: free-form client-supplied string; the Gateway itself only emits `self`, `connect`, and `disconnect`
 - `deviceId`, `roles`, `scopes`: device identity and role/scope hints from the connect handshake
-- `ts`: last update timestamp (ms since epoch)
+- `ts`: last presence update timestamp (ms since epoch), including heartbeat updates; not a user-activity timestamp
+- `onlineSince`: start of an authenticated person's current continuous online period, shared across overlapping connections
+- `lastActivityAt`: latest observed accepted interaction during that online period; absent until activity is observed
 - `watchedSessions`: session keys the client explicitly declares it is viewing, filtered for the recipient
 
 ### Watched session references
@@ -110,6 +112,10 @@ then `connect.client.instanceId`, then the connection id.
 by parsed host or other beacon metadata. A stable `instanceId` helps consumers
 associate rows with the same client; it does not merge separate user WebSocket
 connections. Ephemeral control-plane clients are excluded from tracking entirely.
+
+The Control UI groups connection rows by authenticated identity when displaying
+people. The [people card](/concepts/multi-user#people-cards) keeps online duration
+and observed activity separate from each entry's heartbeat freshness.
 
 ## TTL and bounded size
 

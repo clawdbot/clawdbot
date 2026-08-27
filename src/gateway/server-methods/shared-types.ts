@@ -340,6 +340,8 @@ type GatewayTransportContext = {
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
+  /** Server-stamped activity from an accepted request on the exact live person connection. */
+  recordClientActivity?: (client: GatewayClient | null) => void;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   getApprovalClientConnIds?: <TPayload>(params?: {
     approvalKind?: "exec" | "plugin" | "system-agent";
