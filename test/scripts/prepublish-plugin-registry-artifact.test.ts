@@ -3,7 +3,9 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as packageArtifact from "../../scripts/e2e/parallels/package-artifact.ts";
+import { packAndServeSmokeArtifact } from "../../scripts/e2e/parallels/smoke-common.ts";
 import { resolveCrossOsCompanionPackages } from "../../scripts/lib/cross-os-release-checks/companions.ts";
 import {
   PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,
@@ -19,6 +21,7 @@ const SCRIPT = path.resolve("scripts/prepublish-plugin-registry-artifact.mjs");
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -28,7 +31,7 @@ function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-function fixture() {
+function fixture(packageName = PACKAGE_NAME) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-prepublish-plugin-registry-"));
   tempDirs.push(root);
   const packageRoot = path.join(root, "package");
@@ -37,7 +40,7 @@ function fixture() {
   mkdirSync(artifactDir);
   writeFileSync(
     path.join(packageRoot, "package.json"),
-    `${JSON.stringify({ name: PACKAGE_NAME, version: VERSION })}\n`,
+    `${JSON.stringify({ name: packageName, version: VERSION })}\n`,
   );
   const tarballPath = path.join(artifactDir, TARBALL);
   execFileSync("tar", ["-czf", tarballPath, "-C", root, "package"]);
@@ -49,7 +52,7 @@ function fixture() {
     candidateVersion: VERSION,
     packages: [
       {
-        name: PACKAGE_NAME,
+        name: packageName,
         version: VERSION,
         tarball: TARBALL,
         sha256: sha256(tarballPath),
@@ -157,6 +160,54 @@ console.log("package manifest stdout");
 }
 
 describe("prepublish plugin registry artifact", () => {
+  it.runIf(process.platform !== "win32")(
+    "serves a Parallels candidate with its companion packages and closes both endpoints",
+    async () => {
+      const core = fixture("openclaw");
+      const companion = fixture();
+      vi.spyOn(packageArtifact, "packOpenClaw").mockResolvedValue({
+        path: core.tarballPath,
+        version: VERSION,
+        registryPackages: [
+          { name: PACKAGE_NAME, version: VERSION, tarballPath: companion.tarballPath },
+        ],
+      });
+      const [, server] = await packAndServeSmokeArtifact(
+        core.artifactDir,
+        undefined,
+        "127.0.0.1",
+        0,
+        "candidate fixture",
+        false,
+        "openai",
+      );
+      const staticUrl = server.urlFor(core.tarballPath);
+      let registryUrl = "";
+      try {
+        expect(server.registry).toBeDefined();
+        registryUrl = server.registry!.url;
+        for (const [name, tarball] of [
+          ["openclaw", core.tarballPath],
+          [PACKAGE_NAME, companion.tarballPath],
+        ] as const) {
+          const response = await fetch(`${registryUrl}/${encodeURIComponent(name)}`);
+          const metadata = await response.json();
+          expect(metadata.versions[VERSION]).toMatchObject({ name, version: VERSION });
+          const packed = await fetch(metadata.versions[VERSION].dist.tarball);
+          expect(Buffer.from(await packed.arrayBuffer())).toEqual(readFileSync(tarball));
+        }
+        expect(Buffer.from(await (await fetch(staticUrl)).arrayBuffer())).toEqual(
+          readFileSync(core.tarballPath),
+        );
+      } finally {
+        await server.stop();
+      }
+      for (const url of [staticUrl, registryUrl]) {
+        await expect(fetch(url, { signal: AbortSignal.timeout(1_000) })).rejects.toThrow();
+      }
+    },
+  );
+
   it("validates the immutable manifest, package set, hashes, and packed identity", () => {
     const paths = fixture();
     const result = validate(paths);
