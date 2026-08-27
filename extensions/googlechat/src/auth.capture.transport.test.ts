@@ -8,7 +8,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 const fixture = vi.hoisted(() => ({
   url: "",
   release: async () => {},
-  response: undefined as Response | undefined,
+  received: undefined as ((response: Response) => void) | undefined,
   captured: undefined as ((event: CaptureEventRecord) => void) | undefined,
 }));
 
@@ -54,7 +54,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
           return response;
         },
       });
-      fixture.response = guarded.response;
+      fixture.received?.(guarded.response);
       fixture.release = guarded.release;
       return guarded;
     },
@@ -75,9 +75,14 @@ describe("Google Chat captured response cleanup", () => {
     async (kind) => {
       const closed = createDeferred<void>();
       const captured = createDeferred<CaptureEventRecord>();
+      const received = createDeferred<Response>();
       const sockets = new Map<Socket, Promise<void>>();
       const completeBody = '{"access_token":"fixture"}';
-      fixture.response = undefined;
+      let receivedResponse = false;
+      fixture.received = (response) => {
+        receivedResponse = true;
+        received.resolve(response);
+      };
       fixture.release = async () => {};
       fixture.captured = captured.resolve;
       const server = createServer((request, response) => {
@@ -146,7 +151,8 @@ describe("Google Chat captured response cleanup", () => {
           expect(outcome).toMatchObject({ value: { data: { access_token: "fixture" } } });
         }
         await Promise.race([closed.promise, deadline]);
-        expect(fixture.response?.body?.locked).toBe(false);
+        const response = await Promise.race([received.promise, deadline]);
+        expect(response.body?.locked).toBe(false);
         const event = await Promise.race([captured.promise, deadline]);
         expect(event.kind).toBe(kind === "auth-complete" ? "response" : "error");
         if (kind === "auth-complete") {
@@ -164,11 +170,12 @@ describe("Google Chat captured response cleanup", () => {
         await Promise.all(sockets.values());
         await operation?.catch(() => undefined);
         await fixture.release();
-        if (fixture.response) {
+        if (receivedResponse) {
           await captured.promise;
         }
         verifyJwt.mockRestore();
         fixture.captured = undefined;
+        fixture.received = undefined;
       }
     },
   );

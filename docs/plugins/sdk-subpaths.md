@@ -172,6 +172,12 @@ are private-local.
     | `plugin-sdk/group-activation` | Private-local after July 2026; Narrow group activation mode and command parsing helpers |
   </Accordion>
 
+`createBoundedProviderBinaryStream` owns its source reader, not the request.
+Canceling the returned stream or calling `release()` detaches that reader and
+starts best-effort source cancellation; neither promise waits for a retained
+response clone to finish. The caller must still invoke and await its
+request-release callback afterward.
+
 Provider usage snapshots normally report one or more quota `windows`, each with
 a label, percent used, and optional reset time. Providers that expose balance or
 account-state text instead of resettable quota windows should return

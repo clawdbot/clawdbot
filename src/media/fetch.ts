@@ -8,7 +8,6 @@ import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
-  cancelUnreadResponseBody,
   readChunkWithIdleTimeout,
   readResponseTextSnippet,
   readResponseWithLimit,
@@ -422,16 +421,17 @@ async function assertMediaResponseOk(params: {
   );
 }
 
-async function assertMediaContentLength(params: {
+// Caller-provided responses may already be partially read; discard their remaining bytes too.
+function assertMediaContentLength(params: {
   res: Response;
   sourceUrl: string;
   maxBytes: number;
-}): Promise<void> {
+}): void {
   let length: number | null;
   try {
     length = parseMediaContentLength(params.res.headers.get("content-length"));
   } catch (err) {
-    await cancelUnreadResponseBody(params.res);
+    void params.res.body?.cancel().catch(() => undefined);
     throw new MediaFetchError(
       "http_error",
       `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
@@ -442,7 +442,7 @@ async function assertMediaContentLength(params: {
     return;
   }
   if (length > params.maxBytes) {
-    await cancelUnreadResponseBody(params.res);
+    void params.res.body?.cancel().catch(() => undefined);
     throw new MediaFetchError(
       "max_bytes",
       `Failed to fetch media from ${params.sourceUrl}: content length ${length} exceeds maxBytes ${params.maxBytes}`,
@@ -552,7 +552,7 @@ async function saveOkMediaResponse(params: {
   subdir?: string;
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
-  await assertMediaContentLength({
+  assertMediaContentLength({
     res: params.res,
     sourceUrl: params.sourceUrl,
     maxBytes: params.maxBytes,
@@ -717,7 +717,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     });
 
     const effectiveMaxBytes = options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
-    await assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
+    assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(res, effectiveMaxBytes, {
