@@ -338,4 +338,126 @@ describe("validateConfigObjectWithPlugins channel schema ownership sourceConfig"
       });
     }
   });
+
+  // ClawSweeper P1 (dotted channel ids bypass sensitive-field redaction): redaction derives a
+  // channel's metadata key by cutting at the first dot after `channels.`, so for an id that itself
+  // contains a dot only the leading segment is canonicalised -- `channels.Acme.Chat.x` normalises
+  // to `channels.acme.Chat.x`. Two spellings of one dotted id therefore produce two different
+  // metadata keys, and a hint authored under one would miss config authored under the other.
+  //
+  // Reaching that needs a config authored in a spelling the manifest does not declare, and this is
+  // the gate that makes it unauthorable: membership is tested against the declared spelling, so
+  // every variant below is rejected outright and its fields are never schema-validated. Dotted ids
+  // are covered by the same rule as `QYWX` above; pinned separately because the redaction cut makes
+  // dotted ids the case where the two spellings would actually diverge.
+  it.each(["Acme.Chat", "ACME.CHAT", "acme.Chat"])(
+    "rejects %s, a dotted-channel spelling the plugin does not declare",
+    (authored) => {
+      const manifestRegistry: PluginManifestRegistry = {
+        diagnostics: [],
+        plugins: [
+          createPluginManifestRecord({
+            id: "acme-plugin",
+            origin: "global",
+            channels: ["acme.chat"],
+            channelConfigs: {
+              "acme.chat": {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: { opaqueCredential: { type: "string" } },
+                },
+              },
+            },
+          }),
+        ],
+      };
+
+      const result = validateConfigObjectRawWithPlugins(
+        { channels: { [authored]: { opaqueCredential: "secret" } } },
+        { pluginMetadataSnapshot: { manifestRegistry } },
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toContainEqual({
+          path: `channels.${authored}`,
+          message: `unknown channel id: ${authored}`,
+        });
+        expect(result.issues.map((issue) => issue.path)).not.toContain(
+          `channels.${authored}.opaqueCredential`,
+        );
+      }
+    },
+  );
+
+  it("accepts a dotted channel id authored exactly as the plugin declares it", () => {
+    const manifestRegistry: PluginManifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "acme-plugin",
+          origin: "global",
+          channels: ["acme.chat"],
+          channelConfigs: {
+            "acme.chat": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: { opaqueCredential: { type: "string" } },
+              },
+            },
+          },
+        }),
+      ],
+    };
+
+    const result = validateConfigObjectRawWithPlugins(
+      { channels: { "acme.chat": { opaqueCredential: "secret" } } },
+      { pluginMetadataSnapshot: { manifestRegistry } },
+    );
+
+    expect(
+      result.ok ? [] : result.issues.filter((issue) => issue.path.startsWith("channels.")),
+    ).toEqual([]);
+  });
+
+  // The same gate in the other direction: the leak needs the hint and the config to disagree, and
+  // the hint carries whatever spelling the manifest declares. A manifest declaring the capitalised
+  // dotted id makes the lowercase config the unauthorable half, so neither ordering reaches
+  // redaction with two spellings in play.
+  it("rejects a lowercase dotted spelling when the plugin declares the capitalised one", () => {
+    const manifestRegistry: PluginManifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "acme-plugin",
+          origin: "global",
+          channels: ["Acme.Chat"],
+          channelConfigs: {
+            "Acme.Chat": {
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: { opaqueCredential: { type: "string" } },
+              },
+            },
+          },
+        }),
+      ],
+    };
+
+    const result = validateConfigObjectRawWithPlugins(
+      { channels: { "acme.chat": { opaqueCredential: "secret" } } },
+      { pluginMetadataSnapshot: { manifestRegistry } },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues).toContainEqual({
+        path: "channels.acme.chat",
+        message: "unknown channel id: acme.chat",
+      });
+    }
+  });
 });
