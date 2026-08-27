@@ -1815,6 +1815,12 @@ export async function* normalizePlainTextToolCallStreamEvents(
           );
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
+            // Replayed text becomes ordinary visible text going forward, same as the
+            // false-positive branch in the main delta loop above -- without this, the
+            // carried fence-state scan silently falls behind what was actually streamed,
+            // and a later candidate inside a fence this replay opened would wrongly
+            // report unprotected.
+            advanceProtectionContext(pending.buffer);
             pending = undefined;
             continue;
           }
