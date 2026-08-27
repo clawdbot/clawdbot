@@ -895,7 +895,7 @@ function Ensure-Git {
 function Test-GitFilterSupport {
     try {
         $help = (& git clone -h 2>&1 | Out-String)
-        return $help -match '(?m)\s--filter(?:[ =]|$)'
+        return $help -match '(?m)\s--(?:\[no-\])?filter(?:[ =]|$)'
     } catch {
         return $false
     }

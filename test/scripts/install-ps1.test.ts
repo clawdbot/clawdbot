@@ -722,7 +722,7 @@ describe("install.ps1 failure handling", () => {
           "$script:AliasReplacement = $null",
           "function git {",
           "  if ($args[0] -eq 'clone' -and $args[1] -eq '-h') {",
-          "    if ($script:GitFilterSupport) { Write-Output '  --filter <args>' }",
+          "    if ($script:GitFilterSupport) { Write-Output '  --[no-]filter <args>' }",
           "    $global:LASTEXITCODE = 129",
           "    return",
           "  }",
@@ -1284,7 +1284,7 @@ describe("install.ps1 failure handling", () => {
       'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
     );
     expect(gitFilterSupportBody).toContain("git clone -h");
-    expect(gitFilterSupportBody).toContain("--filter");
+    expect(gitFilterSupportBody).toContain("filter");
     expect(transactionalCloneBody).toContain('$cloneArgs += "--filter=blob:none"');
     expect(transactionalCloneBody).toContain("& git @cloneArgs");
     expect(gitInstallBody.indexOf("New-TransactionalGitCheckout")).toBeLessThan(
