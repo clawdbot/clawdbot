@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 type AgentRunTerminalModelRef = { provider: string; model: string };
 
-export type AgentRunTerminalReceipt = {
+type AgentRunTerminalReceiptFields = {
   runId: string;
   sessionId: string;
   turnId: string;
@@ -10,6 +10,13 @@ export type AgentRunTerminalReceipt = {
   effective: AgentRunTerminalModelRef & { responseModel: string };
   successfulToolNames: string[];
   rerouted: boolean;
+};
+
+export type AgentRunTerminalReceipt = AgentRunTerminalReceiptFields & {
+  terminalDisposition: "visible" | "not-visible";
+};
+
+export type AgentRunTerminalReceiptMetadata = AgentRunTerminalReceiptFields & {
   /** Added by the run entry after producer metadata is normalized. */
   terminalDisposition?: "visible" | "not-visible";
 };
@@ -37,7 +44,7 @@ function isStringArray(value: unknown): value is string[] {
 
 export function normalizeAgentRunTerminalReceipt(
   value: unknown,
-): AgentRunTerminalReceipt | undefined {
+): AgentRunTerminalReceiptMetadata | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -78,5 +85,18 @@ export function normalizeAgentRunTerminalReceipt(
     ...(receipt.terminalDisposition !== undefined
       ? { terminalDisposition: receipt.terminalDisposition }
       : {}),
+  };
+}
+
+export function normalizeCompletedAgentRunTerminalReceipt(
+  value: unknown,
+): AgentRunTerminalReceipt | undefined {
+  const receipt = normalizeAgentRunTerminalReceipt(value);
+  if (!receipt?.terminalDisposition) {
+    return undefined;
+  }
+  return {
+    ...receipt,
+    terminalDisposition: receipt.terminalDisposition,
   };
 }

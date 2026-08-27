@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentRunTerminalDeliverySnapshot } from "../agent-run-terminal-delivery.js";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import { normalizeCompletedAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
@@ -70,7 +70,9 @@ export function createAgentCommandLifecycle(params: {
     const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(
       terminal.metadata.terminalDelivery,
     );
-    const terminalReceipt = normalizeAgentRunTerminalReceipt(terminal.metadata.terminalReceipt);
+    const terminalReceipt = normalizeCompletedAgentRunTerminalReceipt(
+      terminal.metadata.terminalReceipt,
+    );
     const { stopReason, livenessState, timeoutPhase, providerStarted } = terminal.outcome;
     const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
     emitAgentEvent({

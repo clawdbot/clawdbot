@@ -16,7 +16,7 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import {
-  normalizeAgentRunTerminalReceipt,
+  normalizeCompletedAgentRunTerminalReceipt,
   type AgentRunTerminalReceipt,
 } from "../../agents/agent-run-terminal-receipt.js";
 import {
@@ -313,7 +313,9 @@ function createSnapshotFromLifecycleEvent(params: {
     terminalOutcome.reason === "aborted" && data?.stopReason == null && data?.status == null;
   const terminalDelivery = normalizeAgentRunTerminalDeliverySnapshot(data?.terminalDelivery);
   const terminalReply = normalizeAgentRunTerminalReplySnapshot(data?.terminalReply);
-  const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(data?.terminalReceipt);
+  const normalizedTerminalReceipt = normalizeCompletedAgentRunTerminalReceipt(
+    data?.terminalReceipt,
+  );
   const terminalReceipt =
     normalizedTerminalReceipt?.runId === runId ? normalizedTerminalReceipt : undefined;
   return {
