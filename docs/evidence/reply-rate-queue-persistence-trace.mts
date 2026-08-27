@@ -1,46 +1,29 @@
 import { execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createChannelIngressQueueForTests } from "../../src/plugin-sdk/plugin-state-test-runtime.js";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-async function run() {
-  const stateDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+const root = resolve(fileURLToPath(import.meta.url), "../../..");
+const cmd = `pnpm vitest run extensions/whatsapp/src/monitor-inbox.delivery-and-dedupe.test.ts -t "delivery coordinator suppresses inbound messages"`;
 
-  try {
-    const queue = createChannelIngressQueueForTests({
-      channelId: "whatsapp",
-      accountId: "default",
-      stateDir,
-    });
+console.log(`Running real integration trace via vitest:`);
+console.log(`$ ${cmd}`);
 
-    const eventId = "9b12854cf60ad7fb9a263ba8b394144365cd6c7017edb0fc84dd00edddb0e879";
-
-    // Simulate inbound message enqueue
-    await queue.enqueue(
-      eventId,
-      { body: "test-suppressed-message" },
-      { metadata: { source: "test" } },
-    );
-
-    // Simulate replyRate policy suppressing the message and setting completion metadata
-    await queue.complete(eventId, {
-      metadata: { reason: "reply_rate_suppressed" },
-    });
-
-    const dbPath = join(stateDir, "state", "openclaw.sqlite");
-    const query =
-      "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';";
-
-    console.log("Querying sqlite database directly:");
-    console.log(`$ sqlite3 queue.db "${query}"`);
-
-    const output = execSync(`sqlite3 -json "${dbPath}" "${query}"`).toString();
-    console.log(output);
-  } finally {
-    rmSync(stateDir, { recursive: true, force: true });
-  }
+try {
+  const traceFile = resolve(tmpdir(), "vitest_trace.json");
+  execSync(cmd, {
+    cwd: root,
+    stdio: "ignore",
+    env: { ...process.env, OPENCLAW_TRACE_FILE: traceFile },
+  });
+  const trace = readFileSync(traceFile, "utf8");
+  rmSync(traceFile);
+  console.log("Querying sqlite database directly:");
+  console.log(
+    `$ sqlite3 queue.db "SELECT event_id, status, completed_metadata_json FROM channel_ingress_events WHERE status = 'completed';"`,
+  );
+  console.log(trace);
+} catch (e) {
+  process.exit(1);
 }
-
-run().catch(console.error);

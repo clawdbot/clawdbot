@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 // WhatsApp monitor inbox behavior split by ownership.
 import { describe, expect, it, vi } from "vitest";
 import { createWhatsAppDurableInboundQueue } from "./inbound/durable-receive.js";
@@ -755,6 +756,29 @@ describe("web monitor inbox delivery and dedupe", () => {
         metadata: { reason: "reply_rate_suppressed" },
       }),
     );
+
+    // Print the completion trace for the proof artifact
+    const completionCall = completeSpy.mock.calls[0];
+    if (completionCall) {
+      if (process.env.OPENCLAW_TRACE_FILE) {
+        fs.writeFileSync(
+          process.env.OPENCLAW_TRACE_FILE,
+          JSON.stringify(
+            [
+              {
+                event_id: completionCall[0],
+                status: "completed",
+                completed_metadata_json: JSON.stringify(completionCall[1]?.metadata),
+              },
+            ],
+            null,
+            2,
+          ),
+        );
+      }
+    } else {
+      fs.writeFileSync("/tmp/vitest_trace.json", "[]");
+    }
 
     await listener.close();
   });
