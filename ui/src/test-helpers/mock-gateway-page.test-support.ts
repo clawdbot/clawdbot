@@ -9,14 +9,15 @@ type MockGatewayPage = {
 };
 
 export const mockGatewayTest = it.extend<{ gatewayPage: MockGatewayPage }>({
-  // oxlint-disable-next-line no-empty-pattern -- Vitest requires destructuring to discover fixture dependencies.
-  gatewayPage: async ({}, use) => {
+  gatewayPage: async ({ task }, use) => {
     const dom = new JSDOM("", { url: "http://mock-control-ui/", runScripts: "outside-only" });
     try {
       await use({
         window: dom.window,
         execute: (script) => {
-          new Script(script).runInContext(dom.getInternalVMContext());
+          new Script(script, { filename: `mock-gateway:${task.name}` }).runInContext(
+            dom.getInternalVMContext(),
+          );
         },
         close: () => dom.window.close(),
       });
