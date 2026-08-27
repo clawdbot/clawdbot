@@ -307,6 +307,7 @@ export function collectGatewayConfigFindings(
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +
         "(2) gateway.trustedProxies is restricted to proxy IPs only. " +
         "(3) Direct access to the Gateway port is blocked by firewall. " +
+        "Same-host proxy requests are rejected unless gateway.auth.trustedProxy.allowLoopback=true and gateway.trustedProxies includes their loopback source; enable only for a deliberate same-host trust boundary. " +
         "See /gateway/trusted-proxy-auth for setup guidance.",
     });
 
