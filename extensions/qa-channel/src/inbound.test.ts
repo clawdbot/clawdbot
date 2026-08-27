@@ -1,7 +1,7 @@
 // Qa Channel tests cover inbound plugin behavior.
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
@@ -34,8 +34,8 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
+vi.mock("openclaw/plugin-sdk/media-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-store")>()),
   saveMediaBuffer: vi.fn(async () => ({
     id: "stored-audio.ogg",
     path: "/tmp/openclaw-media/stored-audio.ogg",

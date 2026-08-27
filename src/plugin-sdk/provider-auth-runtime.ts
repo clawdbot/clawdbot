@@ -13,6 +13,8 @@ import { startOAuthLoopbackCallbackServer } from "../infra/oauth-loopback-callba
 import { escapeHtml } from "../shared/html-escape.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
+export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
+export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
 export {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
@@ -35,6 +37,37 @@ export type OAuthCallbackResult = {
   /** State value returned by the callback and validated against the expected state. */
   state: string;
 };
+
+type ProviderOAuthLoopbackCallbackResult =
+  | { type: "authorization_code"; code: string; state: string }
+  | { type: "oauth_error"; error: string; errorDescription?: string };
+
+type ProviderOAuthLoopbackCallbackServer = {
+  waitForCallback: () => Promise<ProviderOAuthLoopbackCallbackResult>;
+  close: () => Promise<void>;
+};
+
+type ProviderOAuthLoopbackRenderedResponse = { body: string; contentType: string };
+type ProviderOAuthLoopbackCorsOriginResolver = (
+  originHeader: string | string[] | undefined,
+) => string | undefined;
+
+/**
+ * Binds a hardened loopback listener before returning so provider plugins can open the browser
+ * only after the callback route is ready. Invalid request candidates remain nonterminal.
+ */
+export async function startProviderOAuthLoopbackCallbackServer(params: {
+  redirectUrl: string | URL;
+  expectedState: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  bindHostname?: string;
+  resolveCorsOrigin?: ProviderOAuthLoopbackCorsOriginResolver;
+  renderSuccess?: () => ProviderOAuthLoopbackRenderedResponse;
+  renderError?: (message: string) => ProviderOAuthLoopbackRenderedResponse;
+}): Promise<ProviderOAuthLoopbackCallbackServer> {
+  return await startOAuthLoopbackCallbackServer(params);
+}
 
 /**
  * Non-secret auth profile metadata used by provider discovery helpers.

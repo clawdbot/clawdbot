@@ -597,9 +597,19 @@ class LocalSqliteSnapshotProvider implements SqliteSnapshotProvider {
         `SQLite snapshot must be an immediate child of repository ${this.#repositoryPath}: ${snapshotDir}`,
       );
     }
-    const repositoryStat = await fs.lstat(this.#repositoryPath);
+    const repositoryStat = await lstatIfExists(this.#repositoryPath);
+    if (!repositoryStat) {
+      throw new Error(
+        `SQLite snapshot repository does not exist: ${this.#repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`,
+      );
+    }
     assertDirectory(repositoryStat, this.#repositoryPath, "SQLite snapshot repository");
-    const snapshotStat = await fs.lstat(snapshotDir);
+    const snapshotStat = await lstatIfExists(snapshotDir);
+    if (!snapshotStat) {
+      throw new Error(
+        `SQLite snapshot does not exist: ${snapshotDir}. Run \`openclaw backup sqlite list --repository ${this.#repositoryPath}\` to inspect available snapshots.`,
+      );
+    }
     assertDirectory(snapshotStat, snapshotDir, "SQLite snapshot");
     if (await lstatIfExists(path.join(snapshotDir, SNAPSHOT_PENDING_FILENAME))) {
       const snapshotState = await classifySnapshotDirectory(snapshotDir);
@@ -667,7 +677,12 @@ async function verifySnapshotDatabaseFile(
     throw new Error(`Snapshot artifact changed before SQLite verification: ${artifactPath}`);
   }
 
-  const validationRootIdentity = await fs.lstat(validationRootPath);
+  const validationRootIdentity = await lstatIfExists(validationRootPath);
+  if (!validationRootIdentity) {
+    throw new Error(
+      `SQLite validation root does not exist: ${validationRootPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
+    );
+  }
   assertDirectory(validationRootIdentity, validationRootPath, "SQLite validation root");
   await withPrivateSqliteStagingDirectory({
     rootPath: validationRootPath,

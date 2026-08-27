@@ -315,6 +315,28 @@ describe("OpenAI-compatible completions params", () => {
     }
   });
 
+  it("keeps explicit authorization headers when API-key auth is also present", async () => {
+    mockOpenAIOptionsRef.options = [];
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+
+    const result = await streamOpenAICompletions(
+      {
+        ...model,
+        provider: "llama-cpp",
+        headers: { Authorization: "Bearer proxy-key" },
+      },
+      context,
+      { apiKey: "ambient-key" },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockOpenAIOptionsRef.options).toHaveLength(1);
+    expect(mockOpenAIOptionsRef.options[0]).toMatchObject({
+      apiKey: "ambient-key",
+      defaultHeaders: { Authorization: "Bearer proxy-key" },
+    });
+  });
+
   it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
     mockChunksRef.chunks = [makeRefusalChunk("I can't help with that.")];
 
@@ -898,7 +920,7 @@ describe("OpenAI-compatible completions params", () => {
   });
 
   it("enables Z.AI thinking with the documented payload when requested", async () => {
-    const stream = streamOpenAICompletions(
+    const stream = streamSimpleOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
@@ -908,15 +930,16 @@ describe("OpenAI-compatible completions params", () => {
       context,
       {
         apiKey: "sk-test",
-        reasoningEffort: "high",
+        reasoning: "max",
       },
     );
 
     await stream.result();
 
     expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
-      thinking: { type: "enabled" },
+      thinking: { type: "enabled", clear_thinking: false },
     });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
     expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
@@ -1650,6 +1673,78 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.stopReason).toBe("toolUse");
     const toolCalls = result.content.filter((b) => b.type === "toolCall");
     expect(toolCalls).toHaveLength(1);
+  });
+
+  it("preserves the first tool identity and publishes argument-free tool fragments", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_original", "original", ""),
+      makeToolCallChunk("call_replaced", "replaced", '{"value":1}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const toolDeltas: string[] = [];
+    for await (const event of stream) {
+      if (event.type === "toolcall_delta") {
+        toolDeltas.push(event.delta);
+      }
+    }
+
+    expect(toolDeltas).toEqual(["", '{"value":1}']);
+    expect((await stream.result()).content).toContainEqual({
+      type: "toolCall",
+      id: "call_original",
+      name: "original",
+      arguments: { value: 1 },
+    });
+  });
+
+  it("publishes post-tool text immediately and closes blocks in their original order", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "lookup", '{"value":1}'),
+      makeTextChunk("following text"),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+      if (event.type === "text_delta") {
+        expect(event.partial).toBeDefined();
+      }
+    }
+
+    expect(eventTypes.indexOf("text_delta")).toBeLessThan(eventTypes.indexOf("toolcall_end"));
+    expect(eventTypes.indexOf("toolcall_end")).toBeLessThan(eventTypes.indexOf("text_end"));
+    expect((await stream.result()).content).toEqual([
+      { type: "toolCall", id: "call_1", name: "lookup", arguments: { value: 1 } },
+      {
+        type: "text",
+        text: "following text",
+        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      },
+    ]);
+  });
+
+  it("rolls back provisional commentary when an unfinished tool stream is interrupted", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("ordinary narration"),
+      makeToolCallChunk("call_1", "lookup", '{"value":1}'),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const eventTypes: string[] = [];
+    for await (const event of stream) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Stream ended without finish_reason");
+    expect(result.content).toEqual([{ type: "text", text: "ordinary narration" }]);
+    expect(eventTypes.indexOf("text_end")).toBeLessThan(eventTypes.indexOf("error"));
+    expect(eventTypes).not.toContain("toolcall_end");
   });
 
   it("strips toolCall blocks when finish_reason is stop after visible text", async () => {

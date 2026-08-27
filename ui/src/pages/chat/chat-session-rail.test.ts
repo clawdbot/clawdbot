@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -11,9 +10,6 @@ import {
   requestSessionCompanionState,
   resetSessionCompanion,
 } from "./chat-session-companion.ts";
-import { renderBackgroundTasksToggle } from "./components/chat-background-tasks-render.ts";
-import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
-import { renderSessionRailToggle } from "./components/chat-session-rail-toggle.ts";
 import {
   ChatSessionRailElement,
   ChatSessionRailState,
@@ -38,35 +34,6 @@ function input(overrides: Partial<SessionRailInput> = {}): SessionRailInput {
     digest: digest(),
     hasCompanionActivity: false,
     ...overrides,
-  };
-}
-
-function backgroundTasksToggleProps(): BackgroundTasksProps {
-  return {
-    sessionKey: "agent:main:run",
-    statusRowId: "status-row",
-    collapsed: true,
-    narrowLayout: false,
-    connected: true,
-    canCancel: false,
-    loading: false,
-    error: null,
-    tasks: null,
-    subagentActivity: {
-      rows: [],
-      overflowWorking: 0,
-      taskIds: new Set<string>(),
-      nextExpiryAt: null,
-    },
-    taskDetails: new Map(),
-    taskDetailErrors: new Map(),
-    taskDetailLoadingIds: new Set(),
-    cancellingTaskIds: new Set(),
-    finishedCollapsed: true,
-    onToggleCollapsed: () => {},
-    onToggleFinished: () => {},
-    onRefresh: () => {},
-    onCancel: () => {},
   };
 }
 
@@ -493,6 +460,15 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__timing")?.textContent).toBe("1m 32s");
   });
 
+  it("uses the shared surface empty state before the first side-chat exchange", async () => {
+    const element = await mount();
+    const empty = element.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+
+    expect(empty?.shadowRoot?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(empty?.querySelector("svg")).not.toBeNull();
+  });
+
   it("submits the rail composer and renders sanitized markdown answers", async () => {
     const onSubmit = vi.fn();
     const element = await mount({
@@ -679,28 +655,6 @@ describe("ChatSessionRailElement", () => {
     expect(element.querySelector(".chat-session-rail__exchange")).not.toBeNull();
   });
 
-  it("keeps the destructive clear behind the overflow menu", async () => {
-    const onClear = vi.fn();
-    const element = await mount({ onClear });
-
-    const actions = element.querySelector(".chat-session-rail__actions");
-    expect(
-      actions?.querySelector("wa-dropdown .chat-session-rail__menu, .chat-session-rail__menu"),
-    ).not.toBeNull();
-    // Nothing in the always-visible row destroys the thread: only hide and
-    // collapse sit next to the menu trigger.
-    expect(actions?.querySelectorAll(":scope > button")).toHaveLength(2);
-
-    const clearItem = element.querySelector("wa-dropdown-item[value='clear']");
-    expect(clearItem).not.toBeNull();
-    element
-      .querySelector(".chat-session-rail__menu")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: "clear" } }, bubbles: false }),
-      );
-    expect(onClear).toHaveBeenCalledOnce();
-  });
-
   it("drops the digest band when there is no digest to show", async () => {
     const withDigest = await mount({ digest: { ...digest(), assessment: "Steady progress." } });
     expect(withDigest.querySelector(".chat-session-rail__digest")).not.toBeNull();
@@ -719,35 +673,6 @@ describe("ChatSessionRailElement", () => {
     });
     expect(withoutDigest.querySelector(".chat-session-rail--expanded")).not.toBeNull();
     expect(withoutDigest.querySelector(".chat-session-rail__digest")).toBeNull();
-  });
-
-  it("gives the header toggle a glyph of its own, not the background-tasks one", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    render(renderSessionRailToggle({ mode: "hidden", onToggle: () => {} }), host);
-    const railGlyph = host.querySelector(".chat-session-rail-toggle svg")?.innerHTML;
-    const tasksHost = document.createElement("div");
-    document.body.append(tasksHost);
-    render(renderBackgroundTasksToggle(backgroundTasksToggleProps()), tasksHost);
-    const tasksGlyph = tasksHost.querySelector(".chat-tasks-toggle svg")?.innerHTML;
-
-    expect(railGlyph?.trim()).toBeTruthy();
-    expect(tasksGlyph?.trim()).toBeTruthy();
-    expect(railGlyph).not.toBe(tasksGlyph);
-  });
-
-  it("reports the open panel to assistive technology", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    render(renderSessionRailToggle({ mode: "expanded", onToggle: () => {} }), host);
-    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
-      "true",
-    );
-
-    render(renderSessionRailToggle({ mode: "pill", onToggle: () => {} }), host);
-    expect(host.querySelector(".chat-session-rail-toggle")?.getAttribute("aria-expanded")).toBe(
-      "false",
-    );
   });
 
   it("auto-opens from pill without persisting card, then collapses persistently", async () => {

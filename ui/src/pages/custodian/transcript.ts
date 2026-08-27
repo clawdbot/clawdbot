@@ -8,6 +8,7 @@ import type { WizardStep } from "../../api/types.ts";
 import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { renderChatDivider } from "../chat/components/chat-divider.ts";
 import { renderMessageGroup } from "../chat/components/chat-message.ts";
 import { renderCustodianQuestionCard } from "./custodian-question-card.ts";
@@ -56,20 +57,8 @@ export function retireCustodianQuestions(
   return answered;
 }
 
-export function createCustodianSessionId(): string {
-  if (typeof crypto.randomUUID === "function") {
-    return `control-ui-onboarding-${crypto.randomUUID()}`;
-  }
-  const suffix = [...crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
-  return `control-ui-onboarding-${suffix}`;
-}
-
 export function custodianErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : t("custodian.requestFailed");
+  return formatUiError(error, t("custodian.requestFailed"));
 }
 
 function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
@@ -181,10 +170,12 @@ export function renderCustodianTranscriptEntry(params: {
     ${params.showWizardStep && step
       ? html`<section
           class="custodian__wizard-step"
-          aria-label=${step.title ?? step.message ?? "Setup"}
+          aria-label=${formatUiExternalText(step.title ?? step.message, "Setup")}
         >
           ${step.title
-            ? html`<strong class="custodian__wizard-title">${step.title}</strong>`
+            ? html`<strong class="custodian__wizard-title"
+                >${formatUiExternalText(step.title)}</strong
+              >`
             : nothing}
           ${renderWizardStepControls({
             step,

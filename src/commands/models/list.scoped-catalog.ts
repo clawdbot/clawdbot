@@ -234,7 +234,7 @@ export async function loadScopedListModelCatalogSnapshot(params: {
       config: params.cfg,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       agentDir: params.agentDir,
-      inheritedAuthDir: params.inheritedAuthDir ?? params.agentDir,
+      ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       readOnly: true,
     },

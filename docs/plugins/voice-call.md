@@ -50,6 +50,12 @@ Gateway, then restart the Gateway to load it.
     Set config under `plugins.entries.voice-call.config` (see
     [Configuration](#configuration) below). At minimum: `provider`, provider
     credentials, `fromNumber`, and a publicly reachable webhook URL.
+
+    For an inbound Twilio number, set its **Voice webhook** to the public Voice
+    Call webhook URL with method `POST`. Set the number-level **Status
+    Callback** to the same URL with `?type=status`, also using `POST`, so
+    terminal inbound call statuses reach the plugin.
+
   </Step>
   <Step title="Verify setup">
     ```bash
@@ -105,7 +111,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
-          sessionScope: "per-phone", // per-phone | per-call
+          sessionScope: "per-phone", // per-phone | per-call | main
           numbers: {
             "+15550009999": {
               inboundGreeting: "Silver Fox Cards, how can I help?",
@@ -150,7 +156,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           // Public exposure (pick one)
           // publicUrl: "https://example.ngrok.app/voice/webhook",
           // tunnel: { provider: "ngrok" },
-          // tailscale: { mode: "funnel", path: "/voice/webhook" },
+          // tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" },
 
           outbound: {
             defaultMode: "notify", // notify | conversation
@@ -202,6 +208,8 @@ that Region. See
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
     - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
     - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
+    - Tailscale Serve and Funnel automatically expose the realtime or streaming WebSocket path when that audio mode is enabled.
+    - `tailscale.port` selects the external HTTPS port for both `tailscale.mode` and unified `tunnel.provider: "tailscale-serve" | "tailscale-funnel"`. It defaults to `443`; use `8443` when another HTTPS server owns port 443. Funnel accepts only `443`, `8443`, or `10000`, while Serve accepts any valid TCP port. Non-default ports appear in the webhook and realtime stream URLs.
 
   </Accordion>
   <Accordion title="Streaming connection caps">
@@ -237,12 +245,19 @@ each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
-Voice Call stores generated session keys under the configured agent namespace
-(`agent:<agentId>:voice:*`). Raw explicit integration keys resolve into the
-same namespace: a canonical `agent:<configuredAgentId>:*` key keeps that
-owner and honors core `session.mainKey`/global-scope aliasing; foreign or
-malformed `agent:*` input is scoped as an opaque key under the configured
-agent; `global` and `unknown` remain global sentinels.
+Set `sessionScope: "main"` to route every call into the configured agent's main
+session. This honors the core `session.mainKey` setting and resolves to
+`global` when core `session.scope` is `"global"`. Raw call turns then share
+history with the agent's primary session, so use this only when that shared
+context is intentional.
+
+For `per-phone` and `per-call`, Voice Call stores generated session keys under
+the configured agent namespace (`agent:<agentId>:voice:*`). Raw explicit
+integration keys resolve into the same namespace: a canonical
+`agent:<configuredAgentId>:*` key keeps that owner and honors core
+`session.mainKey`/global-scope aliasing; foreign or malformed `agent:*` input
+is scoped as an opaque key under the configured agent; `global` and `unknown`
+remain global sentinels.
 
 ## Realtime voice conversations
 
@@ -261,23 +276,46 @@ Current runtime behavior:
 - `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
+- Voice Call exposes the built-in `openclaw_end_call` realtime tool on every call. It takes no arguments or call ID; the active voice bridge binds it to the current call.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
 - `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns authorized snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true. The active memory plugin authorizes session-transcript hits; plugins without that capability fail closed for session hits while ordinary memory hits remain available.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
-- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
+- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, `per-call` for isolated calls, or `main` for the configured agent's main session).
+
+### Hangup detection
+
+Realtime calls normally end when the carrier sends a stream stop event or closes
+the media WebSocket. If an intermediary does not promptly forward that close,
+OpenClaw treats 30 seconds without inbound media as a disconnect, waits a
+2-second grace period for media to resume, and then ends the call.
+
+The realtime model can also call `openclaw_end_call` when the caller asks to
+hang up. The model must speak any final words before calling the tool: a
+successful call ends the current provider session and phone connection
+immediately, so no later reply is spoken. If the carrier cannot end the call,
+the bridge stays connected and the model receives an error it can explain to
+the caller. Configured `realtime.tools` cannot replace this built-in by name.
+
+For inbound Twilio numbers, also configure a Status Callback using `POST` to
+your public webhook URL with `?type=status` appended, for example
+`https://voice.example.com/voice/webhook?type=status`. Include the `completed`
+call event. OpenClaw-created outbound calls configure their callback
+automatically. The callback provides the fastest teardown signal, while stream
+close and the inactivity backstop remain independent of it.
 
 ### Tool policy
 
-`realtime.toolPolicy` controls the consult run:
+`realtime.toolPolicy` controls only the consult run. It never disables
+`openclaw_end_call`:
 
 | Policy           | Behavior                                                                                                                                 |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `safe-read-only` | Expose the consult tool and limit the regular agent to `read`, `web_search`, `web_fetch`, `x_search`, `memory_search`, and `memory_get`. |
 | `owner`          | Expose the consult tool and let the regular agent use the normal agent tool policy.                                                      |
-| `none`           | Do not expose the consult tool. Custom `realtime.tools` are still passed through to the realtime provider.                               |
+| `none`           | Do not expose the consult tool. The built-in end-call tool and custom `realtime.tools` remain available.                                 |
 
 `realtime.consultPolicy` controls only the realtime model instructions:
 
@@ -679,11 +717,12 @@ playback state:
 
 ### Twilio stream disconnect grace
 
-When a Twilio media stream disconnects, Voice Call waits **2000 ms** before
-auto-ending the call:
+When a Twilio classic streaming or realtime media stream disconnects, Voice
+Call waits **2000 ms** before auto-ending the call:
 
 - If the stream reconnects during that window, auto-end is canceled.
 - If no stream re-registers after the grace period, the call is ended to prevent stuck active calls.
+- Realtime bridge/session resources, queued audio, transcript ownership, and in-flight consult work close immediately. Only call/provider finalization waits for reconnect.
 
 ## Stale call reaper
 
@@ -854,7 +893,7 @@ Use one public exposure path:
           // or
           tunnel: { provider: "ngrok" },
           // or
-          tailscale: { mode: "funnel", path: "/voice/webhook" },
+          tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" },
         },
       },
     },
@@ -894,6 +933,18 @@ Confirm the provider console points at the exact public webhook URL:
 ```text
 https://voice.example.com/voice/webhook
 ```
+
+For a Twilio inbound number, configure both number-level callbacks in the
+Twilio Console:
+
+- **Voice webhook:** `https://voice.example.com/voice/webhook` using `POST`.
+- **Status Callback:** `https://voice.example.com/voice/webhook?type=status` using `POST`.
+
+Media Streams `stop`/WebSocket close handling is the primary auto-end path and
+does not depend on the HTTP status callback. Twilio's optional `<Stream
+statusCallback>` is a separate stream-diagnostic signal and is not required for
+teardown. `openclaw voicecall setup` validates local configuration and webhook
+exposure; it cannot inspect or change Twilio Console settings.
 
 Then inspect runtime state:
 

@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./http-utils.js", () => ({
-  authorizeGatewayHttpRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
+  authorizeControlUiReadRequestOrReply: (...args: unknown[]) => mocks.authorize(...args),
 }));
 
 vi.mock("../media/fetch.js", () => ({
@@ -37,6 +37,7 @@ vi.mock("../plugins/management-service.js", () => ({
 const {
   clearPluginIconCacheForTest,
   handlePluginIconHttpRequest,
+  LINK_FAVICON_MAX_BYTES,
   PLUGIN_ICON_CACHE_TTL_MS,
   PLUGIN_ICON_MAX_BYTES,
   PLUGIN_ICON_MAX_REDIRECTS,
@@ -48,6 +49,9 @@ const PNG_BYTES = Buffer.from(
   "base64",
 );
 const NORMALIZED_PNG_BYTES = Buffer.from("normalized-png");
+const ICO_BYTES = Buffer.from([
+  0, 0, 1, 0, 1, 0, 16, 16, 0, 0, 1, 0, 32, 0, 0, 0, 0, 0, 22, 0, 0, 0,
+]);
 const CATALOG_ICON_URL = "https://cdn.example.test/setup-tool.svg";
 const ICON_ROUTES = [
   { label: "plugin", pathname: "/__openclaw__/plugin-icon/firecrawl" },
@@ -105,7 +109,7 @@ beforeEach(() => {
   mocks.authorize.mockReset();
   mocks.authorize.mockResolvedValue({
     authMethod: "token",
-    trustDeclaredOperatorScopes: false,
+    operatorScopes: ["operator.admin", "operator.read"],
   });
   mocks.resolveIconUrl.mockResolvedValue("https://cdn.example.test/plugin.svg");
   mocks.resolveCatalogIconUrl.mockImplementation(({ iconUrl }) => iconUrl);
@@ -131,6 +135,104 @@ function request(pathname: string, options?: { token?: string; method?: string }
 }
 
 describe("Control UI plugin and catalog icon routes", () => {
+  it("keeps link favicon fetching off when explicitly disabled", async () => {
+    configForRequest = () => ({
+      gateway: { controlUi: { automaticallyFetchFavicons: false } },
+    });
+    const response = await request("/__openclaw__/link-favicon/example.com");
+
+    expect(response.status).toBe(404);
+    expect(mocks.authorize).toHaveBeenCalledOnce();
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("authenticates enabled link favicon requests before any remote fetch", async () => {
+    configForRequest = () => ({
+      gateway: { controlUi: { automaticallyFetchFavicons: true } },
+    });
+    mocks.authorize.mockImplementationOnce(async ({ res }) => {
+      res.statusCode = 401;
+      res.end();
+      return null;
+    });
+
+    const response = await request("/__openclaw__/link-favicon/example.com", { token: "" });
+
+    expect(response.status).toBe(401);
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "localhost",
+    "router.local",
+    "metadata.google.internal",
+    "127.0.0.1",
+    "8.8.8.8",
+    "[::1]",
+    "example.com/secret",
+    "example.com:443",
+    "user@example.com",
+  ])("rejects non-public-domain favicon host %s without fetching", async (hostname) => {
+    configForRequest = () => ({
+      gateway: { controlUi: { automaticallyFetchFavicons: true } },
+    });
+
+    const response = await request(`/__openclaw__/link-favicon/${encodeURIComponent(hostname)}`);
+
+    expect(response.status).toBe(404);
+    expect(mocks.readRemoteMediaBuffer).not.toHaveBeenCalled();
+  });
+
+  it("fetches by default only through the fixed HTTPS path and strict media guard", async () => {
+    const response = await request("/__openclaw__/link-favicon/Example.COM");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toBe('attachment; filename="link-favicon"');
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledOnce();
+    const fetchOptions = mocks.readRemoteMediaBuffer.mock.calls[0]?.[0];
+    expect(fetchOptions).toMatchObject({
+      url: "https://example.com/favicon.ico",
+      maxBytes: LINK_FAVICON_MAX_BYTES,
+      maxRedirects: PLUGIN_ICON_MAX_REDIRECTS,
+      requireHttps: true,
+      timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+      responseHeaderTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+      readIdleTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
+    });
+    expect(fetchOptions).not.toHaveProperty("ssrfPolicy");
+  });
+
+  it("serves standard ICO favicon bytes without invoking raster processing", async () => {
+    configForRequest = () => ({
+      gateway: { controlUi: { automaticallyFetchFavicons: true } },
+    });
+    mocks.readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: ICO_BYTES,
+      contentType: "image/vnd.microsoft.icon",
+    });
+
+    const response = await request("/__openclaw__/link-favicon/github.com");
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("image/x-icon");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(ICO_BYTES);
+    expect(mocks.encodeImage).not.toHaveBeenCalled();
+  });
+
+  it("negatively caches failed link favicon fetches", async () => {
+    configForRequest = () => ({
+      gateway: { controlUi: { automaticallyFetchFavicons: true } },
+    });
+    mocks.readRemoteMediaBuffer.mockRejectedValueOnce(new Error("upstream failed"));
+
+    const first = await request("/__openclaw__/link-favicon/missing.example");
+    const second = await request("/__openclaw__/link-favicon/missing.example");
+
+    expect(first.status).toBe(404);
+    expect(second.status).toBe(404);
+    expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledOnce();
+  });
+
   it.each(INVALID_ICON_ROUTES)(
     "claims $label instead of falling through to the Control UI",
     async ({ pathname }) => {

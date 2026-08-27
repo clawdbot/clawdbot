@@ -183,6 +183,7 @@ export async function sendRequest(
     method?: string;
     remoteAddress?: string;
     host?: string;
+    headers?: Record<string, string>;
   },
 ): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();

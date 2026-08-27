@@ -193,33 +193,22 @@ async function buildRow(params: {
   model: ListRowModel;
   key: string;
   context: RowBuilderContext;
-  routeIndex?: ModelCatalogLogicalRouteIndex;
-  authEvaluation?: ModelListAuthEvaluation;
+  authEvaluation: ModelListAuthEvaluation;
   allowAuthAvailabilityOverride?: boolean;
   configuredEntry?: ConfiguredEntry;
 }): Promise<ModelRow> {
   const configured = params.configuredEntry ?? params.context.configuredByKey.get(params.key);
-  const authRef = toModelAuthRef(params.model, params.routeIndex);
-  const authEvaluation =
-    params.authEvaluation ??
-    params.context.authIndex.evaluateModelAuth(params.model.provider, authRef);
-  const model = projectListRowModel({
-    model: params.model,
-    evaluation: authEvaluation,
-    cfg: params.context.cfg,
-    ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
-  });
   return toModelRow({
-    model,
+    model: params.model,
     key: params.key,
     tags: configured ? Array.from(configured.tags) : [],
     aliases: configured?.aliases ?? [],
     availableKeys: params.context.availableKeys,
-    authAvailability: authEvaluation.availability,
+    authAvailability: params.authEvaluation.availability,
     authAvailabilityAuthoritative:
       params.allowAuthAvailabilityOverride === true ||
       normalizeProviderIdForAuth(params.model.provider) === "openai" ||
-      authEvaluation.routeResolution !== null,
+      params.authEvaluation.routeResolution !== null,
   });
 }
 
@@ -288,10 +277,9 @@ async function appendVisibleRow(params: {
   }
   params.rows.push(
     await buildRow({
-      model,
+      model: projectedModel,
       key: params.key,
       context: params.context,
-      ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
       authEvaluation,
       allowAuthAvailabilityOverride: params.allowAuthAvailabilityOverride,
       ...(params.configuredEntry ? { configuredEntry: params.configuredEntry } : {}),
@@ -416,7 +404,7 @@ export async function loadListModelCatalogSnapshot(
       cfg: context.cfg,
       ...(context.agentId ? { agentId: context.agentId } : {}),
       agentDir: context.agentDir,
-      inheritedAuthDir: context.inheritedAuthDir ?? context.agentDir,
+      ...(context.inheritedAuthDir ? { inheritedAuthDir: context.inheritedAuthDir } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
       providerIds: context.providerDiscoveryProviderIds,
       runtimeProviderIds: context.providerRuntimeDiscoveryProviderIds,

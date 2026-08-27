@@ -12,6 +12,7 @@ import {
 } from "./executable-path.js";
 
 export type ExecutableResolution = {
+  kind: "executable";
   rawExecutable: string;
   resolvedPath?: string;
   resolvedRealPath?: string;
@@ -19,6 +20,7 @@ export type ExecutableResolution = {
 };
 
 export type CommandResolution = {
+  kind: "command";
   execution: ExecutableResolution;
   policy: ExecutableResolution;
   effectiveArgv?: string[];
@@ -26,12 +28,6 @@ export type CommandResolution = {
   policyBlocked?: boolean;
   blockedWrapper?: string;
 };
-
-function isCommandResolution(
-  resolution: CommandResolution | ExecutableResolution | null,
-): resolution is CommandResolution {
-  return Boolean(resolution && "execution" in resolution && "policy" in resolution);
-}
 
 function parseFirstToken(command: string): string | null {
   const trimmed = command.trim();
@@ -68,6 +64,7 @@ function buildExecutableResolution(
   const resolvedRealPath = tryResolveRealpath(resolvedPath);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
   return {
+    kind: "executable",
     rawExecutable,
     resolvedPath,
     resolvedRealPath,
@@ -90,6 +87,7 @@ function buildCommandResolution(params: {
     ? buildExecutableResolution(params.policyRawExecutable, params)
     : execution;
   const resolution: CommandResolution = {
+    kind: "command",
     execution,
     policy,
     effectiveArgv: params.effectiveArgv,
@@ -97,24 +95,7 @@ function buildCommandResolution(params: {
     policyBlocked: params.policyBlocked,
     blockedWrapper: params.blockedWrapper,
   };
-  // Compatibility getters for JS/tests while TS callers migrate to explicit targets.
-  return Object.defineProperties(resolution, {
-    rawExecutable: {
-      get: () => execution.rawExecutable,
-    },
-    resolvedPath: {
-      get: () => execution.resolvedPath,
-    },
-    resolvedRealPath: {
-      get: () => execution.resolvedRealPath,
-    },
-    executableName: {
-      get: () => execution.executableName,
-    },
-    policyResolution: {
-      get: () => (policy === execution ? undefined : policy),
-    },
-  });
+  return resolution;
 }
 
 export function resolveCommandResolution(
@@ -198,7 +179,7 @@ export function resolveExecutionTargetResolution(
   if (!resolution) {
     return null;
   }
-  return isCommandResolution(resolution) ? resolution.execution : resolution;
+  return resolution.kind === "command" ? resolution.execution : resolution;
 }
 
 export function resolvePolicyTargetResolution(
@@ -207,7 +188,7 @@ export function resolvePolicyTargetResolution(
   if (!resolution) {
     return null;
   }
-  return isCommandResolution(resolution) ? resolution.policy : resolution;
+  return resolution.kind === "command" ? resolution.policy : resolution;
 }
 
 export function resolveExecutionTargetCandidatePath(
@@ -215,7 +196,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    isCommandResolution(resolution) ? resolution.execution : resolution,
+    resolution?.kind === "command" ? resolution.execution : resolution,
     cwd,
   );
 }
@@ -225,7 +206,7 @@ export function resolveExecutionTargetTrustPath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableTrustPath(
-    isCommandResolution(resolution) ? resolution.execution : resolution,
+    resolution?.kind === "command" ? resolution.execution : resolution,
     cwd,
   );
 }
@@ -235,7 +216,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    isCommandResolution(resolution) ? resolution.policy : resolution,
+    resolution?.kind === "command" ? resolution.policy : resolution,
     cwd,
   );
 }
@@ -245,7 +226,7 @@ export function resolvePolicyTargetTrustPath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableTrustPath(
-    isCommandResolution(resolution) ? resolution.policy : resolution,
+    resolution?.kind === "command" ? resolution.policy : resolution,
     cwd,
   );
 }
@@ -279,10 +260,19 @@ export function resolvePolicyAllowlistCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
-const HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
+const LEGACY_HASHED_ARG_PATTERN_PREFIX = "sha256:argv:";
+const CWD_BOUND_HASHED_ARG_PATTERN_PREFIX = "sha256:cwd-argv:v1:";
 
 export function isGeneratedHashedArgPattern(value: string | null | undefined): boolean {
-  return typeof value === "string" && value.startsWith(HASHED_ARG_PATTERN_PREFIX);
+  return (
+    typeof value === "string" &&
+    (value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX) ||
+      value.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX))
+  );
+}
+
+export function isCwdBoundHashedArgPattern(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX);
 }
 
 function renderGeneratedArgPatternSubject(argv: string[]): string {
@@ -297,17 +287,34 @@ function renderGeneratedHashedArgPatternSubject(argv: string[]): string {
     .join("")}`;
 }
 
-export function buildHashedArgPatternFromArgv(argv: string[]): string {
-  const digest = crypto
-    .createHash("sha256")
-    .update(renderGeneratedHashedArgPatternSubject(argv), "utf8")
-    .digest("hex");
-  return `${HASHED_ARG_PATTERN_PREFIX}${digest}`;
+function normalizeGrantCwd(cwd: string, platform?: string | null): string {
+  const effectivePlatform = normalizeLowercaseStringOrEmpty(platform ?? process.platform);
+  const pathApi = effectivePlatform.startsWith("win") ? path.win32 : path.posix;
+  return pathApi.normalize(cwd).replaceAll("\\", "/");
 }
 
-function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
-  if (argPattern.startsWith(HASHED_ARG_PATTERN_PREFIX)) {
-    return argPattern === buildHashedArgPatternFromArgv(argv);
+export function buildCwdBoundHashedArgPattern(
+  argv: string[],
+  cwd: string,
+  platform?: string | null,
+): string {
+  const normalizedCwd = normalizeGrantCwd(cwd, platform);
+  const subject = `${Buffer.byteLength(normalizedCwd, "utf8")}\x00${normalizedCwd}\x00${renderGeneratedHashedArgPatternSubject(argv)}`;
+  const digest = crypto.createHash("sha256").update(subject, "utf8").digest("hex");
+  return `${CWD_BOUND_HASHED_ARG_PATTERN_PREFIX}${digest}`;
+}
+
+function matchArgPattern(
+  argPattern: string,
+  argv: string[],
+  cwd: string | undefined,
+  platform?: string | null,
+): boolean {
+  if (argPattern.startsWith(CWD_BOUND_HASHED_ARG_PATTERN_PREFIX)) {
+    return cwd !== undefined && argPattern === buildCwdBoundHashedArgPattern(argv, cwd, platform);
+  }
+  if (argPattern.startsWith(LEGACY_HASHED_ARG_PATTERN_PREFIX)) {
+    return false;
   }
   // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
   // always include a trailing \x00 sentinel so that every auto-generated pattern
@@ -377,6 +384,7 @@ export function matchAllowlist(
   resolution: ExecutableResolution | null,
   argv?: string[],
   platform?: string | null,
+  cwd?: string,
 ): ExecAllowlistEntry | null {
   if (!entries.length) {
     return null;
@@ -421,7 +429,10 @@ export function matchAllowlist(
       continue;
     }
     // Entry has argPattern — check argv match.
-    if (argv && matchArgPattern(entry.argPattern, argv, platform)) {
+    if (entry.source === "allow-always" && !isCwdBoundHashedArgPattern(entry.argPattern)) {
+      continue;
+    }
+    if (argv && matchArgPattern(entry.argPattern, argv, cwd, platform)) {
       return entry;
     }
   }

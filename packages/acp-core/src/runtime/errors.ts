@@ -128,12 +128,12 @@ export function formatAcpErrorChain(error: unknown): string {
     return redactSensitiveText(String(error));
   }
   const segments: string[] = [renderSingleError(error)];
-  let current: unknown = (error as unknown as { cause?: unknown }).cause;
+  let current: unknown = error.cause;
   let depth = 0;
   while (current !== undefined && current !== null && depth < 8) {
     if (current instanceof Error) {
       segments.push(renderSingleError(current));
-      current = (current as unknown as { cause?: unknown }).cause;
+      current = current.cause;
     } else {
       segments.push(stringifyNonErrorCause(current));
       current = undefined;
@@ -144,7 +144,7 @@ export function formatAcpErrorChain(error: unknown): string {
 }
 
 function renderSingleError(error: Error): string {
-  const codeValue = (error as unknown as { code?: unknown }).code;
+  const codeValue = "code" in error ? error.code : undefined;
   const codeSuffix =
     typeof codeValue === "string" || typeof codeValue === "number" ? ` [${codeValue}]` : "";
   return `${error.name}${codeSuffix}: ${error.message}`;

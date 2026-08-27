@@ -270,6 +270,7 @@ describe("ssrf pinning", () => {
     ["IPv6 unspecified", "::", 6],
     ["IPv4-mapped IPv6 unspecified", "::ffff:0.0.0.0", 6],
     ["NAT64-embedded IPv4 unspecified", "64:ff9b::0.0.0.0", 6],
+    ["local-use NAT64", "64:ff9b:1:808:808:808:a9fe:a9fe", 6],
   ] as const)(
     "rejects a trusted private hostname rebound to %s",
     async (_name, address, family) => {

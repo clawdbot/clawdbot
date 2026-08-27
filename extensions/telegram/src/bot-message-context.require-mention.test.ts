@@ -380,13 +380,11 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     if (!ctx?.ctxPayload) {
       throw new Error("expected Telegram context payload when topic disables requireMention");
     }
-    const activationCalls = resolveGroupActivation.mock.calls as unknown as Array<
-      [{ chatId: number; messageThreadId?: number; sessionKey: string }]
-    >;
-    const [activationOptions] = activationCalls[0] ?? [];
-    expect(activationOptions?.chatId).toBe(-1001234567890);
-    expect(activationOptions?.messageThreadId).toBe(99);
-    expect(activationOptions?.sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
+    expect(resolveGroupActivation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      }),
+    );
   });
 
   it("lets explicit topic requireMention=true override always activation", async () => {

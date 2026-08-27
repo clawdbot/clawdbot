@@ -61,6 +61,34 @@ describe("doctor database schema preflight", () => {
     expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["plain doctor", { nonInteractive: true }],
+    ["doctor --fix", { nonInteractive: true, repair: true }],
+  ])("diagnoses an unreadable shared state database for %s", async (_label, options) => {
+    const statePath = resolveOpenClawStateSqlitePath(process.env);
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, "not a sqlite database");
+    mockDoctorConfigSnapshot();
+
+    const failure = await doctorCommand(createDoctorRuntime(), options).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(statePath);
+    expect((failure as Error).message).toMatch(/file is not a database/iu);
+    expect((failure as Error).message).toContain("left unchanged");
+    expect((failure as Error).message).toContain("restore this file from a verified backup");
+    expect((failure as Error).message).toContain("openclaw doctor --fix");
+    expect((failure as Error).message).toContain(
+      "https://docs.openclaw.ai/reference/database-schemas",
+    );
+    expect(fs.readFileSync(statePath, "utf8")).toBe("not a sqlite database");
+    expect(autoMigrateLegacyStateDir).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshot).not.toHaveBeenCalled();
+  });
 });
 
 function mockInteractiveGitUpdate(status: "ok" | "skipped"): void {

@@ -14,19 +14,21 @@ import { hasBinary } from "../loading/config.js";
 import { parseTarVerboseMetadata } from "./install-tar-verbose.js";
 
 type ArchiveExtractResult = { stdout: string; stderr: string; code: number | null };
+type TarListingResult = ArchiveExtractResult & { stdoutTruncatedBytes?: number };
 type TarPreflightResult = {
   entries: string[];
   metadata: ReturnType<typeof parseTarVerboseMetadata>;
 };
 
 function commandFailureResult(
-  result: { stdout: string; stderr: string; code: number | null },
+  result: TarListingResult,
   fallbackStderr: string,
 ): ArchiveExtractResult {
+  const truncated = (result.stdoutTruncatedBytes ?? 0) > 0;
   return {
     stdout: result.stdout,
-    stderr: result.stderr || fallbackStderr,
-    code: result.code,
+    stderr: truncated ? "tar listing output was truncated; refusing to extract" : fallbackStderr,
+    code: truncated ? 1 : result.code,
   };
 }
 
@@ -49,16 +51,16 @@ async function readTarPreflight(params: {
   const listResult = await runCommandWithTimeout(["tar", "tf", params.archivePath], {
     timeoutMs: params.timeoutMs,
   });
-  if (listResult.code !== 0) {
-    return commandFailureResult(listResult, "tar list failed");
+  if (listResult.code !== 0 || listResult.stdoutTruncatedBytes) {
+    return commandFailureResult(listResult, listResult.stderr || "tar list failed");
   }
   const entries = normalizeStringEntries(listResult.stdout.split("\n"));
 
   const verboseResult = await runCommandWithTimeout(["tar", "tvf", params.archivePath], {
     timeoutMs: params.timeoutMs,
   });
-  if (verboseResult.code !== 0) {
-    return commandFailureResult(verboseResult, "tar verbose list failed");
+  if (verboseResult.code !== 0 || verboseResult.stdoutTruncatedBytes) {
+    return commandFailureResult(verboseResult, verboseResult.stderr || "tar verbose list failed");
   }
   const metadata = parseTarVerboseMetadata(verboseResult.stdout);
   if (metadata.length !== entries.length) {

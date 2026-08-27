@@ -15,7 +15,7 @@ import {
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
-import { playwrightCore } from "./playwright-core.runtime.js";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import { connectOverCdpPinnedTransport } from "./pw-session-cdp-transport.js";
 import {
   blockedPageRefsByCdpUrl,
@@ -40,7 +40,6 @@ import {
   targetKey,
 } from "./pw-session-state.js";
 
-const { chromium } = playwrightCore;
 type CdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
 
 function resolveCdpConnectRetryDelayMs(attempt: number): number {
@@ -452,7 +451,10 @@ export async function connectBrowser(
                   lookup,
                 });
               }
-              return await chromium.connectOverCDP(connectionUrl, { timeout, headers });
+              return await getPlaywrightCore().chromium.connectOverCDP(connectionUrl, {
+                timeout,
+                headers,
+              });
             }),
           );
         };

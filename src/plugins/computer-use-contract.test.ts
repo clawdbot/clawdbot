@@ -1,6 +1,7 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
-  COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES,
+  COMPUTER_STALE_OBSERVATION,
   COMPUTER_USE_V2_ACTION_NAMES,
   parseComputerActParamsJSON,
   parseComputerActResult,
@@ -12,6 +13,17 @@ import {
 import type { OpenClawPluginNodeHostCommand } from "./types.js";
 
 describe("Computer Use wire contract", () => {
+  it("owns the shared provider ref-lifecycle error code", () => {
+    const contract = JSON.parse(
+      readFileSync(
+        new URL("../../test/fixtures/computer-ref-lifecycle-contract.json", import.meta.url),
+        "utf8",
+      ),
+    ) as { staleErrorCode: string };
+
+    expect(contract.staleErrorCode).toBe(COMPUTER_STALE_OBSERVATION);
+  });
+
   it("validates the canonical computer.act payload", () => {
     expect(
       parseComputerActParamsJSON(
@@ -143,7 +155,6 @@ describe("Computer Use wire contract", () => {
 
   it("accepts the portable recording family without native path or helper inputs", () => {
     const resourceHandle = "openclaw:computer-resource:v1:123e4567-e89b-42d3-a456-426614174000";
-    expect(COMPUTER_USE_CONTRACT_ONLY_ACTION_NAMES).toEqual([]);
     for (const input of [
       { action: "get_recording_state" },
       { action: "start_recording", recordVideo: true },
@@ -173,6 +184,11 @@ describe("Computer Use wire contract", () => {
       { action: "start_recording", helperPath: "/tmp/ffmpeg" },
       { action: "replay_trajectory", dir: "../outside" },
       { action: "replay_trajectory", ffmpegPath: "/tmp/ffmpeg" },
+      { action: "get_window_state", windowRef: "window-1", session: "native-session" },
+      { action: "left_click", binaryPath: "/tmp/cua-driver" },
+      { action: "left_click", socketPath: "/tmp/cua.sock" },
+      { action: "left_click", driverArgs: ["--dangerously-bypass-approvals"] },
+      { providerTool: "click", arguments: { x: 1, y: 2 } },
       {
         action: "browser_set_input_files",
         browserRef: "browser-1",
@@ -312,7 +328,7 @@ describe("Computer Use provider registration", () => {
     expect(stopWatching).toHaveBeenCalledOnce();
   });
 
-  it("rejects cross-execution control and closes only the exact host execution", async () => {
+  it("refuses a second mutating execution and closes only the exact host execution", async () => {
     const firstId = "123e4567-e89b-42d3-a456-426614174000";
     const secondId = "223e4567-e89b-42d3-a456-426614174000";
     const commands: OpenClawPluginNodeHostCommand[] = [];

@@ -63,11 +63,14 @@ if [[ "$normalized_context_ref" =~ ^release/([0-9]{4}\.[0-9]+\.[0-9]+)$ ]]; then
     echo "Telegram candidate version ${candidate_version} does not belong to release ${release_version}." >&2
     exit 1
   fi
-elif [[ "$normalized_context_ref" =~ ^extended-stable/([0-9]{4}\.[0-9]+\.33)$ ]]; then
+elif [[ "$normalized_context_ref" =~ ^extended-stable/([0-9]{4}\.([1-9]|1[0-2])\.33)$ ]]; then
   context_version="${BASH_REMATCH[1]}"
+  context_line="${context_version%.33}"
   candidate_version="$(jq -er '.version' "${candidate_root}/package.json")"
-  if [[ "$candidate_version" != "$context_version" ]]; then
-    echo "Telegram candidate version ${candidate_version} does not match context ${normalized_context_ref}." >&2
+  if [[ ! "$candidate_version" =~ ^([0-9]{4}\.([1-9]|1[0-2]))\.([1-9][0-9]*)$ ]] ||
+     [[ "${BASH_REMATCH[1]}" != "$context_line" ]] ||
+     (( 10#${BASH_REMATCH[3]} < 33 )); then
+    echo "Telegram candidate version ${candidate_version} does not belong to context ${normalized_context_ref}; expected a final ${context_line}.PATCH version with PATCH >= 33." >&2
     exit 1
   fi
   context_release_branch="$normalized_context_ref"

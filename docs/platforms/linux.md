@@ -8,26 +8,81 @@ read_when:
 title: "Linux app"
 ---
 
-The Gateway is fully supported on Linux and requires Node. Bun can still be used
-as a dependency installer or package-script runner, but it cannot run OpenClaw
-because it does not provide `node:sqlite`.
+The Gateway is fully supported on Linux. Node is the primary, default, and
+recommended runtime; Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run
+OpenClaw as an explicit opt-in. Use `pnpm` rather than Bun for dependency
+installation.
 
 ## Desktop companion
 
-The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
+The OpenClaw Linux companion is a Tauri desktop app for local and remote
+Gateways. It:
 
-- installs the OpenClaw CLI and managed Node runtime when they are missing; release builds install the stable channel automatically, while development builds ask for the channel first
+- walks new users through choosing a local Gateway, a discovered remote Gateway,
+  a manually entered Gateway URL, or an SSH tunnel
+- installs the OpenClaw CLI and managed Node runtime when local setup needs
+  them; release builds install the stable channel automatically, while
+  development builds ask for the channel first
 - attaches to a healthy Gateway before attempting service changes
 - delegates install, start, stop, and restart operations to the CLI-managed systemd user service
 - discovers nearby Bonjour Gateways and opens each Control UI in a route-scoped window, so several
   Gateway dashboards can stay connected and be used simultaneously
 - opens the Gateway-served Control UI with its resolved authentication URL
-- opens the Control UI in onboarding mode after its first-run install, which
-  offers to import detected Claude Code, Codex, or Hermes memories into the
-  agent workspace (the same import stays available later under
-  Settings → Import Memory)
-- renders agent-driven Canvas and bundled A2UI content for a colocated CLI node host
+- opens Model Setup for an unconfigured local or remote Gateway, automatically
+  tests available AI credentials, and verifies an existing model before
+  opening the dashboard
+- continues into guided onboarding after connecting a new model; onboarding can
+  import detected Claude Code, Codex, or Hermes memories into the agent workspace
+  (the same import stays available later under Settings → Import Memory)
 - remains available from the system tray when its window is closed
+
+### First-run setup
+
+Choose **Get started** on the welcome screen, then choose where your assistant
+should live:
+
+- **On this computer** installs any missing local prerequisites and starts the
+  Gateway as a systemd user service.
+- **On another computer** connects to an existing Gateway. Select a discovered
+  Gateway, enter its address under **Gateway URL**, or choose **SSH tunnel**
+  and enter an SSH target such as `user@gateway-host`. The Gateway port defaults
+  to `18789`.
+
+If the remote Gateway requires authentication, expand **Gateway authentication**
+and enter its token or password. Use one credential type, matching the remote
+Gateway's configuration. Remote setup does not install or start a local Gateway
+service; the remote host owns its model, provider credentials, and agent state.
+
+Use HTTPS or `wss://` for public direct connections. Plain HTTP or `ws://`
+should be limited to loopback, trusted private networks, and Tailnet hosts.
+When the saved configuration includes `gateway.remote.tlsFingerprint`, select
+**SSH tunnel** instead of a direct connection. The embedded browser cannot
+enforce a certificate pin, so the app rejects direct connections before loading
+the remote dashboard or exposing its credentials. Saved remote token and
+password values can use environment- or file-backed SecretRefs; exec and
+shared-store references must be resolved on their owning Gateway host.
+SSH uses your existing OpenSSH authentication and host-key verification. See
+[Remote access](/gateway/remote) for secure Gateway configuration.
+
+After the connection succeeds, Model Setup checks for existing AI credentials,
+offers provider sign-in or API-key entry when needed, and requires a successful
+model response before opening the agent. An already configured Gateway opens
+its normal dashboard; newly configured access continues into guided onboarding.
+Gateway restarts preserve the active setup flow. Closing and reopening the app
+during model activation resumes the same Gateway, agent, and model instead of
+activating the provider twice.
+
+For OpenAI, choose **ChatGPT Login** to use a ChatGPT or Codex subscription, or
+**OpenAI API Key** for API billing. Browser sign-in completes on the Gateway
+host. If that host is remote or its localhost callback cannot be reached,
+choose **ChatGPT Device Pairing** from the additional sign-in options instead;
+device pairing works without a localhost callback. See
+[OpenAI](/providers/openai) and [OAuth](/concepts/oauth).
+
+When the desktop app starts with a supported provider API key in its environment,
+the Gateway service keeps that dedicated inference credential in an owner-only
+environment file. Provider admin keys, GitHub tokens, and unrelated environment
+variables are not copied into the service.
 
 ### Host sleep
 
@@ -117,20 +172,13 @@ After an accepted send, Quick Chat stays open and streams the selected agent's
 plain-text reply below the composer. Press `Esc` to dismiss the bar and its reply;
 `Ctrl+Enter` still opens the dashboard.
 
-### Canvas
-
-Linux Canvas uses two cooperating processes. `openclaw node run` remains the single Gateway node connection; the bundled `linux-canvas` plugin forwards `canvas.*` calls to the running desktop app over a user-only Unix socket. The app owns one on-demand WebView window, including the bundled A2UI renderer and action bridge back to the agent.
-
-The plugin is enabled by default. It advertises Canvas only when the desktop socket exists at `$XDG_RUNTIME_DIR/openclaw-canvas.sock`, or `/tmp/openclaw-canvas-$UID.sock` when `XDG_RUNTIME_DIR` is unavailable. Disable it with `plugins.entries.linux-canvas.enabled: false`. On a headless Linux server without the desktop app, Canvas is not advertised.
-
-Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI actions are accepted only from the bundled renderer.
-
 ## CLI and SSH alternative
 
-The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
+The CLI remains the simplest option for a headless server or VPS. Use a manual
+SSH tunnel when connecting without the Linux desktop companion:
 
 1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
-2. `npm i -g openclaw@latest`
+2. On npm 12 or npm 11.16+, run `npm i -g openclaw@latest --allow-scripts=openclaw`. On npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
 5. Open `http://127.0.0.1:18789/` and authenticate with the configured shared

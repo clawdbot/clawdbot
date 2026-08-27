@@ -11,9 +11,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
+import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import {
-  extractMessageRole,
-  extractSessionTranscriptText,
   resolveTranscriptReadTarget,
   sqliteMessageEventWithSeq,
   toTranscriptReadScope,
@@ -84,7 +83,7 @@ function findFirstTitleUserMessage(
   includeInterSession: boolean,
 ): unknown {
   return entries.map(sqliteMessageEventWithSeq).find((message) => {
-    if (extractMessageRole(message) !== "user") {
+    if (projectSessionDisplayMessage(message)?.role !== "user") {
       return false;
     }
     return (
@@ -99,8 +98,8 @@ function findLastMessageText(entries: readonly SessionTranscriptMessageEvent[]):
     entries
       .toReversed()
       .map(sqliteMessageEventWithSeq)
-      .map(extractSessionTranscriptText)
-      .find(Boolean) ?? null
+      .map((message) => projectSessionDisplayMessage(message, { flattenMarkdown: true }))
+      .find(Boolean)?.text ?? null
   );
 }
 
@@ -161,7 +160,7 @@ function readSqliteTitleFields(
       );
     }
     fields = {
-      firstUserMessage: firstUser ? extractSessionTranscriptText(firstUser) : null,
+      firstUserMessage: firstUser ? (projectSessionDisplayMessage(firstUser)?.text ?? null) : null,
       lastMessagePreview: lastText,
     };
   } catch (error) {
@@ -284,7 +283,7 @@ function readSessionTitleFieldsFromTranscriptBatchCurrent(
       continue;
     }
     const fields = {
-      firstUserMessage: firstUser ? extractSessionTranscriptText(firstUser) : null,
+      firstUserMessage: firstUser ? (projectSessionDisplayMessage(firstUser)?.text ?? null) : null,
       lastMessagePreview: lastText,
     };
     const fieldsByVariant =

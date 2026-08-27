@@ -34,6 +34,12 @@ type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
 
+const skillToolDispatchDependencies: NonNullable<
+  HandleInlineActionsInput["skillToolDispatchDependencies"]
+> = {
+  createOpenClawTools: createOpenClawToolsMock,
+};
+
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
   buildStatusReply: (...args: unknown[]) => buildStatusReplyMock(...args),
@@ -41,10 +47,6 @@ vi.mock("./commands.runtime.js", () => ({
 
 vi.mock("../../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: (...args: unknown[]) => listSkillCommandsForWorkspaceMock(...args),
-}));
-
-vi.mock("../../agents/openclaw-tools.runtime.js", () => ({
-  createOpenClawTools: (...args: unknown[]) => createOpenClawToolsMock(...args),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -128,6 +130,7 @@ const createHandleInlineActionsInput = (params: {
     contextTokens: 0,
     abortedLastRun: false,
     sessionScope: "per-sender",
+    skillToolDispatchDependencies,
     ...params.overrides,
   };
 };
@@ -227,6 +230,28 @@ function officeHoursSkillCommands(): SkillCommandSpec[] {
   ];
 }
 
+function officeHoursInlineSkillCommands(): SkillCommandSpec[] {
+  return [
+    {
+      name: "office_hours",
+      skillName: "office-hours",
+      description: "Office hours",
+      modelVisible: true,
+      skillFile: "/tmp/skills/office-hours/SKILL.md",
+    },
+  ];
+}
+
+function expandedOfficeHoursRequest(body: string): string {
+  return [
+    "Use the following explicitly referenced skills for this request. Read each skill's SKILL.md before acting:",
+    "- office-hours",
+    "",
+    "User request:",
+    body,
+  ].join("\n");
+}
+
 describe("handleInlineActions", () => {
   beforeEach(() => {
     handleCommandsMock.mockReset();
@@ -296,6 +321,41 @@ describe("handleInlineActions", () => {
     expect(onSessionMetadataChanges).toHaveBeenCalledWith([
       { sessionKey: "s:main", agentId: "main", reason: "command-metadata" },
     ]);
+  });
+
+  it("propagates an explicit steer queue override into the prepared-turn result", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/steer use the monochrome version",
+      CommandBody: "/steer use the monochrome version",
+    });
+    handleCommandsMock.mockImplementationOnce(async (params) => {
+      params.command.rawBodyNormalized = "use the monochrome version";
+      params.command.commandBodyNormalized = "use the monochrome version";
+      params.ctx.agentText = "use the monochrome version";
+      return { shouldContinue: true, queueModeOverride: "steer" };
+    });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/steer use the monochrome version",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/steer use the monochrome version",
+        commandBodyNormalized: "/steer use the monochrome version",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+      },
+    });
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      cleanedBody: "use the monochrome version",
+      queueModeOverride: "steer",
+    });
   });
 
   it("delivers a continuing mixed directive ack as a status block without losing metadata", async () => {
@@ -759,6 +819,196 @@ describe("handleInlineActions", () => {
     );
   });
 
+  it("keeps literal $ patterns in bundle command arguments", async () => {
+    const typing = createTypingController();
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+    const ctx = buildTestCtx({
+      Body: "/office_hours price $$ and $& here",
+      CommandBody: "/office_hours price $$ and $& here",
+    });
+    const skillCommands = officeHoursSkillCommands();
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: "/office_hours price $$ and $& here",
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: "/office_hours price $$ and $& here",
+        commandBodyNormalized: "/office_hours price $$ and $& here",
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands,
+      },
+    });
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
+    expect(ctx.Body).toBe("Act as an engineering advisor.\n\nFocus on:\nprice $$ and $& here");
+    const commandArgs = mockObjectArg(handleCommandsMock, "handleCommands");
+    expect(requireRecord(commandArgs.ctx, "handleCommands ctx").Body).toBe(
+      "Act as an engineering advisor.\n\nFocus on:\nprice $$ and $& here",
+    );
+  });
+
+  it("resolves every eligible explicit skill reference in one message", async () => {
+    const typing = createTypingController();
+    const body = "Compare $office_hours with $release_notes for this rollout";
+    const ctx = buildTestCtx({
+      Body: body,
+      CommandBody: body,
+      Provider: "webchat",
+      Surface: "webchat",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "office_hours",
+        skillName: "office-hours",
+        description: "Engineering office hours",
+        modelVisible: true,
+        skillFile: "/tmp/skills/office-hours/SKILL.md",
+      },
+      {
+        name: "release_notes",
+        skillName: "release-notes",
+        description: "Draft release notes",
+        modelVisible: true,
+        skillFile: "/tmp/skills/release-notes/SKILL.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: body,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: body,
+          commandBodyNormalized: body,
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      kind: "continue",
+      explicitSkillSelections: [
+        { name: "office_hours", path: "/tmp/skills/office-hours/SKILL.md" },
+        { name: "release_notes", path: "/tmp/skills/release-notes/SKILL.md" },
+      ],
+    });
+    if (result.kind !== "continue") {
+      throw new Error("expected inline skill references to continue to the model");
+    }
+    expect(result.cleanedBody).toContain("- office-hours");
+    expect(result.cleanedBody).toContain("- release-notes");
+    expect(result.cleanedBody).toContain(body);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves slash commands inside an explicitly referenced skill payload", async () => {
+    const typing = createTypingController();
+    const body = "$office_hours compare /help and /commands with /status";
+    const cleanedBody = stripInlineStatus(body).cleaned;
+    const ctx = buildTestCtx({
+      Body: body,
+      CommandBody: body,
+      Provider: "webchat",
+      Surface: "webchat",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: body,
+          commandBodyNormalized: body,
+        },
+        overrides: {
+          allowTextCommands: true,
+          inlineStatusRequested: true,
+          cfg: { commands: { text: true } },
+          skillCommands: officeHoursInlineSkillCommands(),
+        },
+      }),
+    );
+
+    const expected = expandedOfficeHoursRequest(body);
+    expect(result).toMatchObject({ kind: "continue", cleanedBody: expected });
+    expect(ctx.Body).toBe(expected);
+    expect(buildStatusReplyMock).not.toHaveBeenCalled();
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps unauthorized explicit skill references as plain text", async () => {
+    const typing = createTypingController();
+    const body = "Please use $office_hours to build me a deployment plan";
+    const ctx = buildTestCtx({
+      Body: body,
+      CommandBody: body,
+      Provider: "webchat",
+      Surface: "webchat",
+    });
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: body,
+        command: {
+          isAuthorizedSender: false,
+          rawBodyNormalized: body,
+          commandBodyNormalized: body,
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands: officeHoursInlineSkillCommands(),
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+    expect(ctx.Body).toBe(body);
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["Review /tmp/foo before continuing", "/tmp/foo should stay a path"])(
+    "does not load workspace skills for a bare path in %j",
+    async (body) => {
+      const typing = createTypingController();
+      const ctx = buildTestCtx({ Body: body, CommandBody: body });
+
+      const result = await runTestInlineActions({
+        ctx,
+        typing,
+        cleanedBody: body,
+        command: {
+          isAuthorizedSender: true,
+          rawBodyNormalized: body,
+          commandBodyNormalized: body,
+        },
+        overrides: {
+          allowTextCommands: true,
+          cfg: { commands: { text: true } },
+          skillCommands: [],
+        },
+      });
+
+      expect(result).toMatchObject({ kind: "continue", cleanedBody: body });
+      expect(listSkillCommandsForWorkspaceMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("loads workspace skills when /skill gets an empty preloaded command list", async () => {
     const typing = createTypingController();
     handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
@@ -794,7 +1044,7 @@ describe("handleInlineActions", () => {
     expect(commandArgs.skillCommands).toEqual(skillCommands);
   });
 
-  it("keeps normal prompt text while making $ skill references explicit to the model", async () => {
+  it("preserves exact channel prompt bytes while expanding $ skill references", async () => {
     const typing = createTypingController();
     const original = "Review this plan with $office_hours and $release_notes.";
     const ctx = buildTestCtx({
@@ -935,6 +1185,120 @@ describe("handleInlineActions", () => {
     expect(result.explicitSkillSelections).toEqual([
       { name: "office_hours", path: "/tmp/skills/office-hours/SKILL.md" },
     ]);
+  });
+
+  it("returns a visible error for an explicitly referenced allowlist-hidden skill", async () => {
+    const typing = createTypingController();
+    const original = "Review with $office_hours.";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    listSkillCommandsForWorkspaceMock.mockImplementation(
+      (params: { includeAllowlistHidden?: boolean }) =>
+        params.includeAllowlistHidden
+          ? [
+              {
+                name: "office_hours",
+                skillName: "office-hours",
+                description: "Engineering office hours",
+                skillFile: "/tmp/skills/office-hours/SKILL.md",
+              },
+            ]
+          : [],
+    );
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [],
+        skillFilter: ["another-skill"],
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: {
+        text: 'Skill "office-hours" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+      },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("returns a visible error for an allowlist-hidden leading skill slash command", async () => {
+    const typing = createTypingController();
+    const original = "/office_hours review this";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+    listSkillCommandsForWorkspaceMock.mockImplementation(
+      (params: { includeAllowlistHidden?: boolean }) =>
+        params.includeAllowlistHidden
+          ? [
+              {
+                name: "office_hours",
+                skillName: "office-hours",
+                description: "Engineering office hours",
+                skillFile: "/tmp/skills/office-hours/SKILL.md",
+              },
+            ]
+          : [],
+    );
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: true,
+        cfg: { commands: { text: true } },
+        skillCommands: [],
+        skillFilter: ["another-skill"],
+      },
+    });
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: {
+        text: 'Skill "office-hours" is not available for this agent. Update the skill allowlist or choose an allowed skill.',
+      },
+    });
+    expect(typing.cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("keeps hidden skill references literal when text commands are disabled", async () => {
+    const typing = createTypingController();
+    const original = "Review with $office_hours.";
+    const ctx = buildTestCtx({ Body: original, CommandBody: original });
+
+    const result = await runTestInlineActions({
+      ctx,
+      typing,
+      cleanedBody: original,
+      command: {
+        isAuthorizedSender: true,
+        rawBodyNormalized: original,
+        commandBodyNormalized: original,
+      },
+      overrides: {
+        allowTextCommands: false,
+        cfg: { commands: { text: false } },
+        skillCommands: [],
+        skillFilter: ["another-skill"],
+      },
+    });
+
+    expect(result).toMatchObject({ kind: "continue", cleanedBody: original });
+    expect(listSkillCommandsForWorkspaceMock).not.toHaveBeenCalled();
   });
 
   it("reloads preloaded skill commands when final exec overrides are present", async () => {

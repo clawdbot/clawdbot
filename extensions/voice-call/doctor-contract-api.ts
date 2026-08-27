@@ -65,7 +65,7 @@ function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
     return trimmed;
   }
   if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, resolveHome(env)));
+    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
   }
   return path.resolve(trimmed);
 }
@@ -138,10 +138,16 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
   switch (migration.kind) {
     case "agent-databases-composite-primary-key":
       return "agent database registry primary key -> agent_id,path";
+    case "agent-databases-relative-paths-v9":
+      return "agent database registry paths -> state-relative paths";
     case "audit-events-v2":
       return "audit event ledger -> versioned message lifecycle schema";
     case "commitments-retirement-v7":
       return "retired commitments storage -> removed table and indexes";
+    case "state-table-retirement-v10":
+      return "retired shared-state tables -> removed tables and indexes";
+    case "state-table-retirement-v11":
+      return "retired skill curator tables -> removed tables and indexes";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":

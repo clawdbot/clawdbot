@@ -1,7 +1,13 @@
 // Codex tests cover run attempt.steering plugin behavior.
 import path from "node:path";
 import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  appendSessionTranscriptMessageByIdentity,
+  readSessionTranscriptEvents,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { describe, expect, it, vi } from "vitest";
+import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
@@ -173,13 +179,76 @@ describe("runCodexAppServerAttempt steering", () => {
   it("accepts Gateway transcript-backed steering for the active Codex turn", async () => {
     const { requests, waitForMethod, completeTurn, notify } = createStartedThreadHarness();
     const params = createSteeringParams();
+    const storePath = path.join(tempDir, `${params.sessionId}.sqlite`);
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey!,
+      storePath,
+    };
     params.taskSuggestionDeliveryMode = "gateway";
+    params.sessionTarget = sessionTarget;
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey: params.sessionKey!,
+      storePath,
+      entry: {
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        updatedAt: Date.now(),
+      },
+    });
+    let steerPersisted = false;
+    const userTurnTranscriptRecorder = {
+      persistApproved: vi.fn(async () => {
+        if (steerPersisted) {
+          return undefined;
+        }
+        steerPersisted = true;
+        return await appendSessionTranscriptMessageByIdentity({
+          ...sessionTarget,
+          message: {
+            role: "user",
+            content: "steer this active turn",
+            timestamp: Date.now(),
+            idempotencyKey: `${params.runId}:steer:user`,
+          },
+        });
+      }),
+      hasPersisted: () => steerPersisted,
+    } as unknown as NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
     });
     await waitForMethod("turn/start");
     const onQueueAccepted = vi.fn();
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "pre-steer-commentary",
+          phase: "commentary",
+          text: "PRE-STEER-COMMENTARY",
+        },
+      },
+    });
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "pre-steer-answer",
+          phase: "final_answer",
+          text: "PRE-STEER-ANSWER",
+        },
+      },
+    });
 
     await vi.waitFor(() => {
       expect(
@@ -198,6 +267,7 @@ describe("runCodexAppServerAttempt steering", () => {
       taskSuggestionDeliveryMode: "gateway",
       waitForTranscriptCommit: true,
       onQueueAccepted,
+      userTurnTranscriptRecorder,
     });
     await vi.waitFor(
       () => expect(requests.map((entry) => entry.method)).toContain("turn/steer"),
@@ -219,6 +289,20 @@ describe("runCodexAppServerAttempt steering", () => {
         item: { id: "steered-user-message", type: "userMessage", clientId: clientUserMessageId },
       },
     });
+    await userTurnTranscriptRecorder.persistApproved();
+    await notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "final-answer",
+          phase: "final_answer",
+          text: "Steering completed.",
+        },
+      },
+    });
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
@@ -227,6 +311,11 @@ describe("runCodexAppServerAttempt steering", () => {
       expectedTurnId: "turn-1",
       input: [{ type: "text", text: "steer this active turn" }],
     });
+    const roles = (await readSessionTranscriptEvents(sessionTarget)).flatMap((event) => {
+      const message = (event as { message?: { role?: string } }).message;
+      return message?.role ? [message.role] : [];
+    });
+    expect(roles).toEqual(["user", "assistant", "assistant", "user", "assistant"]);
   });
 
   it("forwards queued text and images to the active app-server turn", async () => {

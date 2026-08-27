@@ -1,0 +1,284 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+  type OpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { appendTranscriptEvent, persistSessionTranscriptTurn } from "./session-accessor.js";
+import {
+  readRecentSessionTranscriptHistoryEvents,
+  readSessionTranscriptHistoryEvents,
+} from "./session-accessor.sqlite-history-events.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const REGRESSION_SQLITE_VARIABLE_LIMIT = 64;
+const REGRESSION_MAX_MESSAGES = 32;
+
+function historyEventId(entry: { event: unknown } | undefined): unknown {
+  const event = entry?.event;
+  return event && typeof event === "object" && "id" in event ? event.id : undefined;
+}
+
+function enforceSqliteVariableLimit(database: OpenClawAgentDatabase): void {
+  const prepare = database.db.prepare.bind(database.db);
+  vi.spyOn(database.db, "prepare").mockImplementation((source) => {
+    const variableCount = source.match(/\?/gu)?.length ?? 0;
+    if (variableCount > REGRESSION_SQLITE_VARIABLE_LIMIT) {
+      throw new Error("too many SQL variables");
+    }
+    return prepare(source);
+  });
+}
+
+function insertSyntheticHistory(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  count: number,
+  boundaries = false,
+): void {
+  const lastSeq = count * (boundaries ? 2 : 1) + 1;
+  const insertEvent = database.db.prepare(
+    "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+  );
+  const insertIdentity = database.db.prepare(
+    `INSERT INTO transcript_event_identities
+       (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+     VALUES (?, ?, ?, ?, NULL, NULL, ?)`,
+  );
+  const insertActive = database.db.prepare(
+    `INSERT INTO session_transcript_active_events
+       (session_id, active_position, event_seq, message_position)
+     VALUES (?, ?, ?, ?)`,
+  );
+  runSqliteImmediateTransactionSync(database.db, () => {
+    for (let seq = 2; seq <= lastSeq; seq += 1) {
+      const isBoundary = boundaries && seq % 2 === 0;
+      const id = `synthetic-${isBoundary ? "boundary" : "message"}-${String(seq)}`;
+      const type = isBoundary ? "compaction" : "message";
+      const event = {
+        type,
+        id,
+        parentId: null,
+        timestamp: "2026-08-15T00:00:00.000Z",
+        ...(isBoundary
+          ? { summary: "synthetic" }
+          : { message: { role: "user", content: "synthetic" } }),
+      };
+      insertEvent.run(sessionId, seq, JSON.stringify(event), seq);
+      insertIdentity.run(sessionId, id, seq, type, seq);
+      insertActive.run(
+        sessionId,
+        seq - 1,
+        seq,
+        isBoundary ? null : boundaries ? Math.floor(seq / 2) : seq - 1,
+      );
+    }
+    database.db
+      .prepare(
+        `UPDATE session_transcript_index_state
+         SET indexed_seq = ?, leaf_event_id = ?, active_event_count = ?, active_message_count = ?
+         WHERE session_id = ?`,
+      )
+      .run(
+        lastSeq,
+        `synthetic-message-${String(lastSeq)}`,
+        lastSeq,
+        boundaries ? count + 1 : lastSeq,
+        sessionId,
+      );
+  });
+}
+
+describe("SQLite transcript history events", () => {
+  let scope: {
+    agentId: string;
+    env: NodeJS.ProcessEnv;
+    sessionId: string;
+    sessionKey: string;
+  };
+
+  beforeEach(() => {
+    scope = {
+      agentId: "main",
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-history-events-") },
+      sessionId: "history-events-test",
+      sessionKey: "agent:main:history-events-test",
+    };
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  it("retains an oversized newest history row without parsing excluded older payloads", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "older", parentId: null, message: { role: "user", content: "older" } }],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "excluded-boundary",
+      parentId: "older",
+      timestamp: "2026-08-15T00:00:00.000Z",
+      summary: "excluded",
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "oversized-newest",
+          parentId: "excluded-boundary",
+          message: { role: "assistant", content: "x".repeat(16_384) },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    database.db
+      .prepare(
+        `UPDATE transcript_events
+         SET event_json = '{'
+         WHERE session_id = ? AND seq IN (
+           SELECT seq FROM transcript_event_identities
+           WHERE session_id = ? AND event_id IN ('older', 'excluded-boundary')
+         )`,
+      )
+      .run(scope.sessionId, scope.sessionId);
+
+    const page = readRecentSessionTranscriptHistoryEvents(scope, {
+      maxBytes: 1024,
+      maxLines: 3,
+      maxMessages: 3,
+    });
+
+    expect(page.totalMessages).toBe(3);
+    expect(page.events.map(({ event }) => (event as { id?: unknown }).id)).toEqual([
+      "oversized-newest",
+    ]);
+    expect(page.events.map(({ seq }) => seq)).toEqual([3]);
+  });
+
+  it("does not read an inactive boundary between active sequence bounds", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const boundaryEvents = [
+      {
+        seq: 2,
+        id: "active-boundary-2",
+        eventJson: JSON.stringify({
+          type: "compaction",
+          id: "active-boundary-2",
+          parentId: "seed",
+          timestamp: "2026-08-15T00:00:01.000Z",
+          summary: "active",
+        }),
+        activePosition: 1,
+      },
+      { seq: 3, id: "inactive-boundary", eventJson: "{", activePosition: undefined },
+      {
+        seq: 4,
+        id: "active-boundary-4",
+        eventJson: JSON.stringify({
+          type: "compaction",
+          id: "active-boundary-4",
+          parentId: "active-boundary-2",
+          timestamp: "2026-08-15T00:00:02.000Z",
+          summary: "active",
+        }),
+        activePosition: 2,
+      },
+    ];
+    const insertEvent = database.db.prepare(
+      "INSERT INTO transcript_events (session_id, seq, event_json, created_at) VALUES (?, ?, ?, ?)",
+    );
+    const insertIdentity = database.db.prepare(
+      `INSERT INTO transcript_event_identities
+         (session_id, event_id, seq, event_type, parent_id, message_idempotency_key, created_at)
+       VALUES (?, ?, ?, 'compaction', NULL, NULL, ?)`,
+    );
+    const insertActive = database.db.prepare(
+      `INSERT INTO session_transcript_active_events
+         (session_id, active_position, event_seq, message_position)
+       VALUES (?, ?, ?, NULL)`,
+    );
+    for (const event of boundaryEvents) {
+      insertEvent.run(scope.sessionId, event.seq, event.eventJson, event.seq);
+      insertIdentity.run(scope.sessionId, event.id, event.seq, event.seq);
+      if (event.activePosition !== undefined) {
+        insertActive.run(scope.sessionId, event.activePosition, event.seq);
+      }
+    }
+    database.db
+      .prepare(
+        `UPDATE session_transcript_index_state
+         SET indexed_seq = 4, leaf_event_id = 'active-boundary-4', active_event_count = 3
+         WHERE session_id = ?`,
+      )
+      .run(scope.sessionId);
+
+    const events = readSessionTranscriptHistoryEvents(scope);
+
+    expect(events.map(historyEventId)).toEqual(["seed", "active-boundary-2", "active-boundary-4"]);
+  });
+
+  it("bounds metadata bindings when the raw history window exceeds SQLite's limit", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const bindingCount = REGRESSION_SQLITE_VARIABLE_LIMIT;
+    insertSyntheticHistory(database, scope.sessionId, bindingCount);
+    enforceSqliteVariableLimit(database);
+
+    const page = readRecentSessionTranscriptHistoryEvents(scope, {
+      maxBytes: 1_000_000,
+      maxLines: bindingCount + 1,
+      maxMessages: REGRESSION_MAX_MESSAGES,
+    });
+
+    expect(page.totalMessages).toBe(bindingCount + 1);
+    expect(page.events).toHaveLength(REGRESSION_MAX_MESSAGES);
+    expect(historyEventId(page.events[0])).toBe(
+      `synthetic-message-${String(bindingCount - REGRESSION_MAX_MESSAGES + 2)}`,
+    );
+    expect(historyEventId(page.events.at(-1))).toBe(
+      `synthetic-message-${String(bindingCount + 1)}`,
+    );
+  });
+
+  it("reads more boundaries than SQLite permits as statement bindings", async () => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [{ eventId: "seed", parentId: null, message: { role: "user", content: "seed" } }],
+      touchSessionEntry: false,
+    });
+    const database = openOpenClawAgentDatabase({ agentId: scope.agentId, env: scope.env });
+    const bindingCount = REGRESSION_SQLITE_VARIABLE_LIMIT;
+    insertSyntheticHistory(database, scope.sessionId, bindingCount, true);
+    enforceSqliteVariableLimit(database);
+
+    const events = readSessionTranscriptHistoryEvents(scope);
+
+    expect(events).toHaveLength(bindingCount * 2 + 1);
+    expect(historyEventId(events[0])).toBe("seed");
+    expect(historyEventId(events.at(-1))).toBe(`synthetic-message-${String(bindingCount * 2 + 1)}`);
+
+    const latestPage = readRecentSessionTranscriptHistoryEvents(scope, {
+      maxBytes: 1_000_000,
+      maxLines: 2,
+      maxMessages: 2,
+    });
+    expect(latestPage.totalMessages).toBe(bindingCount * 2 + 1);
+    expect(latestPage.events.map(historyEventId)).toEqual([
+      `synthetic-boundary-${String(bindingCount * 2)}`,
+      `synthetic-message-${String(bindingCount * 2 + 1)}`,
+    ]);
+  });
+});

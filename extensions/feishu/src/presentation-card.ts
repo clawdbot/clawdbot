@@ -1,5 +1,7 @@
 // Feishu plugin module implements presentation card behavior.
 import {
+  legacyInteractiveReplyToPresentation,
+  normalizeLegacyInteractiveReply,
   normalizeMessagePresentation,
   renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
@@ -13,6 +15,43 @@ type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMess
 
 const FEISHU_CARD_MAX_BYTES = 30 * 1024;
 const FEISHU_CARD_MAX_ELEMENTS = 200;
+
+export function resolveFeishuRichReply(payload: { interactive?: unknown; presentation?: unknown }) {
+  const interactive = normalizeLegacyInteractiveReply(payload.interactive);
+  return {
+    interactive,
+    presentation:
+      normalizeMessagePresentation(payload.presentation) ??
+      (interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined),
+  };
+}
+
+export function buildFeishuCommentPresentationFallback(params: {
+  text?: string;
+  presentation?: NormalizedMessagePresentation;
+  fallbackHasCommand?: boolean;
+}) {
+  const fallbackText = renderMessagePresentationFallbackText(params);
+  // Only warn when the rendered fallback exposes a command the user can copy.
+  const fallbackHasCommand =
+    params.fallbackHasCommand === true ||
+    params.presentation?.blocks.some((block) =>
+      block.type === "select"
+        ? block.options.some(({ action }) => action?.type === "command")
+        : block.type === "buttons" &&
+          block.buttons.some(
+            ({ action, disabled, url, webApp, web_app }) =>
+              !disabled && action?.type === "command" && !url && !webApp?.url && !web_app?.url,
+          ),
+    ) === true;
+  return {
+    fallbackText,
+    fallbackHasCommand,
+    text: fallbackHasCommand
+      ? `${fallbackText}\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.`
+      : fallbackText,
+  };
+}
 
 function countFeishuCardElements(value: unknown, ancestors = new Set<object>()): number {
   if (Array.isArray(value)) {

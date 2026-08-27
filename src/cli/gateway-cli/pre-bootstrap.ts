@@ -1,3 +1,4 @@
+import * as upgrade from "../../commands/doctor/shared/automatic-upgrade-config-repair.js";
 import { resetPublishedConfigRuntimeEnv } from "../../config/config-env-vars.js";
 // Gateway startup checks that must run before shared CLI bootstrap can migrate state.
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
@@ -336,14 +337,16 @@ async function guardGatewayRunSelectedConfig(
     if (!snapshot) {
       return false;
     }
-    if (!snapshot.valid) {
+    if (!snapshot.valid && params.opts.reset) {
       // Invalid config source is untrusted. In particular, applying its env block could let an
       // off-root $include self-authorize OPENCLAW_INCLUDE_ROOTS on the next read. Only explicit dev
       // reset may proceed as the recovery path; ordinary startup skips mutation-capable bootstrap.
-      if (params.opts.reset) {
-        lastGuardedGatewayRunSnapshot = snapshot;
-      }
-      return params.opts.reset === true;
+      lastGuardedGatewayRunSnapshot = snapshot;
+      return true;
+    }
+    const trustedSnapshot = upgrade.resolveUpgradeConfigSnapshot(snapshot);
+    if (!trustedSnapshot) {
+      return false;
     }
     // The service marker also owns config SecretRefs. Only dotenv-absent keys with no current
     // config reference are stale; clearing the broad marker blindly would drop file-backed refs.
@@ -351,10 +354,10 @@ async function guardGatewayRunSelectedConfig(
       environment: process.env,
       managedKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
       presentKeys: trustedEnvLoad.dotenvPresentKeys,
-      preserveKeys: collectEnvSecretRefIds(snapshot.sourceConfig),
+      preserveKeys: collectEnvSecretRefIds(trustedSnapshot.sourceConfig),
     });
     const selectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-    applySelectedConfigEnv(snapshot);
+    applySelectedConfigEnv(trustedSnapshot);
     // Only selection inputs survive a selection hop. Reload credentials once the final config and
     // state dotenv are stable so a superseded profile cannot contaminate the selected gateway.
     if (resolveGatewayConfigSelectionSignature(process.env) !== selectionSignature) {
@@ -372,6 +375,22 @@ async function guardGatewayRunSelectedConfig(
       return true;
     }
     // Recovery writes audit/config state, so run it only after config and state selection is stable.
+    // It is also this startup's first state-directory write (config-health reads open the shared
+    // SQLite store, which quarantines orphaned sidecars), so a live gateway owner refuses here
+    // before any mutation instead of after the run loop's lock acquisition.
+    const { describeLiveGatewayOwnerStartupBlocker } =
+      await import("../../commands/doctor-startup-migration-refusal.js");
+    const liveOwnerBlocker = await describeLiveGatewayOwnerStartupBlocker(process.env);
+    if (liveOwnerBlocker) {
+      params.runtime.error(liveOwnerBlocker);
+      params.runtime.exit(1);
+      return false;
+    }
+    if (!snapshot.valid) {
+      // The exact stable-authored repair is written later under the startup migration lease.
+      lastGuardedGatewayRunSnapshot = snapshot;
+      return true;
+    }
     const recoveredSnapshot = await recoverGuardedGatewayRunConfig(params);
     if (!recoveredSnapshot) {
       return false;
@@ -734,10 +753,13 @@ export async function recheckGatewayRunBootstrap(
   if (!current) {
     return false;
   }
+  // The writer-stamped repair is the only config mutation allowed between selection and launch;
+  // accepting a broader difference here would turn the drift guard into an invalid-config bypass.
   if (
-    await isSameGatewayRunConfigSnapshot(expected, current, {
+    (await isSameGatewayRunConfigSnapshot(expected, current, {
       allowPathChange: params.snapshot !== undefined,
-    })
+    })) ||
+    upgrade.isUpgradeConfigRepairResult(expected, current)
   ) {
     return true;
   }

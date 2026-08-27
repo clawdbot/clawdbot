@@ -55,6 +55,7 @@ private struct ConnectionAttempt {
     let routeAuthorityGeneration: UInt64
     let codexThreadCatalogAdvertised: Bool
     let claudeSessionCatalogAdvertised: Bool
+    let workerUnavailableReason: String?
     let endpoint: GatewayConnection.EndpointSnapshot
     let options: GatewayConnectOptions
     let sessionBox: WebSocketSessionBox?
@@ -114,11 +115,13 @@ final class MacNodeModeCoordinator: NSObject {
     private var nodeHostWorkerRetryTaskGeneration: UInt64 = 0
     private var pendingEndpoint: GatewayConnection.EndpointSnapshot?
     private var activeNodeHostWorkerInput: MacNodeHostWorkerRetryPolicy.Input?
+    private var lastNodeHostWorkerStartFailure: String?
     private var lastObservedPaused: Bool
     private var lastObservedComputerControlEnabled: Bool
     private var lastObservedComputerControlProvider: ComputerControlProvider
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
+    private let channelStatus: MacNodeChannelStatusStore
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let presenceReporter: MacNodePresenceReporter
     private let notificationCenter: NotificationCenter
@@ -153,6 +156,7 @@ final class MacNodeModeCoordinator: NSObject {
         runtime: MacNodeRuntime,
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
+        channelStatus: MacNodeChannelStatusStore = .shared,
         notificationCenter: NotificationCenter = .default,
         observeNotifications: Bool = false,
         initialPaused: Bool? = nil,
@@ -168,12 +172,14 @@ final class MacNodeModeCoordinator: NSObject {
         self.runtime = runtime
         self.nodeHostWorker = nodeHostWorker
         self.presenceReporter = presenceReporter
+        self.channelStatus = channelStatus
         self.notificationCenter = notificationCenter
         self.nodeHostWorkerRetrySleep = nodeHostWorkerRetrySleep
         self.nodeHostWorkerRetryPolicy = nodeHostWorkerRetryPolicy
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
-        self.lastObservedPaused = initialPaused ?? AppDefaults.standard.bool(forKey: pauseDefaultsKey)
+        self.lastObservedPaused = initialPaused ?? AppLaunchRuntimePlan.current.resolvePaused(
+            AppDefaults.standard.bool(forKey: pauseDefaultsKey))
         self.lastObservedComputerControlEnabled = initialComputerControlEnabled ??
             isComputerControlEnabled()
         self.lastObservedComputerControlProvider = initialComputerControlProvider ??
@@ -272,6 +278,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func cancelCoordinatorTasks() {
+        self.channelStatus.record(.idle)
         self.task?.cancel()
         self.task = nil
         self.endpointRefreshTask?.cancel()
@@ -297,7 +304,8 @@ final class MacNodeModeCoordinator: NSObject {
 
     func refresh() {
         self.refresh(
-            isPaused: AppDefaults.standard.bool(forKey: pauseDefaultsKey),
+            isPaused: AppLaunchRuntimePlan.current.resolvePaused(
+                AppDefaults.standard.bool(forKey: pauseDefaultsKey)),
             computerControlEnabled: isComputerControlEnabled(),
             computerControlProvider: ComputerControlProvider.current())
     }
@@ -472,6 +480,7 @@ final class MacNodeModeCoordinator: NSObject {
             if Self.pausedStateRequiresDisconnect(isPaused) {
                 // Pause revokes the node route, not only the outer retry loop. A
                 // connected gateway was revoked before this refresh wake was emitted.
+                self.channelStatus.record(.idle)
                 guard await refreshIterator.next() != nil else { return }
                 continue
             }
@@ -518,14 +527,9 @@ final class MacNodeModeCoordinator: NSObject {
                 if error is MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
                     // The lifecycle-owned delayed wake is the only event allowed
                     // to admit this same worker input after an unexpected exit.
+                    self.channelStatus.record(.unavailable(
+                        reason: self.lastNodeHostWorkerStartFailure ?? error.localizedDescription))
                     guard await refreshIterator.next() != nil else { return }
-                    continue
-                }
-                if error is MacNodeHostWorkerRetryPolicy.RetryBudgetExhausted {
-                    // Only a new worker command or startup-scoped configuration
-                    // generation can re-arm a terminally exhausted worker.
-                    guard await refreshIterator.next() != nil else { return }
-                    retryDelay = 1_000_000_000
                     continue
                 }
                 if let tlsError = error as? GatewayTLSValidationError,
@@ -540,6 +544,7 @@ final class MacNodeModeCoordinator: NSObject {
                     continue
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
+                self.channelStatus.record(.unavailable(reason: error.localizedDescription))
                 try? await Task.sleep(nanoseconds: min(retryDelay, 10_000_000_000))
                 retryDelay = min(retryDelay * 2, 10_000_000_000)
             }
@@ -557,9 +562,8 @@ final class MacNodeModeCoordinator: NSObject {
     {
         let config = endpoint.config
         let provider = ComputerControlProvider.current()
-        let workerManifest = try await Self.workerManifest(
-            self.startNodeHostWorkerIfConfigured(provider: provider),
-            for: provider)
+        let (workerManifest, workerUnavailableReason) =
+            try await self.resolveWorkerManifestForConnection(provider: provider)
         let nativeCaps = self.currentCaps(
             browserControlEnabled: browserControlEnabled,
             cameraEnabled: cameraEnabled,
@@ -631,6 +635,7 @@ final class MacNodeModeCoordinator: NSObject {
                 MacNodeCodexThreadCatalogContract.listCommand),
             claudeSessionCatalogAdvertised: commands.contains(
                 MacNodeClaudeSessionCatalogContract.listCommand),
+            workerUnavailableReason: workerUnavailableReason,
             endpoint: endpoint,
             options: options,
             sessionBox: sessionBox,
@@ -658,6 +663,8 @@ final class MacNodeModeCoordinator: NSObject {
                 guard workerRouteInstalled else { return }
                 await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
+                await self.channelStatus.record(.connected(
+                    workerUnavailableReason: attempt.workerUnavailableReason))
                 self.logger.info("mac node connected to gateway")
                 // The node hello owns this route's session defaults. Reusing the operator
                 // connection here can trigger remote-tunnel recovery while the node connects.
@@ -690,6 +697,7 @@ final class MacNodeModeCoordinator: NSObject {
             },
             onDisconnected: { [weak self] reason in
                 guard let self else { return }
+                await self.channelStatus.record(.unavailable(reason: reason))
                 await self.invalidateRuntimeRoute(authorityGeneration: attempt.routeAuthorityGeneration)
                 await self.scheduleReconnectProbe()
                 self.logger.error("mac node disconnected: \(reason, privacy: .public)")
@@ -862,6 +870,13 @@ final class MacNodeModeCoordinator: NSObject {
     func handleNodeHostConfigurationChangeForTesting() async {
         await self.handleNodeHostConfigurationChange().value
     }
+
+    func resolveWorkerManifestForConnectionForTesting(
+        provider: ComputerControlProvider = .peekaboo) async throws
+        -> (manifest: MacNodeHostManifest?, unavailableReason: String?)
+    {
+        try await self.resolveWorkerManifestForConnection(provider: provider)
+    }
     #endif
 
     private func cancelReconnectProbe() {
@@ -929,12 +944,38 @@ extension MacNodeModeCoordinator {
         Self.resolvedCommands(caps: caps, computerControlProvider: computerControlProvider)
     }
 
+    /// The node-host worker is a capability superset, not a connect
+    /// precondition. Backoff-pending is transient (its lifecycle-owned wake
+    /// retries shortly); every other worker failure connects this Mac with
+    /// native capabilities only and surfaces the reason to the operator.
+    private func resolveWorkerManifestForConnection(
+        provider: ComputerControlProvider) async throws
+        -> (manifest: MacNodeHostManifest?, unavailableReason: String?)
+    {
+        do {
+            let manifest = try await Self.workerManifest(
+                self.startNodeHostWorkerIfConfigured(provider: provider),
+                for: provider)
+            return (manifest, nil)
+        } catch let backoff as MacNodeHostWorkerRetryPolicy.RetryBackoffPending {
+            throw backoff
+        } catch {
+            return (nil, self.recordNodeHostWorkerStartFailure(error))
+        }
+    }
+
     private func startNodeHostWorkerIfConfigured(
         provider: ComputerControlProvider) async throws -> MacNodeHostManifest?
     {
         guard let nodeHostWorker else { return nil }
         guard self.nodeHostWorkerRetryTask == nil else {
             throw MacNodeHostWorkerRetryPolicy.RetryBackoffPending()
+        }
+        if let activeInput = self.activeNodeHostWorkerInput {
+            // Worker launch metadata is startup-scoped. Route retries reuse it instead of
+            // repeating CLI and runtime discovery until an explicit restart resets state.
+            try self.nodeHostWorkerRetryPolicy.prepareForStart(activeInput)
+            return try await nodeHostWorker.start(launch: activeInput.launch)
         }
         let launch: MacNodeHostWorkerLaunch
         do {
@@ -965,6 +1006,18 @@ extension MacNodeModeCoordinator {
         try self.nodeHostWorkerRetryPolicy.prepareForStart(input)
         self.activeNodeHostWorkerInput = input
         return try await nodeHostWorker.start(launch: effectiveLaunch)
+    }
+
+    /// Retry exhaustion keeps the concrete worker error it exhausted on; the
+    /// bare "stopped after N unexpected exits" text cannot guide the operator.
+    private func recordNodeHostWorkerStartFailure(_ error: Error) -> String {
+        if error is MacNodeHostWorkerRetryPolicy.RetryBudgetExhausted {
+            let detail = self.lastNodeHostWorkerStartFailure.map { " — \($0)" } ?? ""
+            return error.localizedDescription + detail
+        }
+        let reason = error.localizedDescription
+        self.lastNodeHostWorkerStartFailure = reason
+        return reason
     }
 
     private func handleNodeHostWorkerFailure(configurationGeneration: UInt64) {
@@ -1006,6 +1059,13 @@ extension MacNodeModeCoordinator {
                 name: .openclawNodeHostWorkerRetryExhausted,
                 object: self,
                 userInfo: ["unexpectedExitCount": unexpectedExitCount])
+            // The exhausted worker must not take the node channel with it. Wake
+            // the connect loop after the disconnect drains so the next attempt
+            // reconnects with native capabilities and a visible degraded reason.
+            Task { @MainActor [weak self] in
+                await invalidation.value
+                self?.refreshContinuation.yield()
+            }
         }
     }
 
@@ -1018,6 +1078,7 @@ extension MacNodeModeCoordinator {
     private func resetNodeHostWorkerRetryState() {
         self.cancelNodeHostWorkerRetryTask()
         self.activeNodeHostWorkerInput = nil
+        self.lastNodeHostWorkerStartFailure = nil
         self.nodeHostWorkerRetryPolicy.reset()
     }
 
@@ -1203,11 +1264,6 @@ extension MacNodeModeCoordinator {
             OpenClawCanvasCommand.present.rawValue,
             OpenClawCanvasCommand.hide.rawValue,
             OpenClawCanvasCommand.navigate.rawValue,
-            OpenClawCanvasCommand.evalJS.rawValue,
-            OpenClawCanvasCommand.snapshot.rawValue,
-            OpenClawCanvasA2UICommand.push.rawValue,
-            OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            OpenClawCanvasA2UICommand.reset.rawValue,
         ]
 
         if computerControlProvider == .peekaboo {

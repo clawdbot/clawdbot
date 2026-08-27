@@ -6,25 +6,42 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-function extractComparableText(message: unknown): string | undefined {
+type ComparableHistoryMessage = {
+  message: unknown;
+  order: number;
+  externalIdentityKey?: string;
+  role?: string;
+  text?: string;
+  timestamp?: number;
+};
+
+type TimestampSummary = {
+  hasMissingTimestamp: boolean;
+  buckets: Map<number, { min: number; max: number }>;
+};
+
+type RoleTextIndex = Map<string, Map<string, TimestampSummary>>;
+
+function extractComparableText(message: unknown, role: string | undefined): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
   const record = message as { role?: unknown; text?: unknown; content?: unknown };
-  const role = readStringValue(record.role);
   const parts: string[] = [];
   const text = readStringValue(record.text);
   if (text !== undefined) {
     parts.push(text);
   }
-  const content = readStringValue(record.content);
+  const rawContent = record.content;
+  const content = readStringValue(rawContent);
   if (content !== undefined) {
     parts.push(content);
-  } else if (Array.isArray(record.content)) {
-    for (const block of record.content) {
+  } else if (Array.isArray(rawContent)) {
+    for (const block of rawContent) {
       if (block && typeof block === "object" && "text" in block) {
         const blockText = readStringValue(block.text);
         if (blockText !== undefined) {
@@ -40,102 +57,103 @@ function extractComparableText(message: unknown): string | undefined {
   if (!joined) {
     return undefined;
   }
-  const visible = role === "user" ? stripInboundMetadata(joined) : joined;
+  const visible = stripInlineDirectiveTagsForDisplay(
+    role === "user" ? stripInboundMetadata(joined) : joined,
+  ).text;
   const normalized = visible.replace(/\s+/g, " ").trim();
   return normalized || undefined;
 }
 
-function resolveComparableTimestamp(message: unknown): number | undefined {
+function prepareComparableMessage(message: unknown, order: number): ComparableHistoryMessage {
   if (!message || typeof message !== "object") {
-    return undefined;
+    return { message, order };
   }
-  return asFiniteNumber((message as { timestamp?: unknown }).timestamp);
-}
-
-function resolveComparableRole(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  return readStringValue((message as { role?: unknown }).role);
+  const record = message as { role?: unknown; timestamp?: unknown };
+  const role = readStringValue(record.role);
+  return {
+    message,
+    order,
+    externalIdentityKey: resolveImportedExternalIdentityKey(message),
+    role,
+    text: extractComparableText(message, role),
+    timestamp: asFiniteNumber(record.timestamp),
+  };
 }
 
 // External identity survives text edits, so it is the strongest match signal
 // for imported messages from Claude CLI or similar external histories.
-type ImportedExternalIdentity = {
-  externalId: string;
-  importedFrom?: string;
-  cliSessionId?: string;
-};
-
-function resolveImportedExternalIdentity(message: unknown): ImportedExternalIdentity | undefined {
+function resolveImportedExternalIdentityKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  const meta =
-    "__openclaw" in message &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object"
-      ? ((message as { __openclaw?: Record<string, unknown> })["__openclaw"] ?? {})
-      : undefined;
-  const externalId = normalizeOptionalString(meta?.externalId);
+  const rawMeta = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!rawMeta || typeof rawMeta !== "object") {
+    return undefined;
+  }
+  const externalId = normalizeOptionalString((rawMeta as { externalId?: unknown }).externalId);
   return externalId
-    ? {
+    ? JSON.stringify([
         externalId,
-        importedFrom: normalizeOptionalString(meta?.importedFrom),
-        cliSessionId: normalizeOptionalString(meta?.cliSessionId),
-      }
+        normalizeOptionalString((rawMeta as { importedFrom?: unknown }).importedFrom),
+        normalizeOptionalString((rawMeta as { cliSessionId?: unknown }).cliSessionId),
+      ])
     : undefined;
 }
 
-function hasSameExternalIdentity(existing: unknown, imported: unknown): boolean | undefined {
-  const importedIdentity = resolveImportedExternalIdentity(imported);
-  const existingIdentity = resolveImportedExternalIdentity(existing);
-  if (!importedIdentity || !existingIdentity) {
-    return undefined;
+function addRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): void {
+  if (!entry.role || !entry.text) {
+    return;
   }
-  return (
-    importedIdentity.externalId === existingIdentity.externalId &&
-    importedIdentity.importedFrom === existingIdentity.importedFrom &&
-    importedIdentity.cliSessionId === existingIdentity.cliSessionId
-  );
+  let byText = index.get(entry.role);
+  if (!byText) {
+    byText = new Map();
+    index.set(entry.role, byText);
+  }
+  let summary = byText.get(entry.text);
+  if (!summary) {
+    summary = { hasMissingTimestamp: false, buckets: new Map() };
+    byText.set(entry.text, summary);
+  }
+  if (entry.timestamp === undefined) {
+    summary.hasMissingTimestamp = true;
+    return;
+  }
+  const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
+  const bucket = summary.buckets.get(bucketKey);
+  if (bucket) {
+    bucket.min = Math.min(bucket.min, entry.timestamp);
+    bucket.max = Math.max(bucket.max, entry.timestamp);
+  } else {
+    summary.buckets.set(bucketKey, { min: entry.timestamp, max: entry.timestamp });
+  }
 }
 
-function isEquivalentImportedMessage(existing: unknown, imported: unknown): boolean {
-  // Text is a fallback only when either message lacks authoritative source identity.
-  const sameExternalIdentity = hasSameExternalIdentity(existing, imported);
-  if (sameExternalIdentity !== undefined) {
-    return sameExternalIdentity;
-  }
-
-  const existingRole = resolveComparableRole(existing);
-  const importedRole = resolveComparableRole(imported);
-  if (!existingRole || existingRole !== importedRole) {
+function hasRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMessage): boolean {
+  if (!entry.role || !entry.text) {
     return false;
   }
-
-  const existingText = extractComparableText(existing);
-  const importedText = extractComparableText(imported);
-  if (!existingText || !importedText || existingText !== importedText) {
+  const summary = index.get(entry.role)?.get(entry.text);
+  if (!summary) {
     return false;
   }
-
-  const existingTimestamp = resolveComparableTimestamp(existing);
-  const importedTimestamp = resolveComparableTimestamp(imported);
-  if (existingTimestamp === undefined || importedTimestamp === undefined) {
+  if (entry.timestamp === undefined || summary.hasMissingTimestamp) {
     return true;
   }
-
-  return Math.abs(existingTimestamp - importedTimestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS;
+  const bucketKey = Math.floor(entry.timestamp / DEDUPE_TIMESTAMP_WINDOW_MS);
+  if (summary.buckets.has(bucketKey)) {
+    return true;
+  }
+  const previous = summary.buckets.get(bucketKey - 1);
+  if (previous && previous.max >= entry.timestamp - DEDUPE_TIMESTAMP_WINDOW_MS) {
+    return true;
+  }
+  const next = summary.buckets.get(bucketKey + 1);
+  return next !== undefined && next.min <= entry.timestamp + DEDUPE_TIMESTAMP_WINDOW_MS;
 }
 
-function compareHistoryMessages(
-  a: { message: unknown; order: number },
-  b: { message: unknown; order: number },
-): number {
-  const aTimestamp = resolveComparableTimestamp(a.message);
-  const bTimestamp = resolveComparableTimestamp(b.message);
-  if (aTimestamp !== undefined && bTimestamp !== undefined && aTimestamp !== bTimestamp) {
-    return aTimestamp - bTimestamp;
+function compareHistoryMessages(a: ComparableHistoryMessage, b: ComparableHistoryMessage): number {
+  if (a.timestamp !== undefined && b.timestamp !== undefined && a.timestamp !== b.timestamp) {
+    return a.timestamp - b.timestamp;
   }
   return a.order - b.order;
 }
@@ -148,13 +166,33 @@ export function mergeImportedChatHistoryMessages(params: {
   if (params.importedMessages.length === 0) {
     return params.localMessages;
   }
-  const merged = params.localMessages.map((message, index) => ({ message, order: index }));
+  const merged = params.localMessages.map(prepareComparableMessage);
+  const exactExternalIdentityIndex = new Set<string>();
+  const allMessageRoleTextIndex: RoleTextIndex = new Map();
+  const identitylessRoleTextIndex: RoleTextIndex = new Map();
+  const indexEntry = (entry: ComparableHistoryMessage) => {
+    if (entry.externalIdentityKey) {
+      exactExternalIdentityIndex.add(entry.externalIdentityKey);
+    } else {
+      addRoleTextCandidate(identitylessRoleTextIndex, entry);
+    }
+    addRoleTextCandidate(allMessageRoleTextIndex, entry);
+  };
+  for (const entry of merged) {
+    indexEntry(entry);
+  }
   let nextOrder = merged.length;
-  for (const imported of params.importedMessages) {
-    if (merged.some((existing) => isEquivalentImportedMessage(existing.message, imported))) {
+  for (const message of params.importedMessages) {
+    const imported = prepareComparableMessage(message, nextOrder);
+    const duplicate = imported.externalIdentityKey
+      ? exactExternalIdentityIndex.has(imported.externalIdentityKey) ||
+        hasRoleTextCandidate(identitylessRoleTextIndex, imported)
+      : hasRoleTextCandidate(allMessageRoleTextIndex, imported);
+    if (duplicate) {
       continue;
     }
-    merged.push({ message: imported, order: nextOrder });
+    merged.push(imported);
+    indexEntry(imported);
     nextOrder += 1;
   }
   merged.sort(compareHistoryMessages);

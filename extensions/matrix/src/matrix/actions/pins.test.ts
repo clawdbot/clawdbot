@@ -77,4 +77,47 @@ describe("matrix pins actions", () => {
       },
     ]);
   });
+
+  it("keeps other pinned messages visible when a poll repeats its pagination cursor", async () => {
+    let pollPageCalls = 0;
+    const getRelations = vi.fn(async () => {
+      pollPageCalls += 1;
+      if (pollPageCalls > 2) {
+        throw new Error("test stopped unbounded Matrix poll pagination");
+      }
+      return { events: [], nextBatch: "stuck", prevBatch: null };
+    });
+    const client = {
+      getRoomStateEvent: async () => ({ pinned: ["$poll", "$message"] }),
+      getEvent: async (_roomId: string, eventId: string) =>
+        eventId === "$poll"
+          ? {
+              event_id: "$poll",
+              sender: "@alice:example.org",
+              type: "m.poll.start",
+              origin_server_ts: 1,
+              content: {
+                "m.poll.start": {
+                  question: { "m.text": "Lunch?" },
+                  answers: [{ id: "pizza", "m.text": "Pizza" }],
+                },
+              },
+            }
+          : {
+              event_id: "$message",
+              sender: "@alice:example.org",
+              type: "m.room.message",
+              origin_server_ts: 2,
+              content: { msgtype: "m.text", body: "Still visible" },
+            },
+      getRelations,
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await listMatrixPins("!room:example.org", { client });
+
+    expect(result.pinned).toEqual(["$poll", "$message"]);
+    expect(result.events.map((event) => event.eventId)).toEqual(["$message"]);
+    expect(getRelations).toHaveBeenCalledTimes(2);
+  });
 });

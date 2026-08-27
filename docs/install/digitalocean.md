@@ -48,8 +48,8 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
     curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
     apt install -y nodejs
 
-    # Install OpenClaw
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    # Install OpenClaw; run onboarding later as the non-root owner.
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
 
     # Create the non-root user that will own OpenClaw state and services.
     adduser openclaw

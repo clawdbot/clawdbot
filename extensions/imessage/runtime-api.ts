@@ -31,7 +31,7 @@ export type { IMessageProbe } from "./src/probe.js";
 export { sendMessageIMessage } from "./src/send.js";
 export { imessageMessageActions } from "./src/actions.js";
 export { setIMessageRuntime } from "./src/runtime.js";
-export { chunkTextForOutbound } from "./src/channel-api.js";
+export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export type IMessageAccountConfig = Omit<
   NonNullable<NonNullable<RuntimeApiOpenClawConfig["channels"]>["imessage"]>,
   "accounts" | "defaultAccount"

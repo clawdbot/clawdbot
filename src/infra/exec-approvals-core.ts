@@ -175,6 +175,12 @@ export type ExecApprovalCommandSpan = {
   endIndex: number;
 };
 
+/** Cron job identity recorded at approval creation for a cron isolated run. */
+type ExecApprovalCronExecutionSource = {
+  jobId: string;
+  jobConfigRevision: string;
+};
+
 export type ExecApprovalRequestPayload = {
   command: string;
   commandPreview?: string | null;
@@ -203,9 +209,15 @@ export type ExecApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
+  /** Gateway-recorded cron source; never taken from client request params. */
+  cronExecutionSource?: ExecApprovalCronExecutionSource | null;
+  /** Exact operation binding prepared at creation for standing-grant minting. */
+  cronOperationBinding?: string | null;
 };
 
 export type ExecApprovalRequest = {
+  /** Descriptive wire metadata; readers derive it from the payload when absent. */
+  approvalKind?: "exec";
   id: string;
   request: ExecApprovalRequestPayload;
   createdAtMs: number;

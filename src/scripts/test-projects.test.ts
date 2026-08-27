@@ -10,7 +10,6 @@ import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../../scripts/run-
 const {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
-  buildVitestArgs,
   buildVitestRunPlans,
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
@@ -48,7 +47,11 @@ describe("test-projects args", () => {
   });
 
   it("keeps watch mode explicit without leaking the sentinel to Vitest", () => {
-    expect(buildVitestArgs(["--watch", "--", "src/foo.test.ts"])).toEqual([
+    const spec = expectDefined(
+      createVitestRunSpecs(["--watch", "--", "src/foo.test.ts"])[0],
+      "watch run spec",
+    );
+    expect(spec.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
       "--config",
       "test/vitest/vitest.unit.config.ts",
@@ -57,7 +60,8 @@ describe("test-projects args", () => {
   });
 
   it("uses run mode by default", () => {
-    expect(buildVitestArgs(["src/foo.test.ts"])).toEqual([
+    const spec = expectDefined(createVitestRunSpecs(["src/foo.test.ts"])[0], "run spec");
+    expect(spec.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
       "run",
       "--config",

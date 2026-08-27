@@ -1,7 +1,6 @@
 // Shared record helpers for legacy config migration modules.
-type JsonRecord = Record<string, unknown>;
-
 import { isRecord } from "../../../utils.js";
+type JsonRecord = Record<string, unknown>;
 
 export type { JsonRecord };
 export { isRecord };

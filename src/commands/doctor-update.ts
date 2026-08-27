@@ -68,7 +68,7 @@ async function inspectGatewayServiceForUpdate(
   try {
     const service = resolveGatewayService();
     const state = await readGatewayServiceState(service, { env: process.env });
-    if (!state.installed) {
+    if (state.loadState.status === "unknown" || !state.installed) {
       return NO_GATEWAY_SERVICE_UPDATE;
     }
     const layout = await summarizeGatewayServiceLayout(state.command);

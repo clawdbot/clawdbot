@@ -8,13 +8,11 @@ import {
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import {
-  isPluginMetadataSnapshotCompatible,
-  resolvePluginMetadataSnapshot,
-} from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
@@ -39,6 +37,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { buildConfiguredModelCatalog, resolveConfiguredModelRef } from "../model-selection.js";
+import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
@@ -85,7 +84,16 @@ export function normalizeExplicitOverrideInput(raw: string, kind: "provider" | "
   return trimmed;
 }
 
-export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: RuntimeEnv) {
+export type PreparedAgentCommandRuntimeContext = Readonly<{
+  config: OpenClawConfig;
+  pluginGeneration: PreparedModelRuntimePluginGeneration;
+}>;
+
+export async function prepareAgentCommandExecution(
+  opts: AgentCommandOpts,
+  runtime: RuntimeEnv,
+  runtimeContext?: PreparedAgentCommandRuntimeContext,
+) {
   const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
@@ -114,7 +122,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     );
   }
 
-  const { cfg, pluginMetadataSnapshot } = await resolveAgentRuntimeConfig(runtime, {
+  const { cfg } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
       opts.deliver !== true && shouldResolveExplicitRecipientSession && recipientChannel
@@ -271,23 +279,17 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     normalizeOptionalString(opts.cwd) ?? normalizeOptionalString(sessionEntryRaw?.spawnedCwd);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const pluginsEnabled = normalizePluginsConfig(cfg.plugins).enabled;
+  const preparedMetadataSnapshot = runtimeContext?.pluginGeneration.pluginMetadataSnapshot;
   const manifestMetadataSnapshot = pluginsEnabled
-    ? pluginMetadataSnapshot &&
-      pluginMetadataSnapshot.pluginIds === undefined &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: pluginMetadataSnapshot,
-        config: cfg,
-        env: process.env,
-        workspaceDir,
-      })
-      ? pluginMetadataSnapshot
-      : resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir })
+    ? (preparedMetadataSnapshot ??
+      resolvePluginMetadataSnapshot({ config: cfg, env: process.env, workspaceDir }))
     : undefined;
   const modelManifestContext = {
     manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
   } satisfies ModelManifestNormalizationContext;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
+    agentId: sessionAgentId,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: pluginsEnabled,
@@ -358,10 +360,46 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
     const { getAcpSessionManager } = await loadAcpManagerRuntime();
     const acpManager = getAcpSessionManager();
     const acpResolution = sessionKey ? acpManager.resolveSession({ cfg, sessionKey }) : null;
+    let promptMessage = message;
+    if (!isRawModelRun && (message.includes("$") || message.trimStart().startsWith("/"))) {
+      const {
+        expandExplicitSkillReferences,
+        hasSkillReferenceCandidate,
+        listSkillCommandsForWorkspace,
+        resolveEffectiveAgentSkillFilter,
+      } = await import("../../skills/discovery/chat-commands.runtime.js");
+      const hasExplicitSkillCandidate =
+        message.trimStart().startsWith("/") || hasSkillReferenceCandidate(message);
+      if (hasExplicitSkillCandidate) {
+        const skillFilter = resolveEffectiveAgentSkillFilter(cfg, sessionAgentId);
+        const commandParams = {
+          workspaceDir,
+          cfg,
+          agentId: sessionAgentId,
+          sessionEntry: sessionEntryRaw,
+          sessionKey,
+          ...(preparedMetadataSnapshot ? { pluginMetadataSnapshot: preparedMetadataSnapshot } : {}),
+          ...(skillFilter ? { skillFilter } : {}),
+        };
+        const skillCommands = listSkillCommandsForWorkspace(commandParams);
+        const allSkillCommands = skillFilter
+          ? listSkillCommandsForWorkspace({ ...commandParams, includeAllowlistHidden: true })
+          : skillCommands;
+        const expansion = expandExplicitSkillReferences({
+          text: message,
+          skillCommands,
+          allSkillCommands,
+        });
+        if (expansion.error) {
+          throw new Error(expansion.error);
+        }
+        promptMessage = expansion.body;
+      }
+    }
     const body =
       !isRawModelRun && acpResolution?.kind === "ready"
-        ? resolveAcpPromptBody(message, opts.internalEvents)
-        : prependInternalEventContext(message, opts.internalEvents);
+        ? resolveAcpPromptBody(promptMessage, opts.internalEvents)
+        : prependInternalEventContext(promptMessage, opts.internalEvents);
     const transcriptBody =
       opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
@@ -394,6 +432,7 @@ export async function prepareAgentCommandExecution(opts: AgentCommandOpts, runti
       agentDir,
       pluginsEnabled,
       manifestMetadataSnapshot,
+      ...(runtimeContext ? { commandRuntimeContext: runtimeContext } : {}),
       modelManifestContext,
       runId,
       isSubagentLane,

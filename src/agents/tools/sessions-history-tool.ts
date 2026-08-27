@@ -16,6 +16,7 @@ import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
+  describeSessionLinkRule,
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
@@ -39,6 +40,7 @@ import {
 import {
   createSessionVisibilityRowChecker,
   createAgentToAgentPolicy,
+  formatSessionToolAccessDenial,
   resolveEffectiveSessionToolsVisibility,
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
@@ -66,6 +68,11 @@ const SessionsHistoryOutputSchema = Type.Union([
       contentTruncated: Type.Boolean(),
       contentRedacted: Type.Boolean(),
       bytes: Type.Number(),
+      sessionLinkRule: Type.Optional(
+        Type.String({
+          description: "How to build Control UI URLs for sessionKey values in this result.",
+        }),
+      ),
       offset: Type.Optional(Type.Number()),
       nextOffset: Type.Optional(Type.Number()),
       hasMore: Type.Optional(Type.Boolean()),
@@ -332,17 +339,15 @@ function resolveSessionsHistoryPaginationMetadata(params: {
     };
   }
 
-  // Gateway offsets count newest transcript rows already returned. Recompute
-  // from the oldest surviving seq after this tool's own filter/cap passes.
-  const oldestSeq = params.messages
+  // Respect Gateway replay cursors and this tool's own byte cap while always advancing.
+  const seq = params.messages
     .map((message) => readHistoryMessageSeq(message))
-    .find((seq): seq is number => typeof seq === "number");
+    .find((value): value is number => typeof value === "number");
+  const gatewayOffset = result?.nextOffset;
   const nextOffset =
-    oldestSeq !== undefined
-      ? Math.max(offset, totalMessages - oldestSeq + 1)
-      : typeof result?.nextOffset === "number"
-        ? result.nextOffset
-        : undefined;
+    seq === undefined
+      ? gatewayOffset
+      : Math.max(offset + 1, Math.min(gatewayOffset ?? totalMessages, totalMessages - seq + 1));
   const hasMore =
     nextOffset !== undefined
       ? nextOffset < totalMessages
@@ -363,12 +368,13 @@ export function createSessionsHistoryTool(opts?: {
   sandboxed?: boolean;
   config?: OpenClawConfig;
   callGateway?: GatewayCaller;
+  sessionLinkBase?: string;
 }): AnyAgentTool {
   return {
     label: "Session History",
     name: "sessions_history",
     displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsHistoryTool(),
+    description: describeSessionsHistoryTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsHistoryToolSchema,
     outputSchema: SessionsHistoryOutputSchema,
     execute: async (_toolCallId, args) => {
@@ -389,10 +395,11 @@ export function createSessionsHistoryTool(opts?: {
       }
       const includeTools = Boolean(params.includeTools);
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const requesterAgentId = resolveSessionAgentIds({
@@ -441,6 +448,7 @@ export function createSessionsHistoryTool(opts?: {
           resolveSessionAgentId({ config: cfg, sessionKey: resolvedSession.key }),
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         visibility,
         a2aPolicy,
       }).check({ key: resolvedSession.key });
@@ -476,9 +484,9 @@ export function createSessionsHistoryTool(opts?: {
           : resolvedKey;
       const access = await resolveSessionToolAccess({
         action: "history",
-        defaultAgentId: requesterAgentId,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
+        mainSessionKey,
         authorizationTargetSessionKey: authorizationKey,
         targetAgentId,
         targetSessionKey: resolvedKey,
@@ -490,7 +498,10 @@ export function createSessionsHistoryTool(opts?: {
       if (!access.allowed) {
         return jsonResult({
           status: access.status,
-          error: access.error,
+          error: formatSessionToolAccessDenial(access, {
+            action: "history",
+            targetSessionKey: displayKey,
+          }),
         });
       }
 
@@ -547,6 +558,9 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes,
+        ...(opts?.sessionLinkBase
+          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+          : {}),
         ...pagination,
       });
     },

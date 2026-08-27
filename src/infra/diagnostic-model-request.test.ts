@@ -5,7 +5,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "./diagnostic-events.js";
-import { isCoreModelRequestStartedDiagnosticMetadata } from "./diagnostic-model-request.js";
+import { resolveCoreModelRequestLifecycleDiagnosticMetadata } from "./diagnostic-model-request.js";
 
 describe("core model request provenance", () => {
   beforeEach(() => resetDiagnosticEventsForTest());
@@ -17,7 +17,8 @@ describe("core model request provenance", () => {
       if (event.type === "model.call.started") {
         events.push({
           callId: event.callId,
-          coreRequest: isCoreModelRequestStartedDiagnosticMetadata(metadata),
+          coreRequest:
+            resolveCoreModelRequestLifecycleDiagnosticMetadata(metadata)?.phase === "started",
         });
       }
     });
@@ -26,12 +27,16 @@ describe("core model request provenance", () => {
     const duplicateModelRequest = await import(
       /* @vite-ignore */ new URL("./diagnostic-model-request.ts?duplicate", import.meta.url).href
     );
-    duplicateModelRequest.emitCoreModelRequestStartedDiagnosticEvent({
-      runId: "fifo-run",
-      callId: "core-before",
-      provider: "mock",
-      model: "request-model",
-    });
+    const generation = Object.freeze({});
+    duplicateModelRequest.emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        runId: "fifo-run",
+        callId: "core-before",
+        provider: "mock",
+        model: "request-model",
+      },
+      generation,
+    );
     emitTrustedDiagnosticEvent({
       type: "model.call.started",
       runId: "fifo-run",
@@ -40,12 +45,15 @@ describe("core model request provenance", () => {
       model: "request-model",
       observationUnit: "request",
     });
-    duplicateModelRequest.emitCoreModelRequestStartedDiagnosticEvent({
-      runId: "fifo-run",
-      callId: "core-after",
-      provider: "mock",
-      model: "request-model",
-    });
+    duplicateModelRequest.emitCoreModelRequestStartedDiagnosticEvent(
+      {
+        runId: "fifo-run",
+        callId: "core-after",
+        provider: "mock",
+        model: "request-model",
+      },
+      generation,
+    );
     await waitForDiagnosticEventsDrained();
 
     expect(events).toEqual([

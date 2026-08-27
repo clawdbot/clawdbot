@@ -82,13 +82,11 @@ export function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): 
 }
 
 export function registerSessionSuggestionTestLifecycle(mocks: {
-  appendSessionAudit: ReturnType<typeof vi.fn>;
   handleChatSend: ReturnType<typeof vi.fn>;
   suggestionMutationFailure?: string;
   presence: unknown[];
 }): void {
   beforeEach(() => {
-    mocks.appendSessionAudit.mockClear();
     mocks.handleChatSend.mockReset();
     mocks.handleChatSend.mockImplementation(({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "suggestion-run", status: "started" });

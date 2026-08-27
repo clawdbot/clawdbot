@@ -1,5 +1,5 @@
 ---
-summary: "Experimental CUA Driver SDK computer control for Windows and Linux node hosts."
+summary: "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts."
 read_when:
   - You are installing, configuring, or auditing the cua-computer plugin
 title: "Cua Computer plugin"
@@ -7,7 +7,7 @@ title: "Cua Computer plugin"
 
 # Cua Computer plugin
 
-Experimental CUA Driver SDK computer control for Windows and Linux node hosts.
+Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.
 
 ## Distribution
 

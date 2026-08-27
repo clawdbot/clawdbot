@@ -283,7 +283,13 @@ describe("matrix directory", () => {
         }),
       }),
     ).toEqual([
-      '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
+      {
+        checkId: "channels.matrix.groups.open",
+        severity: "critical",
+        title: "Matrix security warning",
+        detail:
+          'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.groupPolicy="allowlist" + channels.matrix.groups (and optionally channels.matrix.groupAllowFrom) to restrict rooms.',
+      },
     ]);
 
     expect(
@@ -317,7 +323,13 @@ describe("matrix directory", () => {
         }),
       }),
     ).toEqual([
-      '- Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.accounts.assistant.groupPolicy="allowlist" + channels.matrix.accounts.assistant.groups (and optionally channels.matrix.accounts.assistant.groupAllowFrom) to restrict rooms.',
+      {
+        checkId: "channels.matrix.groups.open",
+        severity: "critical",
+        title: "Matrix security warning",
+        detail:
+          'Matrix rooms: groupPolicy="open" allows any room to trigger (mention-gated). Set channels.matrix.accounts.assistant.groupPolicy="allowlist" + channels.matrix.accounts.assistant.groups (and optionally channels.matrix.accounts.assistant.groupAllowFrom) to restrict rooms.',
+      },
     ]);
   });
 

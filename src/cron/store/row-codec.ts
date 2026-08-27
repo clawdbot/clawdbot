@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
@@ -10,7 +11,10 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  normalizeCronScheduledToolPolicy,
+} from "../scheduled-tool-policy.js";
 import type {
   CronJobState,
   CronPacing,
@@ -193,13 +197,13 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
     job_json: JSON.stringify(stripJobRuntimeFields(job)),
     state_json: JSON.stringify(job.state ?? {}),
     runtime_updated_at_ms: job.updatedAtMs,
-    schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>) ?? null,
+    schedule_identity: tryCronScheduleIdentity({ ...job }) ?? null,
     sort_order: sortOrder,
   };
 }
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
-  const raw = structuredClone(job) as unknown as Record<string, unknown>;
+  const raw: Record<string, unknown> = { ...structuredClone(job) };
   const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   normalizeCronJobIdentityFields(raw);
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -286,6 +290,22 @@ function pacingFromJobJson(jobJson: Record<string, unknown>): CronPacing | undef
   };
 }
 
+function createdActorFromJobJson(value: unknown): SessionCreatedActor | undefined {
+  if (
+    !isRecord(value) ||
+    (value.type !== "human" && value.type !== "agent" && value.type !== "system")
+  ) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(typeof value.id === "string" ? value.id : undefined);
+  const label = normalizeOptionalString(typeof value.label === "string" ? value.label : undefined);
+  return {
+    type: value.type,
+    ...(id ? { id } : {}),
+    ...(label ? { label } : {}),
+  };
+}
+
 function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronStoredJob | null {
   const jsonOwner = isRecord(jobJson.owner) ? jobJson.owner : undefined;
   const ownerAccountId = normalizeOptionalAccountId(
@@ -297,12 +317,19 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
   const pacing = pacingFromJobJson(jobJson);
+  const createdActor = createdActorFromJobJson(jobJson.createdActor);
   const scheduledToolPolicy = normalizeCronScheduledToolPolicy(jobJson.scheduledToolPolicy);
   const toolsAllowProvenance =
     isRecord(jobJson.toolsAllowProvenance) &&
     jobJson.toolsAllowProvenance.version === 1 &&
     jobJson.toolsAllowProvenance.source === "final-executable-surface"
-      ? ({ version: 1, source: "final-executable-surface" } as const)
+      ? ({
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: normalizeCronScheduledToolCallerOrigin(
+            jobJson.toolsAllowProvenance.callerOrigin,
+          ),
+        } as const)
       : undefined;
   if (!schedule || !payload) {
     return null;
@@ -310,6 +337,7 @@ function rowToCronJob(row: CronJobRow, jobJson: Record<string, unknown>): CronSt
   const createdAtMs = normalizeNumber(row.created_at_ms) ?? Date.now();
   return {
     id: row.job_id,
+    ...(createdActor ? { createdActor } : {}),
     ...(row.declaration_key ? { declarationKey: row.declaration_key } : {}),
     ...(row.display_name ? { displayName: row.display_name } : {}),
     ...(row.owner_agent_id || row.owner_session_key || ownerAccountId
@@ -570,7 +598,7 @@ export function updateCronRuntimeRows(
           ...bindStateColumns(job.state ?? {}),
           state_json: JSON.stringify(job.state ?? {}),
           runtime_updated_at_ms: job.updatedAtMs,
-          schedule_identity: tryCronScheduleIdentity(job as unknown as Record<string, unknown>),
+          schedule_identity: tryCronScheduleIdentity({ ...job }),
         })
         .where("store_key", "=", storeKey)
         .where("job_id", "=", job.id),

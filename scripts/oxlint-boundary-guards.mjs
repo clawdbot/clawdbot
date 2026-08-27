@@ -1,6 +1,14 @@
+import {
+  BOUNDARY_GUARD_FIXTURE_ROOT,
+  CHAINED_ASSERTION_EXCLUDED_ROOTS,
+  TYPE_ASSERTION_PRODUCTION_ROOTS,
+  TYPE_ASSERTION_TEST_FILE_SUFFIXES,
+  isSkippedTypeAssertionTestPath,
+  pathMatchesTypeAssertionRoot,
+} from "./lib/type-assertion-guard-scope.mjs";
+
 const EXPRESSION_WRAPPER_RE =
   /^(?:ChainExpression|ParenthesizedExpression|TSAsExpression|TSNonNullExpression|TSTypeAssertion)$/;
-const TEST_FILE_SUFFIXES = [".test.ts", ".test-utils.ts", ".test-harness.ts", ".e2e-harness.ts"];
 
 function unwrapExpression(node) {
   let current = node;
@@ -18,8 +26,8 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
       const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
       if (
         !filename.endsWith(".ts") ||
-        !roots.some((root) => repoPath === root || repoPath.startsWith(`${root}/`)) ||
-        TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        TYPE_ASSERTION_TEST_FILE_SUFFIXES.some((suffix) => filename.endsWith(suffix)) ||
         allowedFiles.includes(repoPath)
       ) {
         return {};
@@ -41,6 +49,86 @@ function restrictedCallRule({ allowedFiles = [], message, objects, property, roo
           }
           context.report({ message, node: node.callee });
         },
+      };
+    },
+  };
+}
+
+// Adapted from dmmulroy/anti-slop@446268e5d15baa968eaec669ff65358d36ae6259, MIT.
+function isTypeAssertionExpression(node) {
+  return node.type === "TSAsExpression" || node.type === "TSTypeAssertion";
+}
+
+function isConstAssertion(node) {
+  const { typeAnnotation } = node;
+  return (
+    typeAnnotation.type === "TSTypeReference" &&
+    typeAnnotation.typeName.type === "Identifier" &&
+    typeAnnotation.typeName.name === "const"
+  );
+}
+
+function isOutermostAssertionInChain(node) {
+  let current = node;
+  let parent = node.parent;
+
+  while (parent.type === "ParenthesizedExpression" && parent.expression === current) {
+    current = parent;
+    parent = parent.parent;
+  }
+
+  return !isTypeAssertionExpression(parent) || parent.expression !== current;
+}
+
+function isForbiddenAssertionChain(node) {
+  let assertionCount = 0;
+  let hasNonConstAssertion = false;
+  let current = node;
+
+  while (isTypeAssertionExpression(current)) {
+    assertionCount += 1;
+    hasNonConstAssertion ||= !isConstAssertion(current);
+    current = unwrapExpressionParentheses(current.expression);
+  }
+
+  return assertionCount > 1 && hasNonConstAssertion;
+}
+
+function noChainedTypeAssertionsRule({ excludedRoots = [], roots }) {
+  return {
+    meta: {
+      type: "problem",
+      docs: {
+        description:
+          "Disallow chained TypeScript as and angle-bracket assertions, including parenthesized chains.",
+      },
+      messages: {
+        chained:
+          "This assertion chain discards type evidence. Keep the original precise type, or parse untrusted input at its boundary before narrowing it.",
+      },
+    },
+    create(context) {
+      const filename = context.physicalFilename.replaceAll("\\", "/");
+      const cwd = context.cwd.replaceAll("\\", "/");
+      const repoPath = filename.startsWith(`${cwd}/`) ? filename.slice(cwd.length + 1) : filename;
+      if (
+        !roots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        excludedRoots.some((root) => pathMatchesTypeAssertionRoot(repoPath, root)) ||
+        isSkippedTypeAssertionTestPath(repoPath)
+      ) {
+        return {};
+      }
+
+      const checkTypeAssertion = (node) => {
+        if (!isOutermostAssertionInChain(node) || !isForbiddenAssertionChain(node)) {
+          return;
+        }
+        context.report({ node, messageId: "chained" });
+      };
+
+      return {
+        TSAsExpression: checkTypeAssertion,
+        TSTypeAssertion: checkTypeAssertion,
       };
     },
   };
@@ -502,7 +590,11 @@ export default {
         "Use registerHttpRoute({ path, auth, match, handler }) and registerPluginHttpRoute for dynamic webhook paths.",
     }),
     "no-widen-then-assert": noWidenThenAssertRule({
-      roots: ["src", "extensions", "packages", "ui/src", "test/fixtures/oxlint-boundary-guards"],
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
+    }),
+    "no-chained-type-assertions": noChainedTypeAssertionsRule({
+      roots: [...TYPE_ASSERTION_PRODUCTION_ROOTS, BOUNDARY_GUARD_FIXTURE_ROOT],
+      excludedRoots: CHAINED_ASSERTION_EXCLUDED_ROOTS,
     }),
   },
 };

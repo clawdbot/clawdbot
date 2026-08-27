@@ -28,12 +28,23 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Stylesheet Policy
 
+- Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
 - Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
 - Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.
 - Duplicate selectors are lint errors; deliberate topic-section reopens use `stylelint-disable-next-line no-duplicate-selectors -- <reason>`.
 - Dead CSS: `node --import tsx scripts/audit-control-ui-dead-css.mts` reports class selectors with no production reference (AST-based, understands `X--${...}` stems and `classMap`). Advisory, not a gate — verify by hand before deleting; extend the script's stem detection rather than its allowlist when it misses a dynamic family.
 - Native CSS nesting: opportunistic only — nest when already rewriting a section; no conversion sweeps.
 - `@layer` is deliberately not used: the shared light-DOM stylesheet's precedence relies on import order plus specificity, page CSS imports lazily per component, and measured `no-descending-specificity` hits are within-file — layering the import manifest would flip unlayered-vs-layered precedence across ~48 lazily imported page files for no measured win. Revisit only with computed-style parity proof across all routes on the mocked dev server (PR #123156/#123160 show the evidence pattern).
+
+## Gateway Coupling
+
+- The Control UI ships from and with its Gateway: one install, one version (product decision, 2026-08-16). UI code never carries gateway-version compatibility — no fallbacks to older methods when a current core method is missing, no version-conditional behavior for older gateways.
+- Method-advertisement checks (`isGatewayMethodAdvertised`) remain only as feature gates for config/plugin-dependent surfaces, never as version compat.
+- The handshake rejects gateway-served same-origin skew. The admission-exempt paths (`pnpm ui:dev`, custom `gateway.controlUi.root`, cross-origin/connection-settings dialing) are unsupported for version mismatch without enforcement: they carry no compat code and fail visibly at the first missing method, by design. Tightening admission to reject them at connect is a server-side product change owned separately.
+
+## Build Chunking
+
+- `ui/config/control-ui-boot-modules.json` is a generated manifest of the modules the default boot flow loads lazily; the `control-ui-boot` group in `ui/config/control-ui-chunking.ts` merges them into a few chunks so boot avoids ~140 HTTP/1.1 requests. Regenerate with `pnpm ui:boot-manifest:gen` after `pnpm ui:build` when boot-path surfaces change materially; stale entries degrade to extra chunks, never breakage. Do not hand-edit the manifest.
 
 ## Live Verification
 

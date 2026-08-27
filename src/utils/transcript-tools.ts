@@ -54,10 +54,6 @@ export const extractToolCallNames = (message: Record<string, unknown>): string[]
   return Array.from(names);
 };
 
-/** Returns whether a transcript message contains any recognized tool-call marker. */
-export const hasToolCall = (message: Record<string, unknown>): boolean =>
-  extractToolCallNames(message).length > 0;
-
 /** Counts recognized tool-result blocks and the subset explicitly marked as errors. */
 export const countToolResults = (message: Record<string, unknown>): ToolResultCounts => {
   const content = message.content;

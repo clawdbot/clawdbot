@@ -8,6 +8,7 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
+import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
 import { finalizeTaskRunByRunId } from "../../../tasks/detached-task-runtime.js";
@@ -45,6 +46,7 @@ class SubagentRunManager extends SubagentLaunchManager {
       throw error;
     }
     this.options.clearPendingLifecycleError(runId);
+    clearGatewayContextResolver(entry);
     if (this.shouldDeleteAttachments(entry)) {
       void safeRemoveAttachmentsDir(entry);
     }

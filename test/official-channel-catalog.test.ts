@@ -20,7 +20,8 @@ import {
   writeOfficialChannelCatalogSource,
 } from "../scripts/write-official-channel-catalog.mts";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -342,10 +343,10 @@ describe("buildOfficialChannelCatalog", () => {
       },
       providerEndpoints: undefined,
       install: {
-        npmSpec: "openclaw-plugin-yuanbao@2.15.0",
+        npmSpec: "openclaw-plugin-yuanbao@2.18.2",
         defaultChoice: "npm",
         expectedIntegrity:
-          "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w==",
+          "sha512-cL85zWLePhi/GWRsXL8ogS4tejNuCE/J0V/OYhDFJzElF2TmndVCUAXaJdssgv/ULJ9sBaic88wAzRllIgZIwA==",
       },
     });
     expect(

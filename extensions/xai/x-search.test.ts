@@ -315,6 +315,7 @@ describe("xai x_search tool", () => {
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
     expect(body.model).toBe("grok-4.3");
+    expect(body.input).toEqual([{ role: "user", content: "dinner recipes" }]);
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_turns).toBe(2);

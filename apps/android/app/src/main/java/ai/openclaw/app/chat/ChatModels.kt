@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.util.Locale
@@ -30,6 +31,7 @@ data class ChatMessage(
   val entryId: String? = null,
   val provenance: ChatMessageProvenance? = null,
   val transcriptMarker: ChatTranscriptMarker? = null,
+  val senderLabel: String? = null,
 )
 
 data class ChatMessageProvenance(
@@ -151,6 +153,18 @@ data class ChatPlanStep(
   val status: ChatPlanStepStatus,
 )
 
+data class ChatProgressCard(
+  val revision: Int,
+  val updatedAt: Long,
+  val markdown: String?,
+  val steps: List<ChatPlanStep>,
+)
+
+internal data class ChatProgressCardGetResult(
+  val sessionKey: String?,
+  val card: ChatProgressCard?,
+)
+
 /** Parses a complete gateway plan snapshot, including legacy string-only steps. */
 internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
   val entries = element as? JsonArray ?: return emptyList()
@@ -193,6 +207,59 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
     }
     parsed
   }
+}
+
+internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressCardGetResult {
+  val result = element as? JsonObject ?: error("Invalid progressCard.get response")
+  if (!result.containsKey("card")) error("Invalid progressCard.get response")
+  val rawCard = result["card"]
+  if (rawCard == null || rawCard is JsonNull) {
+    return ChatProgressCardGetResult(sessionKey = null, card = null)
+  }
+  val card = rawCard as? JsonObject ?: error("Invalid progressCard.get response")
+  val sessionKey =
+    (card["sessionKey"] as? JsonPrimitive)
+      ?.takeIf { it.isString }
+      ?.content
+      ?.trim()
+      ?.takeIf { it.isNotEmpty() }
+      ?: error("Invalid progress card session key")
+  val revision =
+    (card["revision"] as? JsonPrimitive)
+      ?.takeUnless { it.isString }
+      ?.content
+      ?.toLongOrNull()
+      ?.takeIf { it in 1..Int.MAX_VALUE }
+      ?.toInt()
+      ?: error("Invalid progress card revision")
+  val updatedAt =
+    (card["updatedAt"] as? JsonPrimitive)
+      ?.takeUnless { it.isString }
+      ?.content
+      ?.toLongOrNull()
+      ?: error("Invalid progress card update time")
+  val markdown =
+    if (card.containsKey("markdown")) {
+      (card["markdown"] as? JsonPrimitive)
+        ?.takeIf { it.isString }
+        ?.content
+        ?: error("Invalid progress card markdown")
+    } else {
+      null
+    }?.takeIf { it.isNotBlank() }
+  val steps = parseChatPlanSteps(card["steps"])
+  val parsedCard =
+    if (markdown == null && steps.isEmpty()) {
+      null
+    } else {
+      ChatProgressCard(
+        revision = revision,
+        updatedAt = updatedAt,
+        markdown = markdown,
+        steps = steps,
+      )
+    }
+  return ChatProgressCardGetResult(sessionKey = sessionKey, card = parsedCard)
 }
 
 /** Gateway-advertised thinking choice for the active provider/model pair. */
@@ -249,6 +316,8 @@ data class ChatSessionEntry(
   val archived: Boolean? = null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
+  val markedUnreadAt: Long? = null,
+  val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
   val hasAgentStatusMetadata: Boolean = agentStatus != null,
   val observerDigest: SessionObserverDigest? = null,
@@ -266,6 +335,7 @@ data class ChatSessionEntry(
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
   val hasActiveRunMetadata: Boolean = hasActiveRun != null || activeRunIds != null,
+  val hasActiveRunIdsMetadata: Boolean = activeRunIds != null,
   val parentSessionKey: String? = null,
   val spawnedBy: String? = null,
   val hasActiveSubagentRun: Boolean? = null,
@@ -284,6 +354,10 @@ data class ChatSessionEntry(
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )
 
+data class ChatSessionUnreadExpectation(
+  val markedUnreadAt: Long?,
+)
+
 data class ChatSessionAgentStatus(
   val note: String,
   val expiresAt: Long,
@@ -298,7 +372,7 @@ fun filterSessionEntries(
   val query = search.trim().lowercase()
   if (query.isEmpty()) return sessions
   return sessions.filter { session ->
-    listOfNotNull(session.displayName, session.label, session.key)
+    listOfNotNull(session.displayName, session.label, session.category, session.key)
       .any { it.lowercase().contains(query) }
   }
 }
@@ -321,12 +395,6 @@ data class ChatCommandEntry(
 data class ChatInFlightRun(
   val runId: String,
   val text: String,
-  val plan: ChatPlanSnapshot? = null,
-)
-
-data class ChatPlanSnapshot(
-  val steps: List<ChatPlanStep>,
-  val explanation: String? = null,
 )
 
 /**

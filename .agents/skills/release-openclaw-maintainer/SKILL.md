@@ -1,6 +1,6 @@
 ---
 name: release-openclaw-maintainer
-description: Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts.
+description: "Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts."
 ---
 
 # OpenClaw Release Maintainer
@@ -1027,7 +1027,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
    `false` for beta. Let it run in parallel with Code SHA validation.
 8. Run the deterministic source preflight, then Full Release Validation against
    the exact Code SHA with
-   `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`.
+   `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH --workflow-sha <tooling-sha>`.
+   Reuse the recorded full Tooling SHA for every later release validation; do
+   not refresh it from moving `main`.
    For beta-publish, keep `release_profile=beta` and
    `run_release_soak=false`. Record the Validation SHA + Tooling SHA tuple
    (Validation SHA is the Code SHA in this phase) and use one transition
@@ -1124,7 +1126,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     with the original child run IDs and an evidence output path before manually
     recreating the workflow's draft, dependency evidence asset, proof section,
     and publish step.
-27. Run the post-published beta verification roster. Do not scan current `main`
+27. Keep campaign generation outside the release path. The isolated
+    `release-validation-skill-runner.yml` workflow owns campaign updates, and
+    `$openclaw-release-validation` dispatches it when a tester finds the
+    stable-train issue missing or behind the latest beta. Campaign guidance is
+    useful postpublish context, never a publication blocker.
+28. Run the post-published beta verification roster. Do not scan current `main`
     for extra fixes unless the operator explicitly requests a backport audit.
     Apply only operator-selected backports, and increment to the next beta if a
     selected fix must change the already-published package. A failed confidence
@@ -1144,10 +1151,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     all-group cycle. The operator's separate beta-attempt cap, normally 4,
     remains a ceiling for admitted product attempts, not an automatic retry
     budget.
-28. Announce the beta/stable release on Discord best-effort using the configured secret workflow.
-29. If the operator requested beta only, stop after beta verification and the
+29. Announce the beta/stable release on Discord best-effort using the configured secret workflow.
+30. If the operator requested beta only, stop after beta verification and the
     announcement.
-30. If the stable release was published to `beta`, use the light stable
+31. If the stable release was published to `beta`, use the light stable
     promotion roster when the matching beta already carried the full confidence
     pass: published npm postpublish verify, Docker install/update smoke,
     macOS-only Parallels install/update smoke, and required QA signal.
@@ -1155,25 +1162,25 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow
     to promote that stable version from `beta` to `latest`, then verify
     `latest` now points at that version.
-31. If the stable release was published directly to `latest` and `beta` should
+32. If the stable release was published directly to `latest` and `beta` should
     follow it, start that same release-ops dist-tag workflow to point `beta` at
     the stable version, then verify both `latest` and `beta` point at that
     version.
-32. For stable releases, start
+33. For stable releases, start
     `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` for the
     real publish with the successful release-ops mac `preflight_run_id` and wait
     for success.
-33. Verify the successful real release-ops mac run uploaded the `.zip`, `.dmg`,
+34. Verify the successful real release-ops mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
-34. For stable releases, download `macos-appcast-<tag>` from the successful
+35. For stable releases, download `macos-appcast-<tag>` from the successful
     release-ops mac run, update `appcast.xml` on `main`, verify the feed, then
     complete the **Close stable releases on main** gate.
-35. For beta releases, publish the mac assets only when intentionally requested;
+36. For beta releases, publish the mac assets only when intentionally requested;
     expect no shared production
     `appcast.xml` artifact and do not update the shared production feed unless a
     separate beta feed exists.
-36. After stable main closeout, verify npm and the attached release artifacts.
+37. After stable main closeout, verify npm and the attached release artifacts.
 
 ## GHSA advisory work
 

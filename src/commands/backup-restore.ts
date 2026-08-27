@@ -2,13 +2,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
-import { resolveStateDir } from "../config/config.js";
+import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { resolveUserPath, shortenHomePath } from "../utils.js";
-import { BACKUP_MAX_DECOMPRESSION_RATIO, canonicalizePathForContainment } from "./backup-shared.js";
+import { shortenHomePath } from "../utils.js";
+import {
+  BACKUP_MAX_DECOMPRESSION_RATIO,
+  canonicalizePathForContainment,
+  resolveBackupAgentRoots,
+  resolveRequiredBackupPath,
+} from "./backup-shared.js";
 import { verifyBackupArchive } from "./backup-verify.js";
 import { isPathWithin } from "./cleanup-utils.js";
+import { resolveUpgradeConfigSnapshot } from "./doctor/shared/automatic-upgrade-config-repair.js";
 
 const BACKUP_RESTORE_WARNINGS = [
   "Restoring an archive is time travel: every restored state surface rolls back to the archive timestamp.",
@@ -37,14 +43,6 @@ type BackupRestoreResult = {
   warnings: string[];
 };
 
-function resolveRequiredTarget(value: string | undefined): string {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    throw new Error("Missing required --target value.");
-  }
-  return path.resolve(resolveUserPath(trimmed));
-}
-
 async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
   const [canonicalTarget, canonicalStateDir] = await Promise.all([
     canonicalizePathForContainment(targetPath),
@@ -54,6 +52,19 @@ async function assertTargetOutsideLiveState(targetPath: string): Promise<void> {
     throw new Error(
       `Backup restore target must be outside the live OpenClaw state directory: ${targetPath}`,
     );
+  }
+  const configSnapshot = await readConfigFileSnapshot({ observe: false });
+  const discoverySnapshot = resolveUpgradeConfigSnapshot(configSnapshot);
+  if (!discoverySnapshot) {
+    return;
+  }
+  const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
+  for (const { sourcePath } of agentRoots) {
+    if (isPathWithin(canonicalTarget, sourcePath)) {
+      throw new Error(
+        `Backup restore target must be outside the live OpenClaw agent directory: ${targetPath}`,
+      );
+    }
   }
 }
 
@@ -127,7 +138,7 @@ export async function backupRestoreCommand(
   runtime: RuntimeEnv,
   options: BackupRestoreOptions,
 ): Promise<BackupRestoreResult> {
-  const targetPath = resolveRequiredTarget(options.target);
+  const targetPath = resolveRequiredBackupPath(options.target, "--target");
   await assertTargetOutsideLiveState(targetPath);
   const verified = await verifyBackupArchive(options.archive);
   const target = await prepareRestoreTarget(targetPath);

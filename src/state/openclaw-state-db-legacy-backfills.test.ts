@@ -100,6 +100,9 @@ describe("repairLegacySubagentSuspensionReasons", () => {
           delivery: { status: "suspended", suspendedReason: "retry-limit" },
         }),
       );
+    initial.db
+      .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+      .run("2026.7.0");
     closeOpenClawStateDatabaseForTest();
 
     const firstOpen = openOpenClawStateDatabase(options);

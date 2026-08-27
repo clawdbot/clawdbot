@@ -22,6 +22,7 @@ const suite = createControlUiE2eSuite({
 const APPROVAL_ID = "Approval:Mobile/東京 100% 🦞";
 const APPROVAL_NOW_MS = Date.UTC(2026, 6, 10, 18, 0, 0);
 const ARTIFACT_DIR = path.resolve(".artifacts/control-ui-e2e/approval-page");
+const CAPTURE_UI_PROOF = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const MOBILE_RAW_VIDEO_DIR = path.join(ARTIFACT_DIR, "mobile-raw");
 const MOBILE_VIEWPORT = { height: 844, width: 390 } as const;
 const DESKTOP_VIEWPORT = { height: 800, width: 1200 } as const;
@@ -63,7 +64,28 @@ function pendingApproval(basePath: string): PendingApprovalSnapshot {
       commandPreview: 'curl --header "Authorization: <redacted>" …',
       warningText: "This command requests external network access.",
       host: "gateway",
-      nodeId: null,
+      nodeId: "runner-1",
+      agentId: "main",
+      allowedDecisions: ["allow-once", "deny"],
+    },
+  };
+}
+
+function pendingPluginApproval(basePath: string): PendingApprovalSnapshot {
+  return {
+    id: APPROVAL_ID,
+    status: "pending",
+    urlPath: approvalPath(basePath),
+    createdAtMs: APPROVAL_NOW_MS - 30_000,
+    expiresAtMs: APPROVAL_NOW_MS + 5 * 60_000,
+    presentation: {
+      kind: "plugin",
+      title: "Codex workspace command",
+      description: "Run the requested workspace command after operator review.",
+      detail: "pnpm test ui/src/pages/approval",
+      severity: "critical",
+      pluginId: "codex",
+      toolName: "workspace.exec",
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"],
     },
@@ -94,7 +116,7 @@ async function createSurface(params: {
   recordVideo?: boolean;
   viewport: { height: number; width: number };
 }): Promise<ApprovalSurface> {
-  const rawVideoDir = params.recordVideo ? MOBILE_RAW_VIDEO_DIR : undefined;
+  const rawVideoDir = params.recordVideo && CAPTURE_UI_PROOF ? MOBILE_RAW_VIDEO_DIR : undefined;
   if (rawVideoDir) {
     await mkdir(ARTIFACT_DIR, { recursive: true });
     await rm(rawVideoDir, { force: true, recursive: true });
@@ -181,6 +203,15 @@ async function waitForStableApprovalPaint(page: Page): Promise<void> {
       );
     })
     .toBe(true);
+}
+
+async function captureProof(page: Page, name: string): Promise<void> {
+  if (!CAPTURE_UI_PROOF) {
+    return;
+  }
+  await mkdir(ARTIFACT_DIR, { recursive: true });
+  await waitForStableApprovalPaint(page);
+  await page.screenshot({ path: path.join(ARTIFACT_DIR, name) });
 }
 
 async function expectMobilePendingLayout(page: Page): Promise<void> {
@@ -284,15 +315,19 @@ suite.define(() => {
       ]);
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "01-pending-mobile.png"),
-      });
+      expect(await mobile.page.locator(".approval-page__card").getAttribute("class")).toContain(
+        "approval-page__card--severity-warning",
+      );
+      expect(await mobile.page.locator('[data-approval-chip="agent"]').textContent()).toBe("main");
+      expect(await mobile.page.locator('[data-approval-chip="plugin"]').count()).toBe(0);
+      expect(await mobile.page.locator('[data-approval-chip="tool"]').count()).toBe(0);
+      expect(await mobile.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([
+        "Host",
+        "Node",
+      ]);
+      await captureProof(mobile.page, "after-pending-exec.png");
       await mobile.page.getByRole("button", { name: "Allow once" }).scrollIntoViewIfNeeded();
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "01b-pending-actions-mobile.png"),
-      });
+      await captureProof(mobile.page, "after-pending-exec-actions.png");
 
       await Promise.all([
         mobile.page.getByRole("button", { name: "Allow once" }).click(),
@@ -350,14 +385,8 @@ suite.define(() => {
       expect(terminalFocus.top).toBeGreaterThanOrEqual(0);
       expect(terminalFocus.bottom).toBeLessThanOrEqual(terminalFocus.viewportHeight);
       expect(await mobile.page.title()).toBe("Approved here — OpenClaw");
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "02-competing-answer-terminal.png"),
-      });
-      await waitForStableApprovalPaint(desktop.page);
-      await desktop.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "02b-competing-answer-loser-desktop.png"),
-      });
+      await captureProof(mobile.page, "after-competing-answer-terminal.png");
+      await captureProof(desktop.page, "after-competing-answer-loser-desktop.png");
 
       const terminalReload = await mobile.page.reload();
       expect(terminalReload?.status()).toBe(200);
@@ -367,16 +396,43 @@ suite.define(() => {
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectStandaloneApprovalPage(mobile.page);
       await expectNoDecisionButtons(mobile.page);
-      await waitForStableApprovalPaint(mobile.page);
-      await mobile.page.screenshot({
-        path: path.join(ARTIFACT_DIR, "03-terminal-reload-mobile.png"),
-      });
+      await captureProof(mobile.page, "after-terminal-reload-mobile.png");
 
       expect(mobile.pageErrors).toEqual([]);
       expect(desktop.pageErrors).toEqual([]);
     } finally {
       await closeRecordedSurface(mobile, "approval-page-mobile.webm");
     }
+  });
+
+  it("renders plugin identity as chips with a severity accent", async () => {
+    const pending = pendingPluginApproval("");
+    const surface = await createSurface({
+      basePath: "",
+      pending,
+      viewport: DESKTOP_VIEWPORT,
+    });
+
+    const response = await surface.page.goto(approvalUrl(""));
+    expect(response?.status()).toBe(200);
+    await waitForApprovalPage(surface.page);
+    await surface.gateway.waitForRequest("approval.get");
+    await expectStandaloneApprovalPage(surface.page);
+
+    expect(await surface.page.locator(".approval-page__card").getAttribute("class")).toContain(
+      "approval-page__card--severity-danger",
+    );
+    expect(
+      await surface.page.locator(".approval-page__heading > .approval-page__chips").count(),
+    ).toBe(1);
+    expect(await surface.page.locator('[data-approval-chip="plugin"]').textContent()).toBe("codex");
+    expect(await surface.page.locator('[data-approval-chip="tool"]').textContent()).toBe(
+      "workspace.exec",
+    );
+    expect(await surface.page.locator('[data-approval-chip="agent"]').textContent()).toBe("main");
+    expect(await surface.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([]);
+    await captureProof(surface.page, "after-pending-plugin.png");
+    expect(surface.pageErrors).toEqual([]);
   });
 
   it("preserves a mounted deep link across the authentication gate", async () => {

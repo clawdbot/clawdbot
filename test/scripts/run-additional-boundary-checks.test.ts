@@ -254,6 +254,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps chained-type-assertions lint in CI boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:no-chained-type-assertions",
+      command: "pnpm",
+      args: ["run", "lint:no-chained-type-assertions"],
+    });
+  });
+
   it("keeps the Telegram grammY type import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:extensions:telegram-grammy-types",

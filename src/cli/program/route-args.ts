@@ -276,20 +276,25 @@ export function parseSessionsRouteArgs(argv: string[]) {
 export function parseAgentsListRouteArgs(argv: string[]) {
   const listPositionals = getRoutedCommandPositionals(argv, {
     commandPath: ["agents", "list"],
-    booleanFlags: ["--json", "--bindings"],
+    booleanFlags: ["--json", "--bindings", "--tree"],
   });
   if (listPositionals && listPositionals.length === 0) {
     return {
       json: hasFlag(argv, "--json"),
       bindings: hasFlag(argv, "--bindings"),
+      tree: hasFlag(argv, "--tree"),
     };
   }
   const aliasPositionals = getRoutedCommandPositionals(argv, {
     commandPath: ["agents"],
-    booleanFlags: ["--json", "--bindings"],
+    booleanFlags: ["--json", "--bindings", "--tree"],
   });
   return aliasPositionals?.length === 0
-    ? { json: hasFlag(argv, "--json"), bindings: hasFlag(argv, "--bindings") }
+    ? {
+        json: hasFlag(argv, "--json"),
+        bindings: hasFlag(argv, "--bindings"),
+        tree: hasFlag(argv, "--tree"),
+      }
     : null;
 }
 

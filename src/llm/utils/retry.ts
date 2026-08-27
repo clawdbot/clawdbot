@@ -36,6 +36,8 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   const signal = {
     message: errorMessage,
     provider: message.provider,
+    code: message.errorCode,
+    errorType: message.errorType,
     ...(status === undefined ? {} : { status }),
   };
   const classification = classifyFailoverSignal(signal);

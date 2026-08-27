@@ -34,6 +34,7 @@ function runtimeErrors(): string[] {
 
 describe("webhooks cli", () => {
   beforeEach(() => {
+    mocks.runtimeLogs.length = 0;
     mocks.runtimeErrors.length = 0;
     mocks.defaultRuntime.error.mockClear();
     mocks.defaultRuntime.writeJson.mockClear();
@@ -59,33 +60,58 @@ describe("webhooks cli", () => {
       args.push("--json");
     }
 
-    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
-
     if (json) {
-      expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({
-        error: `Error: ${flag} must be a positive integer.`,
-      });
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(
+        `${flag} must be a positive integer.`,
+      );
+      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
       expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
     } else {
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
       expect(runtimeErrors().join("\n")).toContain(`${flag} must be a positive integer.`);
     }
     expect(mocks.runGmailSetup).not.toHaveBeenCalled();
     expect(mocks.runGmailService).not.toHaveBeenCalled();
   });
 
-  it("writes JSON when gmail setup rejects", async () => {
-    mocks.runGmailSetup.mockRejectedValueOnce(new Error("setup failed"));
+  it.each([
+    { command: "setup", mode: "human", json: false },
+    { command: "setup", mode: "JSON", json: true },
+    { command: "run", mode: "human", json: false },
+  ])("renders named gmail $command errors safely in $mode mode", async ({ command, json }) => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const error = new Error(`Gmail failed: Authorization: Bearer ${secret}`);
+    error.name = "GmailCredentialError";
+    const runner = command === "setup" ? mocks.runGmailSetup : mocks.runGmailService;
+    runner.mockRejectedValueOnce(error);
     const program = createProgram();
+    const args =
+      command === "setup"
+        ? ["webhooks", "gmail", "setup", "--account", "default"]
+        : ["webhooks", "gmail", "run"];
+    if (json) {
+      args.push("--json");
+    }
 
-    await expect(
-      program.parseAsync(["webhooks", "gmail", "setup", "--account", "default", "--json"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:1");
-
-    expect(mocks.runGmailSetup).toHaveBeenCalledWith(expect.objectContaining({ json: true }));
-    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith({ error: "Error: setup failed" });
-    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    if (json) {
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow(
+        "Gmail failed: Authorization: Bearer",
+      );
+      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    } else {
+      await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors()).toEqual([
+        expect.stringContaining("Gmail failed: Authorization: Bearer"),
+      ]);
+      expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+    }
+    expect(runner).toHaveBeenCalledOnce();
+    expect([...mocks.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(error.name);
+    expect([...mocks.runtimeLogs, ...runtimeErrors()].join("\n")).not.toContain(secret);
   });
 
   it.each([

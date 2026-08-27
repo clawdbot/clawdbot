@@ -1,16 +1,27 @@
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type {
+  SessionRow,
+  SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
+import type { FastModeSource } from "../../shared/fast-mode.js";
 /**
  * Shared session-tool data shapes and classification helpers.
  *
  * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
  */
+import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityRowChecker,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
 } from "./sessions-access.js";
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 export {
   resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
@@ -21,18 +32,10 @@ export {
   isExpectedSessionLookupMiss,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
-import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import type {
-  SessionRow,
-  SessionRunStatus,
-} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
-import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
-import type { FastModeSource } from "../../shared/fast-mode.js";
 
 /** Coarse session category used by session list/status tools. */
-type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+export const SESSION_LIST_KINDS = ["main", "group", "cron", "hook", "node", "other"] as const;
+type SessionKind = (typeof SESSION_LIST_KINDS)[number];
 
 const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
   main: "main",
@@ -66,6 +69,7 @@ export type GatewaySessionListRow = {
   };
   spawnedBy?: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -115,6 +119,7 @@ export type SessionListRow = {
   kind: SessionKind;
   channel: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -134,7 +139,9 @@ export type SessionListRow = {
 
 /** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
+  agentId?: string;
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
@@ -144,6 +151,7 @@ export function resolveSessionToolContext(opts?: {
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.agentSessionKey,
+      requesterAgentId: opts?.requesterAgentIdOverride ?? opts?.agentId,
       sandboxed: opts?.sandboxed,
     }),
   };

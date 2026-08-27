@@ -1,6 +1,7 @@
 // Tlon monitor tests cover authentication, inbound context, and shutdown lifecycle.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { setImmediate } from "node:timers/promises";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -199,6 +200,57 @@ describe("monitorTlonProvider authentication retry", () => {
     expect(authenticateMock).toHaveBeenCalledTimes(1);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(1_000, controller.signal);
   });
+});
+
+it("awaits cumulative Tlon discovery persistence and retries failed writes", async () => {
+  const controller = new AbortController();
+  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
+  authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
+  settingsManagerMock.load.mockResolvedValueOnce({
+    groupChannels: ["chat/~zod/base"],
+    autoAcceptGroupInvites: true,
+  });
+
+  const monitor = monitorTlonProvider({ abortSignal: controller.signal, runtime });
+  try {
+    await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
+    const groupSubscription = sseClientMock.subscribe.mock.calls
+      .map(([subscription]) => subscription)
+      .find(({ app, path }) => app === "groups" && path === "/groups/ui");
+    if (!groupSubscription) {
+      throw new Error("expected groups-ui subscription");
+    }
+
+    const firstResult = groupSubscription.event({
+      channels: {
+        "chat/~zod/a": {},
+        "chat/~zod/b": {},
+        "chat/~zod/base": {},
+      },
+      join: { channels: ["chat/~zod/b", "chat/~zod/c", "heap/~zod/no"] },
+    });
+    expect.soft(firstResult).toBeInstanceOf(Promise);
+    await firstResult;
+    await setImmediate();
+
+    sseClientMock.poke.mockRejectedValueOnce(new Error("settings write failed"));
+    const retryEvent = { join: { channels: ["chat/~zod/retry"] } };
+    await Promise.resolve(groupSubscription.event(retryEvent)).catch(() => undefined);
+    await setImmediate();
+    await groupSubscription.event(retryEvent);
+
+    expect(sseClientMock.poke).toHaveBeenCalledTimes(3);
+    expect(sseClientMock.poke.mock.calls[2]?.[0]).toMatchObject({
+      json: {
+        "put-entry": {
+          value: ["chat/~zod/base", "chat/~zod/a", "chat/~zod/b", "chat/~zod/c", "chat/~zod/retry"],
+        },
+      },
+    });
+  } finally {
+    controller.abort();
+    await monitor;
+  }
 });
 
 describe("monitorTlonProvider inbound media truth", () => {

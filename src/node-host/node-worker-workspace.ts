@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -19,9 +18,20 @@ import type {
 } from "../worker/node-workspace-retain-protocol.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
+  type NodeWorkerTransferGateway,
   runNodeWorkerWorkspaceTransfer,
   serializeNodeWorkerWorkspace,
 } from "./node-worker-transfer-client.js";
+import {
+  hashNodeWorkerWorkspaceComponent as hashPathComponent,
+  nodeWorkerWorkspaceGenerationKey as workspaceGenerationKey,
+  nodeWorkerWorkspaceLaunchGenerationKey as launchGenerationKey,
+  nodeWorkerWorkspaceSessionKey as workspaceSessionKey,
+  parseNodeWorkerWorkspaceGeneration as parseGenerationName,
+  parseNodeWorkerWorkspaceTransferGeneration as parseTransferArtifactGeneration,
+  resolveNodeManagedWorkspaceIdentity,
+  type NodeWorkerManagedWorkspaceRequest,
+} from "./node-worker-workspace-identity.js";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const WORKSPACE_RETENTION_DELETE_LIMIT = 256;
@@ -52,53 +62,6 @@ type AcceptedRetainSnapshot = {
   retainedGenerations: Set<string>;
   manifestsBySession: Map<string, Set<string> | null>;
 };
-
-function hashPathComponent(value: string, length: number): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, length);
-}
-
-function workspaceGenerationKey(params: {
-  gatewayNamespace: string;
-  environmentHash: string;
-  sessionHash: string;
-  generation: number;
-}): string {
-  return [
-    params.gatewayNamespace,
-    params.environmentHash,
-    params.sessionHash,
-    params.generation,
-  ].join("/");
-}
-
-function launchGenerationKey(reference: NodeWorkerWorkspaceLaunchReference): string {
-  return workspaceGenerationKey({
-    gatewayNamespace: reference.gatewayNamespace,
-    environmentHash: hashPathComponent(reference.environmentId, 16),
-    sessionHash: hashPathComponent(reference.sessionId, 32),
-    generation: reference.ownerEpoch,
-  });
-}
-
-function workspaceSessionKey(environmentHash: string, sessionHash: string): string {
-  return `${environmentHash}/${sessionHash}`;
-}
-
-function parseGenerationName(name: string): number | undefined {
-  const generation = Number(name);
-  return Number.isSafeInteger(generation) && generation >= 0 && String(generation) === name
-    ? generation
-    : undefined;
-}
-
-function parseTransferArtifactGeneration(name: string): number | undefined {
-  const staging = /^\.([0-9]+)\.workspace-transfer-.+$/u.exec(name);
-  if (staging) {
-    return parseGenerationName(staging[1]!);
-  }
-  const backup = /^([0-9]+)\.previous-.+$/u.exec(name);
-  return backup ? parseGenerationName(backup[1]!) : undefined;
-}
 
 async function listOwnedEntries(parent: string): Promise<fs.Dirent[]> {
   try {
@@ -317,6 +280,7 @@ export class NodeWorkerWorkspaceRuntime {
   private readonly retainQueue = new KeyedAsyncQueue();
   private readonly acceptedSnapshots = new Map<string, AcceptedRetainSnapshot>();
   private readonly activeWorkspaceOperations = new Map<string, number>();
+  private readonly deletingWorkspaceGenerations = new Set<string>();
   private readonly activeRetainProtections = new Map<string, Set<Set<string>>>();
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -334,6 +298,31 @@ export class NodeWorkerWorkspaceRuntime {
       GIT_CONFIG_NOSYSTEM: "1",
       GIT_TERMINAL_PROMPT: "0",
       SSH_ASKPASS: "",
+    };
+  }
+
+  /** Claims an existing identity-derived workspace against concurrent retention. */
+  acquireManagedWorkspace(request: NodeWorkerManagedWorkspaceRequest): {
+    workspaceDir: string;
+    release: () => void;
+  } {
+    const identity = resolveNodeManagedWorkspaceIdentity(this.root, request);
+    if (this.deletingWorkspaceGenerations.has(identity.generationKey)) {
+      throw new Error("INVALID_REQUEST: node placement workspace is being removed");
+    }
+    const finishOperation = this.beginWorkspaceOperation(
+      identity.gatewayNamespace,
+      identity.generationKey,
+    );
+    let released = false;
+    return {
+      workspaceDir: identity.workspaceDir,
+      release: () => {
+        if (!released) {
+          released = true;
+          finishOperation();
+        }
+      },
     };
   }
 
@@ -525,16 +514,20 @@ export class NodeWorkerWorkspaceRuntime {
             continue;
           }
           if (
-            await removeOwnedDirectory(
-              this.root,
-              candidate.path,
-              () =>
-                !this.currentLocalProtection(
+            await removeOwnedDirectory(this.root, candidate.path, () => {
+              if (
+                this.currentLocalProtection(
                   params.gatewayNamespace,
                   params.retainedDuringPass,
                   params.listNonterminal,
-                ).has(candidate.generationKey),
-            )
+                ).has(candidate.generationKey)
+              ) {
+                return false;
+              }
+              // No claim may begin after this final check and before recursive removal settles.
+              this.deletingWorkspaceGenerations.add(candidate.generationKey);
+              return true;
+            }).finally(() => this.deletingWorkspaceGenerations.delete(candidate.generationKey))
           ) {
             deleted += 1;
           }
@@ -617,7 +610,7 @@ export class NodeWorkerWorkspaceRuntime {
   async exec(
     input: NodeWorkerWorkspaceExecInput,
     signal?: AbortSignal,
-    gateway?: { url: string; tlsFingerprint?: string },
+    gateway?: NodeWorkerTransferGateway,
   ): Promise<NodeWorkerWorkspaceExecResult> {
     const environmentHash = hashPathComponent(input.environmentId, 16);
     const sessionHash = hashPathComponent(input.sessionId, 32);
@@ -668,6 +661,7 @@ export class NodeWorkerWorkspaceRuntime {
           const stdout = await runNodeWorkerWorkspaceTransfer({
             gatewayUrl: gateway.url,
             gatewayTlsFingerprint: gateway.tlsFingerprint,
+            gatewayCloudflareAccess: gateway.cloudflareAccess,
             environmentId: input.environmentId,
             workspaceDir: workspacePath,
             manifestHome: sessionRoot,

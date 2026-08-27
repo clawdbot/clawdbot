@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import type { Writable } from "node:stream";
+import { Readable, type Writable } from "node:stream";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeLogger } from "../plugins/runtime/types.js";
+import { onDecodedOutput } from "../process/decoded-output.js";
 import { createSpeechThresholdGate, readPcm16AudioStats } from "../talk/audio-energy.js";
+import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
 import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
@@ -46,6 +48,9 @@ type MeetingRealtimeAudioSpawn = (
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
 ) => BridgeProcess;
 
+const STDERR_LINE_TRUNCATED_PREFIX = "[stderr line truncated] ";
+const MAX_STDERR_CHUNK_BYTES = 8 * 1024;
+
 type OutputWriteWaiter = {
   proc: BridgeProcess;
   release: () => void;
@@ -57,6 +62,38 @@ function splitCommand(argv: string[]): { command: string; args: string[] } {
     throw new Error("audio bridge command must not be empty");
   }
   return { command, args };
+}
+
+function attachStderrLineLogger(params: {
+  stderr: BridgeProcess["stderr"];
+  logger: RuntimeLogger;
+  prefix: string;
+}): void {
+  if (!params.stderr) {
+    return;
+  }
+  if (!params.logger.debug) {
+    params.stderr.on("data", () => {});
+    return;
+  }
+  const debug = (message: string) => params.logger.debug?.(message);
+  if (!(params.stderr instanceof Readable)) {
+    // Injected adapters do not promise stream completion; retain their
+    // per-chunk behavior so diagnostics after child exit stay visible.
+    params.stderr.on("data", (chunk) => {
+      debug(`${params.prefix}: ${String(chunk).trim()}`);
+    });
+    return;
+  }
+  onDecodedOutput(params.stderr, (chunk) => {
+    const trimmed = chunk.trim();
+    if (!trimmed) {
+      return;
+    }
+    const truncated = Buffer.byteLength(trimmed, "utf8") > MAX_STDERR_CHUNK_BYTES;
+    const value = truncated ? truncateUtf8Suffix(trimmed, MAX_STDERR_CHUNK_BYTES) : trimmed;
+    debug(`${params.prefix}: ${truncated ? STDERR_LINE_TRUNCATED_PREFIX : ""}${value}`);
+  });
 }
 
 export function createLocalMeetingRealtimeAudioTransport(params: {
@@ -74,8 +111,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
   const input = splitCommand(params.inputCommand);
   const output = splitCommand(params.outputCommand);
   const spawnFn: MeetingRealtimeAudioSpawn =
-    params.spawn ??
-    ((command, args, options) => spawn(command, args, options) as unknown as BridgeProcess);
+    params.spawn ?? ((command, args, options) => spawn(command, args, options));
   const spawnOutputProcess = () =>
     spawnFn(output.command, output.args, { stdio: ["pipe", "ignore", "pipe"] });
   let outputProcess = spawnOutputProcess();
@@ -123,8 +159,10 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
         signalFatal();
       }
     });
-    proc.stderr?.on("data", (chunk) => {
-      params.logger.debug?.(`${params.logScope} audio output: ${String(chunk).trim()}`);
+    attachStderrLineLogger({
+      stderr: proc.stderr,
+      logger: params.logger,
+      prefix: `${params.logScope} audio output`,
     });
     proc.stderr?.on("error", (error: Error) => {
       if (proc === outputProcess) {
@@ -176,8 +214,10 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       signalFatal();
     }
   });
-  inputProcess.stderr?.on("data", (chunk) => {
-    params.logger.debug?.(`${params.logScope} audio input: ${String(chunk).trim()}`);
+  attachStderrLineLogger({
+    stderr: inputProcess.stderr,
+    logger: params.logger,
+    prefix: `${params.logScope} audio input`,
   });
   inputProcess.stdout?.on("error", fail("audio input command stdout"));
   inputProcess.stderr?.on("error", fail("audio input command stderr"));
@@ -309,8 +349,10 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
           `${params.logScope} human barge-in input stdout failed: ${formatErrorMessage(error)}`,
         );
       });
-      bargeInInputProcess.stderr?.on("data", (chunk) => {
-        params.logger.debug?.(`${params.logScope} barge-in input: ${String(chunk).trim()}`);
+      attachStderrLineLogger({
+        stderr: bargeInInputProcess.stderr,
+        logger: params.logger,
+        prefix: `${params.logScope} barge-in input`,
       });
       bargeInInputProcess.stderr?.on("error", (error: Error) => {
         params.logger.warn(

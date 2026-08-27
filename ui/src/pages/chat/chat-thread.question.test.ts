@@ -47,9 +47,6 @@ function items(question: QuestionPrompt, runActive: boolean, messages: unknown[]
     showToolCalls: true,
     runWorking: runActive,
     runActive,
-    planStatus: runActive
-      ? { steps: [{ step: "Wait for the answer", status: "in_progress" }] }
-      : null,
     questionPrompts: [question],
   });
 }
@@ -64,7 +61,6 @@ describe("question chat items", () => {
     expect(run?.kind).toBe("stream-run");
     expect(run?.kind === "stream-run" ? run.parts.map((part) => part.kind) : []).toEqual([
       "reading-indicator",
-      "plan",
     ]);
   });
 
@@ -123,6 +119,29 @@ describe("question chat items", () => {
     expect(
       container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
     ).toContain("Format: Detailed");
+  });
+
+  it("never echoes a secret answer in the terminal transcript summary", () => {
+    const answered = prompt("answered");
+    answered.questions = [
+      {
+        questionId: "api_key",
+        header: "API key",
+        question: "Provide the deployment API key",
+        options: [],
+        isSecret: true,
+        secretStore: { name: "FAKE_DEPLOYMENT_API_KEY", kind: "secret" },
+      },
+    ];
+    answered.answeredElsewhere = true;
+    answered.answers = { answers: { api_key: ["fake-secret-never-render"] } };
+    const container = document.createElement("div");
+
+    render(renderChatQuestionSummary(answered), container);
+
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain("API key: Answered");
+    expect(container.textContent).not.toContain("fake-secret-never-render");
+    expect(container.innerHTML).not.toContain("fake-secret-never-render");
   });
 
   it("omits questions belonging to another session", () => {

@@ -124,7 +124,6 @@ describe("OpenAI Responses continuation", () => {
 
   it("ignores turn correlation headers but isolates explicit authorization", () => {
     const first = claim({ turn: "1" });
-    expect(first).toBeDefined();
     first?.commit(continuationState().lastRequest, {
       id: "resp_1",
       output: continuationState().lastResponseItems,
@@ -145,7 +144,6 @@ describe("OpenAI Responses continuation", () => {
 
   it("grants one claim and prevents a concurrent non-owner from overwriting it", () => {
     const owner = claim({});
-    expect(owner).toBeDefined();
     expect(claim({})).toBeUndefined();
 
     owner?.commit(continuationState().lastRequest, {

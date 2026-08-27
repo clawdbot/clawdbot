@@ -3,6 +3,7 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { formatUiError } from "../format-error.ts";
 
 type SessionEventSubscriptionScope = {
   client: GatewayBrowserClient;
@@ -78,7 +79,7 @@ export function createSessionEventSubscriptionOwner(params: {
                 retryable: true,
               })
             : error;
-        params.onError(scope, String(failure));
+        params.onError(scope, formatUiError(failure));
         const delayMs = params.retryDelayMs(failure);
         if (delayMs === null || !isCurrent(scope, expectedGeneration)) {
           return;

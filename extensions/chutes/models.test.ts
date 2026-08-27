@@ -45,17 +45,6 @@ async function withLiveChutesDiscovery<T>(
   }
 }
 
-function createAuthEchoFetchMock() {
-  return vi.fn().mockImplementation((_url, init?: { headers?: HeadersInit }) => {
-    const auth = readAuthorizationHeader(init);
-    return Promise.resolve(
-      jsonResponse({
-        data: [{ id: auth ? `${auth}-model` : "public-model" }],
-      }),
-    );
-  });
-}
-
 function readAuthorizationHeader(init?: { headers?: HeadersInit }): string {
   const headers = init?.headers;
   if (headers instanceof Headers) {
@@ -309,35 +298,6 @@ describe("chutes-models", () => {
       expect(requireChutesModel(modelsASecond, 0).id).toBe("private/model-a");
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
-  });
-
-  it("evicts oldest token entries when cache reaches max size", async () => {
-    const mockFetch = createAuthEchoFetchMock();
-
-    await withLiveChutesDiscovery(mockFetch, async () => {
-      for (let i = 0; i < 150; i += 1) {
-        await discoverChutesModels(`cache-token-${i}`);
-      }
-
-      await discoverChutesModels("cache-token-0");
-      expect(mockFetch).toHaveBeenCalledTimes(151);
-    });
-  });
-
-  it("prunes expired token cache entries during subsequent discovery", async () => {
-    const mockFetch = createAuthEchoFetchMock();
-
-    await withLiveChutesDiscovery(
-      mockFetch,
-      async () => {
-        await discoverChutesModels("token-a");
-        vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-        await discoverChutesModels("token-b");
-        await discoverChutesModels("token-a");
-        expect(mockFetch).toHaveBeenCalledTimes(3);
-      },
-      { now: "2026-03-01T00:00:00.000Z" },
-    );
   });
 
   it("does not cache 401 fallback under the failed token key", async () => {

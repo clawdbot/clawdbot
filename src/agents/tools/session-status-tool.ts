@@ -39,7 +39,11 @@ import {
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
-import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
+import {
+  formatTaskStatus,
+  formatTaskStatusDetail,
+  formatTaskStatusTitle,
+} from "../../tasks/task-status.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -92,6 +96,7 @@ import {
 } from "./session-status-session-resolve.js";
 import {
   createAgentToAgentPolicy,
+  formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
@@ -455,10 +460,11 @@ function formatSessionTaskLine(params: {
       ? `${snapshot.activeCount} active`
       : snapshot.recentFailureCount > 0
         ? `${snapshot.recentFailureCount} recent failure${snapshot.recentFailureCount === 1 ? "" : "s"}`
-        : `latest ${task.status.replaceAll("_", " ")}`;
+        : `latest ${formatTaskStatus(task).replaceAll("_", " ")}`;
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
+  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
@@ -493,6 +499,7 @@ async function resolveModelOverride(params: {
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: currentProvider,
   });
   const catalog = await loadPreparedModelCatalog({
@@ -536,6 +543,7 @@ async function resolveModelOverride(params: {
 
   const resolved = resolveModelRefFromString({
     cfg: params.cfg,
+    agentId: params.agentId,
     raw,
     defaultProvider: currentProvider,
     aliasIndex,
@@ -590,10 +598,11 @@ export function createSessionStatusTool(opts?: {
       const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
       const changesSince = readNonNegativeIntegerParam(params, "changesSince");
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, mainSessionKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
+          requesterAgentId: opts?.requesterAgentIdOverride,
           sandboxed: opts?.sandboxed,
         });
       const a2aPolicy = createAgentToAgentPolicy(cfg);
@@ -660,11 +669,11 @@ export function createSessionStatusTool(opts?: {
         if (cached) {
           return cached;
         }
-        let access = await resolveSessionToolAccess({
+        const access = await resolveSessionToolAccess({
           action: "status",
-          defaultAgentId: configuredDefaultAgentId,
           requesterAgentId,
           requesterSessionKey: visibilityRequesterKey,
+          mainSessionKey,
           authorizationTargetSessionKey: target.authorizationTargetSessionKey,
           targetAgentId: target.targetAgentId,
           targetSessionKey: target.targetSessionKey,
@@ -673,28 +682,6 @@ export function createSessionStatusTool(opts?: {
           a2aPolicy,
           callGateway: gatewayCall,
         });
-        if (
-          !access.allowed &&
-          target.targetAgentId !== requesterAgentId &&
-          !target.requesterOwned &&
-          !target.authorizationTargetSessionKey.startsWith("agent:") &&
-          !access.error.includes("ownership lookup failed")
-        ) {
-          if (!a2aPolicy.enabled) {
-            access = {
-              allowed: false,
-              status: "forbidden",
-              error:
-                "Agent-to-agent status is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
-            };
-          } else if (!a2aPolicy.isAllowed(requesterAgentId, target.targetAgentId)) {
-            access = {
-              allowed: false,
-              status: "forbidden",
-              error: "Agent-to-agent session status denied by tools.agentToAgent.allow.",
-            };
-          }
-        }
         accessByTarget.set(cacheKey, access);
         return access;
       };
@@ -771,7 +758,12 @@ export function createSessionStatusTool(opts?: {
           requesterOwned: false,
         });
         if (!access.allowed) {
-          throw new Error(access.error);
+          throw new Error(
+            formatSessionToolAccessDenial(access, {
+              action: "status",
+              targetSessionKey: requestedKeyInput,
+            }),
+          );
         }
       }
       let storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
@@ -841,7 +833,12 @@ export function createSessionStatusTool(opts?: {
               requesterOwned: visibleSession.requesterOwned,
             });
             if (!access.allowed) {
-              throw new Error(access.error);
+              throw new Error(
+                formatSessionToolAccessDenial(access, {
+                  action: "status",
+                  targetSessionKey: visibleSession.displayKey,
+                }),
+              );
             }
           }
           resolvedRequesterOwned = visibleSession.requesterOwned;
@@ -958,7 +955,12 @@ export function createSessionStatusTool(opts?: {
         requesterOwned: resolvedRequesterOwned,
       });
       if (!access.allowed) {
-        throw new Error(access.error);
+        throw new Error(
+          formatSessionToolAccessDenial(access, {
+            action: "status",
+            targetSessionKey: requestedKeyInput,
+          }),
+        );
       }
       let scopedResolved = resolved;
 

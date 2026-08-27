@@ -6,7 +6,8 @@ import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
+import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -59,7 +60,7 @@ export function collectCandidateAgentDirs(
 ): string[] {
   const dirs = new Set<string>();
   dirs.add(resolveUserPath(resolveAgentDir(config, "main", env), env));
-  dirs.add(resolveUserPath(resolveLegacyInheritedAuthDir(config, env), env));
+  dirs.add(resolveUserPath(resolveLegacyInheritedAuthAgentDir(config, env), env));
   for (const agentId of listAgentIds(config)) {
     dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
   }
@@ -218,8 +219,8 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
 } | null {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
-  const sourceConfig = structuredClone(params.config);
-  const resolvedConfig = structuredClone(params.config);
+  const sourceConfig = cloneConfigWithResolutionFacts(params.config);
+  const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
   const candidateDirs = resolveCandidateAgentDirs({
     config: resolvedConfig,

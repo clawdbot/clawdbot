@@ -619,6 +619,7 @@ export class NpmUpdateSmoke {
   private targetRegistryUrl = "";
   private macosVm = macosVmDefault;
   private linuxVm = linuxVmDefault;
+  private options: NpmUpdateOptions;
 
   private freshStatus = platformRecord("skip");
   private freshTargetStatus = platformRecord("skip");
@@ -626,7 +627,8 @@ export class NpmUpdateSmoke {
   private updateVersion = platformRecord("skip");
   private timings: NpmUpdateSummary["timings"] = [];
 
-  constructor(private options: NpmUpdateOptions) {
+  constructor(options: NpmUpdateOptions) {
+    this.options = options;
     this.auth = resolveProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,

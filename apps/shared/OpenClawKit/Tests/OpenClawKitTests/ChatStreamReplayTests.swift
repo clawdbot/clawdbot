@@ -90,7 +90,7 @@ private final class ScriptedChatTransport: @unchecked Sendable, OpenClawChatTran
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "pending")
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         []
     }
 

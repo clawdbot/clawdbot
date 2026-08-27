@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
+import { WORKER_BUNDLE_RSYNC_RECEIVER_PATH } from "../../shared/worker-bundle-hash.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
@@ -39,6 +40,7 @@ const remoteWorkspaceManifestEnvelopeSchema = z
         contentHashCount: z.number().finite().nonnegative(),
         contentHashDurationMs: z.number().finite().nonnegative(),
         memoHitCount: z.number().finite().nonnegative(),
+        memoTruncatedCount: z.number().finite().nonnegative(),
         totalDurationMs: z.number().finite().nonnegative(),
       })
       .strict(),
@@ -52,8 +54,7 @@ export type WorkerWorkspaceActionsOptions = {
   environmentId: string;
   sharedHost?: boolean;
   ownerSignal: AbortSignal;
-  isConnected: () => boolean;
-  getPrepared: () => PreparedWorkerSsh | undefined;
+  waitForPrepared: () => Promise<PreparedWorkerSsh>;
   runner: { run(argv: string[], options: CommandOptions): Promise<SpawnResult> };
   tasks: Set<Promise<unknown>>;
   bundleHash: string;
@@ -167,7 +168,7 @@ export function workerWorkspaceRsyncReceiverEntryPath(bundleHash: string): strin
   if (!/^[a-f0-9]{64}$/u.test(bundleHash)) {
     throw new Error("Worker workspace rsync receiver bundle hash is invalid");
   }
-  return `.openclaw-worker/${bundleHash}/dist/worker/workspace-rsync-receiver.js`;
+  return `.openclaw-worker/${bundleHash}/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`;
 }
 
 export function workerWorkspaceSshArgv(
@@ -322,6 +323,19 @@ export async function probeWorkspaceGitMode(params: {
   throw workspaceSyncError(gitBaseResult);
 }
 
+export async function resolveWorkerWorkspaceGitAuthor(
+  request: Pick<WorkerWorkspaceSyncRequest, "localPath" | "gitAuthor">,
+  runTask: (argv: string[]) => Promise<SpawnResult>,
+): Promise<{ name: string; email: string }> {
+  const git = ["git", "-C", request.localPath, "config", "--get"];
+  const read = async (key: "name" | "email") => {
+    const result = await runTask([...git, `user.${key}`]);
+    return workerWorkspaceCommandSucceeded(result) ? result.stdout.trim() : "";
+  };
+  const [name, email] = await Promise.all([read("name"), read("email")]);
+  return { name: request.gitAuthor?.name ?? name, email: request.gitAuthor?.email ?? email };
+}
+
 export function stableWorkerPathComponent(value: string, length: number): string {
   return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
@@ -335,6 +349,14 @@ export function validateWorkspaceSyncRequest(request: WorkerWorkspaceSyncRequest
   }
   if (!Number.isSafeInteger(request.generation) || request.generation < 0) {
     throw new Error("Worker workspace generation must be a non-negative safe integer");
+  }
+  for (const value of [request.gitAuthor?.name, request.gitAuthor?.email]) {
+    if (
+      value !== undefined &&
+      (!value.trim() || value.length > 256 || value.includes("\u0000") || /[\r\n]/u.test(value))
+    ) {
+      throw new Error("Worker workspace Git author metadata is invalid");
+    }
   }
 }
 

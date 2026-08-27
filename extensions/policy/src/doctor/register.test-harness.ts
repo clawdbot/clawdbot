@@ -32,6 +32,18 @@ export function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawC
   };
 }
 
+type PolicyConfigFixture = OpenClawConfig & Record<string, unknown>;
+
+export function cfgWithPolicyOverrides(
+  overrides: Partial<OpenClawConfig> = {},
+): PolicyConfigFixture {
+  return { ...cfgWithPolicy(), ...overrides };
+}
+
+export function rawCfgWithPolicy(overrides: Record<string, unknown>): Record<string, unknown> {
+  return { ...cfgWithPolicy(), ...overrides };
+}
+
 export async function writePolicyFixture(
   ...json: Parameters<typeof JSON.stringify>
 ): Promise<string> {

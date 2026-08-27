@@ -4,13 +4,13 @@ export type ImageFactIndex = number | null;
 
 export type MediaImageLayout = {
   slots: Array<{ kind: "inline" | "offloaded"; factIndex?: number }>;
-  suppressedFactIndexes: number[];
+  suppressedFactIndexes?: number[];
 };
 
 export function readPersistedImageBlockFactIndexes(
   message: AgentMessage,
 ): ImageFactIndex[] | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = Reflect.get(message, "__openclaw");
   const value =
     meta && typeof meta === "object" && !Array.isArray(meta)
       ? (meta as Record<string, unknown>).mediaImageBlockFactIndexes
@@ -24,7 +24,7 @@ export function readPersistedImageBlockFactIndexes(
 }
 
 export function readPersistedMediaImageLayout(message: AgentMessage): MediaImageLayout | undefined {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = Reflect.get(message, "__openclaw");
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     return undefined;
   }

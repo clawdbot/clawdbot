@@ -6,14 +6,16 @@ import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
-import type {
-  ListSpeechVoices,
-  PrepareTtsRequest,
-  TextToSpeech,
-  TextToSpeechStream,
-  TextToSpeechTelephony,
-} from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
+
+type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
+type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
+type PrepareTtsRequest = (
+  ...args: Parameters<TtsRuntimeApi["prepareTtsRequest"]>
+) => Promise<ReturnType<TtsRuntimeApi["prepareTtsRequest"]>>;
+type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
+type TextToSpeechStream = TtsRuntimeApi["textToSpeechStream"];
+type TextToSpeechTelephony = TtsRuntimeApi["textToSpeechTelephony"];
 
 type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
@@ -95,6 +97,8 @@ type RuntimeCreateSessionEntryBaseParams = {
   agentId?: string;
   label?: string;
   spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: RuntimeSessionEntry["permissionMode"];
   /** Bind the created session's CLI execution to this paired node. */
   execNode?: string;
   /** Working directory interpreted only by execNode. */
@@ -346,9 +350,12 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
+    /** Admit a turn for this exact trusted channel plugin and its authenticated sender. */
+    runCommandFromIngress: (
+      opts: import("../../agents/command/types.js").AgentCommandIngressOpts,
+      runtime: import("../../runtime.js").RuntimeEnv,
+    ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: RuntimeRunEmbeddedAgent;
-    /** @deprecated Use runEmbeddedAgent. */
-    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     /**
      * Shares the embedded runner's CLI-backend dispatch eligibility (route,

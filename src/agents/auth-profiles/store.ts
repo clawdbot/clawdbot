@@ -7,6 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isSecretRef } from "../../config/types.secrets.js";
+import { isSqliteLockError } from "../../infra/sqlite-transaction.js";
 import { isRecord } from "../../utils.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
@@ -16,6 +17,7 @@ import {
   syncPersistedExternalCliAuthProfiles,
 } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
+import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   AuthProfileMigrationRequiredError,
   AuthProfileStoreUnreadableError,
@@ -90,6 +92,7 @@ type SaveAuthProfileStoreOptions = {
   preserveOrderProfileIds?: Iterable<string>;
   preserveStateProfileIds?: Iterable<string>;
   pruneOrderProfileIds?: Iterable<string>;
+  sharedStoreWrite?: boolean;
   syncExternalCli?: boolean;
 };
 
@@ -131,19 +134,20 @@ function resolveRuntimeAuthProfileLoadOptions(
   return { ...options, inheritedAuthDir: mode.agentDir };
 }
 
-function hasInlineOAuthTokenMaterial(credential: Record<string, unknown>): boolean {
-  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => credential[field] !== undefined);
+function hasInlineOAuthTokenMaterial(credential: object): boolean {
+  return INLINE_OAUTH_TOKEN_FIELDS.some((field) => Reflect.get(credential, field) !== undefined);
 }
 
 function hasChangedInlineOAuthTokenMaterial(params: {
-  credential: Record<string, unknown>;
-  existingCredential: Record<string, unknown>;
+  credential: object;
+  existingCredential: object;
 }): boolean {
   return INLINE_OAUTH_TOKEN_FIELDS.some((field) => {
-    if (params.credential[field] === undefined) {
+    const credentialValue = Reflect.get(params.credential, field);
+    if (credentialValue === undefined) {
       return false;
     }
-    return !isDeepStrictEqual(params.credential[field], params.existingCredential[field]);
+    return !isDeepStrictEqual(credentialValue, Reflect.get(params.existingCredential, field));
   });
 }
 
@@ -155,16 +159,14 @@ function preserveLegacyOAuthRefsOnSave(params: {
     return params.payload;
   }
   let nextProfiles: typeof params.payload.profiles | undefined;
-  for (const [profileId, credential] of Object.entries(
-    params.payload.profiles as Record<string, unknown>,
-  )) {
-    if (!isRecord(credential) || credential.oauthRef !== undefined || credential.type !== "oauth") {
+  for (const [profileId, credential] of Object.entries(params.payload.profiles)) {
+    if (credential.type !== "oauth" || credential.oauthRef !== undefined) {
       continue;
     }
     const existingCredential = params.existingRaw.profiles[profileId];
     if (
       !isRecord(existingCredential) ||
-      existingCredential.oauthRef === undefined ||
+      !isLegacyOAuthRef(existingCredential.oauthRef) ||
       existingCredential.type !== "oauth"
     ) {
       continue;
@@ -181,7 +183,7 @@ function preserveLegacyOAuthRefsOnSave(params: {
     nextProfiles[profileId] = {
       ...credential,
       oauthRef: existingCredential.oauthRef,
-    } as unknown as (typeof nextProfiles)[string];
+    };
   }
   return nextProfiles ? { ...params.payload, profiles: nextProfiles } : params.payload;
 }
@@ -861,9 +863,10 @@ function mergeRuntimeExternalProfileState(params: {
   return merged;
 }
 
-/** Apply an auth store update inside the SQLite write lock. */
+/** Apply an auth store update inside the SQLite write lock; null only on lock contention. */
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  sharedStoreWrite?: boolean;
   stateDir?: string;
   saveOptions?: SaveAuthProfileStoreOptions;
   updater: (store: AuthProfileStore) => boolean;
@@ -891,7 +894,7 @@ export async function updateAuthProfileStoreWithLock(params: {
         }
         return loadedStore;
       },
-      { stateDir: params.stateDir },
+      { sharedStoreWrite: params.sharedStoreWrite, stateDir: params.stateDir },
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -899,6 +902,9 @@ export async function updateAuthProfileStoreWithLock(params: {
       agentDir,
       error: message,
     });
+    if (!isSqliteLockError(error)) {
+      throw error;
+    }
     return null;
   }
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
@@ -937,7 +943,10 @@ function loadAuthProfileStoreForAgent(
   if (asStore) {
     const legacySources = listLegacyAuthProfileSources({ agentDir: effectiveAgentDir });
     const credentialSources = legacySources.filter((source) => source.kind !== "auth-state");
-    if (credentialSources.length > 0) {
+    // A populated canonical store already owns this agent's credentials, so a
+    // retired file beside it is unarchived bytes rather than pending migration.
+    // Only an empty store means the credentials still live solely in that file.
+    if (credentialSources.length > 0 && Object.keys(asStore.profiles).length === 0) {
       const migrationError = new AuthProfileMigrationRequiredError({
         agentDir: effectiveAgentDir,
         sources: credentialSources,
@@ -1312,25 +1321,30 @@ function saveAuthProfileStoreInTransaction(
   database: AuthProfileDatabase,
   publishFromSuppliedStore = false,
 ): () => void {
-  const savedAuthPath = agentDir ? resolveAgentAuthPath(agentDir) : database.path;
-  const mainAuthPath = agentDir ? resolveSharedAuthPath() : database.path;
+  // Shared-state rows are global: never scope their persistence or runtime snapshots to an
+  // agent, or shared credentials are published and cached as agent-local state.
+  const persistenceAgentDir = "agentId" in database ? agentDir : undefined;
+  const savedAuthPath = persistenceAgentDir
+    ? resolveAgentAuthPath(persistenceAgentDir)
+    : database.path;
+  const mainAuthPath = persistenceAgentDir ? resolveSharedAuthPath() : database.path;
   const savesMainStore = savedAuthPath === mainAuthPath;
-  const loadedPersistedStores = loadPersistedAuthProfileStores(agentDir, database);
+  const loadedPersistedStores = loadPersistedAuthProfileStores(persistenceAgentDir, database);
   const persistedStores: PersistedAuthProfileStores = {
     ...loadedPersistedStores,
     localStore: loadedPersistedStores.localStore ?? {
       version: AUTH_STORE_VERSION,
       profiles: {},
-      ...loadPersistedAuthProfileState(agentDir, database),
+      ...loadPersistedAuthProfileState(persistenceAgentDir, database),
     },
   };
   const localStore = buildLocalAuthProfileStoreForSave({
     store,
-    agentDir,
+    agentDir: persistenceAgentDir,
     options,
     persistedStores,
   });
-  const existingRaw = readPersistedAuthProfileStoreRaw(agentDir, database);
+  const existingRaw = readPersistedAuthProfileStoreRaw(persistenceAgentDir, database);
   const payload = preserveLegacyOAuthRefsOnSave({
     payload: buildPersistedAuthProfileSecretsStore(localStore),
     existingRaw,
@@ -1349,20 +1363,25 @@ function saveAuthProfileStoreInTransaction(
   const credentialsChanged = !isDeepStrictEqual(existingRaw, payload);
   const statePayload = buildPersistedAuthProfileState(localStore);
   const stateChanged = !isDeepStrictEqual(
-    readPersistedAuthProfileStateRaw(agentDir, database),
+    readPersistedAuthProfileStateRaw(persistenceAgentDir, database),
     statePayload,
   );
   const suppliedRuntimeStore = publishFromSuppliedStore
     ? markRuntimePersistedProfiles(
-        buildRuntimeAuthProfileStoreForSave({ store, agentDir, options, persistedStores }),
+        buildRuntimeAuthProfileStoreForSave({
+          store,
+          agentDir: persistenceAgentDir,
+          options,
+          persistedStores,
+        }),
         localStore,
       )
     : undefined;
   if (credentialsChanged) {
-    writePersistedAuthProfileStoreRaw(payload, agentDir, database);
+    writePersistedAuthProfileStoreRaw(payload, persistenceAgentDir, database);
   }
   if (stateChanged) {
-    writePersistedAuthProfileStateRaw(statePayload, agentDir, database);
+    writePersistedAuthProfileStateRaw(statePayload, persistenceAgentDir, database);
   }
   const publishRuntimeSnapshots = () => {
     // Main-store publication invalidates derived stores. Capture the latest
@@ -1373,7 +1392,7 @@ function saveAuthProfileStoreInTransaction(
         )
       : [];
     if (credentialsChanged || stateChanged) {
-      noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+      noteRuntimeAuthProfileStorePersistedMutation(persistenceAgentDir, {
         credentialsChanged,
         profileSetChanged,
         stateChanged,
@@ -1381,7 +1400,7 @@ function saveAuthProfileStoreInTransaction(
       });
     }
     if (suppliedRuntimeStore) {
-      const existing = getRuntimeAuthProfileStoreSnapshot(agentDir);
+      const existing = getRuntimeAuthProfileStoreSnapshot(persistenceAgentDir);
       if (existing) {
         const materialized = preserveResolvedSecretBackedCredentials({
           next: suppliedRuntimeStore,
@@ -1389,7 +1408,7 @@ function saveAuthProfileStoreInTransaction(
         });
         setRuntimeAuthProfileStoreSnapshot(
           mergeRuntimeExternalProfileReferences({ next: materialized, existing }),
-          agentDir,
+          persistenceAgentDir,
         );
       }
       if (savesMainStore && (credentialsChanged || stateChanged)) {
@@ -1408,7 +1427,7 @@ function saveAuthProfileStoreInTransaction(
       }
       return;
     }
-    refreshRuntimeAuthProfileStoreSnapshot(agentDir);
+    refreshRuntimeAuthProfileStoreSnapshot(persistenceAgentDir);
     for (const derived of derivedSnapshots) {
       const refreshed = loadAuthProfileStoreWithoutExternalProfiles(derived.agentDir);
       const materialized = preserveResolvedSecretBackedCredentials({
@@ -1451,14 +1470,18 @@ export function saveAuthProfileStore(
     return;
   }
   let publishRuntimeSnapshots: (() => void) | undefined;
-  runAuthProfileWriteTransaction(effectiveAgentDir, (transactionDatabase) => {
-    publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
-      store,
-      effectiveAgentDir,
-      options,
-      transactionDatabase,
-    );
-  });
+  runAuthProfileWriteTransaction(
+    effectiveAgentDir,
+    (transactionDatabase) => {
+      publishRuntimeSnapshots = saveAuthProfileStoreInTransaction(
+        store,
+        effectiveAgentDir,
+        options,
+        transactionDatabase,
+      );
+    },
+    { sharedStoreWrite: options?.sharedStoreWrite },
+  );
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }
 

@@ -191,6 +191,70 @@ describe("runExecProcess cursor tracking", () => {
 });
 
 describe("sandbox exec preparation failures", () => {
+  it("runs the final authorization check after async preparation and before spawn", async () => {
+    const preparation =
+      createDeferred<Awaited<ReturnType<NonNullable<BashSandboxConfig["buildExecSpec"]>>>>();
+    const denied = new Error("approval directory changed");
+    const beforeSpawn = vi.fn(async () => {
+      throw denied;
+    });
+    const pending = runExecProcess({
+      command: "sandbox-command",
+      workdir: "/tmp",
+      env: {},
+      sandbox: {
+        containerName: "sandbox",
+        workspaceDir: "/workspace",
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => await preparation.promise,
+      },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+      beforeSpawn,
+    });
+
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    preparation.resolve({
+      argv: ["sandbox-command"],
+      env: {},
+      stdinMode: "pipe-closed",
+    });
+    await expect(pending).rejects.toBe(denied);
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sandbox without a backend-owned exec specification", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
+      runtimeManagedRun(input),
+    );
+
+    await expect(
+      runExecProcess({
+        command: "sandbox-command",
+        workdir: "/tmp",
+        env: { EXAMPLE_VALUE: "synthetic-runtime-sandbox-value" },
+        sandbox: {
+          containerName: "sandbox",
+          workspaceDir: "/workspace",
+          containerWorkdir: "/workspace",
+        },
+        usePty: false,
+        warnings: [],
+        maxOutput: 1000,
+        pendingMaxOutput: 1000,
+        notifyOnExit: false,
+        timeoutSec: null,
+      }),
+    ).rejects.toThrow("sandbox backend does not provide buildExecSpec");
+
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+  });
+
   it("settles the registered session once when buildExecSpec rejects", async () => {
     const registry = await import("./bash-process-registry.js");
     const sessionSlugs = await import("./session-slug.js");
@@ -493,9 +557,9 @@ describe("runExecProcess PTY fallback", () => {
     return call[0];
   }
 
-  it("falls back when PTY spawn fails", async () => {
+  it("visibly falls back when the portable worker rejects PTY", async () => {
     supervisorMock.spawn
-      .mockRejectedValueOnce(new Error("pty spawn failed"))
+      .mockRejectedValueOnce(new Error("PTY is unavailable in the portable worker runtime"))
       .mockImplementationOnce(async (input: SpawnInput) => runtimeManagedRun(input, "ok"));
 
     const warnings: string[] = [];
@@ -504,7 +568,7 @@ describe("runExecProcess PTY fallback", () => {
 
     expect(outcome.status).toBe("completed");
     expect(outcome.aggregated).toContain("ok");
-    expect(warnings.join("\n")).toContain("PTY spawn failed");
+    expect(warnings.join("\n")).toContain("PTY is unavailable in the portable worker runtime");
     expect(spawnInput(0).mode).toBe("pty");
     expect(spawnInput(1).mode).toBe("child");
   });

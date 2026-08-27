@@ -798,6 +798,18 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.OPENCLAW_GATEWAY_PASSWORD).toBe("node-password");
   });
 
+  it("passes through the Cloudflare Access service-token pair for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        CF_ACCESS_CLIENT_ID: " cf-client-id ",
+        CF_ACCESS_CLIENT_SECRET: " cf-client-secret ",
+      },
+    });
+    expect(env.CF_ACCESS_CLIENT_ID).toBe("cf-client-id");
+    expect(env.CF_ACCESS_CLIENT_SECRET).toBe("cf-client-secret");
+  });
+
   it("passes through OPENCLAW_ALLOW_INSECURE_PRIVATE_WS for node services", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user", OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: " 1 " },
@@ -956,6 +968,11 @@ describe("resolveGatewayStateDir", () => {
   it("expands ~ in OPENCLAW_STATE_DIR", () => {
     const env = { HOME: "/Users/test", OPENCLAW_STATE_DIR: "~/openclaw-state" };
     expect(resolveGatewayStateDir(env)).toBe(path.resolve("/Users/test/openclaw-state"));
+  });
+
+  it("does not interpret $ patterns in HOME when expanding ~ in OPENCLAW_STATE_DIR", () => {
+    const env = { HOME: "/home/$&user", OPENCLAW_STATE_DIR: "~/openclaw-state" };
+    expect(resolveGatewayStateDir(env)).toBe(path.resolve("/home/$&user/openclaw-state"));
   });
 
   it("preserves Windows absolute paths without HOME", () => {

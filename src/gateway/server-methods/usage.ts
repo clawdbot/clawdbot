@@ -4,6 +4,10 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsUsageParams,
@@ -25,15 +29,13 @@ import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
 } from "../../infra/session-cost-usage-totals.js";
-import type {
-  CostUsageSummary,
-  CostUsageTotals,
-  SessionCostSummary,
-  SessionDailyModelUsage,
-  SessionMessageCounts,
-  SessionModelUsage,
-} from "../../infra/session-cost-usage.js";
 import {
+  type CostUsageSummary,
+  type CostUsageTotals,
+  type SessionCostSummary,
+  type SessionDailyModelUsage,
+  type SessionMessageCounts,
+  type SessionModelUsage,
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummariesFromCache,
@@ -62,7 +64,9 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -71,6 +75,7 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -251,6 +256,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 
 type SessionsUsageCacheKeyParams = {
   configRef: object;
+  visibilityIdentity?: string;
   agentId?: string;
   agentScope?: "all";
   startMs: number;
@@ -276,6 +282,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
+    ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
 
@@ -522,21 +529,6 @@ const getDateParts = (date: Date, interpretation: DateInterpretation): DateParts
   };
 };
 
-/**
- * Parse a date string (YYYY-MM-DD) to start-of-day timestamp based on interpretation mode.
- * Returns undefined if invalid.
- */
-const parseDateToMs = (
-  raw: unknown,
-  interpretation: DateInterpretation = { mode: "utc" },
-): number | undefined => {
-  const parts = parseDateParts(raw);
-  if (!parts) {
-    return undefined;
-  }
-  return datePartsToStartMs(parts, interpretation);
-};
-
 const formatDateLabel = (ms: number, interpretation: DateInterpretation): string => {
   const parts = getDateParts(new Date(ms), interpretation);
   return formatDateParts(parts.year, parts.monthIndex, parts.day);
@@ -745,7 +737,7 @@ function filterSessionStoreByAgent(params: {
   const scopedAgentId = normalizeAgentId(params.agentId);
   const scopedStore: Record<string, SessionEntry> = {};
   for (const [key, entry] of Object.entries(params.store)) {
-    if (params.config.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+    if (key.trim().toLowerCase() === "global") {
       scopedStore[key] = entry;
       continue;
     }
@@ -1141,9 +1133,6 @@ function mergeUsageCacheStatus(
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
-  parseUtcOffsetToMinutes,
-  parseDateToMs,
-  parseDays,
   resolveDateRange,
   loadCostUsageSummaryCached,
   costUsageCache,
@@ -1153,19 +1142,42 @@ export const testApi = {
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
-  "usage.status": async ({ respond, context }) => {
+  "usage.status": async ({ respond, context, client }) => {
+    // Only clients with bounded retry machinery may receive an incomplete cold result.
+    // In-process dispatch reuses the originating request's client, capabilities
+    // included, so a plugin proxying this method inside a capable UI request
+    // would inherit the marker without any way to converge it. Such a caller
+    // must pass a capless client, the way board bindings force `client: null`.
+    const coldRead = hasGatewayClientCap(
+      client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
+    )
+      ? ("refresh-marker" as const)
+      : undefined;
     const summary = await loadUsageStatusStaleWhileRevalidate({
       config: context.getRuntimeConfig(),
+      coldRead,
     });
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params, context }) => {
+  "usage.cost": async ({ respond, params, context, client }) => {
     const dateRange = resolveUsageDateRangeOrRespond(params ?? {}, respond);
     if (!dateRange) {
       return;
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
+        ),
+      );
+      return;
+    }
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
@@ -1188,7 +1200,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params, context }) => {
+  "sessions.usage": async ({ respond, params, context, client }) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -1200,6 +1212,13 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    const sessionCap = operatorSessionCap(client ?? null, config);
+    const visibilityFilter =
+      sessionCap === "none"
+        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+        : undefined;
+    const profileId = gatewayClientSessionCreator(client ?? null)?.id;
+    const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
@@ -1254,17 +1273,23 @@ export const usageHandlers: GatewayRequestHandlers = {
         groupingMode,
         specificKey,
         includeContextWeight,
+        ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
           const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
-          const scopedStore = effectiveAgentId
+          const agentStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,
                 store,
                 agentId: effectiveAgentId,
               })
             : store;
+          const scopedStore = visibilityFilter
+            ? Object.fromEntries(
+                Object.entries(agentStore).filter(([key, entry]) => visibilityFilter(key, entry)),
+              )
+            : agentStore;
           const now = Date.now();
 
           const mergedEntries: MergedEntry[] = [];
@@ -1300,6 +1325,11 @@ export const usageHandlers: GatewayRequestHandlers = {
               null;
             const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
             const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+            if (visibilityFilter && !storeEntry) {
+              throw new SessionsUsageInvalidRequestError(
+                `Invalid session reference: ${specificKey}`,
+              );
+            }
             const sessionId = storeEntry?.sessionId ?? keyRest;
 
             // Stored sessions are canonical SQLite targets. JSONL discovery remains only for
@@ -1371,6 +1401,9 @@ export const usageHandlers: GatewayRequestHandlers = {
 
             for (const discovered of discoveredSessions) {
               const storeMatch = storeBySessionId.get(discovered.sessionId);
+              if (visibilityFilter && !storeMatch) {
+                continue;
+              }
               if (storeMatch) {
                 // Named session from store
                 maybeMergeFamilyEntry({

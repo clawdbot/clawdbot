@@ -287,7 +287,8 @@ describe("node.invoke approval bypass", () => {
   });
 
   const approveAllPendingPairings = async () => {
-    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
     const { approveNodePairing, listNodePairing } = await import("../infra/device-pairing-node.js");
     const deviceList = await listDevicePairing();
     for (const pending of deviceList.pending) {

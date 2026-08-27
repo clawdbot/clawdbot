@@ -201,7 +201,7 @@ type PersistedSender = {
 };
 
 function readPersistedSender(message: AgentMessage): PersistedSender | undefined {
-  const openclaw = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const openclaw = Reflect.get(message, "__openclaw");
   if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
     return undefined;
   }
@@ -456,7 +456,11 @@ export async function prepareEmbeddedAttemptHistory(input: {
       policy: input.transcriptPolicy,
     });
 
-    if (attempt.sessionKey && !isSettledTurnFinalization) {
+    if (
+      attempt.sessionKey &&
+      attempt.sessionPersistence !== "detached" &&
+      !isSettledTurnFinalization
+    ) {
       const storePath = resolveSessionStorePathCore(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });

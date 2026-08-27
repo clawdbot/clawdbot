@@ -33,13 +33,13 @@ function fixture(label: string) {
   return { env, storePath, storeKey, database };
 }
 
-it("preserves undecodable JSON and bumps the epoch once", () => {
+it("preserves undecodable JSON and bumps the epoch once", async () => {
   const { env, storePath, storeKey, database } = fixture("openclaw-cron-owner-");
   database
     .prepare("UPDATE cron_jobs SET agent_id = ' ', job_json = ? WHERE store_key = ?")
     .run("{malformed", storeKey);
 
-  expect(migrate(storePath, env)).toBe(1);
+  expect(await migrate(storePath, env)).toBe(1);
   expect(loadCronRows(database, storeKey)[0]).toMatchObject({
     agent_id: "ops",
     job_json: "{malformed",
@@ -53,7 +53,7 @@ it("preserves undecodable JSON and bumps the epoch once", () => {
   ).toBe(1);
 });
 
-it("preserves a session-scoped owner stored only in job JSON", () => {
+it("preserves a session-scoped owner stored only in job JSON", async () => {
   const { env, storePath, storeKey, database } = fixture("openclaw-cron-json-owner-");
   const row = loadCronRows(database, storeKey)[0];
   const jobJson = JSON.parse(row?.job_json ?? "{}") as Record<string, unknown>;
@@ -65,7 +65,7 @@ it("preserves a session-scoped owner stored only in job JSON", () => {
     )
     .run(JSON.stringify(jobJson), storeKey);
 
-  expect(migrate(storePath, env)).toBe(0);
+  expect(await migrate(storePath, env)).toBe(0);
   const preserved = loadCronRows(database, storeKey)[0];
   const preservedJobJson = JSON.parse(preserved?.job_json ?? "{}") as Record<string, unknown>;
   expect(preserved?.agent_id).toBeNull();
@@ -75,13 +75,13 @@ it("preserves a session-scoped owner stored only in job JSON", () => {
   expect(preservedJobJson).not.toHaveProperty("agentId");
 });
 
-it("rolls back the row when the epoch bump fails", () => {
+it("rolls back the row when the epoch bump fails", async () => {
   const { env, storePath, storeKey, database } = fixture("openclaw-cron-atomic-");
   ensureCronStoreEpochSchema(database);
   database.exec(`CREATE TRIGGER fail_epoch BEFORE UPDATE OF store_epoch ON cron_store_epochs
       BEGIN SELECT RAISE(ABORT, 'synthetic epoch failure'); END`);
 
-  expect(() => migrate(storePath, env)).toThrow("synthetic epoch failure");
+  await expect(migrate(storePath, env)).rejects.toThrow("synthetic epoch failure");
   expect(loadCronRows(database, storeKey)[0]?.agent_id).toBeNull();
 });
 

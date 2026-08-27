@@ -1,5 +1,6 @@
 // Discord plugin module implements thread channel context behavior.
-import { ChannelType } from "../internal/discord.js";
+import { isDiscordThreadChannelType } from "../channel-type.js";
+import type { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordSlug } from "./allow-list.js";
 import {
   resolveDiscordChannelIdSafe,
@@ -25,14 +26,6 @@ type DiscordThreadLikeChannelContext = {
   threadParentSlug: string;
   channelInfo: DiscordChannelInfo | null;
 };
-
-function isDiscordThreadChannelType(type: ChannelType | number | undefined): boolean {
-  return (
-    type === ChannelType.PublicThread ||
-    type === ChannelType.PrivateThread ||
-    type === ChannelType.AnnouncementThread
-  );
-}
 
 function buildFetchedChannelInfo(channel: unknown): DiscordChannelInfo | null {
   const channelInfo = resolveDiscordChannelInfoSafe(channel);

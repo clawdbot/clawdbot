@@ -242,7 +242,7 @@ export function buildStatusOverviewRows(params: {
 
 /** Builds overview rows directly from raw scan/update/gateway inputs. */
 export function buildStatusOverviewSurfaceRows(params: {
-  cfg: Pick<OpenClawConfig, "update" | "gateway">;
+  cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry">;
   update: StatusUpdateLike;
   tailscaleMode: string;
   tailscaleDns?: string | null;

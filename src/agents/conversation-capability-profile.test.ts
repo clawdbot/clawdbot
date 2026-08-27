@@ -15,6 +15,38 @@ import { projectConversationToolNames } from "./conversation-tool-policy-pipelin
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 describe("resolveConversationCapabilityProfile", () => {
+  it("intersects base and provider profile contributions from plugin manifests", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          byProvider: { openai: { profile: "messaging" } },
+        },
+      },
+      modelProvider: "openai",
+      pluginMetadataSnapshot: {
+        plugins: [
+          {
+            contracts: { tools: ["coding_only", "messaging_only", "shared"] },
+            toolMetadata: {
+              coding_only: { profiles: ["coding"] },
+              messaging_only: { profiles: ["messaging"] },
+              shared: { profiles: ["coding", "messaging"] },
+            },
+          },
+        ],
+      } as never,
+    });
+
+    expect(
+      projectConversationToolNames({
+        capabilityProfile: profile,
+        toolNames: ["coding_only", "messaging_only", "shared"],
+        warn: () => undefined,
+      }),
+    ).toEqual(["shared"]);
+  });
+
   it("intersects a prepared direct policy with existing tool policy", () => {
     const profile = resolveConversationCapabilityProfile({
       config: { tools: { deny: ["write"] } },

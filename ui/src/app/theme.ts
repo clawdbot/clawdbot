@@ -1,5 +1,14 @@
 // Control UI module implements theme behavior.
-export type ThemeName = "claw" | "knot" | "dash" | "custom";
+import { inferControlUiPublicAssetPath } from "./public-assets.ts";
+export type ThemeName =
+  | "claw"
+  | "knot"
+  | "dash"
+  | "absolutely"
+  | "tide"
+  | "beacon"
+  | "phosphor"
+  | "custom";
 export type ThemeMode = "system" | "light" | "dark";
 export type ResolvedTheme =
   | "dark"
@@ -8,10 +17,42 @@ export type ResolvedTheme =
   | "openknot-light"
   | "dash"
   | "dash-light"
+  | "absolutely"
+  | "absolutely-light"
+  | "tide"
+  | "tide-light"
+  | "beacon"
+  | "beacon-light"
+  | "phosphor"
+  | "phosphor-light"
   | "custom"
   | "custom-light";
 
-const VALID_THEME_NAMES = new Set<ThemeName>(["claw", "knot", "dash", "custom"]);
+const VALID_THEME_NAMES = new Set<ThemeName>([
+  "claw",
+  "knot",
+  "dash",
+  "absolutely",
+  "tide",
+  "beacon",
+  "phosphor",
+  "custom",
+]);
+
+const THEME_FONT_STYLESHEET_ID = "openclaw-theme-fonts";
+/* Themes that ship their own faces. The stylesheet is fetched only while such a
+   theme is active, so every other theme pays nothing for fonts it never paints.
+   Loading with the app bundle (not the first-paint boot script) costs one
+   font-display: swap on a cold load and keeps the theme->asset mapping in one
+   place. Values are bundle-relative asset names: the href is resolved against
+   the configured Control UI mount, and the stylesheet's own url() references
+   are relative to it, so both levels follow a non-root base path. */
+const THEME_FONT_STYLESHEETS: Partial<Record<ThemeName, ControlUiFontStylesheet>> = {
+  absolutely: "fonts/absolutely.css",
+  beacon: "fonts/beacon.css",
+  phosphor: "fonts/phosphor.css",
+};
+type ControlUiFontStylesheet = `fonts/${string}.css`;
 const VALID_THEME_MODES = new Set<ThemeMode>(["system", "light", "dark"]);
 
 function prefersLightScheme(): boolean {
@@ -52,5 +93,42 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
   if (theme === "dash") {
     return resolvedMode === "light" ? "dash-light" : "dash";
   }
+  if (theme === "absolutely") {
+    return resolvedMode === "light" ? "absolutely-light" : "absolutely";
+  }
+  if (theme === "tide") {
+    return resolvedMode === "light" ? "tide-light" : "tide";
+  }
+  if (theme === "beacon") {
+    return resolvedMode === "light" ? "beacon-light" : "beacon";
+  }
+  if (theme === "phosphor") {
+    return resolvedMode === "light" ? "phosphor-light" : "phosphor";
+  }
   return resolvedMode === "light" ? "custom-light" : "custom";
+}
+
+/** Loads (or drops) the webfont stylesheet a theme declares. Idempotent. */
+export function syncThemeFontStylesheet(theme: ThemeName): void {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const asset = THEME_FONT_STYLESHEETS[theme];
+  const existing = document.getElementById(THEME_FONT_STYLESHEET_ID);
+  if (!asset) {
+    existing?.remove();
+    return;
+  }
+  const href = inferControlUiPublicAssetPath(asset);
+  if (existing instanceof HTMLLinkElement) {
+    if (existing.getAttribute("href") !== href) {
+      existing.href = href;
+    }
+    return;
+  }
+  const link = document.createElement("link");
+  link.id = THEME_FONT_STYLESHEET_ID;
+  link.rel = "stylesheet";
+  link.href = href;
+  document.head.append(link);
 }

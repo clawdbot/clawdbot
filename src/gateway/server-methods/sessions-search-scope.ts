@@ -6,7 +6,7 @@ import {
 import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentIdStrict } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveSessionStoreAgentId,
@@ -15,7 +15,15 @@ import {
 } from "../session-store-key.js";
 
 export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsSearchParams) {
-  const requestedAgentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const normalizedRequest =
+    params.agentId === undefined ? null : normalizeAgentIdStrict(params.agentId);
+  if (normalizedRequest && !normalizedRequest.ok) {
+    return {
+      ok: false as const,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${params.agentId}"`),
+    };
+  }
+  const requestedAgentId = normalizedRequest?.value;
   const resolvedSessionKeys:
     | Array<{ sessionKey: string; agentId: string | undefined }>
     | undefined = params.sessionKeys ? [] : undefined;

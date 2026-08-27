@@ -29,6 +29,8 @@ const MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH = 32 * 1024;
 const MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH = 512;
 const MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION = 32;
 
+type MutableSessionEntry = SessionEntry & Record<string, unknown>;
+
 function normalizeNamespace(value: string): string {
   return value.trim();
 }
@@ -326,7 +328,7 @@ export async function patchPluginSessionExtension(params: {
     },
     (entry, context) => {
       params.assertCurrent?.();
-      const entryRecord = entry as unknown as Record<string, unknown>;
+      const entryRecord = entry as MutableSessionEntry;
       const pluginExtensions = { ...entry.pluginExtensions };
       const pluginState = { ...pluginExtensions[pluginId] };
       if (params.unset === true) {

@@ -43,10 +43,16 @@ Even when direct-message conversation history is shared with main, sandbox and
 tool policy use a derived per-account direct-chat runtime key for external DMs
 so channel-originated messages are not treated like local main-session runs.
 
-Groups and channels remain isolated per channel:
+With the default `session.groupScope: "per-group"`, groups and channels remain
+isolated per channel:
 
 - Groups: `agent:<agentId>:<channel>:group:<id>`
 - Channels/rooms: `agent:<agentId>:<channel>:channel:<id>`
+
+Set `session.groupScope: "main"` to route all non-direct peers into the agent's
+main session, or use `bindings[].session.groupScope` for selected rooms. The
+binding override wins over the global value. This changes shared context only;
+mention gating and replies still use the originating group or channel.
 
 Threads:
 
@@ -134,7 +140,11 @@ Example:
   },
   bindings: [
     { match: { channel: "slack", teamId: "T123" }, agentId: "support" },
-    { match: { channel: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" },
+    {
+      match: { channel: "slack", peer: { kind: "channel", id: "C0123TEAM" } },
+      agentId: "support",
+      session: { groupScope: "main" },
+    },
   ],
 }
 ```

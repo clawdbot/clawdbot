@@ -87,7 +87,7 @@ export function driver(
   const typeText = vi.fn(async () => result({}));
   const pressKey = vi.fn(async () => result({}));
   const callTool = vi.fn<CuaDriverSession["callTool"]>(async () => result({}));
-  const callDesktopTool = vi.fn<CuaDriverSession["callDesktopTool"]>(async () => result({}));
+  const getCursorPosition = vi.fn<CuaDriverSession["getCursorPosition"]>(async () => result({}));
   const escalateScope = vi.fn(async () => ({
     session: "openclaw-test",
     captureScope: 2,
@@ -102,7 +102,7 @@ export function driver(
     isAvailable: () => true,
     resetAvailabilityCache: () => {},
     callTool,
-    callDesktopTool,
+    getCursorPosition,
     escalateScope,
     getDesktopState,
     getScreenSize,
@@ -123,7 +123,7 @@ export function driver(
     moveCursor,
     scroll,
     callTool,
-    callDesktopTool,
+    getCursorPosition,
     escalateScope,
     dispose,
     typeText,
@@ -134,16 +134,12 @@ export function driver(
   };
 }
 
-export async function execution(
-  session: CuaDriverSession,
-  options: { resourceRoot?: string } = {},
-) {
+export async function execution(session: CuaDriverSession) {
   return await createCuaComputerProvider({
     platform: "linux",
     driver: session,
     imageProcessor: {
       encode: vi.fn(async () => ({ data: Buffer.from("jpeg"), width: 100, height: 50 })),
     },
-    resourceRoot: options.resourceRoot,
   }).openExecution({ executionId: randomUUID() });
 }

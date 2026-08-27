@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Whatsapp tests cover channel.setup plugin behavior.
 import { createQueuedWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
@@ -6,7 +7,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WHATSAPP_AUTH_UNSTABLE_CODE } from "./auth-store.js";
 import { whatsappSetupPlugin } from "./channel.setup.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 import { finalizeWhatsAppSetup } from "./setup-finalize.js";
 import {
   createWhatsAppAllowlistModeInput,
@@ -14,13 +14,9 @@ import {
   createWhatsAppLinkingHarness,
   createWhatsAppOwnerAllowlistHarness,
   createWhatsAppPersonalPhoneHarness,
-  createWhatsAppRootAllowFromConfig,
   expectNoWhatsAppLoginFollowup,
   expectWhatsAppAllowlistModeSetup,
   expectWhatsAppLoginFollowup,
-  expectWhatsAppOpenPolicySetup,
-  expectWhatsAppOwnerAllowlistSetup,
-  expectWhatsAppPersonalPhoneSetup,
   expectWhatsAppSeparatePhoneDisabledSetup,
 } from "./setup-test-helpers.js";
 
@@ -178,19 +174,6 @@ describe("whatsapp setup wizard", () => {
     hoisted.resolveWhatsAppAuthDir.mockReturnValue({ authDir: "/tmp/openclaw-whatsapp-test" });
   });
 
-  it("applies owner allowlist when forceAllowFrom is enabled", async () => {
-    const harness = createWhatsAppOwnerAllowlistHarness(createQueuedWizardPrompter);
-
-    const result = await runConfigureWithHarness({
-      harness,
-      forceAllowFrom: true,
-    });
-
-    expect(result.accountId).toBe(DEFAULT_ACCOUNT_ID);
-    expect(hoisted.loginWeb).not.toHaveBeenCalled();
-    expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
-  });
-
   it("rejects invalid owner numbers during prompt validation", async () => {
     const harness = createWhatsAppOwnerAllowlistHarness(createQueuedWizardPrompter);
 
@@ -257,17 +240,6 @@ describe("whatsapp setup wizard", () => {
     ).rejects.toThrow("Invalid WhatsApp allowFrom list");
   });
 
-  it("enables allowlist self-chat mode for personal-phone setup", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
-    const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
-
-    const result = await runConfigureWithHarness({
-      harness,
-    });
-
-    expectWhatsAppPersonalPhoneSetup(result.cfg);
-  });
-
   it("throws a user-facing error instead of crashing when personal-phone input is undefined", async () => {
     hoisted.hasWebCredsSync.mockReturnValue(true);
     const harness = createWhatsAppPersonalPhoneHarness(createQueuedWizardPrompter);
@@ -278,20 +250,6 @@ describe("whatsapp setup wizard", () => {
         harness,
       }),
     ).rejects.toThrow("Invalid WhatsApp owner number");
-  });
-
-  it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {
-    hoisted.hasWebCredsSync.mockReturnValue(true);
-    const harness = createSeparatePhoneHarness({
-      selectValues: ["separate", "open"],
-    });
-
-    const result = await runConfigureWithHarness({
-      harness,
-      cfg: createWhatsAppRootAllowFromConfig() as OpenClawConfig,
-    });
-
-    expectWhatsAppOpenPolicySetup(result.cfg, harness);
   });
 
   it("surfaces accounts.default group warning paths for named accounts", () => {
@@ -322,7 +280,13 @@ describe("whatsapp setup wizard", () => {
     });
 
     expect(warnings).toEqual([
-      '- WhatsApp groups: groupPolicy="open" with no channels.whatsapp.accounts.default.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.accounts.default.groupPolicy="allowlist" + channels.whatsapp.accounts.default.groupAllowFrom or configure channels.whatsapp.accounts.default.groups.',
+      {
+        checkId: "channels.whatsapp.groups.open",
+        severity: "critical",
+        title: "WhatsApp security warning",
+        detail:
+          'WhatsApp groups: groupPolicy="open" with no channels.whatsapp.accounts.default.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.accounts.default.groupPolicy="allowlist" + channels.whatsapp.accounts.default.groupAllowFrom or configure channels.whatsapp.accounts.default.groups.',
+      },
     ]);
   });
 
@@ -354,7 +318,13 @@ describe("whatsapp setup wizard", () => {
     });
 
     expect(warnings).toEqual([
-      '- WhatsApp groups: groupPolicy="open" with no channels.whatsapp.accounts.Default.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.accounts.Default.groupPolicy="allowlist" + channels.whatsapp.accounts.Default.groupAllowFrom or configure channels.whatsapp.accounts.Default.groups.',
+      {
+        checkId: "channels.whatsapp.groups.open",
+        severity: "critical",
+        title: "WhatsApp security warning",
+        detail:
+          'WhatsApp groups: groupPolicy="open" with no channels.whatsapp.accounts.Default.groups allowlist; any group can add + ping (mention-gated). Set channels.whatsapp.accounts.Default.groupPolicy="allowlist" + channels.whatsapp.accounts.Default.groupAllowFrom or configure channels.whatsapp.accounts.Default.groups.',
+      },
     ]);
   });
 

@@ -17,8 +17,10 @@ import {
   type OpaqueRuntimeOwnerKind,
 } from "../agents/execution-auth-binding.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
-import type { AgentHarnessRuntimeArtifactBinding } from "../agents/harness/runtime-artifact.types.js";
-import type { ExpectedAgentHarnessRuntimeArtifact } from "../agents/harness/runtime-artifact.types.js";
+import type {
+  AgentHarnessRuntimeArtifactBinding,
+  ExpectedAgentHarnessRuntimeArtifact,
+} from "../agents/harness/runtime-artifact.types.js";
 import { resolveAgentHarnessOwnerPluginIds } from "../agents/harness/runtime-plugin.js";
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";

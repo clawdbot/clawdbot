@@ -115,7 +115,6 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     contextLimits: AgentContextLimitsSchema,
-    contextTokens: z.number().int().positive().optional(),
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),
@@ -142,7 +141,7 @@ export const AgentDefaultsSchema = z
         enabled: z.boolean().optional(),
         mode: z.union([z.literal("default"), z.literal("safeguard")]).optional(),
         provider: z.string().optional(),
-        thinkingLevel: AgentThinkingLevelSchema.optional(),
+        thinkingLevel: z.union([AgentThinkingLevelSchema, z.literal("inherit")]).optional(),
         keepRecentTokens: z.number().int().positive().optional(),
         identifierPolicy: z.union([z.literal("strict"), z.literal("off")]).optional(),
         recentTurnsPreserve: z.number().int().min(0).max(12).optional(),

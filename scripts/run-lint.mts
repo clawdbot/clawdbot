@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import {
   ensureRepoToolNodeModulesLink,
   resolveRepoToolBinPath,
-} from "./lib/local-heavy-check-runtime.mts";
+} from "./lib/local-check-runtime.mts";
 
 function run(command: string, args: string[], options: SpawnSyncOptions) {
   const result = spawnSync(command, args, options);
@@ -46,11 +46,14 @@ if (uiI18nStatus !== 0) {
   } else {
     // Control UI CSS hygiene: plain stylesheets plus css`` templates in Lit
     // components. oxlint cannot see inside tagged CSS templates.
+    // Delegate like the steps above: the stylelint runner already resolves and
+    // launches the shim, so this pipeline never handles a tool path itself.
     process.exitCode = run(
-      resolveRepoToolBinPath("stylelint"),
+      process.execPath,
       [
-        "--config",
-        path.resolve("config", "stylelint.config.mjs"),
+        "--import",
+        tsxImportSpecifier,
+        path.resolve("scripts", "run-stylelint.mts"),
         "ui/src/**/*.css",
         "ui/src/**/*.ts",
       ],

@@ -46,7 +46,7 @@ function pluginOwnsProviderPolicyRef(
   normalizedProviderId: string,
 ): boolean {
   const ownedProviders = new Set(
-    [...plugin.providers, ...plugin.cliBackends]
+    [...plugin.providers, ...plugin.cliBackends, ...(plugin.contracts?.embeddingProviders ?? [])]
       .map((provider) => normalizeProviderId(provider))
       .filter(Boolean),
   );

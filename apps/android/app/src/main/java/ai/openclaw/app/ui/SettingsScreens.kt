@@ -187,7 +187,6 @@ internal enum class SettingsRoute {
   NodesDevices,
   Channels,
   Dreaming,
-  Canvas,
   Terminal,
   Desktop,
   Notifications,
@@ -223,7 +222,6 @@ internal fun SettingsDetailScreen(
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Terminal -> TerminalSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Desktop -> DesktopScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -247,6 +245,7 @@ private fun UsageSettingsScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val providerCount = usageSummary.providers.size
   val issueCount = usageSummary.providers.count { it.error != null }
+  val usageConverging = usageRefreshVisible(usageRefreshing, usageSummary.refreshing)
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -264,7 +263,7 @@ private fun UsageSettingsScreen(
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawSecondaryButton(text = if (usageRefreshing) nativeString("Refreshing") else nativeString("Refresh"), onClick = viewModel::refreshUsage, enabled = isConnected && !usageRefreshing, modifier = Modifier.weight(1f))
+      ClawSecondaryButton(text = if (usageConverging) nativeString("Refreshing") else nativeString("Refresh"), onClick = viewModel::refreshUsage, enabled = isConnected && !usageConverging, modifier = Modifier.weight(1f))
     }
     usageErrorText?.let { errorText ->
       ClawPanel {
@@ -276,14 +275,17 @@ private fun UsageSettingsScreen(
         ClawPanel {
           Text(text = nativeString("Connect the gateway to load usage."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
-      usageSummary.providers.isEmpty() ->
+      usageSummary.providers.isNotEmpty() -> UsageProvidersPanel(providers = usageSummary.providers)
+      // The warning panel above already reports a failed load; adding
+      // "No usage data yet." beside it claims the operator has no providers.
+      usageErrorText != null -> Unit
+      else ->
         ClawPanel {
           Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(text = nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(text = if (usageConverging) nativeString("Refreshing") else nativeString("No usage data yet."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
             Text(text = nativeString("Provider limits will appear here when your gateway reports them."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
         }
-      else -> UsageProvidersPanel(providers = usageSummary.providers)
     }
   }
 }
@@ -1077,7 +1079,7 @@ private fun NotificationSettingsScreen(
 
   val notificationPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      viewModel.setNotificationForwardingEnabled(granted)
+      viewModel.setNotificationForwardingEnabled(granted && DeviceNotificationListenerService.isAccessEnabled(context))
     }
 
   fun setForwarding(checked: Boolean) {
@@ -1085,12 +1087,16 @@ private fun NotificationSettingsScreen(
       viewModel.setNotificationForwardingEnabled(false)
       return
     }
+    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
+    if (!listenerEnabled) {
+      openNotificationListenerSettings(context)
+      return
+    }
     if (Build.VERSION.SDK_INT >= 33 && !hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)) {
       notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
     } else {
       viewModel.setNotificationForwardingEnabled(true)
     }
-    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
   }
 
   SettingsDetailFrame(title = nativeString("Notifications"), subtitle = nativeString("Choose what reaches OpenClaw."), icon = Icons.Default.Notifications, onBack = onBack) {
@@ -1277,7 +1283,6 @@ private fun PhoneCapabilitiesScreen(
   val locationMode by viewModel.locationMode.collectAsState()
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
-  val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
   val photosAvailable = remember { SensitiveFeatureConfig.photosEnabled }
   val backgroundLocationAvailable = remember { SensitiveFeatureConfig.backgroundLocationEnabled }
@@ -1490,7 +1495,6 @@ private fun PhoneCapabilitiesScreen(
             ::setInstalledAppsSharing,
           ),
           SettingsToggleRow(nativeString("Keep Awake"), nativeString("Keep the node available during active work."), Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
-          SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
     if (SensitiveFeatureConfig.accessibilityControlEnabled) {
@@ -2552,6 +2556,11 @@ private fun UsageProvidersPanel(providers: List<GatewayUsageProviderSummary>) {
     UsageProviderListRow(provider = provider)
   }
 }
+
+internal fun usageRefreshVisible(
+  requestRefreshing: Boolean,
+  summaryRefreshing: Boolean,
+): Boolean = requestRefreshing || summaryRefreshing
 
 @Composable
 private fun UsageProviderListRow(provider: GatewayUsageProviderSummary) {

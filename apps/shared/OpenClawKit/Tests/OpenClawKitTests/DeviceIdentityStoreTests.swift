@@ -471,9 +471,8 @@ struct DeviceIdentityStoreTests {
         let coordinatorURLs = DeviceIdentitySQLiteStore.resolveDeviceIdentityCoordinatorURLs(
             databaseURL: fixture.databaseURL,
             destinationStateDirURL: fixture.destination,
-            temporaryDirectory: FileManager.default.temporaryDirectory,
             uid: getuid())
-        #expect(coordinatorURLs.count == 2)
+        #expect(coordinatorURLs.count == 1)
         for coordinatorURL in coordinatorURLs {
             let coordinatorDirectoryMode = try #require(
                 FileManager.default.attributesOfItem(

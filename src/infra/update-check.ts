@@ -8,9 +8,15 @@ import {
   isPnpmOwnedPackageRoot,
   resolvePnpmNodeModulesRoot,
 } from "./detect-package-manager.js";
+import { GIT_TIMEOUT_MS } from "./git-exec.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
-import { channelToNpmTag, resolveDevUpstreamRef, type UpdateChannel } from "./update-channels.js";
+import {
+  channelToNpmTag,
+  DEV_BRANCH,
+  resolveDevUpstreamRefs,
+  type UpdateChannel,
+} from "./update-channels.js";
 import {
   fetchNpmPackageTargetStatus,
   type NpmMetadataCommandRunner,
@@ -34,9 +40,15 @@ type GitUpdateStatus = {
   error?: string;
 };
 
+type GitTrackingTarget = {
+  revision: string;
+  display: string;
+  fetch: "prune" | { remote: string; mergeRef: string };
+};
+
 type DepsStatus = {
   manager: PackageManager;
-  status: "ok" | "missing" | "stale" | "unknown";
+  status: "ok" | "missing" | "unknown";
   lockfilePath: string | null;
   markerPath: string | null;
   reason?: string;
@@ -227,13 +239,19 @@ async function detectGitRoot(root: string): Promise<string | null> {
 
 async function checkGitUpdateStatus(params: {
   root: string;
-  timeoutMs?: number;
+  timeoutMs: number | undefined;
   fetch?: boolean;
   useDetachedDevUpstream?: boolean;
   upstreamFallback?: { currentSha: string; upstreamRef: string };
 }): Promise<GitUpdateStatus> {
-  const timeoutMs = params.timeoutMs ?? 6000;
+  const timeoutMs = params.timeoutMs ?? (params.fetch ? GIT_TIMEOUT_MS : 6000);
   const root = path.resolve(params.root);
+  const runGit = (...args: string[]) =>
+    runCommandWithTimeout(["git", "-C", root, ...args], { timeoutMs }).catch(() => null);
+  const readGit = async (...args: string[]) => {
+    const result = await runGit(...args);
+    return result?.code === 0 ? result.stdout.trim() || null : null;
+  };
 
   const base: GitUpdateStatus = {
     root,
@@ -249,56 +267,60 @@ async function checkGitUpdateStatus(params: {
     fetchOk: null,
   };
 
-  const [branchRes, shaRes, commitAtRes, tagRes, dirtyRes] = await Promise.all([
-    runCommandWithTimeout(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "rev-parse", "HEAD"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "show", "-s", "--format=%ct", "HEAD"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(["git", "-C", root, "describe", "--tags", "--exact-match"], {
-      timeoutMs,
-    }).catch(() => null),
-    runCommandWithTimeout(
-      ["git", "-C", root, "status", "--porcelain", "--", ":!dist/control-ui/"],
-      {
-        timeoutMs,
-      },
-    ).catch(() => null),
+  const [branchRes, sha, commitAtRaw, tag, dirtyRes] = await Promise.all([
+    runGit("rev-parse", "--abbrev-ref", "HEAD"),
+    readGit("rev-parse", "HEAD"),
+    readGit("show", "-s", "--format=%ct", "HEAD"),
+    readGit("describe", "--tags", "--exact-match"),
+    runGit("status", "--porcelain", "--", ":!dist/control-ui/"),
   ]);
   if (!branchRes || branchRes.code !== 0) {
     return { ...base, error: branchRes?.stderr?.trim() || "git unavailable" };
   }
   const branch = branchRes.stdout.trim() || null;
-  const trackingRevision = resolveDevUpstreamRef(branch, params.useDetachedDevUpstream);
-  const upstreamRes = trackingRevision
-    ? await runCommandWithTimeout(
-        ["git", "-C", root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", trackingRevision],
-        { timeoutMs },
-      ).catch(() => null)
-    : null;
+  const trackingRevisions =
+    branch === "HEAD"
+      ? params.useDetachedDevUpstream
+        ? resolveDevUpstreamRefs(true, [`refs/remotes/origin/${DEV_BRANCH}`])
+        : []
+      : resolveDevUpstreamRefs(false);
+  let tracking: GitTrackingTarget | null = null;
+  for (const revision of trackingRevisions) {
+    const display = await readGit("rev-parse", "--abbrev-ref", "--symbolic-full-name", revision);
+    if (!display) {
+      continue;
+    }
+    let fetch: GitTrackingTarget["fetch"] = "prune";
+    if (branch === "HEAD") {
+      if (revision === `${DEV_BRANCH}@{upstream}`) {
+        const [remote, mergeRef] = await Promise.all([
+          readGit("config", "--get", `branch.${DEV_BRANCH}.remote`),
+          readGit("config", "--get", `branch.${DEV_BRANCH}.merge`),
+        ]);
+        if (!remote || !mergeRef) {
+          continue;
+        }
+        fetch = { remote, mergeRef };
+      } else {
+        fetch = { remote: "origin", mergeRef: `refs/heads/${DEV_BRANCH}` };
+      }
+    }
+    tracking = { revision, display, fetch };
+    break;
+  }
 
-  const sha = shaRes && shaRes.code === 0 ? shaRes.stdout.trim() : null;
-  const commitAtSeconds =
-    commitAtRes?.code === 0 ? Number.parseInt(commitAtRes.stdout.trim(), 10) : Number.NaN;
+  const commitAtSeconds = Number.parseInt(commitAtRaw ?? "", 10);
   const commitAtMs = Number.isSafeInteger(commitAtSeconds) ? commitAtSeconds * 1000 : null;
 
-  const tag = tagRes && tagRes.code === 0 ? tagRes.stdout.trim() : null;
-
-  const trackingUpstream =
-    upstreamRes && upstreamRes.code === 0 ? upstreamRes.stdout.trim() || null : null;
   const receiptUpstream =
-    !trackingUpstream &&
+    !tracking &&
     branch === "HEAD" &&
     sha &&
     params.upstreamFallback?.currentSha.trim().toLowerCase() === sha.toLowerCase()
       ? params.upstreamFallback.upstreamRef.trim() || null
       : null;
-  const upstream = trackingUpstream ?? receiptUpstream;
-  const upstreamSource = trackingUpstream
+  const upstream = tracking?.display ?? receiptUpstream;
+  const upstreamSource = tracking
     ? ("tracking" as const)
     : receiptUpstream
       ? ("receipt" as const)
@@ -306,53 +328,32 @@ async function checkGitUpdateStatus(params: {
 
   const dirty = dirtyRes && dirtyRes.code === 0 ? dirtyRes.stdout.trim().length > 0 : null;
 
+  const fetchTarget =
+    tracking?.fetch && tracking.fetch !== "prune"
+      ? [
+          "--",
+          tracking.fetch.remote,
+          `+${tracking.fetch.mergeRef}:refs/remotes/${tracking.display}`,
+        ]
+      : ["--prune"];
   const fetchOk = params.fetch
-    ? await runCommandWithTimeout(["git", "-C", root, "fetch", "--quiet", "--prune"], { timeoutMs })
-        .then((r) => r.code === 0)
-        .catch(() => false)
+    ? (await runGit("fetch", "--quiet", ...fetchTarget))?.code === 0
     : null;
-
-  const canCompareUpstream = !params.fetch || fetchOk === true;
 
   // Freeze the post-fetch upstream for both graph queries. Active tracking wins;
   // a matching successful update receipt keeps intentional detached installs comparable.
-  const upstreamRevision = `${upstreamSource === "tracking" ? trackingRevision : upstream}^{commit}`;
-  const upstreamCommitRes =
-    canCompareUpstream && upstream && sha
-      ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-parse", "--verify", upstreamRevision],
-          { timeoutMs },
-        ).catch(() => null)
-      : null;
+  const upstreamRevision = `${upstreamSource === "tracking" ? tracking?.revision : upstream}^{commit}`;
   const upstreamCommit =
-    upstreamCommitRes?.code === 0 ? upstreamCommitRes.stdout.trim() || null : null;
-  const mergeBase =
-    sha && upstreamCommit
-      ? await runCommandWithTimeout(["git", "-C", root, "merge-base", sha, upstreamCommit], {
-          timeoutMs,
-        }).catch(() => null)
+    (!params.fetch || fetchOk === true) && upstream && sha
+      ? await readGit("rev-parse", "--verify", upstreamRevision)
       : null;
+  const mergeBase = sha && upstreamCommit ? await readGit("merge-base", sha, upstreamCommit) : null;
   const counts =
-    sha && upstreamCommit && mergeBase?.code === 0 && mergeBase.stdout.trim().length > 0
-      ? await runCommandWithTimeout(
-          ["git", "-C", root, "rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`],
-          { timeoutMs },
-        ).catch(() => null)
+    sha && upstreamCommit && mergeBase
+      ? await readGit("rev-list", "--left-right", "--count", `${sha}...${upstreamCommit}`)
       : null;
 
-  const parseCounts = (raw: string): { ahead: number; behind: number } | null => {
-    const parts = raw.trim().split(/\s+/);
-    if (parts.length < 2) {
-      return null;
-    }
-    const ahead = Number.parseInt(parts[0] ?? "", 10);
-    const behind = Number.parseInt(parts[1] ?? "", 10);
-    if (!Number.isFinite(ahead) || !Number.isFinite(behind)) {
-      return null;
-    }
-    return { ahead, behind };
-  };
-  const parsed = counts && counts.code === 0 ? parseCounts(counts.stdout) : null;
+  const parsed = counts?.match(/^(\d+)\s+(\d+)$/u);
 
   return {
     root,
@@ -364,19 +365,10 @@ async function checkGitUpdateStatus(params: {
     upstreamSha: upstreamCommit,
     commitAtMs,
     dirty,
-    ahead: parsed?.ahead ?? null,
-    behind: parsed?.behind ?? null,
+    ahead: parsed ? Number(parsed[1]) : null,
+    behind: parsed ? Number(parsed[2]) : null,
     fetchOk,
   };
-}
-
-async function statMtimeMs(p: string): Promise<number | null> {
-  try {
-    const st = await fs.stat(p);
-    return st.mtimeMs;
-  } catch {
-    return null;
-  }
 }
 
 async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
@@ -449,25 +441,6 @@ async function checkDepsStatus(params: {
     };
   }
 
-  const lockMtime = await statMtimeMs(lockfilePath);
-  const markerMtime = await statMtimeMs(markerPath);
-  if (!lockMtime || !markerMtime) {
-    return {
-      manager: params.manager,
-      status: "unknown",
-      lockfilePath,
-      markerPath,
-    };
-  }
-  if (lockMtime > markerMtime + 1000) {
-    return {
-      manager: params.manager,
-      status: "stale",
-      lockfilePath,
-      markerPath,
-      reason: "lockfile newer than install marker",
-    };
-  }
   return {
     manager: params.manager,
     status: "ok",
@@ -661,7 +634,7 @@ export async function checkUpdateStatus(params: {
     isGit
       ? checkGitUpdateStatus({
           root,
-          timeoutMs,
+          timeoutMs: params.timeoutMs,
           fetch: Boolean(params.fetchGit),
           useDetachedDevUpstream: params.useDetachedDevUpstream,
           upstreamFallback: params.gitUpstreamFallback,

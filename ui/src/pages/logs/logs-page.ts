@@ -12,6 +12,7 @@ import {
   failPanelRefresh,
 } from "../../components/panel-refresh-status.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -61,35 +62,40 @@ class LogsPage extends OpenClawLightDomElement {
       this.gateway.connected ? this.gateway.gateway : null,
       this.gateway.connected ? this.gateway.client : null,
       opts?.reset ? null : this.logsCursor,
+      this.logsFile,
       opts?.reset === true,
       opts?.quiet === true,
     ] as const;
   }
   private readonly logsTask = new Task(this, {
     autoRun: false,
-    // The cursor and reset flag make each tail page an explicit immutable read.
+    // A cursor belongs to one file; recover source changes inside this task so
+    // no mixed-source page can publish between the incremental and reset reads.
     args: () => this.logsTaskArgs(),
-    task: async ([gateway, client, cursor, reset, quiet], { signal }) => {
+    task: async ([gateway, client, cursor, file, reset, quiet], { signal }) => {
       if (!gateway || !client) {
         return initialState;
       }
       try {
-        const payload = await client.request<{
-          file?: string;
-          cursor?: number;
-          lines?: unknown;
-          truncated?: boolean;
-          reset?: boolean;
-        }>(
-          "logs.tail",
-          {
-            cursor: reset ? undefined : (cursor ?? undefined),
-            limit: this.logsLimit,
-            maxBytes: this.logsMaxBytes,
-          },
-          { signal },
-        );
-        return { ok: true as const, payload, cursor, reset, quiet };
+        const requestTail = (nextCursor?: number) =>
+          client.request<{
+            file?: string;
+            cursor?: number;
+            lines?: unknown;
+            truncated?: boolean;
+            reset?: boolean;
+          }>(
+            "logs.tail",
+            { cursor: nextCursor, limit: this.logsLimit, maxBytes: this.logsMaxBytes },
+            { signal },
+          );
+        let payload = await requestTail(reset ? undefined : (cursor ?? undefined));
+        const sourceChanged =
+          !reset && file !== null && payload.file !== undefined && payload.file !== file;
+        if (sourceChanged) {
+          payload = await requestTail();
+        }
+        return { ok: true as const, payload, cursor, reset: reset || sourceChanged, quiet };
       } catch (error) {
         return { ok: false as const, error, quiet };
       }
@@ -103,7 +109,7 @@ class LogsPage extends OpenClawLightDomElement {
             formatMissingOperatorReadScopeMessage("logs"),
           );
         } else {
-          this.logsStatus = failPanelRefresh(this.logsStatus, String(result.error));
+          this.logsStatus = failPanelRefresh(this.logsStatus, formatUiError(result.error));
         }
         return;
       }
@@ -134,10 +140,14 @@ class LogsPage extends OpenClawLightDomElement {
     },
     invalidateRequests: () => {
       this.logsTaskQuiet = false;
-      void this.logsTask.run([null, null, null, false, false]);
+      void this.logsTask.run([null, null, null, null, false, false]);
     },
-    onSnapshot: () => {
+    onSnapshot: (change) => {
       this.syncPolling();
+      if (change.becameConnected && this.logsFile !== null) {
+        void this.loadLogs({ reset: true, quiet: true });
+        return;
+      }
       this.ensureInitialLogs();
     },
   });
@@ -179,7 +189,7 @@ class LogsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.logsTaskQuiet = false;
-    void this.logsTask.run([null, null, null, false, false]);
+    void this.logsTask.run([null, null, null, null, false, false]);
     if (this.contentScrollFrame !== null) {
       cancelAnimationFrame(this.contentScrollFrame);
       this.contentScrollFrame = null;

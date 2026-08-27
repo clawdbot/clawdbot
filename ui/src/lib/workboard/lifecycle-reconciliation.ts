@@ -1,20 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import { isActiveWorkboardCard, replaceCard, staleSessionState } from "./card-state.ts";
-import {
-  executionStatusForLifecycle,
-  getLifecycleSyncKeys,
-  getWorkboardLifecycle,
-  hasPendingStatusTransition,
-  lifecycleSyncKey,
-  mergePatchMetadata,
-  shouldSkipLifecycleStatusWrite,
-  shouldSkipStaleLifecycleStatus,
-  shouldSyncCardStatus,
-  shouldSyncExecutionStatus,
-} from "./lifecycle.ts";
 import { formatError } from "./normalization-utils.ts";
-import { normalizeCardPayload } from "./normalization.ts";
 import {
   currentWorkboardLifecycleReconciliationEpoch,
   getWorkboardRuntime,
@@ -22,13 +7,11 @@ import {
   isCurrentWorkboardLifecycleReconciliationEpoch,
   isCurrentWorkboardLoadGeneration,
   nextWorkboardLoadGeneration,
-  releaseWorkboardLifecycleWrite,
   resetWorkboardLifecycleTaskConfirmations,
   setWorkboardLifecycleTaskRefreshContinuation,
   setWorkboardLifecycleTaskRefreshFailed,
   setWorkboardLifecycleTasksPrepared,
   shouldRefreshWorkboardTasksForLifecycle,
-  trackWorkboardLifecycleWrite,
   workboardLifecycleRequiresTaskRefresh,
   workboardLifecycleSyncBlocked,
   workboardLifecycleTaskRefreshContinuationWaiting,
@@ -199,8 +182,6 @@ async function refreshWorkboardLifecycleTasks(
 export async function syncWorkboardLifecycle(params: {
   host: WorkboardHost;
   client: GatewayBrowserClient | null;
-  sessions: readonly GatewaySessionRow[];
-  canWrite?: boolean;
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
@@ -252,139 +233,9 @@ export async function syncWorkboardLifecycle(params: {
   ) {
     return;
   }
-  // Read-only operators still need task-refresh recovery. Gate only the
-  // lifecycle card writeback after the shared task snapshot is current.
-  if (params.canWrite === false) {
-    setWorkboardLifecycleTasksPrepared(state, true, {
-      host: params.host,
-      preparedAt: tasksPreparedAt ?? Date.now(),
-      requestUpdate: params.requestUpdate,
-    });
-    return;
-  }
-  const syncKeys = getLifecycleSyncKeys(params.host);
-  let lifecycleWriteStarted = false;
-  for (const card of state.cards) {
-    if (!isActiveWorkboardCard(card)) {
-      continue;
-    }
-    if (
-      !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
-      workboardLifecycleSyncBlocked(params.host, state)
-    ) {
-      return;
-    }
-    const lifecycle = getWorkboardLifecycle(
-      card,
-      params.sessions,
-      state.tasksByCardId.get(card.id),
-    );
-    const executionStatus = executionStatusForLifecycle(lifecycle);
-    const patch: Record<string, unknown> = {};
-    if (
-      lifecycle.sourceUpdatedAt !== undefined &&
-      !shouldSkipLifecycleStatusWrite(params.host, card, lifecycle) &&
-      shouldSyncCardStatus(card, lifecycle.targetStatus)
-    ) {
-      patch.status = lifecycle.targetStatus;
-      mergePatchMetadata(patch, {
-        lifecycleStatusSourceUpdatedAt: lifecycle.sourceUpdatedAt,
-      });
-    }
-    if (shouldSyncExecutionStatus(card, executionStatus)) {
-      patch.execution = {
-        ...card.execution,
-        status: executionStatus,
-        updatedAt: Date.now(),
-      };
-    }
-    const stale = lifecycle.session ? staleSessionState(lifecycle.session) : undefined;
-    const existingStale = card.metadata?.stale;
-    if (stale) {
-      const staleChanged =
-        !existingStale ||
-        existingStale.lastSessionUpdatedAt !== stale.lastSessionUpdatedAt ||
-        existingStale.reason !== stale.reason;
-      if (staleChanged) {
-        mergePatchMetadata(patch, {
-          stale: {
-            ...stale,
-            detectedAt: existingStale?.detectedAt ?? stale.detectedAt,
-          },
-        });
-      }
-    } else if (existingStale) {
-      mergePatchMetadata(patch, {
-        stale: null,
-      });
-    }
-    if (Object.keys(patch).length === 0) {
-      continue;
-    }
-    const key = lifecycleSyncKey(card, lifecycle);
-    if (syncKeys.get(card.id) === key || state.syncingCardIds.has(card.id)) {
-      continue;
-    }
-    const generation = nextWorkboardLoadGeneration(params.host);
-    lifecycleWriteStarted = true;
-    state.syncingCardIds.add(card.id);
-    params.requestUpdate?.();
-    let write: Promise<unknown> | null = null;
-    try {
-      write = params.client.request("workboard.cards.update", {
-        id: card.id,
-        patch,
-      });
-      trackWorkboardLifecycleWrite(params.host, write);
-      const payload = await write;
-      const currentCard = state.cards.find((candidate) => candidate.id === card.id);
-      const responseCard = normalizeCardPayload(payload);
-      // Lifecycle responses are full-card replacements. Any newer load or write
-      // invalidates this generation so its response cannot replace fresher state.
-      if (
-        !currentCard ||
-        !isCurrentWorkboardLoadGeneration(params.host, generation) ||
-        !isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch) ||
-        hasPendingStatusTransition(params.host, currentCard.id) ||
-        (currentCard.status !== card.status && responseCard.status !== currentCard.status) ||
-        (shouldSkipStaleLifecycleStatus(currentCard, lifecycle) &&
-          responseCard.status !== currentCard.status)
-      ) {
-        continue;
-      }
-      replaceCard(state, responseCard);
-      syncKeys.set(card.id, key);
-    } catch (error) {
-      if (isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch)) {
-        state.error = formatError(error);
-        syncKeys.set(card.id, key);
-      }
-    } finally {
-      if (write) {
-        releaseWorkboardLifecycleWrite(params.host, write);
-      }
-      state.syncingCardIds.delete(card.id);
-      if (
-        isCurrentWorkboardLoadGeneration(params.host, generation) &&
-        isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch)
-      ) {
-        setWorkboardLifecycleTasksPrepared(state, true, {
-          host: params.host,
-          preparedAt: tasksPreparedAt ?? Date.now(),
-          requestUpdate: params.requestUpdate,
-        });
-      }
-      params.requestUpdate?.();
-    }
-  }
-  if (
-    !lifecycleWriteStarted &&
-    isCurrentWorkboardLifecycleReconciliationEpoch(params.host, reconciliationEpoch)
-  ) {
-    setWorkboardLifecycleTasksPrepared(state, true, {
-      host: params.host,
-      preparedAt: tasksPreparedAt ?? Date.now(),
-      requestUpdate: params.requestUpdate,
-    });
-  }
+  setWorkboardLifecycleTasksPrepared(state, true, {
+    host: params.host,
+    preparedAt: tasksPreparedAt ?? Date.now(),
+    requestUpdate: params.requestUpdate,
+  });
 }

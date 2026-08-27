@@ -22,8 +22,6 @@ import { formatThreadBindingDurationLabel } from "../../channels/thread-bindings
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
@@ -35,9 +33,6 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
-import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
-import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
-import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
@@ -288,69 +283,16 @@ export const handleUsageCommand: CommandHandler = defineAuthorizedTextCommand(
   async (params, rawArgs) => {
     const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
     if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
-      const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-      const sessionAgentId =
-        params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
-          ? resolveSessionAgentId({
-              sessionKey: params.sessionKey,
-              config: params.cfg,
-              agentId: params.agentId,
-            })
-          : params.agentId;
-      const usageAgentId = sessionAgentId ?? DEFAULT_AGENT_ID;
-      const sessionSummary = await loadSessionCostSummary({
-        sessionId: targetSessionEntry?.sessionId,
-        sessionEntry: targetSessionEntry,
-        ...(targetSessionEntry?.sessionId && params.sessionKey
-          ? {
-              sessionTarget: {
-                agentId: usageAgentId,
-                sessionId: targetSessionEntry.sessionId,
-                sessionKey: params.sessionKey,
-                storePath: resolveSessionStorePathForScope({
-                  agentId: usageAgentId,
-                  sessionKey: params.sessionKey,
-                  storePath:
-                    params.storePath ??
-                    resolveSessionStorePathCore(params.cfg.session?.store, {
-                      agentId: usageAgentId,
-                    }),
-                }),
-              },
-            }
-          : {}),
-        config: params.cfg,
-        agentId: usageAgentId,
-      });
-      const summary = await loadCostUsageSummary({
-        config: params.cfg,
-        agentId: usageAgentId,
-      });
-
-      const sessionCost = formatUsd(sessionSummary?.totalCost);
-      const sessionTokens = sessionSummary?.totalTokens
-        ? formatTokenCount(sessionSummary.totalTokens)
-        : undefined;
-      const sessionMissing = sessionSummary?.missingCostEntries ?? 0;
-      const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
-      const sessionLine =
-        sessionCost || sessionTokens
-          ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
-          : "Session n/a";
-
-      const todayKey = new Date().toLocaleDateString("en-CA");
-      const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
-      const todayCost = formatUsd(todayEntry?.totalCost);
-      const todayMissing = todayEntry?.missingCostEntries ?? 0;
-      const todaySuffix = todayMissing > 0 ? " (partial)" : "";
-      const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
-
-      const last30Cost = formatUsd(summary.totals.totalCost);
-      const last30Missing = summary.totals.missingCostEntries;
-      const last30Suffix = last30Missing > 0 ? " (partial)" : "";
-      const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
-
-      return sessionCommandReply(`💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}`);
+      const { formatSessionUsageCostSummary } = await import("./commands-session-cost.runtime.js");
+      return sessionCommandReply(
+        await formatSessionUsageCostSummary({
+          cfg: params.cfg,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          sessionEntry: params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+          storePath: params.storePath,
+        }),
+      );
     }
 
     const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
@@ -669,6 +611,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (!isRestartEnabled(params.cfg)) {
     return sessionCommandReply("⚠️ /restart is disabled (commands.restart=false).");
   }
+  // Restart tears this process down before the dispatch that carries /restart can
+  // return, so the durable ingress claim would still be held when admission closes.
+  // The drain then releases it without spending retry budget and the successor
+  // replays /restart forever. Adopt here: the command is not idempotent, so losing
+  // the acknowledgement beats an unbounded restart loop. Adoption loss throws,
+  // which correctly aborts the restart because another owner holds the event.
+  await params.opts?.turnAdoptionLifecycle?.onAdopted();
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {

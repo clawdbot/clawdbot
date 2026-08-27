@@ -242,8 +242,11 @@ personal-number mode, and self-chat details: [WhatsApp](/channels/whatsapp).
 The snapshot's global npm tree is owned by root, so plain `openclaw update`
 cannot write to it. Update from the sandbox SSH session with:
 
+The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
+
 ```bash
-sudo env "PATH=$PATH" npm install --global openclaw@latest
+sudo env "PATH=$PATH" npm install --global openclaw@latest --allow-scripts=openclaw
 openclaw doctor
 ```
 

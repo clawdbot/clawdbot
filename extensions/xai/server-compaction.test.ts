@@ -97,6 +97,7 @@ describe("xAI server compaction request preparation", () => {
       "/responses/compact",
       expect.objectContaining({ body: expect.objectContaining({ model: "grok-4-fast" }) }),
     );
+    expect(compacted.historyMode).toBe("compacted-prefix");
     captureOpenAIResponsesCompaction(
       owner,
       compacted.item,

@@ -7,6 +7,7 @@ import {
   navigateToControlUiSession,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -77,10 +78,14 @@ async function withCompanion(run: (surface: CompanionSurface) => Promise<void>):
         agentId: "main",
         sessionKey: initiatingSessionKey,
       });
+      await openChatSidePanelType(page, "Side chat");
       const companion = page.locator("openclaw-chat-session-rail");
-      await companion.locator(".chat-session-rail__expand").click();
       await companion.getByText(answer, { exact: true }).waitFor();
-      const menu = companion.locator("wa-dropdown.chat-session-rail__menu");
+      // The embedded rail has no header of its own: its destructive clear is
+      // contributed to the shared side-panel header by the active panel.
+      const menu = page.locator(
+        ".side-panel__action-group--content wa-dropdown.chat-session-rail__menu",
+      );
       await run({ companion, gateway, menu, page });
     },
   );

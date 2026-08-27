@@ -8,6 +8,7 @@ vi.mock("./code-mode-typescript-runtime.js", () => ({
   loadCodeModeTypeScriptRuntime,
 }));
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 import { prepareSource } from "./code-mode-runtime.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "./code-mode.js";
 import { testing } from "./code-mode.test-support.js";
@@ -92,8 +93,8 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx,
         code: `
-          const first = await tools.callValue("openclaw:core:headless_first", {});
-          const second = await tools.callValue("openclaw:core:headless_second", {
+          const first = await headless_first({});
+          const second = await headless_second({
             value: first.value,
           });
           return second;
@@ -109,183 +110,262 @@ describe("headless Code Mode", () => {
   });
 
   it("keeps the headless race winner when the later-started tool settles first", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const events: string[] = [];
+    const firstStarted = createDeferred();
+    const firstRelease = createDeferred();
     let firstAborted = false;
     const first = fakeTool("headless_first_race", async (_toolCallId, _input, signal) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 25);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            firstAborted = true;
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
+      events.push("first:start");
+      firstStarted.resolve();
+      signal?.addEventListener(
+        "abort",
+        () => {
+          firstAborted = true;
+          firstRelease.reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+      await firstRelease.promise;
+      events.push("first:done");
       return jsonResult({ winner: "first" });
     });
-    const second = fakeTool("headless_second_race", async () => jsonResult({ winner: "second" }));
+    const second = fakeTool("headless_second_race", async () => {
+      await firstStarted.promise;
+      events.push("second:win");
+      return jsonResult({ winner: "second" });
+    });
+    const release = fakeTool("headless_first_race_release", async () => {
+      events.push("first:release");
+      firstRelease.resolve();
+      return jsonResult({ released: true });
+    });
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([first, second]),
-        code: `return await Promise.race([
-          tools.callValue("openclaw:core:headless_first_race", {}),
-          tools.callValue("openclaw:core:headless_second_race", {}),
-        ]);`,
+        ctx: createHeadlessHarness([first, second, release]),
+        code: `const value = await Promise.race([
+            headless_first_race({}),
+            headless_second_race({}),
+          ]);
+          void headless_first_race_release({});
+          return value;`,
         wallClockMs: 5_000,
       }),
     );
 
     expect(result.value).toEqual({ winner: "second" });
-    expect(result.toolCallCount).toBe(2);
+    expect(result.toolCallCount).toBe(3);
     expect(first.execute).toHaveBeenCalledOnce();
     expect(second.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual(["first:start", "second:win", "first:release", "first:done"]);
     expect(firstAborted).toBe(false);
   });
 
   it("drains a headless nested combinator after its outer race wins", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const events: string[] = [];
+    const nestedStarted = createDeferred();
+    const nestedRelease = createDeferred();
     let nestedAborted = false;
     const never = fakeTool("headless_nested_race_never", async (_toolCallId, _input, signal) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 25);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            nestedAborted = true;
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
+      events.push("nested:start");
+      nestedStarted.resolve();
+      signal?.addEventListener(
+        "abort",
+        () => {
+          nestedAborted = true;
+          nestedRelease.reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+      await nestedRelease.promise;
+      events.push("nested:done");
       return jsonResult({ winner: "nested" });
     });
-    const fast = fakeTool("headless_nested_race_fast", async () => jsonResult({ winner: "fast" }));
-
-    const result = expectCompleted(
-      await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([never, fast]),
-        code: `return await Promise.race([
-          Promise.all([tools.callValue("openclaw:core:headless_nested_race_never", {})]),
-          tools.callValue("openclaw:core:headless_nested_race_fast", {}),
-        ]);`,
-        wallClockMs: 5_000,
-      }),
-    );
-
-    expect(result.value).toEqual({ winner: "fast" });
-    expect(result.toolCallCount).toBe(2);
-    expect(never.execute).toHaveBeenCalledOnce();
-    expect(fast.execute).toHaveBeenCalledOnce();
-    expect(nestedAborted).toBe(false);
-  });
-
-  it.each([
-    {
-      label: "directly",
-      auditCode: 'void tools.callValue("openclaw:core:headless_early_audit", {});',
-    },
-    {
-      label: "in a detached already-settled Promise.race",
-      auditCode:
-        'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {}), Promise.resolve()]);',
-    },
-    {
-      label: "in a detached Promise.all",
-      auditCode: 'void Promise.all([tools.callValue("openclaw:core:headless_early_audit", {})]);',
-    },
-    {
-      label: "in a detached Promise.allSettled",
-      auditCode:
-        'void Promise.allSettled([tools.callValue("openclaw:core:headless_early_audit", {})]);',
-    },
-    {
-      label: "in a detached Promise.any",
-      auditCode: 'void Promise.any([tools.callValue("openclaw:core:headless_early_audit", {})]);',
-    },
-    {
-      label: "in a detached Promise.race",
-      auditCode: 'void Promise.race([tools.callValue("openclaw:core:headless_early_audit", {})]);',
-    },
-  ])(
-    "drains a headless detached audit started $label before an awaited nested call",
-    async ({ auditCode }) => {
-      let auditCompleted = false;
-      let auditAborted = false;
-      const auditStarted = createDeferred();
-      const auditRelease = createDeferred();
-      const audit = fakeTool("headless_early_audit", async (_toolCallId, _input, signal) => {
-        auditStarted.resolve();
-        signal?.addEventListener("abort", () => (auditAborted = true), { once: true });
-        await auditRelease.promise;
-        auditCompleted = true;
-        return jsonResult({ recorded: true });
-      });
-      const fast = fakeTool("headless_awaited_fast", async () => {
-        await auditStarted.promise;
-        setImmediate(() => auditRelease.resolve());
-        return jsonResult({ winner: "fast" });
-      });
-
-      const result = expectCompleted(
-        await runCodeModeScriptHeadless({
-          ctx: createHeadlessHarness([audit, fast]),
-          code: `${auditCode}
-          return await tools.callValue("openclaw:core:headless_awaited_fast", {});`,
-          wallClockMs: 5_000,
-        }),
-      );
-
-      expect(result.value).toEqual({ winner: "fast" });
-      expect(result.toolCallCount).toBe(2);
-      expect(audit.execute).toHaveBeenCalledOnce();
-      expect(fast.execute).toHaveBeenCalledOnce();
-      expect(auditCompleted).toBe(true);
-      expect(auditAborted).toBe(false);
-    },
-  );
-
-  it("drains a headless race winner's detached audit and its slower race branch", async () => {
-    let loserAborted = false;
-    const winner = fakeTool("headless_race_winner", async () => jsonResult({ winner: "fast" }));
-    const loser = fakeTool("headless_race_loser", async (_toolCallId, _input, signal) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 25);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            loserAborted = true;
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
-      return jsonResult({ winner: "slow" });
+    const fast = fakeTool("headless_nested_race_fast", async () => {
+      await nestedStarted.promise;
+      events.push("fast:win");
+      return jsonResult({ winner: "fast" });
     });
-    const audit = fakeTool("headless_race_audit", async () => jsonResult({ recorded: true }));
+    const release = fakeTool("headless_nested_race_release", async () => {
+      events.push("nested:release");
+      nestedRelease.resolve();
+      return jsonResult({ released: true });
+    });
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([winner, loser, audit]),
-        code: `return Promise.race([
-          tools.callValue("openclaw:core:headless_race_winner", {}),
-          tools.callValue("openclaw:core:headless_race_loser", {}),
-        ]).then((value) => {
-          void tools.callValue("openclaw:core:headless_race_audit", {});
-          return value;
-        });`,
+        ctx: createHeadlessHarness([never, fast, release]),
+        code: `const value = await Promise.race([
+            Promise.all([headless_nested_race_never({})]),
+            headless_nested_race_fast({}),
+          ]);
+          void headless_nested_race_release({});
+          return value;`,
         wallClockMs: 5_000,
       }),
     );
 
     expect(result.value).toEqual({ winner: "fast" });
     expect(result.toolCallCount).toBe(3);
+    expect(never.execute).toHaveBeenCalledOnce();
+    expect(fast.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual(["nested:start", "fast:win", "nested:release", "nested:done"]);
+    expect(nestedAborted).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "directly",
+      auditCode: "void headless_early_audit({});",
+    },
+    {
+      label: "in a detached already-settled Promise.race",
+      auditCode: "void Promise.race([headless_early_audit({}), Promise.resolve()]);",
+    },
+    {
+      label: "in a detached Promise.all",
+      auditCode: "void Promise.all([headless_early_audit({})]);",
+    },
+    {
+      label: "in a detached Promise.allSettled",
+      auditCode: "void Promise.allSettled([headless_early_audit({})]);",
+    },
+    {
+      label: "in a detached Promise.any",
+      auditCode: "void Promise.any([headless_early_audit({})]);",
+    },
+    {
+      label: "in a detached Promise.race",
+      auditCode: "void Promise.race([headless_early_audit({})]);",
+    },
+  ])(
+    "drains a headless detached audit started $label before an awaited nested call",
+    async ({ auditCode }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const events: string[] = [];
+      let auditCompleted = false;
+      let auditAborted = false;
+      const auditStarted = createDeferred();
+      const auditRelease = createDeferred();
+      const audit = fakeTool("headless_early_audit", async (_toolCallId, _input, signal) => {
+        events.push("audit:start");
+        auditStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            auditAborted = true;
+            auditRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await auditRelease.promise;
+        events.push("audit:done");
+        auditCompleted = true;
+        return jsonResult({ recorded: true });
+      });
+      const fast = fakeTool("headless_awaited_fast", async () => {
+        await auditStarted.promise;
+        events.push("awaited:done");
+        return jsonResult({ winner: "fast" });
+      });
+      const release = fakeTool("headless_early_audit_release", async () => {
+        events.push("audit:release");
+        auditRelease.resolve();
+        return jsonResult({ released: true });
+      });
+
+      const result = expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx: createHeadlessHarness([audit, fast, release]),
+          code: `${auditCode}
+          const value = await headless_awaited_fast({});
+          void headless_early_audit_release({});
+          return value;`,
+          wallClockMs: 5_000,
+        }),
+      );
+
+      expect(result.value).toEqual({ winner: "fast" });
+      expect(result.toolCallCount).toBe(3);
+      expect(audit.execute).toHaveBeenCalledOnce();
+      expect(fast.execute).toHaveBeenCalledOnce();
+      expect(release.execute).toHaveBeenCalledOnce();
+      expect(events).toEqual(["audit:start", "awaited:done", "audit:release", "audit:done"]);
+      expect(auditCompleted).toBe(true);
+      expect(auditAborted).toBe(false);
+    },
+  );
+
+  it("drains a headless race winner's detached audit and its slower race branch", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const events: string[] = [];
+    const loserStarted = createDeferred();
+    const loserRelease = createDeferred();
+    const auditStarted = createDeferred();
+    let loserAborted = false;
+    const winner = fakeTool("headless_race_winner", async () => {
+      await loserStarted.promise;
+      events.push("winner:win");
+      return jsonResult({ winner: "fast" });
+    });
+    const loser = fakeTool("headless_race_loser", async (_toolCallId, _input, signal) => {
+      events.push("loser:start");
+      loserStarted.resolve();
+      signal?.addEventListener(
+        "abort",
+        () => {
+          loserAborted = true;
+          loserRelease.reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+      await loserRelease.promise;
+      events.push("loser:done");
+      return jsonResult({ winner: "slow" });
+    });
+    const audit = fakeTool("headless_race_audit", async () => {
+      events.push("audit:done");
+      auditStarted.resolve();
+      return jsonResult({ recorded: true });
+    });
+    const release = fakeTool("headless_race_loser_release", async () => {
+      await auditStarted.promise;
+      events.push("loser:release");
+      loserRelease.resolve();
+      return jsonResult({ released: true });
+    });
+
+    const result = expectCompleted(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness([winner, loser, audit, release]),
+        code: `const value = await Promise.race([
+            headless_race_winner({}),
+            headless_race_loser({}),
+          ]);
+          void headless_race_audit({});
+          void headless_race_loser_release({});
+          return value;`,
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.value).toEqual({ winner: "fast" });
+    expect(result.toolCallCount).toBe(4);
     expect(winner.execute).toHaveBeenCalledOnce();
     expect(loser.execute).toHaveBeenCalledOnce();
     expect(audit.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      "loser:start",
+      "winner:win",
+      "audit:done",
+      "loser:release",
+      "loser:done",
+    ]);
     expect(loserAborted).toBe(false);
   });
 
@@ -296,8 +376,8 @@ describe("headless Code Mode", () => {
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([first, second]),
-        code: `void tools.callValue("openclaw:core:headless_detached_first", {});
-          void tools.callValue("openclaw:core:headless_detached_second", {});
+        code: `void headless_detached_first({});
+          void headless_detached_second({});
           return "done";`,
         wallClockMs: 5_000,
       }),
@@ -312,79 +392,109 @@ describe("headless Code Mode", () => {
   it.each(["race", "any"] as const)(
     "preserves the headless Promise.%s winner while draining the slower nested tool",
     async (combinator) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const events: string[] = [];
+      const slowStarted = createDeferred();
+      const slowRelease = createDeferred();
       let slowAborted = false;
       let slowCompleted = false;
-      const fast = fakeTool("headless_fast", async () => jsonResult({ winner: "fast" }));
+      const fast = fakeTool("headless_fast", async () => {
+        await slowStarted.promise;
+        events.push("fast:win");
+        return jsonResult({ winner: "fast" });
+      });
       const slow = fakeTool("headless_slow", async (_toolCallId, _input, signal) => {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(resolve, 25);
-          signal?.addEventListener(
-            "abort",
-            () => {
-              clearTimeout(timer);
-              slowAborted = true;
-              reject(new Error("aborted"));
-            },
-            { once: true },
-          );
-        });
+        events.push("slow:start");
+        slowStarted.resolve();
+        signal?.addEventListener(
+          "abort",
+          () => {
+            slowAborted = true;
+            slowRelease.reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+        await slowRelease.promise;
+        events.push("slow:done");
         slowCompleted = true;
         return jsonResult({ winner: "slow" });
+      });
+      const release = fakeTool("headless_slow_release", async () => {
+        events.push("slow:release");
+        slowRelease.resolve();
+        return jsonResult({ released: true });
       });
 
       const result = expectCompleted(
         await runCodeModeScriptHeadless({
-          ctx: createHeadlessHarness([fast, slow]),
-          code: `return await Promise.${combinator}([
-            tools.callValue("openclaw:core:headless_fast", {}),
-            tools.callValue("openclaw:core:headless_slow", {}),
-          ]);`,
+          ctx: createHeadlessHarness([fast, slow, release]),
+          code: `const value = await Promise.${combinator}([
+              headless_slow({}),
+              headless_fast({}),
+            ]);
+            void headless_slow_release({});
+            return value;`,
           wallClockMs: 5_000,
         }),
       );
 
       expect(result.value).toEqual({ winner: "fast" });
-      expect(result.toolCallCount).toBe(2);
+      expect(result.toolCallCount).toBe(3);
       expect(fast.execute).toHaveBeenCalledOnce();
       expect(slow.execute).toHaveBeenCalledOnce();
+      expect(release.execute).toHaveBeenCalledOnce();
+      expect(events).toEqual(["slow:start", "fast:win", "slow:release", "slow:done"]);
       expect(slowCompleted).toBe(true);
       expect(slowAborted).toBe(false);
     },
   );
 
   it("preserves headless fail-fast Promise.all while draining the slower nested tool", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const events: string[] = [];
+    const slowStarted = createDeferred();
+    const slowRelease = createDeferred();
     let slowAborted = false;
     let slowCompleted = false;
     const failed = fakeTool("headless_failed", async () => {
+      events.push("failed:wait");
+      await slowStarted.promise;
+      events.push("failed:reject");
       throw new Error("fast failure");
     });
     const slow = fakeTool("headless_slow", async (_toolCallId, _input, signal) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 25);
-        signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            slowAborted = true;
-            reject(new Error("aborted"));
-          },
-          { once: true },
-        );
-      });
+      events.push("slow:start");
+      slowStarted.resolve();
+      signal?.addEventListener(
+        "abort",
+        () => {
+          slowAborted = true;
+          slowRelease.reject(new Error("aborted"));
+        },
+        { once: true },
+      );
+      await slowRelease.promise;
+      events.push("slow:done");
       slowCompleted = true;
       return jsonResult({ winner: "slow" });
+    });
+    const release = fakeTool("headless_slow_release", async () => {
+      events.push("slow:release");
+      slowRelease.resolve();
+      return jsonResult({ released: true });
     });
 
     const result = expectCompleted(
       await runCodeModeScriptHeadless({
-        ctx: createHeadlessHarness([failed, slow]),
+        ctx: createHeadlessHarness([failed, slow, release]),
         code: `try {
           await Promise.all([
-            tools.callValue("openclaw:core:headless_failed", {}),
-            tools.callValue("openclaw:core:headless_slow", {}),
+            headless_failed({}),
+            headless_slow({}),
           ]);
           return "unexpected success";
         } catch (error) {
+          void headless_slow_release({});
           return error.message;
         }`,
         wallClockMs: 5_000,
@@ -392,9 +502,17 @@ describe("headless Code Mode", () => {
     );
 
     expect(result.value).toBe("fast failure");
-    expect(result.toolCallCount).toBe(2);
+    expect(result.toolCallCount).toBe(3);
     expect(failed.execute).toHaveBeenCalledOnce();
     expect(slow.execute).toHaveBeenCalledOnce();
+    expect(release.execute).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      "failed:wait",
+      "slow:start",
+      "failed:reject",
+      "slow:release",
+      "slow:done",
+    ]);
     expect(slowCompleted).toBe(true);
     expect(slowAborted).toBe(false);
   });
@@ -580,6 +698,49 @@ describe("headless Code Mode", () => {
     ]);
   });
 
+  it("keeps an injected namespace while calling a colliding tool by its advertised global", async () => {
+    const tool = fakeTool("trigger", async () => jsonResult({ owner: "tool" }));
+    const ctx = createHeadlessHarness([tool]);
+    const extraNamespaces: CodeModeNamespaceDescriptor[] = [
+      {
+        id: "cron:trigger",
+        globalName: "trigger",
+        scope: {
+          kind: "object",
+          entries: [["owner", { kind: "value", value: "namespace" }]],
+        },
+      },
+    ];
+    const run = async () =>
+      expectCompleted(
+        await runCodeModeScriptHeadless({
+          ctx,
+          extraNamespaces,
+          code: `
+            const handle = catalog.all().find((entry) => entry.toolName === "trigger");
+            if (!handle) throw new Error("trigger tool missing");
+            return {
+              namespaceOwner: trigger.owner,
+              callableName: handle.callableName,
+              toolResult: await globalThis[handle.callableName]({}),
+            };
+          `,
+          wallClockMs: 120_000,
+        }),
+      );
+
+    const first = await run();
+    const second = await run();
+
+    expect(first.value).toEqual({
+      namespaceOwner: "namespace",
+      callableName: expect.stringMatching(/^trigger_[a-f0-9]{8}$/u),
+      toolResult: { owner: "tool" },
+    });
+    expect(second.value).toEqual(first.value);
+    expect(tool.execute).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects colliding injected namespace globals", async () => {
     const result = expectFailed(
       await runCodeModeScriptHeadless({
@@ -610,8 +771,8 @@ describe("headless Code Mode", () => {
       await runCodeModeScriptHeadless({
         ctx: createHeadlessHarness([tool]),
         code: `
-          await tools.call("openclaw:core:budgeted", {});
-          await tools.call("openclaw:core:budgeted", {});
+          await budgeted({});
+          await budgeted({});
           return true;
         `,
         maxToolCalls: 1,
@@ -667,7 +828,7 @@ describe("headless Code Mode", () => {
         ctx: createHeadlessHarness([tool]),
         code: `
           text("x".repeat(700));
-          await tools.call("openclaw:core:output_boundary", {});
+          await output_boundary({});
           return "y".repeat(700);
         `,
         overrides: { maxOutputBytes: 1_024 },
@@ -689,7 +850,7 @@ describe("headless Code Mode", () => {
         ctx: createHeadlessHarness([tool]),
         code: `
           const calls = Array.from({ length: 129 }, () => () =>
-            tools.call("openclaw:core:budgeted", {}),
+            budgeted({}),
           );
           // Keep each leg within the default 16-call pending cap while proving the cumulative budget.
           for (let offset = 0; offset < calls.length; offset += 16) {
@@ -728,7 +889,7 @@ describe("headless Code Mode", () => {
     const resultPromise = runCodeModeScriptHeadless({
       ctx: createHeadlessHarness([slow]),
       code: `
-        await tools.call("openclaw:core:slow_leg", {});
+        await slow_leg({});
         return true;
       `,
       wallClockMs: 15_000,
@@ -756,7 +917,7 @@ describe("headless Code Mode", () => {
     const resultPromise = runCodeModeScriptHeadless({
       ctx: createHeadlessHarness([slow]),
       code: `
-        await tools.call("openclaw:core:slow_leg", {});
+        await slow_leg({});
         return true;
       `,
       wallClockMs: 360_000,

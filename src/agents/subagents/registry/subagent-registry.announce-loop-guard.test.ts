@@ -79,6 +79,16 @@ vi.mock("../../timeout.js", () => ({
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
 
+  function hydrateAndActivateRegistry() {
+    registry.initSubagentRegistry();
+    const recoveryRuntime = {
+      dispatchAgent: vi.fn(),
+      waitForAgent: vi.fn(async () => ({ status: "pending" })),
+      sendRecoveryNotice: vi.fn(),
+    };
+    registry.activateSubagentRegistry(() => ({ recoveryRuntime }) as never);
+  }
+
   function requireRunById(runs: SubagentRunRecord[], runId: string): SubagentRunRecord {
     const entry = runs.find((run) => run.runId === runId);
     if (!entry) {
@@ -198,7 +208,7 @@ describe("announce loop guard (#18264)", () => {
 
     // Initialization finalizes expired pending rows without another recipient-visible attempt.
     const beforeInit = Date.now();
-    registry.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await flushAsync();
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
@@ -231,7 +241,7 @@ describe("announce loop guard (#18264)", () => {
     };
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
-    registry.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     const resumed = await waitForRun(
       entry.runId,
       (run) => run.delivery?.attemptCount === 4 && typeof run.delivery.nextAttemptAt === "number",
@@ -279,7 +289,7 @@ describe("announce loop guard (#18264)", () => {
       ]),
     );
 
-    registry.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await flushAsync();
 
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
@@ -315,7 +325,7 @@ describe("announce loop guard (#18264)", () => {
       ]),
     );
 
-    registry.initSubagentRegistry();
+    hydrateAndActivateRegistry();
     await flushAsync();
 
     const stored = await waitForRun(

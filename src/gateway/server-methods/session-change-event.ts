@@ -1,8 +1,12 @@
 // Shared sessions.changed broadcaster for gateway RPC and chat-command mutations.
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { hasSessionChangeReceivers } from "../session-change-receivers.js";
-import { buildGatewaySessionEventFields } from "../session-event-payload.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
+import {
+  resolvePrivateSessionEventBroadcastScope,
+  resolveSessionEventAgentScope,
+  type SessionEventAgentScope,
+} from "../session-request-agent.js";
 import { invalidateSessionSharingSnapshot } from "../session-sharing.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
@@ -26,12 +30,15 @@ type SessionChangeContext = Pick<
 type PendingSessionChange = {
   context: SessionChangeContext;
   dirty: boolean;
+  firstDeferredAt?: number;
   key: string;
   payload: SessionChangedPayload;
+  scope: SessionEventAgentScope | null;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
 const SESSIONS_CHANGED_DEBOUNCE_MS = 100;
+const SESSIONS_CHANGED_MAX_WAIT_MS = 500;
 const sessionsMutationVersions = new WeakMap<object, number>();
 const pendingChangesByContext = new WeakMap<object, Map<string, PendingSessionChange>>();
 const pendingSessionChanges = new Set<PendingSessionChange>();
@@ -40,77 +47,73 @@ export function readSessionsMutationVersion(context: object): number {
   return sessionsMutationVersions.get(context) ?? 0;
 }
 
-function sessionChangeKey(payload: SessionChangedPayload): string {
-  return `${payload.agentId ?? ""}\0${payload.sessionKey ?? ""}`;
+function sessionChangeKey(payload: SessionChangedPayload, scope: SessionEventAgentScope | null) {
+  return `${scope?.[1] ?? payload.agentId ?? ""}\0${payload.sessionKey ?? ""}`;
 }
 
 function broadcastSessionsChanged(
   context: SessionChangeContext,
   payload: SessionChangedPayload,
+  scope: SessionEventAgentScope | null,
 ): void {
   const connIds = context.getSessionEventSubscriberConnIds();
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
-  const cfg = context.getRuntimeConfig();
-  const unscopedOwnerAgentId = payload.sessionKey
-    ? tryResolveSessionCompatibilityOwnerAgentId(cfg, payload.sessionKey)
-    : undefined;
-  const effectiveAgentId = payload.agentId ?? unscopedOwnerAgentId;
-  const sessionRow = payload.sessionKey
-    ? loadGatewaySessionRow(
-        payload.sessionKey,
-        effectiveAgentId ? { agentId: effectiveAgentId } : undefined,
-      )
-    : null;
-  let rowAgentId: string | undefined;
-  if (sessionRow) {
-    try {
-      rowAgentId = resolveAgentIdFromSessionKey(sessionRow.key, effectiveAgentId);
-    } catch {
-      rowAgentId = undefined;
-    }
+  if (scope === null) {
+    return;
   }
+  const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = scope;
+  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(payload.sessionKey, scope);
+  const broadcastAgentId = routingAgentId;
+  const broadcastOptions = {
+    ...(broadcastAgentId ? { agentId: broadcastAgentId } : {}),
+    ...privateBroadcastScope,
+    dropIfSlow: true,
+  };
+  const eventPayload = {
+    ...payload,
+    ...(eventAgentId ? { agentId: eventAgentId } : {}),
+    ts: Date.now(),
+  };
+  if (
+    !payload.sessionKey ||
+    !routingAgentId ||
+    (!eventAgentId && !compatibilityOwnerAgentId && !parseAgentSessionKey(payload.sessionKey))
+  ) {
+    context.broadcastToConnIds("sessions.changed", eventPayload, connIds, broadcastOptions);
+    return;
+  }
+  const sessionRow = loadGatewaySessionRow(payload.sessionKey, { agentId: routingAgentId });
   const activeRunState =
-    sessionRow &&
-    (sessionRow.key !== "global" || rowAgentId !== undefined || unscopedOwnerAgentId !== undefined)
+    sessionRow && (sessionRow.key !== "global" || routingAgentId !== undefined)
       ? resolveVisibleActiveSessionRunState({
           context,
           requestedKey: payload.sessionKey ?? sessionRow.key,
           canonicalKey: sessionRow.key,
           sessionId: sessionRow.sessionId,
-          agentId: rowAgentId,
-          defaultAgentId: unscopedOwnerAgentId,
+          agentId: routingAgentId,
+          defaultAgentId: compatibilityOwnerAgentId,
         })
       : null;
   context.broadcastToConnIds(
     "sessions.changed",
     {
-      ...payload,
-      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
-      ts: Date.now(),
+      ...eventPayload,
       ...(sessionRow
         ? {
-            ...buildGatewaySessionEventFields({
+            ...buildGatewaySessionSnapshot({
               sessionRow,
-              agentId: effectiveAgentId,
-              hasActiveRun: activeRunState?.active,
-              activeRunIds: activeRunState?.runIds,
+              agentId: eventAgentId,
+              activeRunState,
+              status: activeRunState?.active ? (activeRunState.status ?? "running") : undefined,
             }),
-            effectiveFastMode: sessionRow.effectiveFastMode,
-            effectiveFastModeSource: sessionRow.effectiveFastModeSource,
-            fastAutoOnSeconds: sessionRow.fastAutoOnSeconds,
-            traceLevel: sessionRow.traceLevel,
-            pluginExtensions: sessionRow.pluginExtensions,
           }
         : {}),
     },
     connIds,
     {
-      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
-      dropIfSlow: true,
-      // Scope only to a concrete key; a `[undefined]` scope filters no connection
-      // correctly and would strip draft gating, so fall back to an unscoped send.
+      ...broadcastOptions,
       ...(sessionRow?.key ? { sessionKeys: [sessionRow.key] } : {}),
     },
   );
@@ -127,7 +130,7 @@ function finishPendingSessionChange(pending: PendingSessionChange): void {
     byKey.delete(pending.key);
   }
   if (pending.dirty) {
-    broadcastSessionsChanged(pending.context, pending.payload);
+    broadcastSessionsChanged(pending.context, pending.payload, pending.scope);
   }
 }
 
@@ -150,19 +153,27 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
   if (!hasSessionChangeReceivers(connIds)) {
     return;
   }
-  const key = sessionChangeKey(payload);
+  const scope: SessionEventAgentScope | null = payload.sessionKey
+    ? resolveSessionEventAgentScope(context.getRuntimeConfig(), payload.sessionKey, payload.agentId)
+    : [payload.agentId, payload.agentId, undefined];
+  const key = sessionChangeKey(payload, scope);
   const byKey = pendingChangesByContext.get(context) ?? new Map<string, PendingSessionChange>();
   pendingChangesByContext.set(context, byKey);
   const pending = byKey.get(key);
   if (pending) {
     pending.payload = payload;
+    pending.scope = scope;
     pending.dirty = true;
+    pending.firstDeferredAt ??= Date.now();
     if (pending.timer) {
       clearTimeout(pending.timer);
     }
+    // Keep resetting for a quiet-period trailing emit without letting a sustained
+    // mutation stream postpone the authoritative row forever.
+    const maxWaitRemaining = pending.firstDeferredAt + SESSIONS_CHANGED_MAX_WAIT_MS - Date.now();
     pending.timer = setTimeout(
       () => finishPendingSessionChange(pending),
-      SESSIONS_CHANGED_DEBOUNCE_MS,
+      Math.max(0, Math.min(SESSIONS_CHANGED_DEBOUNCE_MS, maxWaitRemaining)),
     );
     pending.timer.unref?.();
     return;
@@ -175,13 +186,14 @@ export function emitSessionsChanged(context: SessionChangeContext, payload: Sess
     dirty: false,
     key,
     payload,
+    scope,
     timer: null,
   };
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
   byKey.set(key, next);
   pendingSessionChanges.add(next);
-  broadcastSessionsChanged(context, payload);
+  broadcastSessionsChanged(context, payload, scope);
 }
 
 export function emitSessionArchived(

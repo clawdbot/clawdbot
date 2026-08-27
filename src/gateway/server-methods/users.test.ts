@@ -5,6 +5,7 @@ import {
   validateUsersSelfResult,
   validateUsersSetAvatarResult,
   validateUsersSetDisplayNameResult,
+  validateUsersSetRoleResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { usersHandlers } from "./users.js";
 
@@ -12,6 +13,8 @@ const linkEmail = vi.hoisted(() => vi.fn());
 const listProfiles = vi.hoisted(() => vi.fn());
 const setAvatar = vi.hoisted(() => vi.fn());
 const setDisplayName = vi.hoisted(() => vi.fn());
+const setUserProfileRole = vi.hoisted(() => vi.fn());
+const invalidateOperatorRolePolicy = vi.hoisted(() => vi.fn());
 const ensureProfileForEmail = vi.hoisted(() => vi.fn());
 const getUserProfileDisplay = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
@@ -26,8 +29,11 @@ vi.mock("../../state/user-profiles.js", () => ({
   resolveUserProfileId,
   setAvatar,
   setDisplayName,
+  setUserProfileRole,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
+
+vi.mock("../operator-role-policy.js", () => ({ invalidateOperatorRolePolicy }));
 
 async function runUsersHandler(
   method: keyof typeof usersHandlers,
@@ -52,6 +58,7 @@ describe("users gateway methods", () => {
     createdAt: 1,
     updatedAt: 1,
     emails: ["ada@example.com"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const adminClient = { connect: { scopes: ["operator.admin"] } };
@@ -69,6 +76,8 @@ describe("users gateway methods", () => {
     listProfiles.mockReset();
     setAvatar.mockReset();
     setDisplayName.mockReset();
+    setUserProfileRole.mockReset();
+    invalidateOperatorRolePolicy.mockReset();
     getUserProfileDisplay.mockReturnValue({
       id: profile.id,
       displayName: profile.displayName,
@@ -122,6 +131,78 @@ describe("users gateway methods", () => {
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
 
+  it("waits for the authenticated GitHub sync before returning users.self", async () => {
+    let finishSync: (() => void) | undefined;
+    const providerClient: Record<string, unknown> = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
+    const authenticatedGitHubIdentitySync = vi.fn(
+      async () =>
+        await new Promise<{ profileId: string; updatedAt: number }>((resolve) => {
+          finishSync = () => {
+            providerClient.authenticatedUserProfile = {
+              profileId: profile.id,
+              displayName: "Ada",
+              hasAvatar: false,
+              updatedAt: 1,
+            };
+            resolve({ profileId: profile.id, updatedAt: profile.updatedAt });
+          };
+        }),
+    );
+    providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue(profile);
+
+    const pending = runUsersHandler("users.self", {}, providerClient);
+    await Promise.resolve();
+
+    expect(authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+    expect(getUserProfileListItem).not.toHaveBeenCalled();
+    finishSync?.();
+    const respond = await pending;
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+  });
+
+  it("keeps unresolved users.self unavailable and retryable when GitHub lookup fails", async () => {
+    const providerClient: Record<string, unknown> = {
+      authenticatedUserId: "ada@github",
+      authenticatedUserIsTailscaleProvider: true,
+      connect: { scopes: ["operator.write"] },
+    };
+    const authenticatedGitHubIdentitySync = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network unavailable"))
+      .mockImplementationOnce(async () => {
+        providerClient.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: "Ada",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+        return { profileId: profile.id, updatedAt: profile.updatedAt };
+      });
+    providerClient.authenticatedGitHubIdentitySync = authenticatedGitHubIdentitySync;
+    resolveUserProfileId.mockReturnValue(profile.id);
+    getUserProfileListItem.mockReturnValue(profile);
+
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        retryable: true,
+        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+      }),
+    );
+    expect(await runUsersHandler("users.self", {}, providerClient)).toHaveBeenCalledWith(true, {
+      profile,
+    });
+    expect(authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps generic proxy identities on the legacy profile fallback", async () => {
     const proxyClient = {
       authenticatedUserId: "ada@github",
@@ -148,7 +229,7 @@ describe("users gateway methods", () => {
     expect(respond).toHaveBeenCalledWith(
       false,
       undefined,
-      expect.objectContaining({ message: "authenticated user profile is unavailable" }),
+      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
     );
     expect(ensureProfileForEmail).not.toHaveBeenCalled();
   });
@@ -215,6 +296,116 @@ describe("users gateway methods", () => {
       hasAvatar: false,
       updatedAt: profile.updatedAt,
     });
+  });
+
+  it("assigns a configured profile role and invalidates its cached policy", async () => {
+    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
+    const disconnectClientsForUserProfile = vi.fn();
+    setUserProfileRole.mockReturnValue(assignedProfile);
+
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: "guest" },
+      adminClient,
+      {
+        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+        disconnectClientsForUserProfile,
+      },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
+    expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
+    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, "guest");
+    expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
+    expect(invalidateOperatorRolePolicy.mock.invocationCallOrder[0]).toBeLessThan(
+      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
+    expect(disconnectClientsForUserProfile.mock.invocationCallOrder[0]).toBeLessThan(
+      respond.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("invalidates downgraded operator connections before acknowledging the role change", async () => {
+    const assignedProfile = { ...profile, role: "guest", updatedAt: 2 };
+    const connectedOperator = { scopes: ["operator.admin"] };
+    const disconnectClientsForUserProfile = vi.fn(() => {
+      connectedOperator.scopes = [];
+    });
+    const respond = vi.fn(() => {
+      expect(connectedOperator.scopes).not.toContain("operator.admin");
+    });
+    setUserProfileRole.mockReturnValue(assignedProfile);
+
+    await expectDefined(
+      usersHandlers["users.setRole"],
+      "users.setRole test invariant",
+    )({
+      client: adminClient,
+      context: {
+        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+        disconnectClientsForUserProfile,
+      },
+      params: { profileId: profile.id, role: "guest" },
+      respond,
+    } as never);
+
+    expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
+    expect(disconnectClientsForUserProfile).toHaveBeenCalledWith(profile.id);
+  });
+
+  it("clears profile roles even when role definitions have been removed", async () => {
+    setUserProfileRole.mockReturnValue(profile);
+
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: null },
+      adminClient,
+      { getRuntimeConfig: () => ({}) },
+    );
+
+    expect(respond).toHaveBeenCalledWith(true, { profile });
+    expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, null);
+    expect(invalidateOperatorRolePolicy).toHaveBeenCalledWith(profile.id);
+  });
+
+  it("rejects undefined profile roles before changing storage or cached policy", async () => {
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: "maintainer" },
+      adminClient,
+      { getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }) },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("gateway.roles.definitions"),
+      }),
+    );
+    expect(setUserProfileRole).not.toHaveBeenCalled();
+    expect(invalidateOperatorRolePolicy).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed profile role assignments before reading configuration", async () => {
+    const getRuntimeConfig = vi.fn();
+
+    const respond = await runUsersHandler(
+      "users.setRole",
+      { profileId: profile.id, role: "   " },
+      adminClient,
+      { getRuntimeConfig },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
+    expect(setUserProfileRole).not.toHaveBeenCalled();
   });
 
   it("returns protocol-complete avatar mutations", async () => {

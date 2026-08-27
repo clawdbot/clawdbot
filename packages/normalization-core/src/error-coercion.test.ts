@@ -16,9 +16,35 @@ describe("formatErrorMessage", () => {
   it("walks and deduplicates Error cause chains while preserving codes", () => {
     const root = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
     const inner = new Error("request failed", { cause: root });
-    const outer = new Error("request failed", { cause: inner });
+    const outer = Object.assign(new Error("request failed", { cause: inner }), {
+      code: "REQUEST_FAILED",
+    });
 
     expect(format(outer)).toBe("request failed | socket closed | ECONNRESET");
+    expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
+      "request failed | REQUEST_FAILED | socket closed | ECONNRESET",
+    );
+  });
+
+  it("omits cause text the wrapper message already spells out", () => {
+    // Wrappers that embed the cause verbatim printed the whole sentence twice.
+    const parseFailure = new SyntaxError("JSON5: invalid character 'j' at 1:7");
+    const wrapped = new Error(`Failed to parse --file as JSON5: ${parseFailure.message}`, {
+      cause: parseFailure,
+    });
+    expect(format(wrapped)).toBe(
+      "Failed to parse --file as JSON5: JSON5: invalid character 'j' at 1:7",
+    );
+
+    // Codes keep their own segment even when the detail already names them.
+    const errno = Object.assign(
+      new Error("ENOENT: no such file or directory, open '/tmp/missing.json'"),
+      { code: "ENOENT" },
+    );
+    const notFound = new Error("--file not found: /tmp/missing.json.", { cause: errno });
+    expect(format(notFound)).toBe(
+      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json' | ENOENT",
+    );
   });
 
   it("formats status/code records and structured non-Error causes", () => {
@@ -29,9 +55,21 @@ describe("formatErrorMessage", () => {
     expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
       "request failed | status=429 code=unknown",
     );
+    // A non-Error cause carrying recognized status/code fields alongside extra
+    // keys used to be dropped entirely: formatStatusAndCode returns undefined
+    // for any object with keys beyond status/code, and the cause-chain branch
+    // had no stringifyUnknown fallback (unlike the top-level branch). The
+    // structured detail now survives instead of being swallowed.
     expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
-      "request failed",
+      'request failed | {"statusCode":429}',
     );
+    expect(
+      format(
+        new Error("request failed", {
+          cause: { status: 503, code: "UNAVAILABLE", requestId: "abc" },
+        }),
+      ),
+    ).toBe('request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}');
   });
 
   it("stringifies primitives and circular records without throwing", () => {

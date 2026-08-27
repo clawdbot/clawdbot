@@ -107,69 +107,114 @@ describe("gateway HTTP request trace scope", () => {
 
 describe("gateway HTTP request error cleanup", () => {
   it.each([
-    {
-      label: "partially written",
-      writeResponse: (res: ServerResponse) => res.write("partial"),
-      expectedBody: "partial",
-    },
-    {
-      label: "already completed",
-      writeResponse: (res: ServerResponse) => res.end("complete"),
-      expectedBody: "complete",
-    },
-    {
-      label: "fully written fixed-length",
-      writeResponse: (res: ServerResponse) => {
-        res.setHeader("Content-Length", "7");
-        res.write("partial");
+    { label: "completed", destroy: false },
+    { label: "destroyed", destroy: true },
+  ])("does not invoke later routes after an earlier response is $label", async ({ destroy }) => {
+    const handleWatchNodeRequest = vi.fn(async () => true);
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        if (destroy) {
+          res.destroy();
+        } else {
+          res.end("already finished");
+        }
+        return false;
       },
-      expectedBody: "partial",
-    },
-    {
-      label: "fully written writeHead fixed-length",
-      writeResponse: (res: ServerResponse) => {
-        res.writeHead(200, { "Content-Length": "7" });
-        res.write("partial");
-      },
-      expectedBody: "partial",
-    },
-  ])(
-    "finishes a $label response after its route throws",
-    async ({ writeResponse, expectedBody }) => {
-      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
-      const server = createGatewayHttpServer({
-        clients: new Set(),
-        controlUiEnabled: false,
-        controlUiBasePath: "",
-        openAiChatCompletionsEnabled: false,
-        openResponsesEnabled: false,
-        handleHooksRequest: async (_req, res) => {
-          writeResponse(res);
-          throw new Error("route failed after writing a response");
-        },
-        resolvedAuth,
-        getRuntimeConfig: () => ({}),
-      });
-      const port = await listen(server);
+      handleWatchNodeRequest,
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
 
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
-          signal: AbortSignal.timeout(1_000),
-        });
-
+    try {
+      const request = fetch(`http://127.0.0.1:${port}/api/nodes/watch/example`);
+      if (destroy) {
+        await expect(request).rejects.toMatchObject({ name: "TypeError" });
+      } else {
+        const response = await request;
         expect(response.status).toBe(200);
-        expect(await response.text()).toBe(expectedBody);
-        expect(errorLog).toHaveBeenCalledWith(
-          "[gateway-http] unhandled error in request handler:",
-          expect.any(Error),
-        );
-      } finally {
-        server.closeAllConnections();
-        await closeServer(server);
-        errorLog.mockRestore();
+        expect(await response.text()).toBe("already finished");
       }
-    },
-  );
+      expect(handleWatchNodeRequest).not.toHaveBeenCalled();
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+    }
+  });
+
+  it("preserves a response the route already completed before throwing", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        res.end("complete");
+        throw new Error("route failed after completing a response");
+      },
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/hooks/test`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("complete");
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.any(Error),
+      );
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
+
+  it("aborts an incomplete unframed response after its route throws", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const server = createGatewayHttpServer({
+      clients: new Set(),
+      controlUiEnabled: false,
+      controlUiBasePath: "",
+      openAiChatCompletionsEnabled: false,
+      openResponsesEnabled: false,
+      handleHooksRequest: async (_req, res) => {
+        res.write("partial");
+        throw new Error("route failed after writing a partial response");
+      },
+      resolvedAuth,
+      getRuntimeConfig: () => ({}),
+    });
+    const port = await listen(server);
+
+    try {
+      await expect(
+        fetch(`http://127.0.0.1:${port}/hooks/test`, {
+          signal: AbortSignal.timeout(1_000),
+        }).then(async (response) => await response.text()),
+      ).rejects.toMatchObject({ name: "TypeError" });
+      expect(errorLog).toHaveBeenCalledWith(
+        "[gateway-http] unhandled error in request handler:",
+        expect.any(Error),
+      );
+    } finally {
+      server.closeAllConnections();
+      await closeServer(server);
+      errorLog.mockRestore();
+    }
+  });
 
   it.each([
     {

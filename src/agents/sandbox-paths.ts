@@ -189,10 +189,10 @@ export function assertMediaNotDataUrl(media: string): void {
   }
 }
 
-function isManagedMediaPathUnderRoot(candidate: string): boolean {
+export function resolveManagedMediaRoot(candidate: string): string | undefined {
   const expanded = expandPath(candidate);
   if (!hostPathLooksAbsolute(expanded)) {
-    return false;
+    return undefined;
   }
   const mediaRoot = path.join(resolveConfigDir(), "media");
   const resolvedMediaRoot = path.resolve(mediaRoot);
@@ -201,18 +201,20 @@ function isManagedMediaPathUnderRoot(candidate: string): boolean {
     resolvedExpanded === resolvedMediaRoot ||
     !isPathInside(resolvedMediaRoot, resolvedExpanded)
   ) {
-    return false;
+    return undefined;
   }
   const relative = path.relative(resolvedMediaRoot, resolvedExpanded);
   const firstSegment = relative.split(path.sep)[0] ?? "";
-  return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-");
+  return MANAGED_MEDIA_SUBDIRS.has(firstSegment) || firstSegment.startsWith("tool-")
+    ? path.join(resolvedMediaRoot, firstSegment)
+    : undefined;
 }
 
 export async function resolveAllowedManagedMediaPath(
   candidate: string,
 ): Promise<string | undefined> {
   const expanded = expandPath(candidate);
-  if (!isManagedMediaPathUnderRoot(expanded)) {
+  if (!resolveManagedMediaRoot(expanded)) {
     return undefined;
   }
   const resolved = path.resolve(expanded);
@@ -227,6 +229,7 @@ export async function resolveAllowedManagedMediaPath(
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
+  containerWorkdir?: string;
 }): Promise<string> {
   const raw = params.media.trim();
   if (!raw) {
@@ -235,11 +238,16 @@ export async function resolveSandboxedMediaSource(params: {
   if (isPassThroughRemoteMediaSource(raw)) {
     return raw;
   }
+  const normalizedContainerWorkdir = path.posix.normalize(
+    (params.containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\\/g, "/"),
+  );
+  const containerWorkdir = normalizedContainerWorkdir.replace(/\/+$/, "") || "/";
   let candidate = raw;
   if (/^file:/i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
+      containerWorkdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -256,6 +264,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -294,6 +303,7 @@ async function assertNoManagedMediaAliasEscape(params: {
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   let parsed: URL;
   try {
@@ -311,35 +321,31 @@ function mapContainerWorkspaceFileUrl(params: {
   if (hasEncodedFileUrlSeparator(parsed.pathname)) {
     return undefined;
   }
-  // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
-  // Windows hosts can still accept file:///workspace/... media references.
+  // Backend workdirs are container paths; parse the URL directly so Windows hosts
+  // can still map Linux-style file URLs to their actual sandbox workspace.
   let normalizedPathname: string;
   try {
     normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
   } catch {
     return undefined;
   }
-  if (
-    normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
-  ) {
-    return undefined;
-  }
   return mapContainerWorkspacePath({
     candidate: normalizedPathname,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: params.containerWorkdir,
   });
 }
 
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   const normalized = params.candidate.replace(/\\/g, "/");
-  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+  if (normalized === params.containerWorkdir) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  const prefix = params.containerWorkdir === "/" ? "/" : `${params.containerWorkdir}/`;
   if (!normalized.startsWith(prefix)) {
     return undefined;
   }

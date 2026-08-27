@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 334391,
-  "reason": "cumulative 2026-08-15 UI growth plus folder group defaults catalog and lazy New Session route resolution",
-  "updatedAt": "2026-08-15"
+  "startupJsGzipBytes": 341333,
+  "reason": "Tide, Beacon, and Phosphor themes: theme-name wiring, three appearance options, locale strings, and two font stylesheet mappings",
+  "updatedAt": "2026-08-26"
 }

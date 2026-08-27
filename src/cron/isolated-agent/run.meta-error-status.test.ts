@@ -1,5 +1,5 @@
 // Run meta error tests cover status reporting when cron run metadata fails.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
@@ -132,12 +132,25 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("marks a completed embedded run with no final payload as a cron error", async () => {
-    mockAgentRun();
+  it.each([
+    { label: "accidental", intentionalTerminalCompletion: undefined },
+    { label: "intentional terminal tool", intentionalTerminalCompletion: "tool-batch" as const },
+  ])("accounts for an $label embedded run with no final payload", async (testCase) => {
+    mockAgentRun({
+      meta: testCase.intentionalTerminalCompletion
+        ? { intentionalTerminalCompletion: testCase.intentionalTerminalCompletion }
+        : {},
+    });
     mockAnnounceOutcome();
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
+    if (testCase.intentionalTerminalCompletion) {
+      expect(dispatchCronDeliveryMock).toHaveBeenCalled();
+      expect(result.status).toBe("ok");
+      expect(result.error).toBeUndefined();
+      return;
+    }
     expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
     expect(result.status).toBe("error");
     expect(result.error).toBe("cron isolated run completed without a final assistant payload");
@@ -160,6 +173,9 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   });
 
   it("keeps explicit silent replies as successful cron completions", async () => {
+    const { resolveCronPayloadOutcome } =
+      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
     mockAgentRun({
       usage: { input: 10, output: 1 },
       meta: {
@@ -167,13 +183,27 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
         finalAssistantVisibleText: "NO_REPLY",
       },
     });
-    mockAnnounceOutcome();
 
     const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(dispatchCronDeliveryMock).toHaveBeenCalled();
     expect(result.status).toBe("ok");
     expect(result.error).toBeUndefined();
+  });
+
+  it("records a real tool error when the terminal assistant reply is silent", async () => {
+    const { resolveCronPayloadOutcome } =
+      await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+    resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
+    mockAgentRun({
+      payloads: [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }],
+      meta: { finalAssistantVisibleText: "NO_REPLY" },
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+
+    expect(result.status).toBe("error");
+    expect(result.error).toContain("Bash failed");
   });
 
   it("keeps committed message-tool deliveries as successful cron completions", async () => {

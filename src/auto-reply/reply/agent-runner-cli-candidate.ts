@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
@@ -9,10 +10,6 @@ import {
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import type { ContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
-import {
-  AGENT_RUN_RESTART_ABORT_STOP_REASON,
-  resolveAgentRunErrorLifecycleFields,
-} from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,7 +38,7 @@ import { shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
-import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { resolveReplyOperationTerminationFields } from "./reply-operation-abort.js";
 import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authority.js";
 
 type CliPresentation = Pick<
@@ -90,6 +87,12 @@ export async function runCliFallbackCandidate(params: {
   bootstrapPromptWarningSignaturesSeen: string[];
 }> {
   const turn = params.turn;
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const selectedModelEntry = turn.followupRun.run.thinkingCatalog?.find(
+    (entry) =>
+      normalizeProviderId(entry.provider) === normalizedProvider && entry.id === params.model,
+  );
+  const modelHasVision = Boolean(selectedModelEntry?.input?.includes("image"));
   const sessionKey = turn.sessionKey ?? turn.followupRun.run.sessionKey;
   const sessionTarget =
     sessionKey && turn.storePath
@@ -110,15 +113,8 @@ export async function runCliFallbackCandidate(params: {
     sessionKey: turn.sessionKey,
     startedAt: cliLifecycleStartedAt,
     getLifecycleGeneration: () => params.lifecycleGeneration,
-    resolveTerminationFields: (error) => ({
-      ...resolveAgentRunErrorLifecycleFields(error, params.runAbortSignal),
-      ...(isReplyOperationRestartAbort(turn.replyOperation)
-        ? {
-            aborted: true as const,
-            stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-          }
-        : {}),
-    }),
+    resolveTerminationFields: (error) =>
+      resolveReplyOperationTerminationFields(error, params.runAbortSignal, turn.replyOperation),
   });
   params.onLifecycleBackstop(lifecycleBackstop);
   const authProfile = resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
@@ -382,6 +378,10 @@ export async function runCliFallbackCandidate(params: {
             currentInboundContext: turn.followupRun.currentInboundContext,
             inputProvenance: turn.followupRun.run.inputProvenance,
             modelProvider: params.provider,
+            modelHasVision,
+            modelContextWindow: selectedModelEntry?.contextWindow,
+            modelContextTokens: selectedModelEntry?.contextTokens,
+            contextWindow: turn.getActiveSessionEntry()?.contextWindow,
             provider: params.cliExecutionProvider,
             execOverrides: turn.followupRun.run.execOverrides,
             bashElevated: turn.followupRun.run.bashElevated,
@@ -399,6 +399,8 @@ export async function runCliFallbackCandidate(params: {
             extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
             sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
             taskSuggestionDeliveryMode: turn.followupRun.run.taskSuggestionDeliveryMode,
+            // Heartbeat ambient routes are never implicit message recipients.
+            ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
             allowEmptyAssistantReplyAsSilent: turn.followupRun.run.allowEmptyAssistantReplyAsSilent,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
@@ -416,6 +418,7 @@ export async function runCliFallbackCandidate(params: {
               ],
             images: params.currentTurnImages.images,
             imageOrder: params.currentTurnImages.imageOrder,
+            mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             skillsSnapshot: turn.followupRun.run.skillsSnapshot,
             messageChannel: turn.followupRun.originatingChannel ?? undefined,
             messageProvider: hookMessageProvider,
@@ -434,11 +437,13 @@ export async function runCliFallbackCandidate(params: {
             channelContext: turn.followupRun.run.channelContext,
             currentThreadTs: cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
             currentMessageId: cliCurrentMessageId,
+            replyToMode: turn.followupRun.originatingReplyToMode ?? turn.sessionCtx.ReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
             senderIsOwner: turn.followupRun.run.senderIsOwner,
             approvalReviewerDeviceId: turn.followupRun.run.approvalReviewerDeviceId,
             toolsAllow: turn.opts?.toolsAllow,
+            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             disableTools: turn.opts?.disableTools,
             toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(
               turn.followupRun,

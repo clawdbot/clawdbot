@@ -15,8 +15,14 @@ const SLACK_PRESENCE_AUTO_MAX_PARTICIPANTS = 8;
 const SLACK_PRESENCE_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 const SLACK_PRESENCE_MAX_POLLS_PER_INTERVAL = 45;
 const SLACK_PRESENCE_MAX_TARGETS = 2_000;
+const DEFAULT_SLACK_PRESENCE_EVENT_PROMPT = [
+  "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
+  "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
+];
 
-type SlackPresenceEventsConfig = NonNullable<SlackAccountConfig["presenceEvents"]>;
+type SlackPresenceEventsConfig = NonNullable<SlackAccountConfig["presenceEvents"]> & {
+  prompt?: string;
+};
 type SlackPresenceEventsMode = NonNullable<SlackPresenceEventsConfig["mode"]>;
 type PresenceObservation = { presence: "active" } | { presence: "away"; firstObservedAtMs: number };
 
@@ -24,6 +30,7 @@ type PresenceTarget = {
   key: string;
   teamId?: string;
   mode: Exclude<SlackPresenceEventsMode, "off">;
+  prompt: string | undefined;
   channelId: string;
   threadId?: string;
   to: string;
@@ -49,6 +56,13 @@ function resolveMode(
   accountConfig: SlackPresenceEventsConfig | undefined,
 ): SlackPresenceEventsMode {
   return channelConfig?.mode ?? accountConfig?.mode ?? "off";
+}
+
+function resolvePrompt(
+  channelConfig: SlackPresenceEventsConfig | undefined,
+  accountConfig: SlackPresenceEventsConfig | undefined,
+): string | undefined {
+  return channelConfig?.prompt ?? accountConfig?.prompt;
 }
 
 export function hasSlackPresenceEventsEnabled(params: {
@@ -80,12 +94,17 @@ function formatSlackPresenceEvent(
 ): string {
   const { observedAwayAtMs, observedActiveAtMs } = awayObservation;
   const observedAwayDurationMs = Math.max(0, observedActiveAtMs - observedAwayAtMs);
+  const promptLines =
+    target.prompt === undefined
+      ? DEFAULT_SLACK_PRESENCE_EVENT_PROMPT
+      : target.prompt.length > 0
+        ? [target.prompt]
+        : [];
   const lines = [
     "Slack presence event:",
     `A human participant became active on Slack after being observed away: user_id=${JSON.stringify(userId)}${target.teamId ? ` team_id=${JSON.stringify(target.teamId)}` : ""} channel_id=${JSON.stringify(target.channelId)}${target.threadId ? ` thread_ts=${JSON.stringify(target.threadId)}` : ""}.`,
     `observed_away_at_ms=${observedAwayAtMs} observed_active_at_ms=${observedActiveAtMs} observed_away_duration_ms=${observedAwayDurationMs}`,
-    "Before greeting, retrieve relevant memory and wiki context for this immutable user_id, including a known timezone when available. Use their local time; if their timezone is unknown, do not guess.",
-    "Send at most one short, natural greeting in this Slack conversation. Do not reveal private memory. If no greeting is appropriate, stay silent.",
+    ...promptLines,
   ];
   return lines.join("\n");
 }
@@ -128,6 +147,7 @@ function resolveObservedTarget(params: {
     key: `${teamId ? `team:${teamId}:` : ""}${channelId}${targetSuffix}`,
     ...(teamId ? { teamId } : {}),
     mode,
+    prompt: resolvePrompt(prepared.channelConfig?.presenceEvents, params.accountConfig),
     channelId,
     threadId,
     to: formatSlackTarget({
@@ -215,6 +235,7 @@ export function createSlackPresenceMonitor(params: {
     const current = targets.get(observed.key);
     if (current) {
       current.mode = observed.mode;
+      current.prompt = observed.prompt;
       current.sessionKey = observed.sessionKey;
       current.agentId = observed.agentId;
       current.to = observed.to;

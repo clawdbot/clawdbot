@@ -6,29 +6,41 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "../plugins/current-plugin-metadata-snapshot.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../plugins/manifest-model-suppression.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataEnvFingerprint } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 type ManifestSuppressionResolver = ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;
 
-type CachedManifestSuppressionResolver = {
+type CachedStandaloneManifestSuppressionResolver = {
   config: OpenClawConfig | undefined;
   controlPlaneFingerprint: string;
   cwd: string;
   envFingerprint: string;
-  metadataSnapshot: unknown;
+  metadataSnapshot: PluginMetadataSnapshot | undefined;
   resolver: ManifestSuppressionResolver;
   workspaceDir: string | undefined;
 };
 
-let cachedManifestSuppressionResolver: CachedManifestSuppressionResolver | undefined;
+const configlessRuntimeGeneration = {};
+let runtimeGenerationResolvers = new WeakMap<
+  PluginMetadataSnapshot,
+  WeakMap<object, Map<string | undefined, ManifestSuppressionResolver>>
+>();
+let cachedStandaloneManifestSuppressionResolver:
+  | CachedStandaloneManifestSuppressionResolver
+  | undefined;
 
 /** Clear cached manifest suppression resolver state for tests and metadata lifecycle resets. */
 function clearModelSuppressionResolverCache(): void {
-  cachedManifestSuppressionResolver = undefined;
+  runtimeGenerationResolvers = new WeakMap();
+  cachedStandaloneManifestSuppressionResolver = undefined;
 }
 
 registerPluginMetadataProcessMemoLifecycleClear(clearModelSuppressionResolverCache);
@@ -38,7 +50,33 @@ function resolveCachedManifestSuppressionResolver(params: {
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
 }): ManifestSuppressionResolver {
-  const cached = cachedManifestSuppressionResolver;
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot(params);
+  if (metadataSnapshot && isCurrentPluginMetadataSnapshotRuntimeGeneration(metadataSnapshot)) {
+    let byConfig = runtimeGenerationResolvers.get(metadataSnapshot);
+    if (!byConfig) {
+      byConfig = new WeakMap();
+      runtimeGenerationResolvers.set(metadataSnapshot, byConfig);
+    }
+    const configKey = params.config ?? configlessRuntimeGeneration;
+    let byWorkspace = byConfig.get(configKey);
+    if (!byWorkspace) {
+      byWorkspace = new Map();
+      byConfig.set(configKey, byWorkspace);
+    }
+    const cached = byWorkspace.get(params.workspaceDir);
+    if (cached) {
+      return cached;
+    }
+    const resolver = buildManifestBuiltInModelSuppressionResolver({
+      env: params.env,
+      ...(params.config ? { config: params.config } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    });
+    byWorkspace.set(params.workspaceDir, resolver);
+    return resolver;
+  }
+
+  const cached = cachedStandaloneManifestSuppressionResolver;
   const controlPlaneFingerprint = resolvePluginControlPlaneFingerprint({
     ...(params.config ? { config: params.config } : {}),
     env: params.env,
@@ -46,7 +84,6 @@ function resolveCachedManifestSuppressionResolver(params: {
   });
   const cwd = process.cwd();
   const envFingerprint = resolvePluginMetadataEnvFingerprint(params.env);
-  const metadataSnapshot = getCurrentPluginMetadataSnapshotState().snapshot;
   if (
     cached !== undefined &&
     cached.config === params.config &&
@@ -63,7 +100,7 @@ function resolveCachedManifestSuppressionResolver(params: {
     ...(params.config ? { config: params.config } : {}),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  cachedManifestSuppressionResolver = {
+  cachedStandaloneManifestSuppressionResolver = {
     config: params.config,
     controlPlaneFingerprint,
     cwd,

@@ -145,17 +145,20 @@ describe("workspace hash memo", () => {
       contentHashCount: 7,
       contentHashDurationMs: 11,
       memoHitCount: 13,
+      memoTruncatedCount: 17,
       totalDurationMs: 17,
     });
     recordRemoteWorkspaceHashMetrics(aggregate, {
       contentHashCount: 19,
       contentHashDurationMs: 23,
       memoHitCount: 29,
+      memoTruncatedCount: 31,
       totalDurationMs: 31,
     });
     expect(aggregate).toMatchObject({
       remoteContentHashCount: 26,
       remoteMemoHitCount: 42,
+      remoteMemoTruncatedCount: 48,
       remoteHashDurationMs: 34,
       remoteManifestDurationMs: 48,
     });
@@ -179,6 +182,7 @@ describe("workspace hash memo", () => {
           contentHashCount: MAX_RECONCILIATION_ENTRIES,
           contentHashDurationMs: Number.MAX_SAFE_INTEGER,
           memoHitCount: MAX_RECONCILIATION_ENTRIES,
+          memoTruncatedCount: MAX_RECONCILIATION_ENTRIES,
           totalDurationMs: Number.MAX_SAFE_INTEGER,
         },
       })}\n`,
@@ -232,5 +236,58 @@ describe("workspace hash memo", () => {
     const nextReconcile = await capture([]);
     expect(nextReconcile.manifestRef).toBe(replaced.manifestRef);
     expect(nextReconcile.metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 0 });
+  });
+
+  it("bounds the remote memo to the largest files and reports truncation", async () => {
+    const root = tempDirs.make("openclaw-remote-manifest-memo-cap-");
+    const home = path.join(root, "home");
+    const workspace = path.join(root, "workspace");
+    await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
+    await Promise.all([
+      fs.writeFile(path.join(workspace, "small.txt"), "1"),
+      fs.writeFile(path.join(workspace, "medium.txt"), "22"),
+      fs.writeFile(path.join(workspace, "large.txt"), "333"),
+    ]);
+    const limitDeclaration = `const MAX_RECONCILIATION_ENTRIES = ${MAX_RECONCILIATION_ENTRIES};`;
+    const limitedScript = REMOTE_WORKSPACE_MANIFEST_JS.replace(
+      limitDeclaration,
+      "const MAX_RECONCILIATION_ENTRIES = 2;",
+    );
+    expect(limitedScript).not.toBe(REMOTE_WORKSPACE_MANIFEST_JS);
+    const env = { ...process.env, HOME: home };
+    type MemoResponse = {
+      manifestRef: string;
+      memo: [string, string][];
+      metrics: { contentHashCount: number; memoHitCount: number; memoTruncatedCount: number };
+    };
+    const capture = async (memo: [string, string][]): Promise<MemoResponse> => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", limitedScript, workspace, "", "memo-v1"],
+        { timeoutMs: 10_000, baseEnv: env, input: JSON.stringify(memo) },
+      );
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      return JSON.parse(result.stdout) as MemoResponse;
+    };
+
+    const first = await capture([]);
+    expect(
+      first.memo
+        .map(([identity]) => Number(identity.split(":")[3]))
+        .toSorted((left, right) => left - right),
+    ).toEqual([2, 3]);
+    expect(first.metrics).toMatchObject({
+      contentHashCount: 3,
+      memoHitCount: 0,
+      memoTruncatedCount: 1,
+    });
+
+    const unchanged = await capture(first.memo);
+    expect(unchanged.manifestRef).toBe(first.manifestRef);
+    expect(unchanged.memo).toEqual(first.memo);
+    expect(unchanged.metrics).toMatchObject({
+      contentHashCount: 1,
+      memoHitCount: 2,
+      memoTruncatedCount: 1,
+    });
   });
 });

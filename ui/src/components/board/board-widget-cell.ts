@@ -19,6 +19,8 @@ import {
   pluginIdForWidgetKind,
   type PluginBoardWidgetRenderer,
 } from "../../lib/board/widgets/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { showToast } from "../../lib/toast.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderBoardMcpAppContent } from "./board-mcp-app-content.ts";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
@@ -152,7 +154,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private async runAction(action: () => Promise<void>): Promise<void> {
+  private async runAction(action: () => Promise<void>, failureMessage?: string): Promise<void> {
     if (this.actionPending || this.busy) {
       return;
     }
@@ -162,10 +164,24 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     try {
       await action();
     } catch (error) {
-      this.actionError = error instanceof Error ? error.message : String(error);
+      this.actionError = formatUiError(error);
+      if (failureMessage) {
+        showToast({ message: failureMessage });
+      }
     } finally {
       this.actionPending = false;
     }
+  }
+
+  private runGrantDecision(
+    widget: BoardWidget,
+    callbacks: BoardWidgetCellCallbacks,
+    decision: BoardGrantDecision,
+  ): void {
+    const failureMessage = t(
+      decision === "granted" ? "board.widget.allowFailed" : "board.widget.rejectFailed",
+    );
+    void this.runAction(() => callbacks.grant(widget.name, decision), failureMessage);
   }
 
   private handleMenuSelect(
@@ -206,8 +222,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         ? renderBoardWidgetPending({
             widget,
             disabled: this.busy || this.actionPending || !this.canGrant,
-            onGrant: (decision) =>
-              void this.runAction(() => callbacks.grant(widget.name, decision)),
+            onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
             ...(this.actionError
               ? { error: renderBoardWidgetActionError(this.actionError, true) }
               : {}),
@@ -243,7 +258,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       return renderBoardWidgetPending({
         widget,
         disabled: this.busy || this.actionPending || !this.canGrant,
-        onGrant: (decision) => void this.runAction(() => callbacks.grant(widget.name, decision)),
+        onGrant: (decision) => this.runGrantDecision(widget, callbacks, decision),
         ...(this.actionError
           ? { error: renderBoardWidgetActionError(this.actionError, true) }
           : {}),
@@ -255,6 +270,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
         disabled: this.busy || this.actionPending || !this.canMutate,
         onRemove: () => void this.runAction(() => callbacks.remove(widget)),
       });
+    }
+    if (widget.contentKind === "plugin" && widget.frameUrl) {
+      return this.frame.render(widget);
     }
     if (widget.contentKind === "plugin") {
       if (this.pluginRendererError) {
@@ -287,7 +305,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     const widget = this.widget;
     const activeKinds = this.context?.gateway.snapshot.hello?.controlUiWidgetKinds ?? [];
     const contribution =
-      widget?.contentKind === "plugin"
+      widget?.contentKind === "plugin" && !widget.frameUrl
         ? getPluginWidgetKindContribution(widget.pluginKind, activeKinds)
         : null;
     if (!contribution) {
@@ -314,7 +332,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       })
       .catch((error: unknown) => {
         if (this.pluginRendererLoadToken === loadToken) {
-          this.pluginRendererError = error instanceof Error ? error.message : String(error);
+          this.pluginRendererError = formatUiError(error);
           this.requestUpdate();
         }
       });
@@ -388,9 +406,13 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
       widget.grantState === "pending" ||
       widget.grantState === "rejected";
     const contentScrollable =
-      bodyScrollable || widget.contentKind === "mcp-app" || widget.contentKind === "plugin";
+      bodyScrollable ||
+      widget.contentKind === "mcp-app" ||
+      (widget.contentKind === "plugin" && !widget.frameUrl);
     const presentation =
-      widget.contentKind === "html" ? (widget.presentation ?? "card") : undefined;
+      widget.contentKind === "html" || widget.frameUrl
+        ? (widget.presentation ?? "card")
+        : undefined;
     // While a move/resize gesture runs, the card fills its (preview) cell so
     // the user manipulates the quantized rect they will actually commit.
     const exactHeightPx = this.dragging
@@ -428,7 +450,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
             >${widget.contentKind === "mcp-app"
               ? t("board.widget.kindMcp")
               : widget.contentKind === "plugin"
-                ? this.pluginRendererLabel || t("board.widget.kindPlugin")
+                ? widget.kindLabel || this.pluginRendererLabel || t("board.widget.kindPlugin")
                 : t("board.widget.kindHtml")}</span
           >
           ${renderBoardGrantedCapabilities(widget)}

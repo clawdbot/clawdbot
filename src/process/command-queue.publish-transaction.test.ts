@@ -22,7 +22,9 @@ import {
 
 const CRON = "cron-nested";
 const HOOK = "hook-dispatch";
+const DELIVERY = "delivery-dispatch";
 const GROUP = "cron-hooks";
+const MOVED_GROUP = "cron-delivery";
 
 type LaneGroupSpec = NonNullable<Parameters<typeof publishLaneConfiguration>[0]["groups"]>[string];
 
@@ -53,10 +55,12 @@ async function settle(): Promise<void> {
 beforeEach(() => {
   resetAllLanes();
   clearCommandLaneGroup(GROUP);
+  clearCommandLaneGroup(MOVED_GROUP);
 });
 
 afterEach(() => {
   clearCommandLaneGroup(GROUP);
+  clearCommandLaneGroup(MOVED_GROUP);
   resetAllLanes();
 });
 
@@ -117,6 +121,78 @@ describe("publishLaneConfiguration", () => {
       g.release();
     }
     await Promise.all(runs);
+  });
+
+  test("commit dispatch uses group order rather than publication object order", async () => {
+    setCommandLaneConcurrency(CRON, 0);
+    setCommandLaneConcurrency(HOOK, 0);
+
+    const starts: string[] = [];
+    const cronGate = gate();
+    const hookGate = gate();
+    const olderCron = enqueueCommandInLane(
+      CRON,
+      async () => {
+        starts.push(CRON);
+        await cronGate.promise;
+      },
+      { priority: "background" },
+    );
+    const newerHook = enqueueCommandInLane(
+      HOOK,
+      async () => {
+        starts.push(HOOK);
+        await hookGate.promise;
+      },
+      { priority: "background" },
+    );
+
+    // Deliberately publish HOOK first in both objects. The older CRON head must
+    // still own the single shared slot.
+    publishLaneConfiguration({
+      lanes: { [HOOK]: 1, [CRON]: 1 },
+      groups: { [GROUP]: { budget: 1, members: [HOOK, CRON] } },
+    });
+    await settle();
+    expect(starts).toEqual([CRON]);
+
+    cronGate.release();
+    await olderCron;
+    await settle();
+    expect(starts).toEqual([CRON, HOOK]);
+    hookGate.release();
+    await newerHook;
+  });
+
+  test("moving a busy member wakes queued work in its previous group", async () => {
+    publishLaneConfiguration({
+      lanes: { [CRON]: 1, [HOOK]: 1, [DELIVERY]: 1 },
+      groups: { [GROUP]: { budget: 1, members: [CRON, HOOK] } },
+    });
+
+    const cronGate = gate();
+    const cronRun = enqueueCommandInLane(CRON, async () => await cronGate.promise);
+    const hookGate = gate();
+    const hookRun = enqueueCommandInLane(HOOK, async () => await hookGate.promise);
+    await settle();
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({ activeCount: 0, queuedCount: 1 });
+
+    // CRON's active task stops counting against the old group as soon as it is
+    // moved. That newly free old-group capacity must wake HOOK immediately.
+    publishLaneConfiguration({
+      groups: { [MOVED_GROUP]: { budget: 1, members: [CRON, DELIVERY] } },
+    });
+    await settle();
+    expect(getCommandLaneSnapshot(HOOK)).toMatchObject({
+      group: GROUP,
+      activeCount: 1,
+      queuedCount: 0,
+    });
+    expect(getCommandLaneSnapshot(CRON).group).toBe(MOVED_GROUP);
+
+    cronGate.release();
+    hookGate.release();
+    await Promise.all([cronRun, hookRun]);
   });
 
   test("a rejected configuration does not leave lanes widened and dispatching", async () => {

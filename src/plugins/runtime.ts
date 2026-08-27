@@ -2,6 +2,7 @@
 import { onAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   getPluginCommandExecutionCount,
   isPluginCommandExecutionActiveHere,
@@ -63,13 +64,19 @@ function isRegistryLive(registry: PluginRegistry): boolean {
   return state.activeRegistry === registry;
 }
 
-async function cleanupPreviousPluginHostRegistry(params: {
-  previousRegistry: PluginRegistry;
-}): Promise<void> {
+const loadPluginHostCleanupRuntime = createLazyRuntimeModule(async () => {
   const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
     import("../config/config.js"),
     import("./host-hook-cleanup.js"),
   ]);
+  return { getRuntimeConfig, cleanupReplacedPluginHostRegistry };
+});
+
+async function cleanupPreviousPluginHostRegistry(params: {
+  previousRegistry: PluginRegistry;
+}): Promise<void> {
+  const { getRuntimeConfig, cleanupReplacedPluginHostRegistry } =
+    await loadPluginHostCleanupRuntime();
   const nextRegistry = asPluginRegistry(state.activeRegistry);
   if (nextRegistry === params.previousRegistry) {
     return;
@@ -77,12 +84,20 @@ async function cleanupPreviousPluginHostRegistry(params: {
   // Async cleanup must not clear state for a registry that has been restored
   // active, but later swaps should not strand cleanup for the retiring registry.
   const shouldCleanup = () => state.activeRegistry !== params.previousRegistry;
-  await cleanupReplacedPluginHostRegistry({
+  const { failures } = await cleanupReplacedPluginHostRegistry({
     cfg: getRuntimeConfig(),
     previousRegistry: params.previousRegistry,
     nextRegistry,
     shouldCleanup,
   });
+  // Per-hook cleanup errors are collected instead of thrown (host-hook-cleanup
+  // must finish every plugin); dropping them here would hide broken
+  // session-extension/scheduler teardown from operators entirely.
+  for (const failure of failures) {
+    log.warn(
+      `plugin host cleanup failed for ${failure.pluginId} hook ${failure.hookId}: ${String(failure.error)}`,
+    );
+  }
 }
 
 function cleanupRetiredPluginHostRegistry(previousRegistry: PluginRegistry): void {
@@ -428,6 +443,10 @@ export async function clearActivePluginRegistry(): Promise<void> {
     return;
   }
   await completion;
+}
+
+export async function prepareActivePluginRegistryShutdown(): Promise<void> {
+  await loadPluginHostCleanupRuntime();
 }
 
 export function resetPluginRuntimeStateForTest(): void {

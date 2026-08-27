@@ -492,8 +492,12 @@ function hasGatewayDrainingFailure(err: unknown): boolean {
   return errorGraphHasName(err, "GatewayDrainingError");
 }
 
-function hasWorkerRunnerUnavailableFailure(err: unknown): boolean {
-  return errorGraphHasName(err, "WorkerRunnerUnavailableError");
+function hasWorkerRunnerCoordinationFailure(err: unknown): boolean {
+  return [
+    "WorkerRunnerUnavailableError",
+    "WorkerRunnerCapacityError",
+    "WorkerWorkspaceReconciliationError",
+  ].some((name) => errorGraphHasName(err, name));
 }
 
 function hasDirectProviderFailureIdentity(err: unknown): boolean {
@@ -891,7 +895,7 @@ export function resolveModelFallbackError(
   }
   // Gateway admission can fail before any provider turn starts. Preserve that
   // identity through wrappers and aggregates so fallback cannot blame a model.
-  if (hasGatewayDrainingFailure(err) || hasWorkerRunnerUnavailableFailure(err)) {
+  if (hasGatewayDrainingFailure(err) || hasWorkerRunnerCoordinationFailure(err)) {
     return { kind: "coordination", error: err };
   }
   const staleLifecycleFailure = hasStaleAgentRunLifecycleFailure(err);

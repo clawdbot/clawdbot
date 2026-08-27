@@ -38,7 +38,6 @@ struct SettingsProTab: View {
     @AppStorage("gateway.manual.port") var manualGatewayPort: Int = 18789
     @AppStorage("gateway.manual.tls") var manualGatewayTLS: Bool = true
     @AppStorage("gateway.discovery.debugLogs") var discoveryDebugLogsEnabled: Bool = false
-    @AppStorage("canvas.debugStatusEnabled") var canvasDebugStatusEnabled: Bool = false
     @AppStorage("gateway.setupCode") var setupCode: String = ""
     @AppStorage("gateway.onboardingComplete") var onboardingComplete: Bool = false
     @AppStorage("gateway.hasConnectedOnce") var hasConnectedOnce: Bool = false
@@ -58,6 +57,7 @@ struct SettingsProTab: View {
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
+    @State var gatewayActionStatusText: String?
     @State var setupAttemptID: UUID?
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
     @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
@@ -360,8 +360,12 @@ struct SettingsProTab: View {
         self.onGatewaySetupRequestHandled?(gatewaySetupRequest.id)
     }
 
+    var canOpenNotificationsRouteFromApprovals: Bool {
+        self.ownsNavigationStack ? self.directRoute == nil : self.navigateToRoute != nil
+    }
+
     func openNotificationsRouteFromApprovals() {
-        guard self.directRoute == nil else { return }
+        guard self.canOpenNotificationsRouteFromApprovals else { return }
         if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
             self.onApprovalNotificationsRoute?(approvalID)
         }

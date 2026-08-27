@@ -238,10 +238,15 @@ describe("nvidia provider catalog", () => {
       lookupFn: expect.any(Function),
       policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
       signal: undefined,
-      timeoutMs: 10_000,
+      timeoutMs: expect.any(Number),
       url: NVIDIA_FEATURED_MODELS_URL,
       requireHttps: true,
     });
+    // getCachedLiveProviderModelRows forwards the budget remaining after elapsed
+    // time, so only the bound is stable; pinning 10_000 fails once a millisecond passes.
+    const guardedRequest = ssrfRuntimeMocks.fetchWithSsrFGuard.mock.calls[0]?.[0];
+    expect(guardedRequest?.timeoutMs).toBeGreaterThan(0);
+    expect(guardedRequest?.timeoutMs).toBeLessThanOrEqual(10_000);
     expect(release).toHaveBeenCalledOnce();
   });
 

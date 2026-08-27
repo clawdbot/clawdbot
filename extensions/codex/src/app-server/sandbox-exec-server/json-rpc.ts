@@ -1,10 +1,9 @@
 /**
  * JSON-RPC parsing, validation, and response helpers for the sandbox
- * exec-server WebSocket protocol.
+ * transport-neutral exec-server protocol.
  */
-import type { RawData, WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
-import type { HttpHeader, JsonRpcRequest } from "./types.js";
+import type { CodexSandboxExecMessageTransport, HttpHeader, JsonRpcRequest } from "./types.js";
 
 /** JSON-RPC error code used when a sandbox filesystem resource does not exist. */
 export const JSON_RPC_NOT_FOUND = -32004;
@@ -22,14 +21,8 @@ export class JsonRpcProtocolError extends Error {
   }
 }
 
-/** Parses raw WebSocket data into a JSON-RPC request object. */
-export function parseRequest(data: RawData): JsonRpcRequest {
-  const buffer = Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : Buffer.from(data);
-  const text = buffer.toString("utf8");
+/** Parses a normalized JSON message into a JSON-RPC request object. */
+export function parseRequest(text: string): JsonRpcRequest {
   const parsed = JSON.parse(text) as unknown;
   return requireObject(parsed, "JSON-RPC request") as JsonRpcRequest;
 }
@@ -91,21 +84,21 @@ export function readHttpHeaders(value: unknown): HttpHeader[] {
   });
 }
 
-/** Sends a JSON-RPC success response over the WebSocket. */
+/** Sends a JSON-RPC success response through the connection message sink. */
 export function sendResult(
-  socket: WebSocket,
+  send: CodexSandboxExecMessageTransport["send"],
   id: string | number,
-  result: JsonValue | undefined,
+  result: JsonValue,
 ): void {
-  socket.send(JSON.stringify({ jsonrpc: "2.0", id, result: result === undefined ? {} : result }));
+  send({ jsonrpc: "2.0", id, result });
 }
 
-/** Sends a JSON-RPC error response over the WebSocket. */
+/** Sends a JSON-RPC error response through the connection message sink. */
 export function sendError(
-  socket: WebSocket,
+  send: CodexSandboxExecMessageTransport["send"],
   id: string | number | undefined,
   code: number,
   message: string,
 ): void {
-  socket.send(JSON.stringify({ jsonrpc: "2.0", id: id ?? null, error: { code, message } }));
+  send({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 }

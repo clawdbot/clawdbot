@@ -110,7 +110,7 @@ describe("Control UI theme contrast", () => {
       requireCssColor(dark, "card"),
     ];
     const timestampRule = readRuleBody(groupedCss, ".chat-group-timestamp");
-    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args");
+    const slashArgsRule = readRuleBody(chatLayoutCss, ".slash-menu-args,\n.slash-menu-desc");
 
     expect(timestampRule).toMatch(/color:\s*var\(--muted\)/);
     expect(slashArgsRule).toMatch(/color:\s*var\(--muted\)/);
@@ -141,12 +141,17 @@ describe("Control UI theme contrast", () => {
     expect(sessionLabelRule).toMatch(/color:\s*var\(--muted\)/);
     expect(readOpacity(sessionLabelRule)).toBe(1);
 
+    const light = readCssVarBlock(baseCss, ':root[data-theme-mode="light"]');
     for (const selector of [
-      ':root[data-theme-mode="light"]',
+      null,
       ':root[data-theme="openknot-light"]',
       ':root[data-theme="dash-light"]',
+      ':root[data-theme="absolutely-light"]',
+      ':root[data-theme="tide-light"]',
+      ':root[data-theme="beacon-light"]',
+      ':root[data-theme="phosphor-light"]',
     ]) {
-      const theme = readCssVarBlock(baseCss, selector);
+      const theme = selector ? { ...light, ...readCssVarBlock(baseCss, selector) } : light;
       const muted = requireCssColor(theme, "muted");
       for (const surface of ["bg", "bg-elevated", "bg-muted", "card"]) {
         expect(contrastRatio(muted, requireCssColor(theme, surface))).toBeGreaterThanOrEqual(4.5);

@@ -1,6 +1,8 @@
 name: Vitest Cache Warm
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
   repository_dispatch:
     types: [vitest-cache-warm]
@@ -11,31 +13,36 @@ permissions:
   contents: read
 
 concurrency:
-  group: vitest-cache-warm
+  group: vitest-cache-warm-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   warm:
-    # Dependency snapshots are serialized before main CI fanout. This workflow
-    # writes only the transform and compile caches from scheduled/trusted runs.
+    # Shared CI cache publication is isolated from pull-request execution.
+    # Trusted release/proof workflows may save only through the same authority contract.
     if: github.repository == 'openclaw/openclaw'
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node environment
+        id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          build-all-cache-scope: full
+          cache-mode: read-write
+          dependency-cache: "true"
           install-bun: "false"
           node-compile-cache: "true"
           node-compile-cache-scope: "test"
-          save-actions-cache: "true"
-          save-node-compile-cache: "true"
-          save-vitest-fs-cache: "true"
-          use-actions-cache: "true"
           vitest-fs-cache: "true"
+
+      - name: Warm build cache
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build
 
       - name: Select broad cache seed
         shell: bash
@@ -53,9 +60,101 @@ jobs:
             [
               `OPENCLAW_NODE_TEST_GROUPS_JSON=${JSON.stringify(groups)}`,
               "OPENCLAW_NODE_TEST_PLAN_CONCURRENCY=1",
+              "OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE=1",
             ].join("\n") + "\n",
           );
           EOF
 
       - name: Warm transform and compile caches
+        id: warm-caches
+        continue-on-error: true
+        env:
+          # Match the CI shard lanes running the same envelopes: without the
+          # raised ceiling a heavy suite's worker can die under default heap
+          # (run 31874567859), skipping every cache save for the day.
+          NODE_OPTIONS: --max-old-space-size=8192
         run: node --import tsx scripts/ci-run-node-test-shard.mts
+
+      - name: Save Node toolchain cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && runner.os != 'Windows' && runner.environment != 'github-hosted' && steps.setup-node-env.outputs.node-toolchain-populated == 'true' && steps.setup-node-env.outputs.node-toolchain-cache-matched-key != steps.setup-node-env.outputs.node-toolchain-cache-key }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.setup-node-env.outputs.node-toolchain-cache-path }}
+          key: ${{ steps.setup-node-env.outputs.node-toolchain-cache-key }}
+
+      - name: Save exact dependency cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.dependency-cache-key != '' && steps.setup-node-env.outputs.dependency-cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            node_modules
+            ui/node_modules
+            packages/*/node_modules
+            examples/*/node_modules
+            .cache/openclaw-pnpm-store
+          key: ${{ steps.setup-node-env.outputs.dependency-cache-key }}
+
+      # Prefix restores accumulate old lockfile generations. Keep the trusted
+      # writer bounded before publishing the coarser fallback store.
+      - name: Prune pnpm store before save
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.pnpm-store-cache-key != '' && steps.setup-node-env.outputs.pnpm-store-cache-hit != 'true' }}
+        shell: bash
+        run: |
+          du -sh "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}" || true
+          pnpm store prune
+          du -sh "${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}" || true
+
+      - name: Save pnpm store cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.pnpm-store-cache-key != '' && steps.setup-node-env.outputs.pnpm-store-cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.setup-node-env.outputs.pnpm-store-cache-path }}
+          key: ${{ steps.setup-node-env.outputs.pnpm-store-cache-key }}
+
+      - name: Save Vitest transform cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.vitest-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/openclaw-vitest-fs-cache
+          key: ${{ steps.setup-node-env.outputs.vitest-cache-key }}
+
+      - name: Save Node compile cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.node-compile-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /var/tmp/openclaw-node-compile-cache
+          key: ${{ steps.setup-node-env.outputs.node-compile-cache-key }}
+
+      - name: Save build-all cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.setup-node-env.outputs.build-all-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ steps.setup-node-env.outputs.build-all-cache-key }}
+
+      - name: Save dist build cache
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            dist/
+            dist-runtime/
+            packages/*/dist/
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
+          key: ${{ runner.os }}-dist-build-v3-${{ github.sha }}
+
+      - name: Assert cache warming succeeded
+        if: ${{ always() }}
+        run: |
+          if [ "${{ steps.warm-caches.outcome }}" != "success" ]; then
+            echo "::error::Vitest cache warming failed"
+            exit 1
+          fi

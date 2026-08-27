@@ -9,6 +9,7 @@ export {
 } from "./state-migrations.doctor.js";
 export { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
 export { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
+export { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 export {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyTaskStateSidecars,

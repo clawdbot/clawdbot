@@ -2,13 +2,13 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import type { RunInspectorState } from "./run-inspector-model.ts";
+import { t } from "../../i18n/index.ts";
+import type { RunInspectorResult, RunInspectorState } from "./run-inspector-model.ts";
 import { renderRunInspector } from "./run-inspector-view.ts";
 
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
 
-function presentResult(): AuditRunInspectResult {
+function presentResult(): RunInspectorResult {
   return {
     schemaVersion: 1,
     run: { runId: "run-1", executionId: "execution-1", status: "known" },
@@ -53,13 +53,10 @@ function presentResult(): AuditRunInspectResult {
         missingEvidence: ["invoker.principal"],
       },
     },
-    decisions: [
+    decisionDisplays: [
       {
         schemaVersion: 1,
-        receiptId: "receipt-1",
-        contextId: "context-1",
-        executionId: "execution-1",
-        runId: "run-1",
+        selectorId: "receipt-1",
         occurredAt: 1,
         action: {
           family: "run",
@@ -69,15 +66,11 @@ function presentResult(): AuditRunInspectResult {
         decision: { outcome: "not-applicable", reasonCode: "identity_not_evaluated" },
         enforcement: {
           coverageState: "unattributed",
-          policyRefs: [],
-          grantRefs: [],
+          policyCount: 0,
+          grantCount: 0,
           contextFieldsUsed: [],
         },
-        source: {
-          owner: "agent-command",
-          recordRef: "context-1",
-          decisionBoundary: "agent-command.run-admission",
-        },
+        provenance: { state: "verified", producer: "run-admission" },
         missingEvidence: ["invoker.principal"],
         remediation: [
           { code: "no_identity_enforcement_claimed", text: "Do not treat this as authorization." },
@@ -93,7 +86,7 @@ function unavailableResult(
   state: "unknown" | "unsupported",
   reasonCode: string,
   remediation: Array<{ code: string; text: string }> = [],
-): AuditRunInspectResult {
+): RunInspectorResult {
   return {
     schemaVersion: 1,
     run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
@@ -103,19 +96,40 @@ function unavailableResult(
       missingEvidence: ["identity.context"],
       remediation,
     },
-    decisions: [],
+    decisionDisplays: [],
     coverage: { state, missingEvidence: ["identity.context"] },
   };
 }
 
-function renderState(state: RunInspectorState, onLoadMoreExecutions = vi.fn()) {
+type ViewTestState =
+  | Exclude<RunInspectorState, { status: "ready" }>
+  | (Omit<Extract<RunInspectorState, { status: "ready" }>, "receiptPageCursors"> & {
+      receiptPageCursors?: ReadonlyMap<string, string | undefined>;
+    });
+
+function renderState(state: ViewTestState, onLoadMoreExecutions = vi.fn()) {
   const container = document.createElement("div");
   document.body.append(container);
+  const normalizedState: RunInspectorState =
+    state.status === "ready"
+      ? {
+          ...state,
+          receiptPageCursors:
+            state.receiptPageCursors ??
+            new Map(
+              state.result.decisionDisplays.map((receipt) => [receipt.selectorId, undefined]),
+            ),
+        }
+      : state;
   render(
     renderRunInspector({
       basePath: "/operator",
-      state,
+      state: normalizedState,
+      selector: { kind: "run", id: "run-1" },
+      selectorId: null,
+      onLoadMoreDecisions: vi.fn(),
       onLoadMoreExecutions,
+      onRestart: vi.fn(),
       onRetry: vi.fn(),
     }),
     container,
@@ -159,6 +173,12 @@ describe("renderRunInspector", () => {
     expect(text).not.toContain("context-1");
     expect(text).not.toContain("execution-1");
     expect(text).toContain("Additional decision receipts are available");
+    expect(text).toContain("Not applicable");
+    expect(text).toContain("Unattributed");
+    expect(text).toContain("identity_not_evaluated");
+    expect(text).toContain("Verified producer");
+    expect(text).toContain("run-admission");
+    expect(text).toContain("Do not treat this as authorization.");
     expect(text).toContain("Best-effort audit warning");
     expect(text).not.toContain("raw-sender-id-42");
     expect(
@@ -179,9 +199,16 @@ describe("renderRunInspector", () => {
     [{ status: "disconnected" } satisfies RunInspectorState, "Gateway disconnected"],
     [{ status: "unauthorized" } satisfies RunInspectorState, "Operator read access required"],
     [{ status: "unsupported" } satisfies RunInspectorState, "Run inspection unsupported"],
-    [{ status: "error" } satisfies RunInspectorState, "Run inspection failed"],
+    [{ status: "error", recovery: "retry" } satisfies RunInspectorState, "Run inspection failed"],
   ])("renders the explicit panel state", (state, expected) => {
     expect(renderState(state).textContent).toContain(expected);
+  });
+
+  it("renders the localized restart control with its accessible name", () => {
+    expect(t("activity.runInspector.restart")).toBe("Restart inspection");
+
+    const button = renderState({ status: "error", recovery: "restart" }).querySelector("button");
+    expect(button?.textContent?.trim()).toBe("Restart inspection");
   });
 
   it.each([
@@ -202,7 +229,7 @@ describe("renderRunInspector", () => {
   });
 
   it("links an ambiguous run candidate to exact execution inspection", () => {
-    const result: AuditRunInspectResult = {
+    const result: RunInspectorResult = {
       schemaVersion: 1,
       run: { runId: "ambiguous-run", status: "known" },
       identity: {
@@ -214,7 +241,7 @@ describe("renderRunInspector", () => {
         missingEvidence: ["execution.selection"],
         remediation: [],
       },
-      decisions: [],
+      decisionDisplays: [],
       coverage: { state: "unknown", missingEvidence: ["execution.selection"] },
       nextExecutionCursor: "opaque-cursor",
     };

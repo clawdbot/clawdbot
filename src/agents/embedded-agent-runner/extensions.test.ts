@@ -58,8 +58,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     const factories = buildEmbeddedExtensionFactories({
       cfg: {
         agents: {
-          list: [{ id: "capped", contextTokens: 200_000 }],
-          defaults: { contextTokens: 128_000, compaction: { mode: "safeguard" } },
+          defaults: { compaction: { mode: "safeguard" } },
         },
       } as OpenClawConfig,
       sessionManager,

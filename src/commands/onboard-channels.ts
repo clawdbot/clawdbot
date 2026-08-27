@@ -1,7 +1,7 @@
 /** Re-export seam for channel onboarding flow helpers. */
 export {
   createChannelOnboardingPostWriteHook,
-  createChannelOnboardingPostWriteHookCollector,
+  createChannelSetupTransaction,
   runCollectedChannelOnboardingPostWriteHooks,
   setupChannels,
 } from "../flows/channel-setup.js";

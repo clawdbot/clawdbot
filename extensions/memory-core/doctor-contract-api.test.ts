@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -488,6 +489,7 @@ describe("memory-core doctor dreaming migration", () => {
 
   afterEach(async () => {
     resetMemoryCoreDreamingStateForTests();
+    resetPluginStateStoreForTests();
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
@@ -2576,6 +2578,13 @@ describe("memory-core doctor dreaming migration", () => {
       "agent",
       "openclaw-agent.sqlite",
     );
+    const retainedResetTranscript = path.join(
+      stateDir,
+      "agents",
+      "main",
+      "sessions",
+      "session-1.jsonl.reset.2026-08-23T07-10-59.000Z",
+    );
     const invalidAgentQmdHome = path.join(stateDir, "agents", "main!", "qmd");
     const externalModels = path.join(rootDir, "shared-qmd-models");
     const symlinkHomeTarget = path.join(rootDir, "symlink-qmd-home-target");
@@ -2585,6 +2594,7 @@ describe("memory-core doctor dreaming migration", () => {
       path.join(qmdHome, "xdg-config", "qmd", "index.yml"),
       path.join(qmdHome, "sessions", "session.md"),
       canonicalAgentFile,
+      retainedResetTranscript,
       path.join(invalidAgentQmdHome, "index.sqlite"),
       path.join(externalModels, "model.bin"),
       path.join(symlinkHomeTarget, "index.sqlite"),
@@ -2592,6 +2602,14 @@ describe("memory-core doctor dreaming migration", () => {
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, "derived", "utf8");
     }
+    await fs.writeFile(
+      retainedResetTranscript,
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Retained reset transcript recall fact" },
+      }),
+      "utf8",
+    );
     await fs.symlink(externalModels, path.join(qmdHome, "xdg-cache", "qmd", "models"));
     await fs.mkdir(path.dirname(symlinkHome), { recursive: true });
     await fs.symlink(symlinkHomeTarget, symlinkHome);
@@ -2610,6 +2628,12 @@ describe("memory-core doctor dreaming migration", () => {
 
     await expect(fs.access(qmdHome)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.access(canonicalAgentFile)).resolves.toBeUndefined();
+    await expect(fs.readFile(retainedResetTranscript, "utf8")).resolves.toContain(
+      "Retained reset transcript recall fact",
+    );
+    expect((await buildSessionEntry(retainedResetTranscript))?.content).toBe(
+      "User: Retained reset transcript recall fact",
+    );
     await expect(fs.access(invalidAgentQmdHome)).resolves.toBeUndefined();
     await expect(fs.access(path.join(externalModels, "model.bin"))).resolves.toBeUndefined();
     expect((await fs.lstat(symlinkHome)).isSymbolicLink()).toBe(true);

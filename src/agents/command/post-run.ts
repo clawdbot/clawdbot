@@ -1,5 +1,7 @@
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import type { FollowupRun } from "../../auto-reply/reply/queue.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -22,8 +24,9 @@ import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { persistAssistantTranscriptRepairRecord } from "./assistant-transcript-repair.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
 import type { PreparedAgentCommandExecution } from "./prepare.js";
-import type { EmbeddedAgentAttempt } from "./run-embedded-attempt.js";
+import type { runEmbeddedAgentAttempt } from "./run-embedded-attempt.js";
 import {
+  loadAgentRunnerMemoryRuntime,
   loadCliCompactionRuntime,
   loadDeliveryRuntime,
   loadSessionStoreRuntime,
@@ -31,6 +34,8 @@ import {
 import { clearPendingFinalDelivery } from "./session-helpers.js";
 import type { EmbeddedSessionState } from "./session-preparation.js";
 import type { AgentCommandOpts } from "./types.js";
+
+type EmbeddedAgentAttempt = Awaited<ReturnType<typeof runEmbeddedAgentAttempt>>;
 
 const log = createSubsystemLogger("agents/agent-command");
 
@@ -70,9 +75,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
     workspaceDir,
     cwd,
     agentDir,
+    timeoutMs,
     outboundSession,
     runId,
-    agentCfg,
   } = params.prepared;
   const {
     fallbackProvider,
@@ -91,7 +96,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     terminal,
     lifecycleGeneration,
   } = params.attempt;
-  const { skillsSnapshot, runContext } = params.embeddedSessionState;
+  const { resolvedVerboseLevel, skillsSnapshot, runContext } = params.embeddedSessionState;
   const effectiveCwd = cwd ?? workspaceDir;
   let sessionEntry = params.sessionEntry;
   let result = params.attempt.result;
@@ -147,7 +152,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
       await updateSessionStoreAfterAgentRun({
         cfg,
         agentDir,
-        contextTokensOverride: agentCfg?.contextTokens,
         sessionId: effectiveSessionId,
         sessionKey,
         storePath,
@@ -237,6 +241,74 @@ export async function finalizeEmbeddedAgentCommand(params: {
       }
     }
 
+    // Embedded runs own transcript persistence; CLI runs must prove their explicit append succeeded.
+    const turnTranscriptPersisted =
+      transcriptPersistenceRunner === "embedded" || persistedCliTurnTranscript;
+    if (
+      turnTranscriptPersisted &&
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      !params.suppressVisibleSessionEffects
+    ) {
+      const flushProvider = result.meta.agentMeta?.provider ?? fallbackProvider;
+      const flushModel = result.meta.agentMeta?.model ?? fallbackModel;
+      const followupRun: FollowupRun = {
+        prompt: "",
+        enqueuedAt: Date.now(),
+        run: {
+          agentId: sessionAgentId,
+          agentDir,
+          sessionId: sessionEntry.sessionId,
+          sessionKey,
+          sessionFile: sessionKey,
+          workspaceDir,
+          cwd: effectiveCwd,
+          runtimePolicySessionKey: sessionKey,
+          config: cfg,
+          provider: flushProvider,
+          model: flushModel,
+          authProfileId: sessionEntry.authProfileOverride?.trim() || undefined,
+          authProfileIdSource: resolveSessionAuthProfileOverrideSource(sessionEntry),
+          blockReplyBreak: "message_end",
+          skillsSnapshot,
+          thinkLevel: effectiveTurnThinkLevel,
+          verboseLevel: resolvedVerboseLevel ?? "off",
+          timeoutMs,
+          // Maintenance is system-owned and must not inherit completed-turn authority.
+          senderIsOwner: false,
+        },
+      };
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      const { runMemoryFlushIfNeeded } = await loadAgentRunnerMemoryRuntime();
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+      const memoryFlushResult = await runMemoryFlushIfNeeded({
+        cfg,
+        followupRun,
+        promptForEstimate: "",
+        sessionCtx: {},
+        defaultModel: flushModel,
+        resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        runtimePolicySessionKey: sessionKey,
+        storePath,
+        isHeartbeat: isHeartbeatLifecycleRunKind(params.opts.bootstrapContextRunKind),
+        abortSignal: params.opts.abortSignal,
+        onSessionIdChanged: params.opts.onSessionIdChanged,
+      });
+      sessionEntry = memoryFlushResult.sessionEntry ?? sessionEntry;
+      if (sessionEntry.sessionId !== runOwnedSessionId) {
+        runOwnedSessionId = sessionEntry.sessionId;
+        publishSessionOwnership();
+      }
+      throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
+      assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    }
+
     const payloads = result.payloads ?? [];
     const pendingFinalDeliveryMarker = await persistPendingFinalDeliveryMarker({
       deliver: params.opts.deliver === true,
@@ -266,7 +338,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           await loadCliCompactionRuntime()
         ).runCliTurnCompactionLifecycle({
           cfg,
-          sessionId: effectiveSessionId,
+          sessionId: sessionEntry?.sessionId ?? effectiveSessionId,
           sessionKey: sessionKey ?? effectiveSessionId,
           sessionEntry,
           sessionStore,
@@ -283,6 +355,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           senderIsOwner: params.opts.senderIsOwner,
           thinkLevel: effectiveTurnThinkLevel,
           extraSystemPrompt: params.opts.extraSystemPrompt,
+          pluginGeneration: params.prepared.commandRuntimeContext?.pluginGeneration,
         });
         throwAgentRunRestartAbortReason(params.opts.abortSignal?.reason);
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);

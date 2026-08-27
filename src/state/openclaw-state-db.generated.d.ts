@@ -77,17 +77,11 @@ export interface AgentDeletionJournal {
   workspace_dir: string;
 }
 
-export interface AgentModelCatalogs {
-  agent_dir: string;
-  catalog_key: string;
-  raw_json: string;
-  updated_at: number;
-}
-
-export interface AndroidNotificationRecentPackages {
-  package_name: string;
-  sort_order: number;
-  updated_at_ms: number;
+export interface AgentProvenance {
+  agent_id: string;
+  created_at_ms: number;
+  created_via: string;
+  creator_agent_id: string | null;
 }
 
 export interface ApnsRegistrationTombstones {
@@ -359,16 +353,6 @@ export interface ClawhubPromotionsFeedState {
   updated_at_ms: number;
 }
 
-export interface CommandLogEntries {
-  action: string;
-  entry_json: string;
-  id: string;
-  sender_id: string;
-  session_key: string;
-  source: string;
-  timestamp_ms: number;
-}
-
 export interface ConfigHealthEntries {
   config_path: string;
   last_known_good_json: string | null;
@@ -381,6 +365,11 @@ export interface ConfigMachineState {
   state_key: string;
   updated_at_ms: number;
   value_json: string;
+}
+
+export interface ConfigRevisionKeys {
+  hmac_key: Uint8Array;
+  id: Generated<number>;
 }
 
 export interface CronJobRuntimeAuthorities {
@@ -639,14 +628,6 @@ export interface DiagnosticEvents {
   sequence: Generated<number>;
 }
 
-export interface DiagnosticStabilityBundles {
-  bundle_json: string;
-  bundle_key: string;
-  created_at: number;
-  generated_at: string;
-  reason: string;
-}
-
 export interface ExecApprovalsConfig {
   agent_count: number;
   allowlist_count: number;
@@ -686,6 +667,13 @@ export interface ExecutionIdentityContexts {
   created_at: number;
   execution_id: string;
   run_id: string;
+}
+
+export interface ExecutionOwnerLifecycleBindings {
+  context_id: string;
+  execution_id: string;
+  owner_id: string;
+  owner_kind: string;
 }
 
 export interface FleetCells {
@@ -787,6 +775,43 @@ export interface GatewayRestartSentinel {
   version: number;
 }
 
+export interface GithubPublicationRequests {
+  agent_id: string;
+  base_branch: string | null;
+  body: string | null;
+  branch: string;
+  claim_id: string | null;
+  created_at_ms: number;
+  environment_id: string | null;
+  error_code: string | null;
+  gateway_instance_id: string | null;
+  head_commit: string | null;
+  idempotency_key: string;
+  identity_account_id: number;
+  identity_login: string;
+  identity_profile_id: string | null;
+  identity_source: string;
+  next_action: string | null;
+  owner_epoch: number | null;
+  placement_generation: number | null;
+  pull_request_url: string | null;
+  reported_at_ms: number | null;
+  repository: string | null;
+  repository_fingerprint: string;
+  request_digest: string;
+  request_id: string;
+  run_id: string | null;
+  session_id: string;
+  session_key: string;
+  source_head_commit: string | null;
+  source_index_tree: string | null;
+  status: string;
+  title: string | null;
+  updated_at_ms: number;
+  workspace_tree: string | null;
+  worktree_id: string;
+}
+
 export interface InstalledPluginIndex {
   compat_registry_version: string;
   diagnostics_json: string;
@@ -843,16 +868,6 @@ export interface McpOauthStores {
   format_version: number;
   store_json: string;
   store_key: string;
-  updated_at: number;
-}
-
-export interface MediaBlobs {
-  blob: Uint8Array;
-  content_type: string | null;
-  created_at: number;
-  id: string;
-  size_bytes: number;
-  subdir: string;
   updated_at: number;
 }
 
@@ -920,23 +935,6 @@ export interface MigrationSources {
   target_table: string;
 }
 
-export interface ModelCapabilityCache {
-  context_window: number;
-  cost_cache_read: number;
-  cost_cache_write: number;
-  cost_input: number;
-  cost_output: number;
-  input_image: number;
-  input_text: number;
-  max_tokens: number;
-  model_id: string;
-  name: string;
-  provider_id: string;
-  reasoning: number;
-  supports_tools: number | null;
-  updated_at_ms: number;
-}
-
 export interface ModelCatalogRemote {
   bundle_json: string;
   checked_at: number;
@@ -961,6 +959,7 @@ export interface NativeHookRelayBridges {
 export interface NodeHostConfig {
   config_key: string;
   display_name: string | null;
+  gateway_cloudflare_access_json: string | null;
   gateway_context_path: string | null;
   gateway_host: string | null;
   gateway_port: number | null;
@@ -971,6 +970,11 @@ export interface NodeHostConfig {
   token: string | null;
   updated_at_ms: number;
   version: number;
+}
+
+export interface NodeWorkerLaunchContainers {
+  container_json: string | null;
+  launch_id: string;
 }
 
 export interface NodeWorkerLaunches {
@@ -1025,6 +1029,21 @@ export interface OperatorApprovalExecutionIdentities {
   source_execution_id: string;
 }
 
+export interface OperatorApprovalStandingGrants {
+  agent_id: string;
+  created_at_ms: number;
+  cron_job_id: string;
+  expires_at_ms: number;
+  grant_id: string;
+  job_config_revision: string;
+  last_used_at_ms: number | null;
+  minted_by_approval_id: string;
+  operation_binding: string;
+  revoked_at_ms: number | null;
+  revoked_by: string | null;
+  use_count: Generated<number>;
+}
+
 export interface OperatorApprovals {
   approval_id: string;
   audience_session_keys_json: string;
@@ -1062,6 +1081,36 @@ export interface OutboundMediaProvenance {
   sha256: string;
   size_bytes: number;
   version: number;
+}
+
+export interface OutboundMessageExecutionBindings {
+  context_id: string;
+  event_id: string;
+  execution_id: string;
+  run_id: string;
+}
+
+export interface OutboundMessageProgress {
+  account_ref: string | null;
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string | null;
+  channel: string;
+  context_id: string | null;
+  conversation_kind: string;
+  conversation_ref: string | null;
+  duration_ms: number | null;
+  execution_id: string | null;
+  occurred_at: number;
+  outcome: string;
+  progress_id: string;
+  run_id: string | null;
+  schema_version: number;
+  sequence: Generated<number>;
+  source_id: string;
+  source_sequence: number;
+  target_ref: string | null;
 }
 
 export interface PluginBindingApprovals {
@@ -1210,17 +1259,6 @@ export interface SkillCuratorState {
   last_success_at_ms: number | null;
 }
 
-export interface SkillLifecycle {
-  archived_reason: string | null;
-  created_at_ms: number;
-  pinned: Generated<number>;
-  skill_file: string;
-  skill_key: string;
-  skill_name: string;
-  state: string;
-  state_changed_at_ms: number;
-}
-
 export interface SkillUploadChunks {
   byte_offset: number;
   chunk_blob: Uint8Array;
@@ -1256,6 +1294,16 @@ export interface SkillUsage {
   use_count: number;
 }
 
+export interface SkillWorkshopCollectionReviews {
+  backup_id: string;
+  create_time: number;
+  dropped_json: string;
+  kept_names_json: string;
+  review_id: string;
+  workspace_dir: string;
+  written_names_json: string;
+}
+
 export interface SkillWorkshopProposalEvents {
   actor_json: string;
   correlation_id: string | null;
@@ -1267,13 +1315,6 @@ export interface SkillWorkshopProposalEvents {
   proposed_version: string;
   revision_hash: string;
   sequence: Generated<number>;
-}
-
-export interface SkillWorkshopProposalOriginRuns {
-  mutation_count: number;
-  position: number;
-  proposal_id: string;
-  run_id: string;
 }
 
 export interface SkillWorkshopProposalRollbacks {
@@ -1288,6 +1329,7 @@ export interface SkillWorkshopProposalRollbacks {
 
 export interface SkillWorkshopProposals {
   applied_at: string | null;
+  claim_released_time: number | null;
   created_at: string;
   draft_hash: string;
   kind: string;
@@ -1524,6 +1566,8 @@ export interface WorkerEnvironments {
   idle_since_at_ms: number | null;
   last_error: string | null;
   lease_id: string | null;
+  node_device_id: string | null;
+  node_setup_id: string | null;
   owner_epoch: Generated<number>;
   profile_id: string;
   profile_snapshot_json: string;
@@ -1551,6 +1595,21 @@ export interface WorkerInferenceTurns {
   state: string;
   terminal_json: string | null;
   turn_id: string;
+  updated_at_ms: number;
+}
+
+export interface WorkerSessionPlacementMoves {
+  abandon_source: number | null;
+  created_at_ms: number;
+  last_error: string | null;
+  operation_id: string;
+  session_id: string;
+  source_environment_id: string;
+  source_generation: number;
+  source_owner_epoch: number;
+  target_id: string | null;
+  target_kind: string;
+  target_machine_class: string | null;
   updated_at_ms: number;
 }
 
@@ -1712,8 +1771,7 @@ export interface DB {
   agent_database_leases: AgentDatabaseLeases;
   agent_databases: AgentDatabases;
   agent_deletion_journal: AgentDeletionJournal;
-  agent_model_catalogs: AgentModelCatalogs;
-  android_notification_recent_packages: AndroidNotificationRecentPackages;
+  agent_provenance: AgentProvenance;
   apns_registration_tombstones: ApnsRegistrationTombstones;
   apns_registrations: ApnsRegistrations;
   audit_events: AuditEvents;
@@ -1734,9 +1792,9 @@ export interface DB {
   claw_workspace_files: ClawWorkspaceFiles;
   clawhub_promotion_claims: ClawhubPromotionClaims;
   clawhub_promotions_feed_state: ClawhubPromotionsFeedState;
-  command_log_entries: CommandLogEntries;
   config_health_entries: ConfigHealthEntries;
   config_machine_state: ConfigMachineState;
+  config_revision_keys: ConfigRevisionKeys;
   cron_job_runtime_authorities: CronJobRuntimeAuthorities;
   cron_job_scratch: CronJobScratch;
   cron_jobs: CronJobs;
@@ -1752,10 +1810,10 @@ export interface DB {
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
   diagnostic_events: DiagnosticEvents;
-  diagnostic_stability_bundles: DiagnosticStabilityBundles;
   exec_approvals_config: ExecApprovalsConfig;
   execution_decision_facts: ExecutionDecisionFacts;
   execution_identity_contexts: ExecutionIdentityContexts;
+  execution_owner_lifecycle_bindings: ExecutionOwnerLifecycleBindings;
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
@@ -1763,27 +1821,30 @@ export interface DB {
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;
+  github_publication_requests: GithubPublicationRequests;
   installed_plugin_index: InstalledPluginIndex;
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   mcp_oauth_pending_authorizations: McpOauthPendingAuthorizations;
   mcp_oauth_stores: McpOauthStores;
-  media_blobs: MediaBlobs;
   meeting_transcript_sessions: MeetingTranscriptSessions;
   meeting_transcript_summaries: MeetingTranscriptSummaries;
   meeting_transcript_utterances: MeetingTranscriptUtterances;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
-  model_capability_cache: ModelCapabilityCache;
   model_catalog_remote: ModelCatalogRemote;
   native_hook_relay_bridges: NativeHookRelayBridges;
   node_host_config: NodeHostConfig;
+  node_worker_launch_containers: NodeWorkerLaunchContainers;
   node_worker_launches: NodeWorkerLaunches;
   official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   onboarding_recommendations: OnboardingRecommendations;
   operator_approval_execution_identities: OperatorApprovalExecutionIdentities;
+  operator_approval_standing_grants: OperatorApprovalStandingGrants;
   operator_approvals: OperatorApprovals;
   outbound_media_provenance: OutboundMediaProvenance;
+  outbound_message_execution_bindings: OutboundMessageExecutionBindings;
+  outbound_message_progress: OutboundMessageProgress;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
@@ -1798,12 +1859,11 @@ export interface DB {
   session_watch_cursors: SessionWatchCursors;
   sidebar_sections: SidebarSections;
   skill_curator_state: SkillCuratorState;
-  skill_lifecycle: SkillLifecycle;
   skill_upload_chunks: SkillUploadChunks;
   skill_uploads: SkillUploads;
   skill_usage: SkillUsage;
+  skill_workshop_collection_reviews: SkillWorkshopCollectionReviews;
   skill_workshop_proposal_events: SkillWorkshopProposalEvents;
-  skill_workshop_proposal_origin_runs: SkillWorkshopProposalOriginRuns;
   skill_workshop_proposal_rollbacks: SkillWorkshopProposalRollbacks;
   skill_workshop_proposals: SkillWorkshopProposals;
   state_leases: StateLeases;
@@ -1822,6 +1882,7 @@ export interface DB {
   worker_environment_ssh_fallback_ports: WorkerEnvironmentSshFallbackPorts;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placement_moves: WorkerSessionPlacementMoves;
   worker_session_placements: WorkerSessionPlacements;
   worker_session_tool_operations: WorkerSessionToolOperations;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;

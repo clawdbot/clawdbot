@@ -4,7 +4,7 @@ export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
 
 /** One validation error found during config-set dry-run processing. */
 export type ConfigSetDryRunError = {
-  kind: "missing-path" | "schema" | "resolvability" | "model";
+  kind: "missing-path" | "schema" | "resolvability" | "model" | "conflict";
   message: string;
   ref?: string;
 };

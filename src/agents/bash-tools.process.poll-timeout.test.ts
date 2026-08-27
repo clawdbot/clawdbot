@@ -112,6 +112,81 @@ test("process poll waits for completion when timeout is provided", async () => {
   });
 });
 
+test.each([
+  { name: "buffered stdout", stream: "stdout", arrivesDuringWait: false, dropped: false },
+  { name: "buffered stderr", stream: "stderr", arrivesDuringWait: false, dropped: false },
+  { name: "new stdout", stream: "stdout", arrivesDuringWait: true, dropped: false },
+  { name: "new stderr", stream: "stderr", arrivesDuringWait: true, dropped: false },
+  { name: "buffered capped output", stream: "stdout", arrivesDuringWait: false, dropped: true },
+] as const)(
+  "process poll returns $name before the requested wait expires",
+  async ({ name, stream, arrivesDuringWait, dropped }) => {
+    vi.useFakeTimers();
+    const sessionId = `sess-prompt-${name.replaceAll(" ", "-")}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const controller = new AbortController();
+    const appendPendingOutput = () => {
+      if (dropped) {
+        appendOversizedPendingOutput(session);
+      } else {
+        appendOutput(session, stream, "interactive prompt\n");
+      }
+    };
+    if (arrivesDuringWait) {
+      setTimeout(appendPendingOutput, 10);
+    } else {
+      appendPendingOutput();
+    }
+
+    let settled = false;
+    const observedPoll = pollSession(
+      processTool,
+      "toolcall-prompt",
+      sessionId,
+      30_000,
+      controller.signal,
+    ).then(
+      (result) => {
+        settled = true;
+        return result;
+      },
+      () => undefined,
+    );
+
+    try {
+      await vi.advanceTimersByTimeAsync(arrivesDuringWait ? 250 : 0);
+      expect(settled).toBe(true);
+
+      const poll = await observedPoll;
+      expect(poll?.details).toMatchObject({ status: "running", sessionId });
+      expect(poll?.content[0]).toMatchObject({
+        type: "text",
+        text: expect.stringContaining(
+          dropped ? "earlier output is omitted from this poll" : "interactive prompt",
+        ),
+      });
+      expect(session.pendingOutput).toHaveLength(0);
+    } finally {
+      controller.abort();
+      await observedPoll;
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("process poll rejects an already-aborted signal without consuming buffered output", async () => {
+  const sessionId = "sess-prompt-already-aborted";
+  const { processTool, session } = createProcessSessionHarness(sessionId);
+  appendOutput(session, "stdout", "interactive prompt\n");
+  const controller = new AbortController();
+  controller.abort();
+
+  await expect(
+    pollSession(processTool, "toolcall-prompt-aborted", sessionId, 30_000, controller.signal),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
+});
+
 test("waiting poll returns only output appended since the previous poll", async () => {
   vi.useFakeTimers();
   try {
@@ -690,41 +765,90 @@ test.each([
   }
 });
 
-test("process poll exposes finished-session termination metadata", async () => {
-  const sessionId = "sess-signal";
-  const { processTool, session } = createProcessSessionHarness(sessionId);
+test.each([
+  {
+    name: "overall timeout after a zero exit",
+    exitCode: 0,
+    exitSignal: null,
+    status: "failed",
+    exitReason: "overall-timeout",
+    noOutputTimedOut: false,
+    timedOut: true,
+  },
+  {
+    name: "no-output timeout",
+    exitCode: null,
+    exitSignal: "SIGKILL",
+    status: "failed",
+    exitReason: "no-output-timeout",
+    noOutputTimedOut: true,
+    timedOut: true,
+  },
+  {
+    name: "nonzero exit",
+    exitCode: 7,
+    exitSignal: null,
+    status: "completed",
+    exitReason: "exit",
+    timedOut: false,
+  },
+  {
+    name: "successful exit",
+    exitCode: 0,
+    exitSignal: null,
+    status: "completed",
+    exitReason: "exit",
+    timedOut: false,
+  },
+  {
+    name: "manual cancellation",
+    exitCode: null,
+    exitSignal: "SIGTERM",
+    status: "failed",
+    exitReason: "manual-cancel",
+    timedOut: false,
+  },
+] as const)(
+  "process log and poll preserve authoritative $name without log consuming the completion",
+  async ({ name, exitCode, exitSignal, status, exitReason, timedOut, ...optional }) => {
+    const sessionId = `sess-terminal-${name.replaceAll(" ", "-")}`;
+    const { processTool, session } = createProcessSessionHarness(sessionId);
+    const remove = vi.fn(() => true);
 
-  appendOutput(session, "stderr", "terminated\n");
-  markExited(session, null, "SIGKILL", "failed", "no-output-timeout", true);
+    appendOutput(session, "stderr", "terminal output\n");
+    markExited(session, exitCode, exitSignal, status, exitReason, optional.noOutputTimedOut);
+    recordNotifyOnExitRemoval(session, remove);
 
-  const poll = await pollSession(processTool, "toolcall-signal", sessionId);
-  const details = poll.details as {
-    status?: string;
-    exitCode?: number | null;
-    exitSignal?: NodeJS.Signals | number | null;
-    exitReason?: string;
-    timedOut?: boolean;
-    noOutputTimedOut?: boolean;
-    aggregated?: string;
-  };
+    const log = await processTool.execute("toolcall-terminal-log", {
+      action: "log",
+      sessionId,
+    });
+    expect(log.details).toMatchObject({
+      status,
+      sessionId,
+      exitCode: exitCode ?? undefined,
+      exitReason,
+      timedOut,
+      ...optional,
+    });
+    const logText = log.content[0]?.type === "text" ? log.content[0].text : "";
+    expect(logText).toContain("terminal output");
+    expect(logText.includes("Verify the resulting state before retrying")).toBe(timedOut);
+    expect(remove).not.toHaveBeenCalled();
 
-  expect(details.status).toBe("failed");
-  expect(details.exitCode).toBeUndefined();
-  expect(details.exitSignal).toBe("SIGKILL");
-  expect(details.exitReason).toBe("no-output-timeout");
-  expect(details.timedOut).toBe(true);
-  expect(details.noOutputTimedOut).toBe(true);
-  expect(details.aggregated).toContain("terminated");
-  expect(poll.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining("external side effects may already have completed"),
-  });
-  expect(poll.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining("Verify the resulting state before retrying"),
-  });
-  expect(poll.content[0]).toMatchObject({
-    type: "text",
-    text: expect.stringContaining("Do not automatically rerun non-idempotent commands"),
-  });
-});
+    const poll = await pollSession(processTool, "toolcall-terminal-poll", sessionId);
+    expect(poll.details).toMatchObject({
+      status,
+      sessionId,
+      exitCode: exitCode ?? undefined,
+      exitReason,
+      timedOut,
+      aggregated: "terminal output\n",
+      ...optional,
+    });
+    const pollText = poll.content[0]?.type === "text" ? poll.content[0].text : "";
+    expect(pollText).toContain("terminal output");
+    expect(pollText.includes("Verify the resulting state before retrying")).toBe(timedOut);
+    expect(remove).toHaveBeenCalledOnce();
+  },
+);

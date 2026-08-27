@@ -1,9 +1,6 @@
 // Legacy auth-choice alias handling for CLI/onboarding compatibility.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolveManifestDeprecatedProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
+import { resolveManifestDeprecatedProviderAuthChoice } from "../plugins/provider-auth-choices.js";
 import type { AuthChoice } from "./onboard-types.js";
 
 const LEGACY_REPLACEMENT_AUTH_CHOICES = new Set(["claude-cli"]);
@@ -26,19 +23,6 @@ function resolveReplacementLabel(choiceLabel: string): string {
   return choiceLabel.trim() || "the replacement auth choice";
 }
 
-/** List deprecated CLI auth-choice aliases that manifest providers still recognize. */
-export function resolveLegacyAuthChoiceAliasesForCli(params?: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): ReadonlyArray<AuthChoice> {
-  const manifestCliAliases = resolveManifestProviderAuthChoices(params)
-    .flatMap((choice) => choice.deprecatedChoiceIds ?? [])
-    .filter((choice): choice is AuthChoice => LEGACY_REPLACEMENT_AUTH_CHOICES.has(choice))
-    .toSorted((left, right) => left.localeCompare(right));
-  return Array.from(new Set(manifestCliAliases));
-}
-
 /** Map old onboard auth choices to their current provider-backed choices. */
 export function normalizeLegacyOnboardAuthChoice(
   authChoice: AuthChoice | undefined,
@@ -49,6 +33,9 @@ export function normalizeLegacyOnboardAuthChoice(
   },
 ): AuthChoice | undefined {
   if (authChoice === "oauth") {
+    // Pre-manifest spelling of Anthropic setup-token auth. Normalizing here is
+    // what keeps it out of the CLI choice lists: every onboard surface runs this
+    // first, so no downstream validator ever sees "oauth".
     return "setup-token";
   }
   if (typeof authChoice === "string") {

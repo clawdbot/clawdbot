@@ -1,6 +1,8 @@
 // Doctor auth hint tests cover OAuth refresh failure formatting and auth repair guidance.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import {
@@ -68,11 +70,31 @@ describe("doctor auth hints", () => {
     );
   });
 
-  it("reports the legacy shared auth owner with the migration command", () => {
-    noteSharedAuthStoreStatus({
+  it("does not report a legacy shared auth owner without stored credentials", () => {
+    const env = {
       ...process.env,
       OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-shared-auth-"),
-    });
+    };
+    noteSharedAuthStoreStatus(env);
+
+    expect(mocks.note).not.toHaveBeenCalled();
+  });
+
+  it("reports the legacy shared auth owner with stored credentials", () => {
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-doctor-shared-auth-"),
+    };
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+        },
+      },
+      resolveSharedMainAuthAgentDir(env),
+    );
+    noteSharedAuthStoreStatus(env);
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("openclaw doctor --fix"),

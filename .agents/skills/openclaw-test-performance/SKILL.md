@@ -93,8 +93,9 @@ barrels, package-boundary tests, or extension suites.
    - runtime capture should be quiet and config-tolerant.
    - command output should include wall time, exit code, and peak RSS when
      available.
-4. For broad or package-heavy plugin proof, use Crabbox-backed Blacksmith
-   Testbox by default on maintainer machines:
+4. For broad or package-heavy plugin proof, use the current dedicated Linux
+   worker when available. On a maintainer workstation, use Crabbox-backed
+   Blacksmith Testbox:
    - `pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>`
    - add `--keep`/`--id <id-or-slug>` only when several commands must share one
      warmed box; stop it with `pnpm crabbox:stop -- <id-or-slug>`.

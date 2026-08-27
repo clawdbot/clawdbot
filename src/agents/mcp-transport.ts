@@ -4,11 +4,7 @@
  * This module turns normalized MCP server config into stdio, SSE, or
  * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
  */
-import {
-  SSEClientTransport,
-  type SSEClientTransportOptions,
-} from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { SSEClientTransportOptions } from "@modelcontextprotocol/sdk/client/sse.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +16,10 @@ import {
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
+import {
+  OpenClawSSEClientTransport,
+  OpenClawStreamableHTTPClientTransport,
+} from "./mcp-http-transport.js";
 import { withMcpOAuthBearer } from "./mcp-oauth-fetch.js";
 import { operatorMcpOAuthIdentity, requesterMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { OpenClawStdioClientTransport } from "./mcp-stdio-transport.js";
@@ -173,7 +173,7 @@ export function resolveMcpTransport(
       : baseFetch;
   if (resolved.transportType === "streamable-http") {
     return {
-      transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
+      transport: new OpenClawStreamableHTTPClientTransport(new URL(resolved.url), {
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
         fetch: httpFetch,
       }),
@@ -187,7 +187,7 @@ export function resolveMcpTransport(
   const sseHeaders: Record<string, string> = { ...headers };
   const hasHeaders = Object.keys(sseHeaders).length > 0;
   return {
-    transport: new SSEClientTransport(new URL(resolved.url), {
+    transport: new OpenClawSSEClientTransport(new URL(resolved.url), {
       requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
       fetch: httpFetch,
       eventSourceInit: {

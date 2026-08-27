@@ -1,5 +1,5 @@
-import type { RealtimeVoiceAgentTalkbackQueue } from "./agent-talkback-runtime.js";
 import {
+  type RealtimeVoiceAgentTalkbackQueue,
   createRealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceAgentTalkbackQueueParams,
 } from "./agent-talkback-runtime.js";

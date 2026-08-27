@@ -1,5 +1,5 @@
+import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
-import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type {
   AnyAgentTool,
   OpenClawPluginNodeHostCommand,
@@ -35,6 +35,7 @@ describe("ollama lazy imports", () => {
     let nodeInferenceImports = 0;
     let setupImports = 0;
     let streamImports = 0;
+    let streamParams: Record<string, unknown> | undefined;
     let webSearchImports = 0;
     let wslImports = 0;
     let wslChecks = 0;
@@ -114,7 +115,10 @@ describe("ollama lazy imports", () => {
     vi.doMock("./src/stream.runtime.js", () => {
       streamImports += 1;
       return {
-        createConfiguredOllamaStreamFn: () => async () => ({ transport: "ollama" }),
+        createConfiguredOllamaStreamFn: (params: Record<string, unknown>) => {
+          streamParams = params;
+          return async () => ({ transport: "ollama" });
+        },
       };
     });
     vi.doMock("./src/web-search-provider.runtime.js", () => {
@@ -138,20 +142,21 @@ describe("ollama lazy imports", () => {
     });
 
     const { default: ollamaPlugin } = await import("./index.js");
-    let embeddingAdapter: MemoryEmbeddingProviderAdapter | undefined;
+    let embeddingAdapter: EmbeddingProviderAdapter | undefined;
     let mediaProvider: MediaUnderstandingProvider | undefined;
     const nodeCommands: OpenClawPluginNodeHostCommand[] = [];
     const providers: ProviderPlugin[] = [];
     let nodeInferenceTool: AnyAgentTool | undefined;
     let webSearchProvider: WebSearchProviderPlugin | undefined;
+    const runtime = createPluginRuntimeMock();
     ollamaPlugin.register(
       createTestPluginApi({
         id: "ollama",
         name: "Ollama",
         source: "test",
         config: {},
-        runtime: createPluginRuntimeMock(),
-        registerMemoryEmbeddingProvider: (adapter) => {
+        runtime,
+        registerEmbeddingProvider: (adapter) => {
           embeddingAdapter = adapter;
         },
         registerMediaUnderstandingProvider: (provider) => {
@@ -229,9 +234,9 @@ describe("ollama lazy imports", () => {
       config: {
         models: {
           providers: {
-            ollama: {
+            "ollama-gpu": {
               api: "ollama",
-              baseUrl: "http://127.0.0.1:11434",
+              baseUrl: "http://127.0.0.1:11435",
               models: [],
             },
           },
@@ -240,12 +245,19 @@ describe("ollama lazy imports", () => {
       model: {
         api: "ollama",
         id: "qwen3:32b",
-        provider: "ollama",
+        provider: "ollama-gpu",
       },
-      provider: "ollama",
+      provider: "ollama-gpu",
     } as never);
     await expect(streamFn?.({} as never, {} as never, {})).resolves.toEqual({
       transport: "ollama",
+    });
+    expect(streamParams).toMatchObject({
+      providerBaseUrl: "http://127.0.0.1:11435",
+      localService: {
+        providerId: "ollama-gpu",
+        acquire: runtime.llm.acquireLocalService,
+      },
     });
 
     expect({

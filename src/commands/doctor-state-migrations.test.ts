@@ -952,8 +952,35 @@ describe("doctor legacy state migrations", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toContain("Relocated shared auth profiles into shared SQLite state.");
+    expect(result.notices).toContain(
+      "The main agent no longer owns shared credentials and can now be deleted.",
+    );
     expect(readPersistedSharedAuthProfileStoreRaw(env)).toEqual(store);
     expect(readPersistedAuthProfileStoreRaw(mainAgentDir)).toBeNull();
+  });
+
+  it("records fresh shared auth ownership without reporting a relocation", async () => {
+    const stateDir = makeDoctorStateDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.changes).not.toContain(
+      "Relocated shared auth profiles into shared SQLite state.",
+    );
+    expect(result.notices ?? []).not.toContain(
+      "The main agent no longer owns shared credentials and can now be deleted.",
+    );
+    const database = openOpenClawStateDatabase({ env }).db;
+    expect(
+      database
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
+        .get(),
+    ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
   });
 
   it("removes stale transcript paths left by a shipped legacy migration", async () => {

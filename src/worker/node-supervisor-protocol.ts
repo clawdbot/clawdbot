@@ -14,7 +14,6 @@ export const NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE = "openclaw-worker-conn
 export type NodeWorkerLaunchInput = {
   launchId: string;
   gatewayNamespace: string;
-  installKind: "local" | "bundle";
   expectedBundleHash: string;
   placementGeneration: number;
   descriptor: WorkerLaunchPlan;
@@ -103,6 +102,18 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
+export function assertNodeWorkerLaunchIdentity(
+  input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
+  descriptor: WorkerLaunchPlan,
+): void {
+  if (descriptor.assignment.turnId !== input.launchId) {
+    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
+  }
+  if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
+    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
+  }
+}
+
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
   const value = decodeRequest(raw);
   if (
@@ -110,7 +121,6 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
     !hasExactKeys(value, [
       "launchId",
       "gatewayNamespace",
-      "installKind",
       "expectedBundleHash",
       "placementGeneration",
       "descriptor",
@@ -123,9 +133,6 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
   if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
     throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
   }
-  if (value.installKind !== "local" && value.installKind !== "bundle") {
-    throw new Error("INVALID_REQUEST: installKind must be local or bundle");
-  }
   if (!isPlanHash(value.expectedBundleHash)) {
     throw new Error(
       "INVALID_REQUEST: expectedBundleHash must be 64 lowercase hexadecimal characters",
@@ -137,13 +144,13 @@ export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunc
   } catch {
     throw new Error("INVALID_REQUEST: invalid worker launch descriptor");
   }
-  if (descriptor.admission.handshake.bundleHash !== value.expectedBundleHash) {
-    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
-  }
+  assertNodeWorkerLaunchIdentity(
+    { launchId, expectedBundleHash: value.expectedBundleHash },
+    descriptor,
+  );
   return {
     launchId,
     gatewayNamespace,
-    installKind: value.installKind,
     expectedBundleHash: value.expectedBundleHash,
     placementGeneration: requireNonNegativeInteger(
       value.placementGeneration,
@@ -200,13 +207,12 @@ export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSuper
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "installKind" | "placementGeneration"
+    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration"
   >,
 ): string {
   return createHash("sha256")
     .update(
       stableStringify({
-        installKind: input.installKind,
         expectedBundleHash: input.expectedBundleHash,
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,

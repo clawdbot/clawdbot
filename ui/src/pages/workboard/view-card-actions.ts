@@ -36,6 +36,7 @@ function moveCardToStatus(props: WorkboardProps, card: WorkboardCard, status: Wo
     status === card.status ||
     state.busyCardIds.has(card.id) ||
     state.dispatching ||
+    !canMutate(props) ||
     !props.connected ||
     !props.client
   ) {

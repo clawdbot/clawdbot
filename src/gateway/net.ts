@@ -7,6 +7,7 @@ import {
   isIpInCidr,
   isLoopbackIpAddress,
   isPrivateOrLoopbackIpAddress,
+  isRfc8215LocalUseNat64Ipv6Address,
   normalizeIpAddress,
 } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -64,13 +65,14 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
     return false;
   }
   const headers = req.headers ?? {};
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
+  return Object.keys(headers).some((header) => {
+    const normalized = normalizeLowercaseStringOrEmpty(header);
+    return (
+      normalized === "forwarded" ||
+      normalized === "x-real-ip" ||
+      normalized.startsWith("x-forwarded-")
+    );
+  });
 }
 
 /** Return whether a request is a clean loopback request without forwarded identity headers. */
@@ -110,9 +112,11 @@ export function resolveLocalInterfaceAddressMatch(
 /**
  * Returns true if the IP belongs to a private or loopback network range.
  * Private ranges: RFC1918, link-local, ULA IPv6, and CGNAT (100.64/10), plus loopback.
+ * Excludes RFC8215 local-use NAT64: SSRF policy blocks that allocation, but
+ * Gateway trust decisions cannot infer a private mapped destination from it.
  */
 export function isPrivateOrLoopbackAddress(ip: string | undefined): boolean {
-  return isPrivateOrLoopbackIpAddress(ip);
+  return isPrivateOrLoopbackIpAddress(ip) && !isRfc8215LocalUseNat64Ipv6Address(ip);
 }
 
 function normalizeIp(ip: string | undefined): string | undefined {

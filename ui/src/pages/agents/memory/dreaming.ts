@@ -11,6 +11,7 @@ import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import {
   canCallGatewayMethod,
   isGatewayMethodAdvertised,
@@ -104,7 +105,7 @@ export type WikiOverview = {
 };
 
 type DreamingResourceKey = "dreamingStatus" | "dreamDiary" | "wikiImportInsights" | "wikiOverview";
-type DreamingResourceRequest = { agentId: string | null };
+type DreamingResourceRequest = { agentId: string };
 
 export type DreamingState = {
   client: GatewayBrowserClient | null;
@@ -291,18 +292,6 @@ function resolveSelectedAgentId(state: DreamingState): string | null {
   return normalizeTrimmedString(state.selectedAgentId) ?? null;
 }
 
-function buildSelectedAgentPayloadForAgentId(
-  agentId: string | null,
-): { agentId: string } | Record<string, never> {
-  return agentId ? { agentId } : {};
-}
-
-function buildSelectedAgentPayload(
-  state: DreamingState,
-): { agentId: string } | Record<string, never> {
-  return buildSelectedAgentPayloadForAgentId(resolveSelectedAgentId(state));
-}
-
 export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
   pluginId: string;
   enabled: boolean;
@@ -388,15 +377,17 @@ async function loadDreamingResource<Key extends DreamingResourceKey>(
   key: Key,
   spec: DreamingResourceSpec<Key> = DREAMING_RESOURCE_SPECS[key],
 ): Promise<void> {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-
   const agentId = resolveSelectedAgentId(state);
   const loadingKey = `${key}Loading` as const;
   const errorKey = `${key}Error` as const;
   const agentKey = `${key}AgentId` as const;
+  if (!agentId) {
+    return;
+  }
+  const client = state.client;
+  if (!client || !state.connected) {
+    return;
+  }
   if (state[agentKey] !== agentId) {
     spec.clear(state);
   }
@@ -422,10 +413,7 @@ async function loadDreamingResource<Key extends DreamingResourceKey>(
   state[loadingKey] = true;
   state[errorKey] = null;
   try {
-    const payload = await client.request<DreamingResourcePayloads[Key]>(
-      spec.method,
-      buildSelectedAgentPayloadForAgentId(agentId),
-    );
+    const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
     if (state.resourceRequests[key] !== request || resolveSelectedAgentId(state) !== agentId) {
       return;
     }
@@ -433,7 +421,7 @@ async function loadDreamingResource<Key extends DreamingResourceKey>(
     state[agentKey] = agentId;
   } catch (error) {
     if (state.resourceRequests[key] === request && resolveSelectedAgentId(state) === agentId) {
-      state[errorKey] = String(error);
+      state[errorKey] = formatUiError(error);
     }
   } finally {
     if (state.resourceRequests[key] === request) {
@@ -472,8 +460,10 @@ async function runDreamDiaryAction(
   },
 ): Promise<boolean> {
   const client = state.client;
+  const agentId = resolveSelectedAgentId(state);
   if (
     !client ||
+    !agentId ||
     !canCallDreamingMethod(state, method, "operator.write") ||
     state.dreamDiaryActionLoading
   ) {
@@ -485,10 +475,7 @@ async function runDreamDiaryAction(
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
-    const payload = await client.request<DoctorMemoryDreamActionPayload>(
-      method,
-      buildSelectedAgentPayload(state),
-    );
+    const payload = await client.request<DoctorMemoryDreamActionPayload>(method, { agentId });
     if (options?.reloadDiary !== false) {
       await loadDreamDiary(state);
     }
@@ -503,7 +490,7 @@ async function runDreamDiaryAction(
     };
     return true;
   } catch (err) {
-    const message = String(err);
+    const message = formatUiError(err);
     state.dreamingStatusError = message;
     state.lastError = message;
     state.dreamDiaryActionArchivePath = null;

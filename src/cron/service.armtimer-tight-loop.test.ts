@@ -112,7 +112,7 @@ describe("CronService - armTimer tight loop prevention", () => {
     timeoutSpy.mockRestore();
   });
 
-  it("does not add extra delay when the next wake time is in the future", () => {
+  it("reads enabled and collection length only during one future-wake traversal", () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const now = Date.parse("2026-02-28T12:32:00.000Z");
 
@@ -120,34 +120,58 @@ describe("CronService - armTimer tight loop prevention", () => {
       storePath: "/tmp/test-cron/jobs.json",
       now,
     });
+    const job: CronJob = {
+      id: "future-job",
+      name: "future-job",
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs: now,
+      updatedAtMs: now,
+      schedule: { kind: "cron", expr: "*/15 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "test" },
+      delivery: { mode: "none" },
+      state: { nextRunAtMs: now + 10_000 },
+    };
+    let enabledReads = 0;
+    Object.defineProperty(job, "enabled", {
+      configurable: true,
+      get: () => {
+        enabledReads += 1;
+        if (enabledReads > 1) {
+          throw new Error("enabled read more than once");
+        }
+        return true;
+      },
+    });
+    let lengthReads = 0;
+    const jobs = new Proxy([job], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          lengthReads += 1;
+          if (lengthReads > target.length + 1) {
+            throw new Error("jobs.length read after iteration");
+          }
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
     state.store = {
       version: 1,
-      jobs: [
-        {
-          id: "future-job",
-          name: "future-job",
-          enabled: true,
-          deleteAfterRun: false,
-          createdAtMs: now,
-          updatedAtMs: now,
-          schedule: { kind: "cron", expr: "*/15 * * * *" },
-          sessionTarget: "isolated" as const,
-          wakeMode: "next-heartbeat" as const,
-          payload: { kind: "agentTurn" as const, message: "test" },
-          delivery: { mode: "none" as const },
-          state: { nextRunAtMs: now + 10_000 }, // 10 seconds in the future
-        },
-      ],
+      jobs,
     };
 
-    armTimer(state);
+    try {
+      armTimer(state);
 
-    const delays = extractTimeoutDelays(timeoutSpy);
-
-    // The natural delay (10 s) should be used, not the floor.
-    expect(delays).toContain(10_000);
-
-    timeoutSpy.mockRestore();
+      expect(enabledReads).toBe(1);
+      expect(lengthReads).toBe(2);
+      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+      expect(extractTimeoutDelays(timeoutSpy)).toContain(10_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("keeps a maintenance wake armed when enabled jobs have no nextRunAtMs", () => {
@@ -158,33 +182,51 @@ describe("CronService - armTimer tight loop prevention", () => {
       storePath: "/tmp/test-cron/jobs.json",
       now,
     });
+    const job: CronJob = {
+      id: "missing-next-run",
+      name: "missing-next-run",
+      enabled: true,
+      deleteAfterRun: false,
+      createdAtMs: now - 60_000,
+      updatedAtMs: now - 30_000,
+      schedule: { kind: "cron", expr: "*/15 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "test" },
+      delivery: { mode: "none" },
+      state: {
+        lastRunStatus: "error",
+        lastRunAtMs: now - 45_000,
+        lastError: "provider overloaded",
+      },
+    };
+    const jobs = [job];
+    const filterSpy = vi.spyOn(jobs, "filter");
     state.store = {
       version: 1,
-      jobs: [
-        {
-          id: "missing-next-run",
-          name: "missing-next-run",
-          enabled: true,
-          deleteAfterRun: false,
-          createdAtMs: now - 60_000,
-          updatedAtMs: now - 60_000,
-          schedule: { kind: "cron", expr: "*/15 * * * *" },
-          sessionTarget: "isolated" as const,
-          wakeMode: "next-heartbeat" as const,
-          payload: { kind: "agentTurn" as const, message: "test" },
-          delivery: { mode: "none" as const },
-          state: {},
-        },
-      ],
+      jobs,
     };
 
-    armTimer(state);
+    try {
+      armTimer(state);
 
-    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
-    const delays = extractTimeoutDelays(timeoutSpy);
-    expect(delays).toContain(60_000);
-
-    timeoutSpy.mockRestore();
+      expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
+      expect(extractTimeoutDelays(timeoutSpy)).toContain(60_000);
+      expect(filterSpy).not.toHaveBeenCalled();
+      expect(state.store.jobs).toEqual([job]);
+      expect(state.store.jobs[0]).toBe(job);
+      expect(job.state).toEqual({
+        lastRunStatus: "error",
+        lastRunAtMs: now - 45_000,
+        lastError: "provider overloaded",
+      });
+      expect(noopLogger.debug).toHaveBeenLastCalledWith(
+        { jobCount: 1, enabledCount: 1, withNextRun: 0, delayMs: 60_000 },
+        "cron: timer armed for maintenance recheck",
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("breaks the onTimer→armTimer hot-loop with stuck runningAtMs", async () => {

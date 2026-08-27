@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
+import type { ChannelApprovalKind } from "../infra/approval-types.js";
 
 const PRESENTATION_FALLBACK_CONTINUATION = Symbol.for(
   "openclaw.presentation.fallback-continuation",
@@ -84,7 +85,7 @@ export type MessagePresentationAction =
       /** Resolve one durable operator approval without exposing transport callback data. */
       type: "approval";
       approvalId: string;
-      approvalKind: "exec" | "plugin";
+      approvalKind: ChannelApprovalKind;
       decision: "allow-once" | "allow-always" | "deny";
     }
   | {

@@ -16,6 +16,27 @@ function firstModel(row: Record<string, unknown>) {
 }
 
 describe("live discovery vendor token-limit fields", () => {
+  it("fills an omitted seed window from the matching live row", () => {
+    const [model] = buildOpenAICompatibleLiveModels(
+      [{ id: "transport-only", object: "model", context_window: 262_144 }],
+      {
+        ...fallback,
+        models: [
+          {
+            id: "transport-only",
+            name: "Transport only",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 8192,
+          },
+        ],
+      },
+    );
+
+    expect(model?.contextWindow).toBe(262_144);
+  });
+
   it("reads Anthropic's max_input_tokens and max_tokens", () => {
     // Anthropic names the context window by its input side and the output cap
     // as max_tokens; before this mapping both fell back to generic defaults.

@@ -16,10 +16,6 @@ import {
   listRegisteredEmbeddingProviders,
   type RegisteredEmbeddingProvider,
   restoreRegisteredEmbeddingProviders,
-  clearMemoryEmbeddingProviders,
-  listRegisteredMemoryEmbeddingProviders,
-  type RegisteredMemoryEmbeddingProvider,
-  restoreRegisteredMemoryEmbeddingProviders,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -32,7 +28,6 @@ type CapturedCall = {
 };
 
 let embeddingProvidersSnapshot: RegisteredEmbeddingProvider[];
-let memoryEmbeddingProvidersSnapshot: RegisteredMemoryEmbeddingProvider[];
 let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 
 function createOptions(config: OpenClawConfig) {
@@ -49,17 +44,13 @@ function createOptions(config: OpenClawConfig) {
 beforeEach(() => {
   previousPluginRegistry = getActivePluginRegistry();
   embeddingProvidersSnapshot = listRegisteredEmbeddingProviders();
-  memoryEmbeddingProvidersSnapshot = listRegisteredMemoryEmbeddingProviders();
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
 });
 
 afterEach(() => {
   clearEmbeddingProviders();
-  clearMemoryEmbeddingProviders();
   setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
   restoreRegisteredEmbeddingProviders(embeddingProvidersSnapshot);
-  restoreRegisteredMemoryEmbeddingProviders(memoryEmbeddingProvidersSnapshot);
 });
 
 describe("memory-core generic embedding provider bridge", () => {
@@ -156,8 +147,6 @@ describe("memory-core generic embedding provider bridge", () => {
     expect(registry.registry.embeddingProviders.map((entry) => entry.provider.id)).toEqual([
       "virtual-generic",
     ]);
-    expect(listRegisteredMemoryEmbeddingProviders()).toEqual([]);
-
     expect(resolveEmbeddingProviderIndexIdentity(createOptions(config))).toEqual({
       provider: { id: "virtual-generic", model: "virtual-model" },
       cacheKeyData: {

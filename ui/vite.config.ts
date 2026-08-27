@@ -1,11 +1,19 @@
 // Control UI config module wires vite behavior.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import { gzip } from "pako";
 import type { Plugin, UserConfig } from "vite";
+import {
+  CONTROL_UI_ASSET_MANIFEST_FILENAME,
+  CONTROL_UI_ASSET_MANIFEST_VERSION,
+  hashControlUiAssetManifestEntries,
+  type ControlUiAssetManifestEntry,
+} from "../src/gateway/control-ui-asset-manifest.ts";
 import { controlUiCodeSplitting } from "./config/control-ui-chunking.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -71,7 +79,8 @@ export function createControlUiPrecompressedAssetVariants(
     },
     {
       fileName: `${fileName}.gz`,
-      source: gzipSync(body, { level: 9 }),
+      // Host zlib is byte-unstable across supported runtimes; pako's classic hash is canonical.
+      source: Buffer.from(gzip(body, { level: 9, legacyHash: true })),
     },
   ];
 }
@@ -306,9 +315,11 @@ export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "json-schema"),
+    sourcePackageAlias("normalization-core", "markdown-plain-text"),
     sourcePackageAlias("normalization-core", "number-coercion"),
     sourcePackageAlias("normalization-core", "phone-presentation"),
     sourcePackageAlias("normalization-core", "record-coerce"),
+    sourcePackageAlias("normalization-core", "result"),
     sourcePackageAlias("normalization-core", "string-coerce"),
     sourcePackageAlias("normalization-core", "string-normalization"),
     sourcePackageAlias("normalization-core", "utf16-slice"),
@@ -419,6 +430,56 @@ function controlUiPrecompressedAssetsPlugin(buildOutDir: string): Plugin {
   };
 }
 
+function collectControlUiAssetManifestEntries(buildOutDir: string): ControlUiAssetManifestEntry[] {
+  const assetsRoot = path.join(buildOutDir, "assets");
+  const entries: ControlUiAssetManifestEntry[] = [];
+  const visit = (directory: string) => {
+    for (const entry of fs
+      .readdirSync(directory, { withFileTypes: true })
+      .toSorted((a, b) => a.name.localeCompare(b.name))) {
+      const filePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(filePath);
+        continue;
+      }
+      // Source maps are diagnostics, not runtime dependencies of an open document.
+      if (entry.name.endsWith(".map")) {
+        continue;
+      }
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(`Unsafe Control UI build asset: ${filePath}`);
+      }
+      const source = fs.readFileSync(filePath);
+      entries.push({
+        path: path.relative(buildOutDir, filePath).split(path.sep).join("/"),
+        sha256: createHash("sha256").update(source).digest("hex"),
+        size: source.byteLength,
+      });
+    }
+  };
+  visit(assetsRoot);
+  return entries;
+}
+
+function controlUiAssetManifestPlugin(buildOutDir: string): Plugin {
+  return {
+    name: "control-ui-asset-manifest",
+    apply: "build",
+    closeBundle() {
+      const assets = collectControlUiAssetManifestEntries(buildOutDir);
+      const manifest = {
+        version: CONTROL_UI_ASSET_MANIFEST_VERSION,
+        generation: hashControlUiAssetManifestEntries(assets),
+        assets,
+      };
+      fs.writeFileSync(
+        path.join(buildOutDir, CONTROL_UI_ASSET_MANIFEST_FILENAME),
+        `${JSON.stringify(manifest)}\n`,
+      );
+    },
+  };
+}
+
 export default function controlUiViteConfig(options: { outDir?: string } = {}): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
@@ -479,6 +540,7 @@ export default function controlUiViteConfig(options: { outDir?: string } = {}): 
       controlUiBrowserOnlySharedModuleAliases(),
       controlUiPrecompressedAssetsPlugin(buildOutDir),
       controlUiServiceWorkerBuildIdPlugin(buildInfo.buildId, buildOutDir),
+      controlUiAssetManifestPlugin(buildOutDir),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
@@ -275,8 +276,9 @@ export function flushChatQueueAfterIdleSessionReconciliation(
 }
 
 function setChatError(host: ChatModelSettingsHost, error: string | null, requestUpdate = false) {
-  host.lastError = error;
-  host.chatError = error;
+  const message = error === null ? null : formatUiError(error);
+  host.lastError = message;
+  host.chatError = message;
   if (requestUpdate) {
     host.requestUpdate?.();
   }
@@ -288,6 +290,7 @@ function setChatError(host: ChatModelSettingsHost, error: string | null, request
 // cannot clobber a newer selection.
 const chatFastModePatchTokens = new WeakMap<object, Map<string, symbol>>();
 const chatThinkingPatchTokens = new WeakMap<object, Map<string, symbol>>();
+const chatContextWindowPatchTokens = new WeakMap<object, Map<string, symbol>>();
 
 function claimChatSettingsPatch(
   store: WeakMap<object, Map<string, symbol>>,
@@ -390,7 +393,7 @@ export function switchChatFastMode(
       return true;
     } catch (err) {
       rollback();
-      setChatError(host, `Failed to set speed: ${String(err)}`, true);
+      setChatError(host, `Failed to set speed: ${formatUiError(err)}`, true);
       return false;
     }
   })();
@@ -455,7 +458,7 @@ export async function switchChatModel(
       return true;
     } catch (err) {
       if (ownsModelOverride()) {
-        setChatError(host, `Failed to set model: ${String(err)}`, true);
+        setChatError(host, `Failed to set model: ${formatUiError(err)}`, true);
       }
       return false;
     } finally {
@@ -533,9 +536,57 @@ export function switchChatThinkingLevel(
       return true;
     } catch (err) {
       rollback();
-      setChatError(host, `Failed to set thinking level: ${String(err)}`, true);
+      setChatError(host, `Failed to set thinking level: ${formatUiError(err)}`, true);
       return false;
     }
   })();
   return patchPromise;
+}
+
+export function switchChatContextWindow(
+  host: ChatModelSettingsHost,
+  nextContextWindow: string,
+  targetSessionKey = host.sessionKey,
+): Promise<boolean> {
+  if (!host.client || !host.connected) {
+    return Promise.resolve(false);
+  }
+  const activeRow = host.sessionsResult?.sessions?.find((row) =>
+    areUiSessionKeysEquivalent(row.key, targetSessionKey),
+  );
+  const previous = activeRow?.contextWindow;
+  const next = nextContextWindow.trim() || undefined;
+  if ((previous ?? "") === (next ?? "")) {
+    return Promise.resolve(true);
+  }
+  const token = claimChatSettingsPatch(chatContextWindowPatchTokens, host, targetSessionKey);
+  setChatError(host, null, true);
+  patchSessionRow(host, targetSessionKey, { contextWindow: next });
+  const rollback = () => {
+    if (isCurrentChatSettingsPatch(chatContextWindowPatchTokens, host, targetSessionKey, token)) {
+      patchSessionRow(host, targetSessionKey, { contextWindow: previous });
+    }
+  };
+  return (async () => {
+    try {
+      const patched = await patchChatSessionSettings(
+        host,
+        targetSessionKey,
+        { contextWindow: next ?? null },
+        {
+          ...scopedAgentParamsForSession(host, targetSessionKey),
+          reconcile: async () => refreshCurrentChatSessionList(host),
+        },
+      );
+      if (!patched) {
+        rollback();
+        return false;
+      }
+      return true;
+    } catch (err) {
+      rollback();
+      setChatError(host, `Failed to set context window: ${formatUiError(err)}`, true);
+      return false;
+    }
+  })();
 }

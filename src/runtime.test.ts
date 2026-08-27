@@ -21,30 +21,23 @@ import {
 } from "./runtime.js";
 
 describe("createNonExitingRuntime", () => {
-  it("returns runtime with exit function", () => {
+  it("throws a typed exit error carrying the requested code", () => {
     const runtime = createNonExitingRuntime();
-    expect(typeof runtime.exit).toBe("function");
-  });
+    let thrown: unknown;
 
-  it("exit function throws ExitError", () => {
-    const runtime = createNonExitingRuntime();
-    expect(() => runtime.exit(1)).toThrow(ExitError);
-  });
-
-  it("ExitError includes exit code", () => {
-    const runtime = createNonExitingRuntime();
-    expect(() => runtime.exit(42)).toThrow("exit 42");
-    expect(() => runtime.exit(42)).toThrow(ExitError);
-  });
-
-  it("ExitError is distinguishable from generic Error", () => {
-    const runtime = createNonExitingRuntime();
     try {
-      runtime.exit(1);
-    } catch (err) {
-      expect(err instanceof ExitError).toBe(true);
-      expect(err instanceof Error).toBe(true);
+      runtime.exit(42);
+    } catch (error) {
+      thrown = error;
     }
+
+    expect(thrown).toBeInstanceOf(ExitError);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(thrown).toMatchObject({
+      name: "ExitError",
+      message: "exit 42",
+      code: 42,
+    });
   });
 });
 

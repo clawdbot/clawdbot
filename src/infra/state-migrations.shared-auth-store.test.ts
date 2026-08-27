@@ -77,6 +77,49 @@ describe("shared auth store relocation", () => {
     };
   }
 
+  async function createEmptyFixture(createSourceDatabase: boolean) {
+    const stateDir = tempDirs.make("openclaw-shared-auth-empty-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: undefined };
+    const [paths, ownership, sqlite, migration] = await Promise.all([
+      import("../agents/auth-profiles/shared-main-dir.js"),
+      import("../agents/auth-profiles/path-resolve.js"),
+      import("../agents/auth-profiles/sqlite.js"),
+      import("./state-migrations.shared-auth-store.js"),
+    ]);
+    const mainAgentDir = paths.resolveSharedMainAuthAgentDir(env);
+    const sourcePath = sqlite.resolveAuthProfileDatabasePath(mainAgentDir);
+    if (createSourceDatabase) {
+      sqlite.writePersistedAuthProfileStoreRaw({ version: 1, profiles: {} }, mainAgentDir);
+      sqlite.deletePersistedAuthProfileStoreRaw(mainAgentDir);
+    }
+    return { env, stateDir, sourcePath, ownership, migration };
+  }
+
+  it.each([
+    { label: "fresh profile", createSourceDatabase: false },
+    { label: "legacy profile with an empty source database", createSourceDatabase: true },
+  ])("records ownership without reporting relocation for a $label", async (testCase) => {
+    const fixture = await createEmptyFixture(testCase.createSourceDatabase);
+    expect(fs.existsSync(fixture.sourcePath)).toBe(testCase.createSourceDatabase);
+
+    const detected = fixture.migration.detectSharedAuthStoreMigration({
+      stateDir: fixture.stateDir,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.hasLegacy).toBe(true);
+    expect(
+      await fixture.migration.migrateSharedAuthStore({
+        detected,
+        stateDir: fixture.stateDir,
+      }),
+    ).toEqual({ changes: [], warnings: [] });
+    expect(fixture.ownership.resolveSharedAuthStoreOwnership(fixture.env)).toEqual({
+      location: "state-db",
+    });
+  });
+
   it("moves exact rows, preserves every effective agent store, and records receipts", async () => {
     const fixture = await createFixture();
     const effectiveBytes = (agentDir: string) => {

@@ -203,7 +203,7 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     // events can both resume asynchronously, and must not reopen the shared DB.
     const activeAgent = agent;
     agent = null;
-    activeAgent?.shutdown();
+    await activeAgent?.shutdown();
     const gatewayStop = gateway.stopAndWait().catch((err: unknown) => {
       console.warn(`acp: gateway stop failed during shutdown: ${formatErrorMessage(err)}`);
     });

@@ -147,9 +147,13 @@ if (mode === "connection-failure") {
 }
 `;
 
-export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): WorkerLaunchPlan {
+export function testWorkerDescriptor(
+  workspaceDir: string,
+  prompt = "success",
+  turnId = "turn-1",
+): WorkerLaunchPlan {
   return {
-    version: 3,
+    version: 4,
     admission: {
       environmentId: "environment-1",
       credential: TEST_WORKER_CREDENTIAL,
@@ -167,7 +171,7 @@ export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): 
       operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
       agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
-      turnId: "turn-1",
+      turnId,
       prompt,
       suppressPromptTranscript: false,
       workspaceDir,
@@ -202,7 +206,7 @@ export function writeNodeWorkerFixture(root: string) {
   const bundleDir = path.join(bundleRoot, "gateway-1", "bundles", TEST_BUNDLE_HASH);
   fs.mkdirSync(bundleDir, { recursive: true });
   fs.mkdirSync(workspaceDir, { recursive: true });
-  fs.writeFileSync(path.join(bundleDir, "openclaw.mjs"), TEST_WORKER_SOURCE);
+  fs.writeFileSync(path.join(bundleDir, "worker.mjs"), TEST_WORKER_SOURCE);
   return { bundleRoot, env: { OPENCLAW_STATE_DIR: stateDir }, root, stateDir, workspaceDir };
 }
 
@@ -214,9 +218,8 @@ export function testWorkerLaunchInput(
   return {
     launchId,
     gatewayNamespace: "gateway-1",
-    installKind: "bundle",
     expectedBundleHash: TEST_BUNDLE_HASH,
     placementGeneration: 4,
-    descriptor: testWorkerDescriptor(workspaceDir, prompt),
+    descriptor: testWorkerDescriptor(workspaceDir, prompt, launchId),
   };
 }

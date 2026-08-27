@@ -49,7 +49,7 @@ export async function prepareGatewayAgentCliShim(
     platform?: NodeJS.Platform;
     stateDir?: string;
   } = {},
-): Promise<{ binDir: string; executablePath: string }> {
+): Promise<void> {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const invocation = options.invocation ?? resolveCurrentOpenClawCliInvocation([]);
@@ -70,7 +70,6 @@ export async function prepareGatewayAgentCliShim(
     tempPrefix: "openclaw-agent-cli",
   });
   gatewayAgentCliState.binDir = binDir;
-  return { binDir, executablePath };
 }
 
 /** Clear a prepared launcher after startup failure; normal Gateway close resets it globally. */

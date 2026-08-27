@@ -804,8 +804,10 @@ describe("Microsoft Teams meeting captions and permissions", () => {
       sessionMatched: true,
       urlMatched: true,
     });
-    expect(() =>
-      TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({ result: "not-json" }),
-    ).toThrow("Microsoft Teams browser status JSON is malformed.");
+    for (const result of ["not-json", "null", "[]"]) {
+      expect(() => TEAMS_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({ result })).toThrow(
+        "Microsoft Teams browser status JSON is malformed.",
+      );
+    }
   });
 });

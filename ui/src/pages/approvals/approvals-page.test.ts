@@ -2,7 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalHistoryResult } from "../../../../packages/gateway-protocol/src/schema/approvals.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
@@ -35,6 +35,7 @@ function createPage(
   auth?: { role: string; scopes?: string[] },
 ): {
   page: TestApprovalsPage;
+  emitGatewayEvent: (event: string, payload: unknown) => void;
   updateGateway: (next: Partial<ApplicationGatewaySnapshot>) => void;
 } {
   const client = { request } as GatewayBrowserClient;
@@ -44,6 +45,7 @@ function createPage(
     ...(auth ? { hello: { auth } } : {}),
   } as ApplicationGatewaySnapshot;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const gateway = {
     get snapshot() {
       return snapshot;
@@ -51,6 +53,10 @@ function createPage(
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
     },
   } as unknown as ApplicationContext["gateway"];
   const provider = createApplicationContextProvider({
@@ -62,6 +68,12 @@ function createPage(
   document.body.append(provider);
   return {
     page,
+    emitGatewayEvent(event, payload) {
+      const frame = { event, payload, type: "event" } as GatewayEventFrame;
+      for (const listener of eventListeners) {
+        listener(frame);
+      }
+    },
     updateGateway(next) {
       snapshot = { ...snapshot, ...next };
       for (const listener of listeners) {
@@ -139,6 +151,64 @@ describe("ApprovalsPage", () => {
   });
 
   it.each([
+    { kind: "exec", event: "exec.approval.resolved" },
+    { kind: "plugin", event: "plugin.approval.resolved" },
+    { kind: "system-agent", event: "openclaw.approval.resolved" },
+  ])("shows a newly resolved $kind approval without leaving the page", async ({ event }) => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [] })
+      .mockResolvedValueOnce({ items: [terminal("newly-resolved", 2_000)] });
+    const { page, emitGatewayEvent } = createPage(request as GatewayBrowserClient["request"]);
+
+    await settle(page);
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain(
+      "No resolved approvals",
+    );
+
+    emitGatewayEvent(event, { id: "newly-resolved", decision: "deny" });
+    await settle(page);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain(
+      "echo newly-resolved",
+    );
+  });
+
+  it("refreshes the newest history after an approval resolves during pagination", async () => {
+    let resolveOlderPage!: (result: ApprovalHistoryResult) => void;
+    const olderPage = new Promise<ApprovalHistoryResult>((resolve) => {
+      resolveOlderPage = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
+      .mockReturnValueOnce(olderPage)
+      .mockResolvedValueOnce({ items: [terminal("newest", 3_000), terminal("first", 2_000)] });
+    const { page, emitGatewayEvent } = createPage(request as GatewayBrowserClient["request"]);
+
+    await settle(page);
+    const loadMore = [...page.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Load more"),
+    );
+    loadMore?.click();
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    emitGatewayEvent("exec.approval.resolved", { id: "newest", decision: "deny" });
+    expect(request).toHaveBeenCalledTimes(2);
+
+    resolveOlderPage({ items: [terminal("older", 1_000)] });
+    await settle(page);
+    await settle(page);
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo newest");
+  });
+
+  it.each([
     { name: "read-only", scopes: ["operator.read"] },
     { name: "write-only", scopes: ["operator.write"] },
   ])("does not request or render approval history for a $name operator", async ({ scopes }) => {
@@ -179,10 +249,13 @@ describe("ApprovalsPage", () => {
       .fn()
       .mockReturnValueOnce(staleHistory)
       .mockResolvedValueOnce({ items: [terminal("current", 2_000)] });
-    const { page, updateGateway } = createPage(request as GatewayBrowserClient["request"], {
-      role: "operator",
-      scopes: ["operator.approvals"],
-    });
+    const { page, emitGatewayEvent, updateGateway } = createPage(
+      request as GatewayBrowserClient["request"],
+      {
+        role: "operator",
+        scopes: ["operator.approvals"],
+      },
+    );
 
     await settle(page);
     expect(request).toHaveBeenCalledOnce();
@@ -192,6 +265,8 @@ describe("ApprovalsPage", () => {
         auth: { role: "operator", scopes: ["operator.read"] },
       } as ApplicationGatewaySnapshot["hello"],
     });
+    await settle(page);
+    emitGatewayEvent("exec.approval.resolved", { id: "inaccessible", decision: "deny" });
     await settle(page);
     expect(request).toHaveBeenCalledOnce();
     expect(page.querySelector(".approval-history-table")).toBeNull();

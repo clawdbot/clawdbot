@@ -35,7 +35,11 @@ export type ResolvedConfiguredProvider<TProvider, TConfig> =
       /** Provider selection failed before a configured provider could be used. */
       ok: false;
       /** Stable failure code for setup/runtime callers. */
-      code: "missing-configured-provider" | "no-registered-provider" | "provider-not-configured";
+      code:
+        | "missing-configured-provider"
+        | "no-registered-provider"
+        | "provider-not-configured"
+        | "provider-unavailable";
       /** Normalized explicit provider id, when the caller supplied one. */
       configuredProviderId?: string;
       /** Candidate provider that existed but failed configuration checks. */
@@ -110,6 +114,8 @@ export function resolveConfiguredCapabilityProvider<
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
   /** Iterable of providers eligible for auto-selection. */
   listProviders: () => Iterable<TProvider>;
+  /** Availability gate checked before provider-specific config normalization. */
+  isProviderAvailable?: (params: { provider: TProvider }) => boolean;
   resolveProviderConfig: (params: {
     /** Candidate provider being resolved. */
     provider: TProvider;
@@ -153,8 +159,13 @@ export function resolveConfiguredCapabilityProvider<
     };
   }
 
+  let firstUnavailable: TProvider | undefined;
   let firstUnconfigured: TProvider | undefined;
   for (const provider of providers) {
+    if (params.isProviderAvailable && !params.isProviderAvailable({ provider })) {
+      firstUnavailable ??= provider;
+      continue;
+    }
     const resolution = resolveProviderCandidate({
       ...params,
       provider,
@@ -163,6 +174,14 @@ export function resolveConfiguredCapabilityProvider<
       return resolution;
     }
     firstUnconfigured ??= provider;
+  }
+
+  if (!firstUnconfigured && firstUnavailable) {
+    return {
+      ok: false,
+      code: "provider-unavailable",
+      provider: firstUnavailable,
+    };
   }
 
   return {

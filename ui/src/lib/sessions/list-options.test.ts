@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { SessionGoal, SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): SessionsListResult {
@@ -23,7 +23,7 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
-function createSessions(client: GatewayBrowserClient, key: string) {
+function createSessions(client: GatewayBrowserClient, key: string, ownerId?: string) {
   return createSessionCapability({
     snapshot: {
       client,
@@ -31,6 +31,7 @@ function createSessions(client: GatewayBrowserClient, key: string) {
       sessionKey: key,
       assistantAgentId: "main",
       hello: null,
+      selfUser: ownerId ? { id: ownerId } : null,
     },
     subscribe: () => () => undefined,
     subscribeEvents: () => () => undefined,
@@ -38,6 +39,31 @@ function createSessions(client: GatewayBrowserClient, key: string) {
 }
 
 describe("session list replacement options", () => {
+  it.each([
+    { filter: "owner", options: { ownerId: "profile-bob" } },
+    { filter: "involving me", options: { involvingMe: true } },
+    { filter: "search", options: { search: "release" } },
+  ])("keeps an explicit $filter query single-phase", async ({ options }) => {
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const sessions = createSessions(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "profile-ada",
+    );
+
+    await sessions.refresh({ agentId: "main", ...options, force: true });
+
+    const listCalls = request.mock.calls.filter(([method]) => method === "sessions.list");
+    expect(listCalls).toHaveLength(1);
+    expect(listCalls[0]?.[1]).toEqual(expect.objectContaining(options));
+    sessions.dispose();
+  });
+
   it("preserves sidebar metadata hydration when refreshing after session patches", async () => {
     const key = "agent:main:untitled";
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -385,6 +411,68 @@ describe("session list replacement options", () => {
       derivedTitle: "Readable planning title",
       lastMessagePreview: "Latest visible reply",
     });
+    sessions.dispose();
+  });
+
+  it("does not preserve another agent's raw-global row through background hydration", async () => {
+    const opsGoal: SessionGoal = {
+      schemaVersion: 1,
+      id: "goal-ops",
+      objective: "Ops only",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    };
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      listCallCount += 1;
+      return sessionsResult(
+        listCallCount === 1
+          ? [
+              {
+                key: "global",
+                kind: "global",
+                updatedAt: 1,
+                owner: { actor: { type: "agent", id: "ops", label: "Ops" } },
+                goal: opsGoal,
+                status: "running",
+              },
+            ]
+          : [],
+        listCallCount,
+      );
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const snapshot = {
+      client,
+      phase: "connected" as const,
+      sessionKey: "global",
+      assistantAgentId: "ops",
+      hello: null,
+    };
+    const sessions = createSessionCapability({
+      snapshot,
+      subscribe: () => () => undefined,
+      subscribeEvents: () => () => undefined,
+    });
+
+    await sessions.refresh({ agentId: "ops", force: true });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      key: "global",
+      goal: opsGoal,
+    });
+
+    snapshot.assistantAgentId = "research";
+    await sessions.refresh({ agentId: "research", backgroundHydrate: true, force: true });
+
+    expect(sessions.state.agentId).toBe("research");
+    expect(sessions.state.result?.sessions).toEqual([]);
     sessions.dispose();
   });
 

@@ -6,6 +6,7 @@ import {
   LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX,
   resolveSecretInputRef,
 } from "../../config/types.secrets.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
   isValidSecretRef,
   resolveDefaultSecretProviderAlias,
@@ -41,20 +42,23 @@ export function resolveSecretRefReadOnlyAvailability(
   if (!isSecretRef(value) || !isValidSecretRef(value)) {
     return false;
   }
+  if (value.source === "env") {
+    if (
+      !canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: value.provider,
+        id: value.id,
+      })
+    ) {
+      return false;
+    }
+    return hasSecret(env[value.id]) ? true : undefined;
+  }
   const source = cfg.secrets?.providers?.[value.provider];
   const isImplicitProvider =
-    (value.source === "env" && value.provider === resolveDefaultSecretProviderAlias(cfg, "env")) ||
-    (value.source === "store" &&
-      value.provider === resolveDefaultSecretProviderAlias(cfg, "store"));
+    value.source === "store" && value.provider === resolveDefaultSecretProviderAlias(cfg, "store");
   if ((!source && !isImplicitProvider) || (source && source.source !== value.source)) {
     return false;
-  }
-  if (value.source === "env") {
-    return source?.source === "env" && source.allowlist && !source.allowlist.includes(value.id)
-      ? false
-      : hasSecret(env[value.id])
-        ? true
-        : undefined;
   }
   if (
     value.source === "file" &&

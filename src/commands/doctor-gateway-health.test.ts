@@ -311,11 +311,12 @@ describe("checkGatewayHealth", () => {
     );
   });
 
-  it("reports the typed close reason instead of claiming the gateway is not running", async () => {
+  it("reports a typed close without depending on gateway error wording", async () => {
     const error = Object.assign(
-      new Error("gateway closed (1008): \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
+      new Error("transport closed: \u001B]52;c;YXR0YWNr\u0007protocol version mismatch"),
       {
         kind: "closed",
+        code: 1008,
       },
     );
     callGateway.mockRejectedValueOnce(error);
@@ -325,7 +326,7 @@ describe("checkGatewayHealth", () => {
     await checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 });
 
     expect(note).toHaveBeenCalledWith(
-      "Gateway connect failed: gateway closed (1008): protocol version mismatch",
+      "Gateway connect failed: transport closed: protocol version mismatch",
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");

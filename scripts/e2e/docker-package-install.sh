@@ -64,7 +64,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     set -euo pipefail
     export PNPM_HOME=/tmp/pnpm-home
     export PATH="$PNPM_HOME:$PATH"
-    corepack prepare pnpm@11.15.1 --activate
+    corepack prepare pnpm@11.22.0 --activate
     pnpm config set global-bin-dir "$PNPM_HOME"
     pnpm config set global-dir /tmp/pnpm-global
     pnpm add --global --allow-build=openclaw /tmp/openclaw-current.tgz
@@ -86,7 +86,7 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   "$IMAGE_NAME" \
   bash -lc '
     set -euo pipefail
-    npm install -g --prefix /tmp/bun-runtime bun@1.3.14 --no-fund --no-audit
+    npm install -g --prefix /tmp/bun-runtime bun@1.4.0 --no-fund --no-audit
     cd /repo
     BUN_BIN=/tmp/bun-runtime/bin/bun \
       OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0 \

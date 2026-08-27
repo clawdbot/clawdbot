@@ -9,7 +9,9 @@ import {
   getActiveSecretsRuntimeEnvState,
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
+import type { GitHubPublicationCoordinator } from "./github-publication.js";
 import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
 import {
@@ -19,7 +21,7 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
 } from "./worker-environments/device-provider.js";
 import type { WorkerLiveEventReceiver } from "./worker-environments/live-events.js";
-import type { GatewayNodeWorkerBundleInstaller } from "./worker-environments/node-worker-bundle-installer.js";
+import { createWorkerNodeEnrollmentManager } from "./worker-environments/node-enrollment.js";
 import type { NodeWorkerBundleTransferHttpCallback } from "./worker-environments/node-worker-bundle-transfer-http.js";
 import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from "./worker-environments/node-worker-gateway-namespace.js";
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
@@ -34,7 +36,6 @@ type WorkerEnvironmentStore = ReturnType<
   typeof import("./worker-environments/store.js").createWorkerEnvironmentStore
 >;
 type WorkerEnvironmentRecord = ReturnType<WorkerEnvironmentStore["list"]>[number];
-type WorkerGatewayEndpoint = { host: "127.0.0.1" | "::1"; port: number } | undefined;
 type WorkerEnvironmentLogger = {
   child: (name: string) => { warn: (message: string) => void };
 };
@@ -53,9 +54,10 @@ export type GatewayWorkerEnvironmentRuntime = {
   workerLiveEvents?: WorkerLiveEventReceiver;
   workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
-  ensureNodeWorkerBundle?: GatewayNodeWorkerBundleInstaller;
   bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
+  bindGitHubPublication?: (coordinator: GitHubPublicationCoordinator) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
+  bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
   handleNodeWorkerBundleTransferRequest?: NodeWorkerBundleTransferHttpCallback;
   handleNodeWorkspaceTransferRequest?: NodeWorkspaceTransferHttpCallback;
@@ -106,8 +108,8 @@ export async function loadGatewayWorkerEnvironmentStartupState(): Promise<Gatewa
 
 export async function createGatewayWorkerEnvironmentRuntime(params: {
   getPluginRegistry: () => Pick<PluginRegistry, "workerProviders">;
-  resolveWorkerGateway: () => WorkerGatewayEndpoint;
   desktopSessionRegistry: DesktopSessionRegistry;
+  nodeDesktopStreamBroker?: NodeDesktopStreamBroker;
   startup: GatewayWorkerEnvironmentStartupState;
   log: WorkerEnvironmentLogger;
 }): Promise<GatewayWorkerEnvironmentRuntime> {
@@ -125,6 +127,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     { createNodeWorkspaceTransferService },
     { createNodeWorkspaceTransferHttpCallback },
     { createWorkerSessionToolExecutor },
+    { createWorkerNodeDesktopCarrier },
     { resolveWorkerProvider },
   ] = await Promise.all([
     import("./worker-environments/service.js"),
@@ -139,6 +142,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     import("./worker-environments/node-workspace-transfer-service.js"),
     import("./worker-environments/node-workspace-transfer-http.js"),
     import("./worker-environments/worker-session-tool-executor.js"),
+    import("./worker-environments/node-desktop-carrier.js"),
     import("../plugins/worker-provider-registry.js"),
   ]);
   // The Gateway state-directory lock proves that executors from the previous
@@ -147,7 +151,11 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   params.startup.placementStore.clearLocalTurnClaimsAfterRestart();
-  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore);
+  const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
+    // Claims loaded before this Gateway acquired the state lock remain usable only by
+    // workspace recovery. Worker authority is minted from claims created in this lifecycle.
+    rejectExistingWorkerClaims: true,
+  });
   const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = () =>
     listRetainedWorkerBundleHashes({
@@ -202,6 +210,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
+  const workerNodeDesktopStreamBroker = params.nodeDesktopStreamBroker;
+  const workerNodeDesktopCarrier = workerNodeDesktopStreamBroker
+    ? createWorkerNodeDesktopCarrier({
+        store: params.startup.store,
+        desktopRegistry: params.desktopSessionRegistry,
+      })
+    : undefined;
   const nodeWorkerBundleTransfer = createNodeWorkerBundleTransferService();
   const nodeWorkspaceTransfer = createNodeWorkspaceTransferService({
     getOwner: (environmentId) => params.startup.store.getTransferOwner(environmentId),
@@ -229,11 +244,21 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     },
     transfer: nodeWorkerBundleTransfer,
   });
+  const nodeEnrollment = createWorkerNodeEnrollmentManager({
+    store: params.startup.store,
+    getConfig: getRuntimeConfig,
+    resolveAvailability: deviceRuntime.resolveAvailability,
+  });
   let executeSessionTool: ReturnType<typeof createWorkerSessionToolExecutor> = async () => {
     throw new Error("Worker session tools are unavailable");
   };
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
+  };
+  let githubPublication: Pick<GitHubPublicationCoordinator, "requestForClaim"> = {
+    requestForClaim: async () => {
+      throw new Error("GitHub publication is unavailable");
+    },
   };
   const workerEnvironmentServiceBase = createWorkerEnvironmentService({
     store: params.startup.store,
@@ -244,14 +269,14 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
         ? deviceRuntime.provider
         : resolveWorkerProvider(params.getPluginRegistry(), providerId),
     prepareInstallation,
-    resolveNodeWorkerBuild: async (deviceId) => {
-      const build = await deviceRuntime.resolveWorkerBuild(deviceId);
-      return build ? structuredClone(build) : undefined;
-    },
+    ensureNodeWorkerBundle: async (deviceId) => await ensureNodeWorkerBundle({ deviceId }),
+    prepareNodeEnrollment: nodeEnrollment.begin,
+    retireNodeEnrollment: nodeEnrollment.retire,
+    stopNodeEnrollmentWaits: nodeEnrollment.stop,
     tunnelManager: workerTunnelManager,
     nodeTunnelManager: nodeWorkerTunnelManager,
+    nodeDesktopCarrier: workerNodeDesktopCarrier,
     stopNodeWorkerBundleTransfers: () => nodeWorkerBundleTransfer.closeAll(),
-    resolveWorkerGateway: params.resolveWorkerGateway,
     applyTranscriptCommit: createWorkerTranscriptCommitter({
       getConfig: getRuntimeConfig,
     }).commit,
@@ -299,7 +324,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     logger: workerEnvironmentLog,
   });
   const workerEnvironmentService = workerEnvironmentServiceBase;
-  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.isAvailable);
+  bindDeviceWorkerAvailability(workerEnvironmentService, deviceRuntime.resolveAvailability);
   bindDeviceWorkerReconciliation(workerEnvironmentService, async (deviceId) => {
     const environmentIds = params.startup.store
       .listForReconcile()
@@ -331,17 +356,31 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     placements: params.startup.placementStore,
     environments: workerEnvironmentService,
     dispatchChild: (request) => dispatchChild(request),
+    githubPublication: {
+      requestForClaim: (request) => githubPublication.requestForClaim(request),
+    },
   });
+  const bindWorkerNodeDesktopControl =
+    workerNodeDesktopCarrier && workerNodeDesktopStreamBroker
+      ? (transport: NodeWorkerSupervisorTransport) =>
+          workerNodeDesktopCarrier.bindRuntime({
+            transport,
+            streamBroker: workerNodeDesktopStreamBroker,
+          })
+      : undefined;
   return {
     workerEnvironmentService,
     workerLiveEvents,
     workerTunnelManager,
     nodeWorkerGatewayNamespace,
-    ensureNodeWorkerBundle,
     bindWorkerSessionDispatch: (dispatch) => {
       dispatchChild = dispatch;
     },
+    bindGitHubPublication: (coordinator) => {
+      githubPublication = coordinator;
+    },
     bindDeviceNodeControl: deviceRuntime.bindNodeTransport,
+    ...(bindWorkerNodeDesktopControl ? { bindWorkerNodeDesktopControl } : {}),
     bindNodeWorkspaceBindingResolver: (resolver) =>
       nodeWorkerTunnelManager.bindWorkspaceBindingResolver(resolver),
     handleNodeWorkerBundleTransferRequest:

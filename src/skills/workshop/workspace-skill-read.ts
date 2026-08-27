@@ -12,6 +12,7 @@ import {
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { tryRealpath } from "../loading/symlink-targets.js";
+import { listWorkshopOwnedSkillDirs } from "./ownership.js";
 
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 
@@ -41,6 +42,7 @@ type WritableWorkspaceSkillSummary = {
   name: string;
   description?: string;
   filePath: string;
+  userAuthored: boolean;
 };
 
 /**
@@ -50,21 +52,28 @@ type WritableWorkspaceSkillSummary = {
  */
 export function listWritableWorkspaceSkillSummaries(
   workspaceDir: string,
-  opts?: { config?: OpenClawConfig; agentId?: string },
+  opts?: { config?: OpenClawConfig; agentId?: string; env?: NodeJS.ProcessEnv },
 ): WritableWorkspaceSkillSummary[] {
   const status = buildWorkspaceSkillStatus(workspaceDir, {
     config: opts?.config,
     agentId: opts?.agentId,
   });
+  const ownedDirs = listWorkshopOwnedSkillDirs(workspaceDir, opts?.env ? { env: opts.env } : {});
   const summaries: WritableWorkspaceSkillSummary[] = [];
   for (const skill of status.skills) {
     if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
       continue;
     }
+    const userAuthored = !ownedDirs.has(path.resolve(skill.baseDir));
     summaries.push(
       skill.description
-        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
-        : { name: skill.skillKey, filePath: skill.filePath },
+        ? {
+            name: skill.skillKey,
+            description: skill.description,
+            filePath: skill.filePath,
+            userAuthored,
+          }
+        : { name: skill.skillKey, filePath: skill.filePath, userAuthored },
     );
   }
   return summaries;

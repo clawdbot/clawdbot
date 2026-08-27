@@ -120,7 +120,7 @@ function baseProfileContext() {
       type: "page",
     })),
     focusTab: vi.fn(async () => {}),
-    closeTab: vi.fn(async () => {}),
+    closeTab: vi.fn(async (targetId: string) => targetId),
     stopRunningBrowser: vi.fn(async () => ({ stopped: false })),
     resetProfile: vi.fn(async () => ({ moved: false, from: "" })),
   };
@@ -302,6 +302,25 @@ describe("browser tab routes", () => {
     expect(forProfile).not.toHaveBeenCalled();
   });
 
+  it("returns tab-open navigation failures instead of a success payload", async () => {
+    const navigationError = new Error("page.goto: net::ERR_NAME_NOT_RESOLVED");
+    const profileCtx = createProfileContext({
+      openTab: vi.fn(async () => {
+        throw navigationError;
+      }),
+    });
+
+    const response = await callTabsRoute({
+      method: "post",
+      path: "/tabs/open",
+      body: { url: "https://unresolved.example" },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toEqual({ error: String(navigationError) });
+  });
+
   it("returns browser-not-running for close when the browser is not reachable", async () => {
     await expectBrowserNotRunningAction("close");
   });
@@ -320,8 +339,23 @@ describe("browser tab routes", () => {
     });
 
     expect(response.statusCode).toBe(200);
-    expect(response.body).toEqual({ ok: true });
+    expect(response.body).toEqual({ ok: true, targetId: "T1" });
     expect(profileCtx.closeTab).toHaveBeenCalledWith("T1", { exactTargetId: true });
+  });
+
+  it("returns the canonical target id resolved behind a friendly close reference", async () => {
+    const profileCtx = createProfileContext({
+      closeTab: vi.fn(async () => "T1_RAW"),
+    });
+
+    const response = await callTabsDelete({
+      profileCtx,
+      targetId: "docs",
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true, targetId: "T1_RAW" });
+    expect(profileCtx.closeTab).toHaveBeenCalledWith("docs", undefined);
   });
 
   it("rejects unknown target id modes before mutating a tab", async () => {

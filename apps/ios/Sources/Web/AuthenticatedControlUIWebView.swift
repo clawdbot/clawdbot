@@ -7,6 +7,8 @@ import WebKit
 enum AuthenticatedControlUI {
     private static let queryComponentAllowed = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    private static let pathSegmentAllowed = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!'()*")
 
     static func pageURL(
         config: GatewayConnectConfig?,
@@ -33,8 +35,14 @@ enum AuthenticatedControlUI {
             return "\(name)=\(encodedValue)"
         }
         guard encodedItems.count == queryItems.count else { return nil }
-        components.percentEncodedQuery = encodedItems.joined(separator: "&")
+        components.percentEncodedQuery = encodedItems.isEmpty
+            ? nil
+            : encodedItems.joined(separator: "&")
         return components.url
+    }
+
+    static func percentEncodedPathSegment(_ value: String) -> String? {
+        value.addingPercentEncoding(withAllowedCharacters: self.pathSegmentAllowed)
     }
 
     /// Origin-gated document-start script for the Control UI native-auth contract.

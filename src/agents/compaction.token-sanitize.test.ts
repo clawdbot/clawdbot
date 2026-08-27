@@ -86,7 +86,6 @@ describe("compaction token accounting sanitization", () => {
 
     const sanitized = sanitizeCompactionMessages(messages);
 
-    expect(sanitized).toHaveLength(2);
     expect(sanitized[0]).not.toHaveProperty("details");
     expect(sanitized.map((message) => message.role)).toEqual(["toolResult", "user"]);
   });

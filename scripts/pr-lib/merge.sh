@@ -242,7 +242,7 @@ merge_run() {
   source .local/prep.env
 
   local pr_meta_json
-  pr_meta_json=$(gh pr view "$pr" --json state,isDraft)
+  pr_meta_json=$(read_pr_view_json "$pr" "state,isDraft") || exit 1
   local is_draft
   is_draft=$(printf '%s\n' "$pr_meta_json" | jq -r .isDraft)
   if [ "$is_draft" = "true" ]; then
@@ -312,7 +312,7 @@ merge_run() {
   # artifact, exact-head, required-check, and drift check in merge_verify.
   if [ "$auto_merge_requested" = "true" ]; then
     local auto_meta
-    auto_meta=$(gh pr view "$pr" --json state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest)
+    auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
     local auto_head_sha
     auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
     if [ "$auto_head_sha" != "$PREP_HEAD_SHA" ]; then
@@ -338,7 +338,7 @@ merge_run() {
         print_relevant_log_excerpt .local/merge-output.log
         exit 1
       fi
-      auto_meta=$(gh pr view "$pr" --json state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest)
+      auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
       auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
       mergeable=$(printf '%s\n' "$auto_meta" | jq -r '.mergeable // "UNKNOWN"')
       merge_state_status=$(printf '%s\n' "$auto_meta" | jq -r '.mergeStateStatus // "UNKNOWN"')
@@ -365,7 +365,7 @@ merge_run() {
         --match-head-commit "$PREP_HEAD_SHA" \
         >.local/merge-output.log 2>&1
       then
-        auto_meta=$(gh pr view "$pr" --json state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest)
+        auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
         auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
         state=$(printf '%s\n' "$auto_meta" | jq -r .state)
         existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
@@ -385,7 +385,7 @@ merge_run() {
           exit 1
         fi
       else
-        auto_meta=$(gh pr view "$pr" --json state,headRefOid,autoMergeRequest)
+        auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,autoMergeRequest") || exit 1
         auto_head_sha=$(printf '%s\n' "$auto_meta" | jq -r .headRefOid)
         existing_auto_method=$(printf '%s\n' "$auto_meta" | jq -r '.autoMergeRequest.mergeMethod // ""')
         if [ "$auto_head_sha" = "$PREP_HEAD_SHA" ] && [ -n "$existing_auto_method" ]; then

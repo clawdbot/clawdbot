@@ -3,12 +3,29 @@ import type { spawnTerminalPty } from "../../process/terminal-pty.js";
 import type { TerminalSessionManager } from "./session-manager.js";
 
 type TerminalOpenRequestInput = Parameters<TerminalSessionManager["open"]>[0];
+type TerminalOpenOutcome = Awaited<ReturnType<TerminalSessionManager["open"]>>;
 type AgentTerminalOwner = Extract<TerminalOpenRequestInput["owner"], { kind: "agent" }>;
 type TerminalPtyHandle = Awaited<ReturnType<typeof spawnTerminalPty>>;
 
-/** Builds the manager-private task binding while preserving the public owner shape. */
-export function taskAgentOwner(agentSessionKey: string, taskId: string): AgentTerminalOwner {
-  const owner = { kind: "agent" as const, agentSessionKey, taskId };
+export function agentTerminalOwner(
+  agentSessionKey: string,
+  agentSessionId = "agent-session-id",
+  agentId = "main",
+): AgentTerminalOwner {
+  return { kind: "agent", agentSessionKey, agentSessionId, agentId };
+}
+
+/** Builds the manager-private task binding while preserving the agent owner identity. */
+export function taskAgentOwner(
+  agentSessionKey: string,
+  taskId: string,
+  agentSessionId = "agent-session-id",
+  agentId = "main",
+): AgentTerminalOwner {
+  const owner = {
+    ...agentTerminalOwner(agentSessionKey, agentSessionId, agentId),
+    taskId,
+  };
   return owner;
 }
 
@@ -23,6 +40,15 @@ export type FakeTerminalPty = TerminalPtyHandle & {
   emitData: (chunk: string) => void;
   emitExit: (code: number, signal?: number) => void;
 };
+
+export function expectTerminalOpen(
+  outcome: TerminalOpenOutcome,
+): Extract<TerminalOpenOutcome, { ok: true }> {
+  if (!outcome.ok) {
+    throw new Error("expected terminal open");
+  }
+  return outcome;
+}
 
 /** A controllable fake PTY that records writes and lets tests drive data/exit. */
 export function makeFakePty(): FakeTerminalPty {

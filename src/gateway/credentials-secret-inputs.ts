@@ -1,7 +1,10 @@
 // Gateway credential secret-input resolver.
 // Resolves SecretRefs before applying Gateway credential precedence rules.
+import {
+  cloneConfigWithResolutionFacts,
+  resolveConfigSecretRef,
+} from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 import {
   GatewaySecretRefUnavailableError,
@@ -51,9 +54,15 @@ async function resolveGatewaySecretInputString(params: {
   path: string;
   env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
+    value: params.value,
+    defaults: params.config.secrets?.defaults,
+  });
   const value = await materializeSecretInput({
     config: params.config,
-    value: params.value,
+    value: ref ?? params.value,
     env: params.env,
     normalize: trimToUndefined,
     onResolveRefError: () => {
@@ -71,10 +80,12 @@ function hasConfiguredGatewaySecretRef(
   path: SupportedGatewaySecretInputPath,
 ): boolean {
   return Boolean(
-    resolveSecretInputRef({
+    resolveConfigSecretRef({
+      config,
+      path,
       value: readGatewaySecretInputValue(config, path),
       defaults: config.secrets?.defaults,
-    }).ref,
+    }),
   );
 }
 
@@ -140,7 +151,7 @@ function canGatewaySecretInputPathWin(params: {
     return false;
   }
   const sentinel = `__OPENCLAW_GATEWAY_SECRET_REF_PROBE_${params.path.replaceAll(".", "_")}__`;
-  const probeConfig = structuredClone(params.config);
+  const probeConfig = cloneConfigWithResolutionFacts(params.config);
   for (const candidatePath of ALL_GATEWAY_SECRET_INPUT_PATHS) {
     if (!hasConfiguredGatewaySecretRef(probeConfig, candidatePath)) {
       continue;
@@ -227,7 +238,7 @@ async function resolvePreferredGatewaySecretInputs(params: {
       continue;
     }
     if (nextConfig === params.config) {
-      nextConfig = structuredClone(params.config);
+      nextConfig = cloneConfigWithResolutionFacts(params.config);
     }
     try {
       const resolvedValue = await resolveConfiguredGatewaySecretInput({
@@ -278,7 +289,7 @@ async function resolveGatewayCredentialsFromConfigWithSecretInputs(params: {
         throw error;
       }
       if (resolvedConfig === params.options.config) {
-        resolvedConfig = structuredClone(params.options.config);
+        resolvedConfig = cloneConfigWithResolutionFacts(params.options.config);
       }
       // Resolve refs lazily on demand as a backstop for precedence cases the
       // optimistic scan skipped, but stop if the same path loops.

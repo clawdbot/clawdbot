@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const commonScript = join(process.cwd(), "scripts/pr-lib/common.sh");
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const headSha = "0123456789abcdef0123456789abcdef01234567";
 const landedSha = "fedcba9876543210fedcba9876543210fedcba98";
@@ -89,6 +90,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
 
   const shell = `
 set -euo pipefail
+source "$OPENCLAW_TEST_COMMON_SCRIPT"
 source "$OPENCLAW_TEST_MERGE_SCRIPT"
 script_parent_dir="$OPENCLAW_TEST_SCRIPTS_DIR"
 enter_worktree() { :; }
@@ -259,6 +261,7 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_COMMENT_BODY: commentBody,
       OPENCLAW_TEST_COMMENT_EMPTY: scenario.commentEmpty ? "true" : "false",
       OPENCLAW_TEST_COMMENT_FAILURES: String(scenario.commentFailures ?? 0),
+      OPENCLAW_TEST_COMMON_SCRIPT: commonScript,
       OPENCLAW_TEST_DISABLED_AUTO_META: disabledAutoMeta,
       OPENCLAW_TEST_GH_CALLS: calls,
       OPENCLAW_TEST_LANDED_SHA: landedSha,

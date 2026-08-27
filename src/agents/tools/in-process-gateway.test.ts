@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -24,6 +25,7 @@ import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.j
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayToolWithCreation,
+  withAgentToolGatewayRuntimeIdentity,
 } from "./in-process-gateway.js";
 
 describe("trusted in-process Gateway session creation", () => {
@@ -37,7 +39,8 @@ describe("trusted in-process Gateway session creation", () => {
   it("surfaces creation provenance only on in-process dispatch", async () => {
     const creation = {
       via: "spawn" as const,
-      actor: { type: "agent" as const, id: "agent:main:main" },
+      actor: { type: "agent" as const, id: "main" },
+      requesterSessionKey: "agent:main:main",
     };
     await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation);
 
@@ -84,7 +87,8 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main", parentSessionKey: "agent:main:main", spawnDepth: 1 },
       {
         via: "spawn",
-        actor: { type: "agent", id: "agent:main:main" },
+        actor: { type: "agent", id: "main" },
+        requesterSessionKey: "agent:main:main",
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
       },
@@ -113,10 +117,15 @@ describe("request-shaped in-process Gateway dispatch", () => {
   it("uses the local router with least privilege and transport-equivalent request options", async () => {
     const controller = new AbortController();
     const onAccepted = vi.fn();
+    const agentToolCaller = {
+      agentId: "main",
+      sessionKey: "agent:main:discord:direct:colin",
+    };
 
     await callAgentToolGatewayRequest({
       method: "agent",
       params: { sessionKey: "agent:main:worker", message: "run" },
+      agentToolCaller,
       expectFinal: true,
       onAccepted,
       signal: controller.signal,
@@ -127,6 +136,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
       { sessionKey: "agent:main:worker", message: "run" },
       {
         forceSyntheticClient: true,
+        agentToolCaller,
         syntheticScopes: ["operator.write"],
         expectFinal: true,
         onAccepted,
@@ -135,6 +145,35 @@ describe("request-shaped in-process Gateway dispatch", () => {
       },
     );
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("carries trusted runtime identity only through the private in-process carrier", async () => {
+    const identity = {
+      kind: "agentRuntime",
+      agentId: "main",
+      sessionKey: "agent:main:worker",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      delegatedAuthority: {
+        kind: "local",
+        lifecycleGeneration: "generation-1",
+        claimId: "claim-1",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+      },
+    } as const;
+    const request = withAgentToolGatewayRuntimeIdentity(
+      { method: "chat.send", params: { sessionKey: "agent:main:child" } },
+      identity,
+    );
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+      expect(readInProcessAgentRuntimeIdentity(options)).toBe(identity);
+      return { runId: "run-1" };
+    });
+
+    await callAgentToolGatewayRequest(request);
+
+    expect(JSON.stringify(request)).toBe(
+      '{"method":"chat.send","params":{"sessionKey":"agent:main:child"}}',
+    );
   });
 
   it.each([
@@ -189,11 +228,44 @@ describe("request-shaped in-process Gateway dispatch", () => {
       method: "sessions.list",
       params: { limit: 5 },
       timeoutMs: 2_000,
+      agentRunTracking: "native_subagent",
+      agentToolCaller: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:direct:colin",
+      },
     } as const;
 
     await callAgentToolGatewayRequest(request);
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(request);
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: { limit: 5 },
+      timeoutMs: 2_000,
+    });
     expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("does not drop a private runtime identity onto the transport fallback", async () => {
+    mocks.hasContext = false;
+    const request = withAgentToolGatewayRuntimeIdentity(
+      { method: "chat.send", params: { sessionKey: "agent:main:child" } },
+      {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:worker",
+        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+        delegatedAuthority: {
+          kind: "local",
+          lifecycleGeneration: "generation-1",
+          claimId: "claim-1",
+          operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+        },
+      },
+    );
+
+    await expect(callAgentToolGatewayRequest(request)).rejects.toThrow(
+      "trusted agent runtime identity requires in-process Gateway dispatch",
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 });

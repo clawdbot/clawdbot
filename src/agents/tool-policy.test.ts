@@ -168,18 +168,18 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     } as unknown as OpenClawConfig;
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
-    expect(resolved.allow).toEqual(["read", "image"]);
+    expect(resolved.allow).toEqual(["read", "view_image"]);
     expect(resolved.deny).toEqual(["browser"]);
   });
 
-  it("does not auto-add image when explicitly denied", () => {
+  it("does not auto-add view_image when explicitly denied", () => {
     const cfg = {
-      tools: { sandbox: { tools: { allow: ["read"], deny: ["image"] } } },
+      tools: { sandbox: { tools: { allow: ["read"], deny: ["view_image"] } } },
     } as unknown as OpenClawConfig;
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
-    expect(resolved.deny).toEqual(["image"]);
+    expect(resolved.deny).toEqual(["view_image"]);
   });
 });
 

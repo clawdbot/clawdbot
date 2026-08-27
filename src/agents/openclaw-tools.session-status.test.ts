@@ -43,9 +43,6 @@ const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
 const getSessionStateVersionMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string) => 0),
 );
-const listAmbientGroupWatchTargetsMock = vi.hoisted(() =>
-  vi.fn((_watcherSessionKey: string) => new Set<string>()),
-);
 const listSessionStateEventsSinceMock = vi.hoisted(() =>
   vi.fn((_sessionKey: string, _agentId: string, _after: number, _limit: number) => ({
     events: [] as Array<Record<string, unknown>>,
@@ -328,7 +325,8 @@ vi.mock("../agents/prepared-model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -378,8 +376,6 @@ vi.mock("../tasks/task-owner-access.js", () => ({
 vi.mock("../sessions/session-state-events.js", () => ({
   getSessionStateVersion: (sessionKey: string, agentId: string) =>
     getSessionStateVersionMock(sessionKey, agentId),
-  listAmbientGroupWatchTargets: (watcherSessionKey: string) =>
-    listAmbientGroupWatchTargetsMock(watcherSessionKey),
   listSessionStateEventsSince: (
     sessionKey: string,
     agentId: string,
@@ -427,8 +423,6 @@ function resetSessionStore(inputStore: Record<string, SessionEntry>) {
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
   getSessionStateVersionMock.mockReset();
   getSessionStateVersionMock.mockReturnValue(0);
-  listAmbientGroupWatchTargetsMock.mockReset();
-  listAmbientGroupWatchTargetsMock.mockReturnValue(new Set());
   listSessionStateEventsSinceMock.mockReset();
   listSessionStateEventsSinceMock.mockReturnValue({
     events: [],
@@ -797,8 +791,8 @@ describe("session_status tool", () => {
     }
   });
 
-  it("returns watched group changesSince under tree visibility", async () => {
-    const groupSessionKey = "agent:main:telegram:group:watched";
+  it("returns same-agent group changesSince from main under tree visibility", async () => {
+    const groupSessionKey = "agent:main:telegram:group:unspawned";
     resetSessionStore({
       "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
       [groupSessionKey]: {
@@ -814,7 +808,6 @@ describe("session_status tool", () => {
         agentToAgent: { enabled: false },
       },
     };
-    listAmbientGroupWatchTargetsMock.mockReturnValue(new Set([groupSessionKey]));
     getSessionStateVersionMock.mockReturnValue(9);
     listSessionStateEventsSinceMock.mockReturnValue({
       events: [
@@ -830,7 +823,6 @@ describe("session_status tool", () => {
       changesSince: 4,
     });
 
-    expect(listAmbientGroupWatchTargetsMock).toHaveBeenCalledWith("agent:main:main");
     expect(listSessionStateEventsSinceMock).toHaveBeenCalledWith(groupSessionKey, "main", 4, 200);
     expect(result.details).toMatchObject({
       ok: true,
@@ -1746,27 +1738,27 @@ describe("session_status tool", () => {
     expect(text).not.toContain("finished long ago");
   });
 
-  it("shows recent failure context in session_status output when no task is active", async () => {
+  it("shows blocked completion outcomes in session_status output", async () => {
     const text = await renderTaskStatus(
       [
         {
-          taskId: "task-failed",
+          taskId: "task-blocked",
           runtime: "cron",
           requesterSessionKey: "agent:main:main",
-          task: "failing task",
-          status: "failed",
-          deliveryStatus: "pending",
+          task: "blocked task",
+          status: "succeeded",
+          terminalOutcome: "blocked",
           notifyPolicy: "done_only",
           createdAt: Date.now() - 5_000,
-          error: "permission denied",
+          terminalSummary: "Additional input required.",
         },
       ],
-      "tc-failed",
+      "tc-blocked",
     );
 
-    expect(text).toContain("📌 Tasks: 1 recent failure");
-    expect(text).toContain("failing task");
-    expect(text).toContain("permission denied");
+    expect(text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(text).toContain("blocked task");
+    expect(text).toContain("Additional input required.");
   });
 
   it("truncates long task titles and details in session_status output", async () => {
@@ -2311,7 +2303,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     );
 
     expect(loadSessionStoreMock).not.toHaveBeenCalled();
@@ -2440,7 +2432,7 @@ describe("session_status tool", () => {
         model: "default",
       }),
     ).rejects.toThrow(
-      "Session status visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
+      "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     );
 
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
@@ -2680,6 +2672,38 @@ describe("session_status tool", () => {
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();
     expect(saved.liveModelSwitchPending).toBe(true);
+  });
+
+  it("resolves a model alias configured only on the target agent", async () => {
+    resetSessionStore({
+      main: { sessionId: "s1", updatedAt: 10 },
+    });
+    mockConfig = {
+      ...createMockConfig(),
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: { "openai/gpt-5.4": { alias: "global" } },
+          modelPolicy: { allow: ["anthropic/claude-sonnet-4-6"] },
+        },
+        entries: {
+          main: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "agent-sonnet" },
+            },
+          },
+        },
+      },
+    };
+
+    const result = await getSessionStatusTool().execute("agent-alias", {
+      model: "agent-sonnet",
+    });
+
+    expect(result.details).toMatchObject({
+      modelOverride: "anthropic/claude-sonnet-4-6",
+      modelProvider: "anthropic",
+    });
   });
 
   it("preserves a compatible auth profile when changing the session model", async () => {

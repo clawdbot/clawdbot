@@ -90,6 +90,22 @@ function removedCompatRecord(
 // doctor fixes, and replacement notes should be revalidated against the current
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
+  deprecatedCompatRecord("doctor-context-budget-one-knob", {
+    removeAfter: "2026-11-16",
+    owner: "config",
+    introduced: "2026-08-16",
+    source:
+      "models.providers.* context defaults and agents.defaults/entries/list contextTokens caps",
+    migration: "src/config/legacy.context-budget.ts",
+    replacement:
+      "models.providers.<provider>.models[].contextTokens active-input caps and per-model contextWindow metadata",
+    docsPath: "/concepts/model-providers",
+    tests: [
+      "src/config/legacy.context-budget.test.ts",
+      "src/config/io.compat.test.ts",
+      "src/commands/doctor-config-flow.test.ts",
+    ],
+  }),
   deprecatedCompatRecord("doctor-cli-backends-plugin-registration", {
     removeAfter: "2026-09-22",
     owner: "agent-runtime",

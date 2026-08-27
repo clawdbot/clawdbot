@@ -574,13 +574,18 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
   // carries its owning agent. The triggering agent owns whatever the roster cannot attribute.
   const triggerAgentId = normalizeLowercaseStringOrEmpty(params.agentId);
   const seenWorkspaces = new Set<string>();
-  const workspaces: Array<{ agentId?: string; workspaceDir: string }> = [];
-  const addWorkspace = (workspaceDir: string, agentId: string): void => {
+  const workspaces: Array<{ agentId?: string; agentIds: readonly string[]; workspaceDir: string }> =
+    [];
+  const addWorkspace = (
+    workspaceDir: string,
+    agentId: string,
+    agentIds: readonly string[] = [agentId],
+  ): void => {
     if (!workspaceDir || seenWorkspaces.has(workspaceDir)) {
       return;
     }
     seenWorkspaces.add(workspaceDir);
-    workspaces.push({ ...(agentId ? { agentId } : {}), workspaceDir });
+    workspaces.push({ ...(agentId ? { agentId } : {}), agentIds, workspaceDir });
   };
   // The triggering agent wins its own workspace; otherwise sort so a workspace shared by
   // several agents always resolves the same owner across sweeps.
@@ -597,7 +602,11 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       // the host falls back to the roster default agent when the turn has no id.
       ...(triggerAgentId ? { primaryAgentId: triggerAgentId } : {}),
     })) {
-      addWorkspace(entry.workspaceDir, resolveWorkspaceOwnerAgentId(entry.agentIds));
+      addWorkspace(
+        entry.workspaceDir,
+        resolveWorkspaceOwnerAgentId(entry.agentIds),
+        entry.agentIds,
+      );
     }
   }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
@@ -642,7 +651,7 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
   ]);
-  for (const { agentId, workspaceDir } of workspaces) {
+  for (const { agentId, agentIds, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
     try {
       const phaseResult = await runDreamingSweepPhases({
@@ -701,6 +710,8 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
         );
       }
       const applied = await applyShortTermPromotions({
+        agentId,
+        workspaceAgentIds: agentIds,
         workspaceDir,
         candidates,
         limit: params.config.limit,

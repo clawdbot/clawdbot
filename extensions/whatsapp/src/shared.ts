@@ -9,6 +9,7 @@ import {
 import {
   collectOpenGroupPolicyRouteAllowlistWarnings,
   createAllowlistProviderGroupPolicyWarningCollector,
+  createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
@@ -145,6 +146,12 @@ export function createWhatsAppPluginBase(params: {
         },
       }),
   });
+  const collectWhatsAppOpenGroupFindings = createConditionalWarningCollector.findings({
+    collectWarnings: collectWhatsAppSecurityWarnings,
+    checkId: "channels.whatsapp.groups.open",
+    severity: "critical",
+    title: "WhatsApp security warning",
+  });
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
@@ -209,7 +216,7 @@ export function createWhatsAppPluginBase(params: {
     security: {
       applyConfigFixes: applyWhatsAppSecurityConfigFixes,
       resolveDmPolicy: whatsappResolveDmPolicy,
-      collectWarnings: collectWhatsAppSecurityWarnings,
+      collectWarnings: collectWhatsAppOpenGroupFindings,
     },
     doctor: whatsappDoctor,
     setupContract: params.setupContract,

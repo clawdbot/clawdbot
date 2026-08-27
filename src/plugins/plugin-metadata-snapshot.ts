@@ -4,7 +4,10 @@ import {
   getActiveDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  isCurrentPluginMetadataSnapshotRuntimeGeneration,
+} from "./current-plugin-metadata-snapshot.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -16,7 +19,10 @@ import {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
-import { registerPluginMetadataSnapshotReaders } from "./plugin-metadata-snapshot.runtime.js";
+import {
+  adoptCurrentPluginMetadataSnapshotIfAbsentRuntime,
+  registerPluginMetadataSnapshotReaders,
+} from "./plugin-metadata-snapshot.runtime.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -326,11 +332,31 @@ export function completePluginMetadataSnapshot(params: {
     return params.snapshot;
   }
   const workspaceDir = params.workspaceDir ?? params.snapshot.workspaceDir;
-  return loadPluginMetadataSnapshot({
+  const manifestStartedAt = performance.now();
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+    index: params.snapshot.index,
     config: params.config,
     env: params.env ?? process.env,
-    index: params.snapshot.index,
     ...(workspaceDir ? { workspaceDir } : {}),
+    includeDisabled: true,
+  });
+  const manifestRegistryMs = performance.now() - manifestStartedAt;
+  const completed = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
+  const { pluginIds: _pluginIds, ...unscoped } = completed;
+  return freezeSnapshotValue({
+    ...unscoped,
+    configFingerprint: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      index: completed.index,
+      policyHash: completed.policyHash,
+      workspaceDir,
+    }),
+    metrics: {
+      ...completed.metrics,
+      manifestRegistryMs,
+      totalMs: completed.metrics.totalMs + manifestRegistryMs,
+    },
   });
 }
 
@@ -354,46 +380,21 @@ export function resolvePluginMetadataSnapshot(
         : {}),
     });
     if (!current) {
-      const lifecycleSnapshot = getCurrentPluginMetadataSnapshot({
-        config: params.config,
-        env: params.env,
-        ...(params.pluginIds !== undefined ? { pluginIds: params.pluginIds } : {}),
-        ...(params.pluginIdScope !== undefined ? { pluginIdScope: params.pluginIdScope } : {}),
-        allowWorkspaceScopedSnapshot: true,
-      });
-      const targetWorkspace = params.workspaceDir;
-      const hasWorkspacePlugin = lifecycleSnapshot?.index.plugins.some(
-        (plugin) => plugin.origin === "workspace",
-      );
-      // Gateway metadata is lifecycle-stable. A workspace with no plugin root can reuse the
-      // published graph without polling every bundled/global artifact on its first turn.
+      const snapshot = loadPluginMetadataSnapshot(params);
+      // Scoped or caller-owned discovery must never become process-wide metadata.
       if (
-        lifecycleSnapshot &&
-        targetWorkspace &&
-        targetWorkspace !== lifecycleSnapshot.workspaceDir &&
-        !hasWorkspacePlugin &&
-        params.workspacePluginRootPresent === false
+        params.index === undefined &&
+        params.workspaceDir === undefined &&
+        params.pluginIds === undefined &&
+        params.pluginIdScope === undefined &&
+        snapshot.workspaceDir === undefined &&
+        snapshot.pluginIds === undefined
       ) {
-        const index = Object.freeze({
-          ...lifecycleSnapshot.index,
-          workspaceDir: targetWorkspace,
-        });
-        return Object.freeze({
-          ...lifecycleSnapshot,
-          configFingerprint: resolvePluginControlPlaneFingerprint({
-            config: params.config,
-            env: params.env,
-            index,
-            policyHash: lifecycleSnapshot.policyHash,
-            workspaceDir: targetWorkspace,
-          }),
-          index,
-          workspaceDir: targetWorkspace,
-        });
+        adoptCurrentPluginMetadataSnapshotIfAbsentRuntime(snapshot, params);
       }
-      return loadPluginMetadataSnapshot(params);
+      return snapshot;
     }
-    if (!params.index) {
+    if (!params.index || isCurrentPluginMetadataSnapshotRuntimeGeneration(current)) {
       return current;
     }
     if (

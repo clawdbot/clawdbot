@@ -20,7 +20,7 @@ struct MacSwarmFixtureChatTransport: OpenClawChatTransport {
             thinkingLevel: "medium")
     }
 
-    func listModels() async throws -> [OpenClawChatModelChoice] {
+    func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
         [OpenClawChatModelChoice(
             modelID: "gpt-5.6-sol",
             name: "GPT-5.6 Sol",

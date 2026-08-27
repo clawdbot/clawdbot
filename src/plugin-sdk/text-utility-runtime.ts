@@ -63,4 +63,5 @@ export {
   truncateUtf16Safe,
 } from "../utils.js";
 export { fetchWithTimeout } from "../utils/fetch-timeout.js";
+export { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 export { withTimeout };

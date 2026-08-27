@@ -32,6 +32,26 @@ const SURFACE_TOKENS = ["--bg", "--bg-elevated", "--bg-muted", "--card", "--pane
 const AA_NORMAL_TEXT_MIN = 4.5;
 
 /*
+ * Beacon is the accessibility theme: it advertises WCAG AAA rather than AA, and
+ * that promise is the reason to pick it. Holding it to the shared 4.5:1 floor
+ * would let a palette edit quietly demote it to an ordinary dark theme, so its
+ * own floor is asserted separately.
+ */
+const AAA_NORMAL_TEXT_MIN = 7;
+
+/*
+ * The chat confirmation button defaults to --danger under --media-foreground,
+ * which is a theme-invariant white, and every dark palette opts out of that
+ * pairing through a selector list in chat/grouped.css. A theme with a light
+ * --danger that is missing from the list therefore renders white on pale:
+ * Beacon shipped that way at 1.80:1 until review caught it. Membership is read
+ * back out of the stylesheet rather than restated here, so the list and the
+ * palettes cannot drift apart again.
+ */
+const CONFIRM_BUTTON_RULE = ".chat-confirm-popover__yes";
+const AAA_THEMES = new Set(["beacon", "beacon-light"]);
+
+/*
  * Separation guardrail for the markdown code chip.
  *
  * Text contrast was never the failure mode here: the chip surface itself
@@ -48,6 +68,18 @@ const CHIP_SURFACE_MIN_STEP = 1.05;
 const CHIP_BORDER_MIN_STEP = 1.25;
 
 /*
+ * Diff syntax uses its own translucent tint inside code surfaces. The ink must
+ * remain readable after that tint is composited onto every surface a markdown
+ * code block can use; missing light-mode overrides previously left additions
+ * at 1.15:1 on --bg-muted.
+ */
+const DIFF_SELECTORS = [
+  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-addition",
+  ":is(.code-block, .code-block-wrapper pre code.hljs) .hljs-deletion",
+] as const;
+const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
+
+/*
  * Link contrast guardrail for painted chat bubbles.
  *
  * Accent-colored links can collapse into the accent-derived user fill, while
@@ -61,7 +93,7 @@ const SENDER_TINT_BUBBLE_RULE = ".chat-group.user.chat-group--sender-tint .chat-
 // Light mode resets both bubble skins back to flat surfaces, and those rules win
 // on source order (see the order contract in chat/grouped.css). Asserting the
 // dark fills against light palettes would guard a surface nothing paints.
-const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-bubble';
+const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
   ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
 
@@ -112,6 +144,14 @@ function resolveThemes(blocks: Map<string, TokenMap>): Map<string, TokenMap> {
     ["openknot-light", layer(light, blocks.get(':root[data-theme="openknot-light"]'))],
     ["dash", layer(blocks.get(':root[data-theme="dash"]'))],
     ["dash-light", layer(light, blocks.get(':root[data-theme="dash-light"]'))],
+    ["absolutely", layer(blocks.get(':root[data-theme="absolutely"]'))],
+    ["absolutely-light", layer(light, blocks.get(':root[data-theme="absolutely-light"]'))],
+    ["tide", layer(blocks.get(':root[data-theme="tide"]'))],
+    ["tide-light", layer(light, blocks.get(':root[data-theme="tide-light"]'))],
+    ["beacon", layer(blocks.get(':root[data-theme="beacon"]'))],
+    ["beacon-light", layer(light, blocks.get(':root[data-theme="beacon-light"]'))],
+    ["phosphor", layer(blocks.get(':root[data-theme="phosphor"]'))],
+    ["phosphor-light", layer(light, blocks.get(':root[data-theme="phosphor-light"]'))],
   ]);
 }
 
@@ -282,6 +322,41 @@ function readCodeChipTokens(chatTextCss: string): { surface: string; border: str
   return { surface, border };
 }
 
+type ConfirmButtonPaint = { background: string; color: string };
+
+function readConfirmButtonPaint(groupedCss: string): {
+  base: ConfirmButtonPaint;
+  overrides: Map<string, ConfirmButtonPaint>;
+} {
+  const pattern = /([^{}]*\.chat-confirm-popover__yes(?![\w-])[^{}]*)\{([^}]*)\}/gu;
+  let base: ConfirmButtonPaint | undefined;
+  const overrides = new Map<string, ConfirmButtonPaint>();
+  for (const match of groupedCss.matchAll(pattern)) {
+    const selector = (match[1] ?? "").trim();
+    const body = match[2] ?? "";
+    if (selector.includes(":hover")) {
+      continue;
+    }
+    const background = body.match(/background:\s*var\((--[\w-]+)\)/u)?.[1];
+    const color = body.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+    if (!background || !color) {
+      continue;
+    }
+    const themes = [...selector.matchAll(/\[data-theme="([^"]+)"\]/gu)].map((m) => m[1] ?? "");
+    if (themes.length === 0) {
+      base = { background, color };
+      continue;
+    }
+    for (const theme of themes) {
+      overrides.set(theme, { background, color });
+    }
+  }
+  if (!base) {
+    throw new Error(`could not read the base "${CONFIRM_BUTTON_RULE}" paint`);
+  }
+  return { base, overrides };
+}
+
 function readRuleBody(css: string, selector: string): string {
   const body = css.split(`${selector} {`)[1]?.split("}")[0];
   if (body === undefined) {
@@ -304,6 +379,7 @@ function readChatLinkTokens(chatTextCss: string): { link: string; hover: string 
 function readBubbleBackgrounds(groupedCss: string): {
   user: string;
   lightUser: string;
+  lightUserText: string;
   senderTint: string;
   lightSenderTint: string;
 } {
@@ -317,6 +393,9 @@ function readBubbleBackgrounds(groupedCss: string): {
   return {
     user: readBackground(USER_BUBBLE_RULE),
     lightUser: readBackground(LIGHT_USER_BUBBLE_RULE),
+    lightUserText:
+      readRuleBody(groupedCss, LIGHT_USER_BUBBLE_RULE).match(/color:\s*var\((--[\w-]+)\)/u)?.[1] ??
+      "",
     senderTint: readBackground(SENDER_TINT_BUBBLE_RULE),
     lightSenderTint: readBackground(LIGHT_SENDER_TINT_BUBBLE_RULE),
   };
@@ -326,7 +405,7 @@ describe("Control UI theme contrast", () => {
   const baseCss = fs.readFileSync(path.join(stylesDir, "base.css"), "utf8");
   const themes = resolveThemes(parseThemeBlocks(baseCss));
 
-  it("keeps every text token at WCAG AA on every theme surface", () => {
+  it("keeps every text token at WCAG AA on every theme surface, AAA on themes that promise it", () => {
     const failures: string[] = [];
     for (const [themeName, tokens] of themes) {
       for (const textToken of TEXT_TOKENS) {
@@ -340,9 +419,10 @@ describe("Control UI theme contrast", () => {
             continue;
           }
           const ratio = contrastRatio(parseHex(foreground), parseHex(background));
-          if (ratio < AA_NORMAL_TEXT_MIN) {
+          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+          if (ratio < floor) {
             failures.push(
-              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+              `${themeName}: ${textToken} ${foreground} on ${surfaceToken} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
             );
           }
         }
@@ -382,6 +462,60 @@ describe("Control UI theme contrast", () => {
     expect(failures).toEqual([]);
   });
 
+  it("keeps the chat confirmation button legible on every theme", () => {
+    const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
+    const { base, overrides } = readConfirmButtonPaint(groupedCss);
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      const paint = overrides.get(themeName) ?? base;
+      const background = tokens.get(paint.background);
+      const color = tokens.get(paint.color);
+      if (!background?.startsWith("#") || !color?.startsWith("#")) {
+        continue;
+      }
+      const ratio = contrastRatio(parseHex(color), parseHex(background));
+      const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+      if (ratio < floor) {
+        failures.push(
+          `${themeName}: ${paint.color} ${color} on ${paint.background} ${background} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
+        );
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("keeps highlighted diff lines at WCAG AA on every code surface", () => {
+    const componentsCss = fs.readFileSync(path.join(stylesDir, "components.css"), "utf8");
+    const diffStyles = DIFF_SELECTORS.map((selector) => {
+      const rule = readRuleBody(componentsCss, selector);
+      const foregroundToken = rule.match(/color:\s*var\((--[\w-]+)\)/u)?.[1];
+      const tint = rule.match(/background:\s*([^;]+);/u)?.[1];
+      if (!foregroundToken || !tint) {
+        throw new Error(`could not read diff colors from "${selector}"`);
+      }
+      return { foregroundToken, tint };
+    });
+    const failures: string[] = [];
+    for (const [themeName, tokens] of themes) {
+      for (const { foregroundToken, tint } of diffStyles) {
+        const foreground = resolveOpaqueColor(`var(${foregroundToken})`, tokens);
+        const resolvedTint = resolveColor(tint, tokens);
+        for (const surfaceToken of DIFF_HOST_SURFACES) {
+          const host = resolveOpaqueColor(`var(${surfaceToken})`, tokens);
+          const background = composite(resolvedTint, host);
+          const ratio = contrastRatio(foreground, background);
+          const floor = AAA_THEMES.has(themeName) ? AAA_NORMAL_TEXT_MIN : AA_NORMAL_TEXT_MIN;
+          if (ratio < floor) {
+            failures.push(
+              `${themeName}: ${foregroundToken} on ${tint} over ${surfaceToken} = ${ratio.toFixed(2)}:1 (< ${floor}:1)`,
+            );
+          }
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  });
+
   it("keeps chat links at WCAG AA on every bubble surface", () => {
     const chatTextCss = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
     const groupedCss = fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8");
@@ -394,6 +528,17 @@ describe("Control UI theme contrast", () => {
       const userFill = isLight ? bubbleBackgrounds.lightUser : bubbleBackgrounds.user;
       const senderTint = isLight ? bubbleBackgrounds.lightSenderTint : bubbleBackgrounds.senderTint;
       const userBubble = composite(resolveColor(userFill, tokens), page);
+
+      if (isLight) {
+        expect(bubbleBackgrounds.lightUserText).not.toBe("");
+        const foreground = resolveOpaqueColor(`var(${bubbleBackgrounds.lightUserText})`, tokens);
+        const ratio = contrastRatio(foreground, userBubble);
+        if (ratio < AA_NORMAL_TEXT_MIN) {
+          failures.push(
+            `${themeName}: text ${bubbleBackgrounds.lightUserText} on user bubble ${userFill} = ${ratio.toFixed(2)}:1 (< ${AA_NORMAL_TEXT_MIN}:1)`,
+          );
+        }
+      }
 
       for (const [state, token] of [
         ["link", linkTokens.link],

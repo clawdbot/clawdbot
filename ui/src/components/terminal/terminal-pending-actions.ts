@@ -1,3 +1,8 @@
+import type { TerminalPanelToggleDetail } from "../panel-toggle-contract.ts";
+import {
+  TerminalOpenTimeoutError,
+  TerminalOpenUnusableSessionError,
+} from "./terminal-connection.ts";
 import type {
   TerminalPanelAction,
   TerminalPanelCatalogReference,
@@ -8,7 +13,45 @@ import {
 } from "./terminal-session-storage.ts";
 import type { TerminalTaskQueue } from "./terminal-task-queue.ts";
 
-type TerminalPendingActionsOptions = {
+type RetryOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
+
+/** Retains the exact failed open intent until the operator retries or the tab becomes ready. */
+export class TerminalOpenRetry {
+  private action: RetryOpenAction | null = null;
+
+  remember(catalog: TerminalPanelCatalogReference | undefined, agentId: string | null): void {
+    this.action = catalog ? { kind: "catalog", agentId, catalog } : { kind: "open", agentId };
+  }
+
+  clearUnlessRetryable(error: unknown): void {
+    if (
+      !(
+        error instanceof TerminalOpenTimeoutError ||
+        error instanceof TerminalOpenUnusableSessionError
+      )
+    ) {
+      this.clear();
+    }
+  }
+
+  clear(): void {
+    this.action = null;
+  }
+
+  get available(): boolean {
+    return this.action !== null;
+  }
+
+  run(): void {
+    const action = this.action;
+    this.clear();
+    if (action) {
+      void terminalIntentQueue.queue(action);
+    }
+  }
+}
+
+export type TerminalIntentHost = {
   bootQueue: Pick<TerminalTaskQueue, "enqueue">;
   currentGeneration: () => number;
   canRun: () => boolean;
@@ -27,23 +70,69 @@ type TerminalPendingActionsOptions = {
   clearTimeout: () => void;
 };
 
-/** Keeps admitted terminal actions owned across reconnect generations and document reloads. */
-export class TerminalPendingActions {
+/**
+ * One terminal intent queue per document. Panels come and go — a session route
+ * mounts the side-panel terminal beside the shell's bottom-dock instance — but
+ * the queue, its persisted copy, and the reconnect fence must not: two owners
+ * over one storage key drop each other's intents and run the same open twice.
+ * Hosts bind while connected; the most recent binding executes.
+ */
+class TerminalIntentQueue {
   private readonly actions: TerminalPanelAction[];
   private refreshPending = false;
   private refreshTimedOut = false;
   private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private drainScheduled = false;
+  private hosts: TerminalIntentHost[] = [];
+  private fenceHost: TerminalIntentHost | null = null;
+  private fenceGeneration = 0;
+  private timeoutHost: TerminalIntentHost | null = null;
 
-  constructor(private readonly options: TerminalPendingActionsOptions) {
+  constructor() {
+    this.actions = [];
+    this.rehydrate();
+  }
+
+  /**
+   * Mirrors the persisted record whenever no panel is bound, so a document with
+   * its terminals unmounted resumes exactly like a freshly loaded one.
+   */
+  private rehydrate(): void {
     const persisted = loadPersistedTerminalActions();
     // Explicit user work supersedes a generic reconnect restore. Otherwise the
     // restored shell would open first and obscure the action the operator chose.
-    this.actions = persisted.some((action) => action.kind !== "restore")
+    const admitted = persisted.some((action) => action.kind !== "restore")
       ? persisted.filter((action) => action.kind !== "restore")
       : persisted;
-    if (this.actions.length !== persisted.length) {
+    this.actions.splice(0, this.actions.length, ...admitted);
+    if (admitted.length !== persisted.length) {
       persistTerminalActions(this.actions);
+    }
+  }
+
+  private get host(): TerminalIntentHost | null {
+    return this.hosts.at(-1) ?? null;
+  }
+
+  bindHost(host: TerminalIntentHost): void {
+    if (this.hosts.length === 0) {
+      this.rehydrate();
+    }
+    this.hosts = [...this.hosts.filter((bound) => bound !== host), host];
+    void this.drain();
+  }
+
+  releaseHost(host: TerminalIntentHost): void {
+    this.hosts = this.hosts.filter((bound) => bound !== host);
+    // A fence outlives its opener only as a deadlock: nothing else can release it.
+    if (this.fenceHost === host) {
+      this.resetLifecycle(host);
+    }
+    if (this.hosts.length === 0) {
+      this.clearRefreshTimer();
+      this.refreshTimedOut = false;
+      this.timeoutHost = null;
+      this.rehydrate();
     }
   }
 
@@ -59,27 +148,42 @@ export class TerminalPendingActions {
     return this.refreshPending && !this.refreshTimedOut && this.actions.length > 0;
   }
 
-  beginRefreshFence(generation: number): void {
+  beginRefreshFence(host: TerminalIntentHost, generation: number): void {
     this.refreshPending = true;
+    this.fenceHost = host;
+    this.fenceGeneration = generation;
     this.clearRefreshFailure();
     this.clearRefreshTimer();
-    this.armRefreshTimer(generation);
+    this.armRefreshTimer();
   }
 
-  releaseRefreshFence(): void {
+  releaseRefreshFence(host: TerminalIntentHost): void {
+    if (this.fenceHost !== host) {
+      return;
+    }
     this.clearRefreshTimer();
     this.refreshPending = false;
+    this.fenceHost = null;
     this.clearRefreshFailure();
     void this.drain();
   }
 
-  resetLifecycle(): void {
+  // Only the panel that opened the fence may drop it; another panel disposing
+  // its tabs must not unblock a refresh it knows nothing about.
+  resetLifecycle(host: TerminalIntentHost): void {
+    if (this.fenceHost !== null && this.fenceHost !== host) {
+      return;
+    }
     this.clearRefreshTimer();
     this.refreshPending = false;
+    this.fenceHost = null;
     this.clearRefreshFailure();
   }
 
-  async queue(action: TerminalPanelAction): Promise<void> {
+  async queue(
+    action: TerminalPanelAction,
+    options: { deferUntilHostChange?: boolean } = {},
+  ): Promise<void> {
     let changed = false;
     if (action.kind !== "restore") {
       for (let index = this.actions.length - 1; index >= 0; index -= 1) {
@@ -89,35 +193,47 @@ export class TerminalPendingActions {
         }
       }
     }
+    const explicitIntentPending = this.actions.some((pending) => pending.kind !== "restore");
     const key = JSON.stringify(action);
-    if (!this.actions.some((pending) => JSON.stringify(pending) === key)) {
+    if (
+      !(action.kind === "restore" && explicitIntentPending) &&
+      !this.actions.some((pending) => JSON.stringify(pending) === key)
+    ) {
       this.actions.push(action);
       changed = true;
     }
     if (changed) {
       persistTerminalActions(this.actions);
     }
-    this.armRefreshTimer(this.options.currentGeneration());
+    // A session-route intent is persisted before its embedded panel mounts.
+    // The shell's bottom-only panel must not claim it in that gap; the next
+    // host binding drains it from the canonical document queue.
+    if (options.deferUntilHostChange) {
+      return;
+    }
+    this.armRefreshTimer();
+    const host = this.host;
     if (this.refreshPending) {
-      this.options.requestUpdate();
-    } else if (!this.options.hasTabs()) {
-      this.options.setBooting(true);
+      host?.requestUpdate();
+    } else if (host && !host.hasTabs()) {
+      host.setBooting(true);
     }
     await this.drain();
   }
 
   async drain(): Promise<void> {
-    if (this.drainScheduled || this.actions.length === 0 || !this.options.canRun()) {
+    const host = this.host;
+    if (this.drainScheduled || this.actions.length === 0 || !host || !this.canRun(host)) {
       return;
     }
     this.drainScheduled = true;
     try {
-      await this.options.bootQueue.enqueue(async (isCurrent) => {
+      await host.bootQueue.enqueue(async (isCurrent) => {
         const action = this.actions[0];
-        if (!action || !isCurrent() || !this.options.canRun()) {
+        if (!action || !isCurrent() || !this.canRun(host)) {
           return;
         }
-        const completed = await this.execute(action);
+        const completed = await this.execute(host, action);
         if (!completed || !isCurrent()) {
           return;
         }
@@ -129,35 +245,47 @@ export class TerminalPendingActions {
       });
     } finally {
       this.drainScheduled = false;
-      if (this.actions.length > 0 && this.options.canRun()) {
+      const current = this.host;
+      if (this.actions.length > 0 && current && this.canRun(current)) {
         void this.drain();
-      } else if (this.actions.length === 0 && !this.options.hasTabs()) {
-        this.options.setBooting(false);
+      } else if (this.actions.length === 0 && current && !current.hasTabs()) {
+        current.setBooting(false);
       }
     }
   }
 
-  cancel(): void {
+  // Closing a terminal drops the intents queued for it, but only the panel the
+  // operator is actually looking at may do that to the shared queue.
+  cancel(host: TerminalIntentHost): void {
+    if (this.host !== host) {
+      return;
+    }
     this.actions.splice(0);
     persistTerminalActions(this.actions);
-    this.options.setBooting(false);
+    host.setBooting(false);
     this.clearRefreshFailure();
   }
 
-  private async execute(action: TerminalPanelAction): Promise<boolean> {
+  private canRun(host: TerminalIntentHost): boolean {
+    return !this.refreshPending && host.canRun();
+  }
+
+  private async execute(host: TerminalIntentHost, action: TerminalPanelAction): Promise<boolean> {
     if (action.kind === "attach") {
-      return this.options.attach(action.sessionId, action.agentOwned);
+      return host.attach(action.sessionId, action.agentOwned);
     }
     if (action.kind === "open") {
-      return this.options.open(undefined, action.agentId);
+      return host.open(undefined, action.agentId);
     }
-    await this.options.reattach();
-    if (!this.options.canRun()) {
+    await host.reattach();
+    // A second panel mounting mid-flight must not strand this action: the host
+    // that started it is still connected, so it finishes what it began.
+    if (!this.canRun(host)) {
       return false;
     }
     return action.kind === "catalog"
-      ? this.options.open(action.catalog, action.agentId)
-      : this.options.ensureInitial(action.agentId);
+      ? host.open(action.catalog, action.agentId)
+      : host.ensureInitial(action.agentId);
   }
 
   private clearRefreshTimer(): void {
@@ -169,27 +297,65 @@ export class TerminalPendingActions {
 
   private clearRefreshFailure(): void {
     if (this.refreshTimedOut) {
-      this.options.clearTimeout();
+      // The panel that surfaced the timeout owns the text that clears it.
+      this.timeoutHost?.clearTimeout();
+      this.timeoutHost = null;
       this.refreshTimedOut = false;
     }
   }
 
-  private armRefreshTimer(generation: number): void {
-    if (!this.refreshPending || this.refreshTimer !== null || this.actions.length === 0) {
+  private armRefreshTimer(): void {
+    const fenceHost = this.fenceHost;
+    if (!this.refreshPending || !fenceHost || this.refreshTimer !== null) {
       return;
     }
+    if (this.actions.length === 0) {
+      return;
+    }
+    const generation = this.fenceGeneration;
     this.refreshTimer = globalThis.setTimeout(() => {
       this.refreshTimer = null;
       if (
-        generation !== this.options.currentGeneration() ||
+        this.fenceHost !== fenceHost ||
+        generation !== fenceHost.currentGeneration() ||
         !this.refreshPending ||
         this.actions.length === 0
       ) {
         return;
       }
       this.refreshTimedOut = true;
-      this.options.showTimeout();
-      this.options.setBooting(false);
-    }, this.options.timeoutMs());
+      this.timeoutHost = fenceHost;
+      fenceHost.showTimeout();
+      fenceHost.setBooting(false);
+    }, fenceHost.timeoutMs());
   }
+}
+
+/** Document-scoped owner; panels bind to it, they do not own copies. */
+export const terminalIntentQueue = new TerminalIntentQueue();
+
+/**
+ * The durable intent a toggle implies, if any. Observers record it here rather
+ * than handing the raw event to a panel that may not be mounted yet: a reload
+ * between the request and that mount would otherwise lose it with no trace.
+ */
+export function terminalToggleIntent(
+  event: Event,
+  fallbackAgentId: string | null,
+): TerminalPanelAction | null {
+  const detail =
+    event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
+      ? (event.detail as TerminalPanelToggleDetail)
+      : null;
+  if (!detail || detail.open === false) {
+    return null;
+  }
+  const agentId = detail.agentId?.trim() || fallbackAgentId;
+  if (detail.terminalSessionId) {
+    return { kind: "attach", sessionId: detail.terminalSessionId, agentOwned: true };
+  }
+  if (detail.catalog) {
+    return { kind: "catalog", agentId, catalog: detail.catalog };
+  }
+  return detail.open === true ? { kind: "restore", agentId } : null;
 }

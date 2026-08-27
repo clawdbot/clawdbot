@@ -5,14 +5,18 @@ import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import type { LobsterPetPaletteId } from "../../components/lobster-pet-contract.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { renderLobsterdex } from "./view.ts";
+import { renderLobsterdex, type LobsterdexCopyFeedback } from "./view.ts";
 
 class LobsterdexPage extends OpenClawLightDomElement {
-  @state() private copiedPaletteId: LobsterPetPaletteId | null = null;
+  @state() private copyFeedback: LobsterdexCopyFeedback | null = null;
+  private copyAttempt = 0;
   private copyResetTimer: number | null = null;
 
   override disconnectedCallback(): void {
+    this.copyAttempt += 1;
+    this.copyFeedback = null;
     if (this.copyResetTimer !== null) {
       window.clearTimeout(this.copyResetTimer);
       this.copyResetTimer = null;
@@ -54,18 +58,23 @@ class LobsterdexPage extends OpenClawLightDomElement {
   }
 
   private readonly copyLink = async (paletteId: LobsterPetPaletteId): Promise<void> => {
-    const url = `${location.origin}${location.pathname}#lobsterdex-${paletteId}`;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      return;
-    }
-    this.copiedPaletteId = paletteId;
+    const attempt = ++this.copyAttempt;
+    this.copyFeedback = null;
     if (this.copyResetTimer !== null) {
       window.clearTimeout(this.copyResetTimer);
+      this.copyResetTimer = null;
     }
+    const url = `${location.origin}${location.pathname}#lobsterdex-${paletteId}`;
+    const copied = await copyToClipboard(
+      url,
+      () => this.isConnected && attempt === this.copyAttempt,
+    );
+    if (!this.isConnected || attempt !== this.copyAttempt) {
+      return;
+    }
+    this.copyFeedback = { paletteId, status: copied ? "copied" : "error" };
     this.copyResetTimer = window.setTimeout(() => {
-      this.copiedPaletteId = null;
+      this.copyFeedback = null;
       this.copyResetTimer = null;
     }, 1_500);
   };
@@ -77,7 +86,7 @@ class LobsterdexPage extends OpenClawLightDomElement {
       </section>
       ${renderSettingsWorkspace(
         renderLobsterdex(getLobsterdexEntries(), {
-          copiedPaletteId: this.copiedPaletteId,
+          copyFeedback: this.copyFeedback,
           onCopyLink: (paletteId) => void this.copyLink(paletteId),
         }),
       )}

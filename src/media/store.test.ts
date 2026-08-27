@@ -827,18 +827,18 @@ describe("media store", () => {
         const nested = await storeResult.saveMediaBuffer(
           Buffer.from("old nested"),
           "text/plain",
-          path.join("remote-cache", "session-prune", "images"),
+          path.join("prune-chain", "session-prune", "images"),
         );
         const mediaDir = await storeResult.ensureMediaDir();
         const sessionDir = path.dirname(path.dirname(nested.path));
-        const remoteCacheDir = path.dirname(sessionDir);
+        const pruneChainDir = path.dirname(sessionDir);
         const past = Date.now() - 10_000;
         await fs.utimes(nested.path, past / 1000, past / 1000);
         return {
           removedFiles: [nested.path],
           preservedFiles: [],
-          removedDirs: [sessionDir],
-          preservedDirs: [remoteCacheDir, mediaDir],
+          removedDirs: [sessionDir, pruneChainDir],
+          preservedDirs: [mediaDir],
         };
       },
       run: async (storeValue: typeof import("./store.js")) =>

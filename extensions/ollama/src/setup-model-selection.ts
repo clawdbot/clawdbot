@@ -1,12 +1,13 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { selectPreferredLocalModelId } from "openclaw/plugin-sdk/provider-model-shared";
-import { OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
+import { normalizeOllamaCloudModelId, OLLAMA_CLOUD_DEFAULT_MODELS } from "./defaults.js";
 import {
   buildDefaultOllamaCloudModelDefinition,
   buildOllamaModelDefinition,
   enrichOllamaModelsWithContext,
   fetchOllamaModels,
   isReasoningModelHeuristic,
+  mergeOllamaModelShowInfo,
   readOllamaModelShowInfo,
   resolveOllamaApiBase,
   type OllamaModelWithContext,
@@ -112,8 +113,7 @@ export function selectAppGuidedOllamaModelFromDiscovery(
       id: model.name,
       contextWindow: model.contextWindow,
       supportsTools: model.capabilities?.includes("tools") === true,
-      reasoning:
-        model.capabilities?.includes("thinking") === true || isReasoningModelHeuristic(model.name),
+      reasoning: model.capabilities?.includes("thinking") ?? isReasoningModelHeuristic(model.name),
       size: model.size,
     })),
   );
@@ -126,8 +126,13 @@ export function buildOllamaModelsConfig(
 ) {
   return modelNames.map((name) => {
     const discovered = discoveredModelsByName?.get(name);
-    const defaultModel = defaultModels.find((model) => model.id === name);
-    if (defaultModel && !discovered) {
+    // Cloud suggestions arrive suffixed (`kimi-k3:cloud`); the default table is keyed bare.
+    // Match through the suffix for context/capabilities, but keep the requested id: the
+    // suffixed spelling is what gets written into config.
+    const defaultModel = defaultModels.find(
+      (model) => model.id === normalizeOllamaCloudModelId(name),
+    );
+    if (defaultModel && !discovered && defaultModel.id === name) {
       return buildDefaultOllamaCloudModelDefinition(defaultModel);
     }
     const capabilities =
@@ -160,7 +165,7 @@ export async function inspectOllamaModelsForSetup(
             signal,
             auditContext: "ollama-setup.tools-scan",
           });
-          return Object.assign({}, model, showInfo);
+          return mergeOllamaModelShowInfo(model, showInfo);
         } catch (error) {
           signal?.throwIfAborted();
           // A failed inspection must not inherit the optimistic tools default
@@ -168,7 +173,7 @@ export async function inspectOllamaModelsForSetup(
           // distinct from authoritative empty capabilities so name-based
           // reasoning detection still applies.
           inspectionFailures.push(`${model.name}: ${formatErrorMessage(error)}`);
-          return Object.assign({}, model, { showInspectionFailed: true as const });
+          return mergeOllamaModelShowInfo(model, { showInspectionFailed: true });
         }
       }),
     );

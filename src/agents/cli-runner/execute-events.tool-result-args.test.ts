@@ -41,6 +41,7 @@ function buildContext(runId: string): PreparedCliRunContext {
     systemPrompt: "system",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
     bootstrapPromptWarningLines: [],
+    claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   } as PreparedCliRunContext;
 }

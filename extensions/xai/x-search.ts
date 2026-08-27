@@ -1,6 +1,7 @@
 // Xai plugin module implements x search behavior.
 import {
   jsonResult,
+  normalizeToIsoDate,
   readCache,
   readStringArrayParam,
   readStringParam,
@@ -58,32 +59,6 @@ function getSharedXSearchCache(): Map<string, XSearchCacheEntry> {
 
 const X_SEARCH_CACHE = getSharedXSearchCache();
 
-function resolveXSearchConfig(cfg?: unknown): Record<string, unknown> | undefined {
-  return resolveEffectiveXSearchConfig(cfg as never);
-}
-
-function resolveXSearchEnabled(params: {
-  cfg?: unknown;
-  config?: Record<string, unknown>;
-  runtimeConfig?: unknown;
-  auth?: XaiToolAuthContext;
-}): boolean {
-  return isXaiToolEnabled({
-    enabled: params.config?.enabled as boolean | undefined,
-    runtimeConfig: params.runtimeConfig as never,
-    sourceConfig: params.cfg as never,
-    auth: params.auth,
-  });
-}
-
-async function resolveXSearchApiKey(params: {
-  sourceConfig?: unknown;
-  runtimeConfig?: unknown;
-  auth?: XaiToolAuthContext;
-}): Promise<string | undefined> {
-  return await resolveXaiToolApiKeyWithAuth(params as never);
-}
-
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
   if (!value) {
     return undefined;
@@ -95,19 +70,7 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
   }
-  const [yearText, monthText, dayText] = trimmed.split("-");
-  if (yearText === undefined || monthText === undefined || dayText === undefined) {
-    throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
-  }
-  const year = Number.parseInt(yearText, 10);
-  const month = Number.parseInt(monthText, 10);
-  const day = Number.parseInt(dayText, 10);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
-  ) {
+  if (!normalizeToIsoDate(trimmed)) {
     throw new PluginToolInputError(`${label} must be a valid calendar date`);
   }
   return trimmed;
@@ -163,13 +126,13 @@ export function createXSearchTool(options?: {
   runtimeConfig?: Record<string, unknown> | null;
   auth?: XaiToolAuthContext;
 }) {
-  const xSearchConfig = resolveXSearchConfig(options?.config);
+  const xSearchConfig = resolveEffectiveXSearchConfig(options?.config as never);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
   if (
-    !resolveXSearchEnabled({
-      cfg: options?.config,
-      config: xSearchConfig,
-      runtimeConfig: runtimeConfig ?? undefined,
+    !isXaiToolEnabled({
+      enabled: typeof xSearchConfig?.enabled === "boolean" ? xSearchConfig.enabled : undefined,
+      runtimeConfig: (runtimeConfig ?? undefined) as never,
+      sourceConfig: options?.config as never,
       auth: options?.auth,
     })
   ) {
@@ -178,9 +141,9 @@ export function createXSearchTool(options?: {
 
   return createXSearchToolDefinition(async (_toolCallId, args, signal) => {
     signal?.throwIfAborted();
-    const apiKey = await resolveXSearchApiKey({
-      sourceConfig: options?.config,
-      runtimeConfig: runtimeConfig ?? undefined,
+    const apiKey = await resolveXaiToolApiKeyWithAuth({
+      sourceConfig: options?.config as never,
+      runtimeConfig: (runtimeConfig ?? undefined) as never,
       auth: options?.auth,
     });
     if (!apiKey) {

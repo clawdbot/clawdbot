@@ -5,12 +5,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  assignSessionOwner,
   loadSessionEntry as loadInternalSessionEntry,
   patchSessionEntryCore as patchInternalSessionEntry,
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
-import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
+import type * as ConfigSessionTypes from "../config/sessions/types.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,
@@ -29,12 +29,14 @@ import {
   type SessionEntry,
 } from "./session-store-runtime.js";
 
+type InternalSessionEntry = ConfigSessionTypes.InternalSessionEntry;
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LEGACY_TRANSCRIPT_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
 const sessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof SessionEntry
   ? false
   : true = true;
-const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof ConfigSessionEntry
+const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof ConfigSessionTypes.SessionEntry
   ? false
   : true = true;
 void sessionEntryKeepsRecoveryPrivate;
@@ -60,6 +62,11 @@ describe("session-store-runtime compatibility surface", () => {
       storePath,
       entry,
     });
+  }
+
+  function assignOwner(sessionKey: string): void {
+    const actor = { id: "profile-owner", type: "human" as const };
+    assignSessionOwner({ sessionKey, storePath }, { assignedBy: actor, owner: actor });
   }
 
   function expectRecoveryCleared(params: {
@@ -320,15 +327,13 @@ describe("session-store-runtime compatibility surface", () => {
   });
 
   it("applies whole-store compatibility mutations through SQLite rows", async () => {
-    await seedSessionEntry("agent:main:remove", {
-      sessionId: "session-remove",
-      updatedAt: 10,
-    });
+    await seedSessionEntry("agent:main:remove", { sessionId: "session-remove", updatedAt: 10 });
     await seedSessionEntry("agent:main:update", {
       model: "gpt-5.5",
       sessionId: "session-update",
       updatedAt: 10,
     });
+    ["agent:main:remove", "agent:main:update"].forEach(assignOwner);
 
     await expect(
       updateSessionStore(
@@ -810,45 +815,46 @@ describe("session-store-runtime compatibility surface", () => {
     });
   });
 
-  it("preserves resolved maintenance settings through entry patches", async () => {
-    const staleSessionKey = "agent:main:stale";
-    const activeSessionKey = "agent:main:active";
-    const now = Date.now();
-    await seedSessionEntry(staleSessionKey, {
-      sessionId: "session-stale",
-      updatedAt: now - 8 * DAY_MS,
-    });
-    await seedSessionEntry(activeSessionKey, {
-      sessionId: "session-active",
-      updatedAt: now,
-    });
+  it.each([
+    { pruneAfterMs: 7 * DAY_MS, staleSessionPresent: false },
+    { pruneAfterMs: 0, staleSessionPresent: true },
+    { pruneAfterMs: -DAY_MS, staleSessionPresent: true },
+  ])(
+    "applies age retention $pruneAfterMs through entry patches",
+    async ({ pruneAfterMs, staleSessionPresent }) => {
+      const staleSessionKey = "agent:main:stale";
+      const activeSessionKey = "agent:main:active";
+      const now = Date.now();
+      await seedSessionEntry(staleSessionKey, {
+        sessionId: "session-stale",
+        updatedAt: now - 8 * DAY_MS,
+      });
+      await seedSessionEntry(activeSessionKey, {
+        sessionId: "session-active",
+        updatedAt: now,
+      });
+      assignOwner(staleSessionKey);
 
-    await expect(
-      patchSessionEntry({
+      await patchSessionEntry({
         sessionKey: activeSessionKey,
         storePath,
         maintenanceConfig: {
           mode: "enforce",
-          pruneAfterMs: 7 * DAY_MS,
+          pruneAfterMs,
           modelRunPruneAfterMs: DAY_MS,
-          maxEntries: 1,
+          maxEntries: 100,
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
           highWaterBytes: null,
         },
         update: () => ({ model: "gpt-5.5" }),
-      }),
-    ).resolves.toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
+      });
 
-    expect(getSessionEntry({ sessionKey: activeSessionKey, storePath })).toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
-    expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-  });
+      expect(getSessionEntry({ sessionKey: staleSessionKey, storePath }) != null).toBe(
+        staleSessionPresent,
+      );
+    },
+  );
 
   it("forwards maintenance suppression through entry patches", async () => {
     const staleSessionKey = "agent:main:stale";
@@ -995,20 +1001,16 @@ describe("session-store-runtime compatibility surface", () => {
   });
 
   it("cleans lifecycle artifacts through the accessor-backed SDK wrapper", async () => {
-    const sessionKey = "agent:main:lifecycle-owned-old";
+    const sessionId = "lifecycle-owned-old";
+    const sessionKey = `agent:main:${sessionId}`;
     const oldTimestamp = Date.now() - 600_000;
-    await seedSessionEntry(sessionKey, {
-      sessionId: "lifecycle-owned-old",
-      updatedAt: oldTimestamp,
-    });
-    await seedSessionEntry("agent:main:regular", {
-      sessionId: "regular",
-      updatedAt: Date.now(),
-    });
+    await seedSessionEntry(sessionKey, { sessionId, updatedAt: oldTimestamp });
+    await seedSessionEntry("agent:main:regular", { sessionId: "regular", updatedAt: Date.now() });
+    assignOwner(sessionKey);
     await appendTranscriptEvent(
-      { agentId: "main", sessionKey, sessionId: "lifecycle-owned-old", storePath },
+      { agentId: "main", sessionKey, sessionId, storePath },
       {
-        runId: "lifecycle-owned-old",
+        runId: sessionId,
         timestamp: new Date(oldTimestamp).toISOString(),
         type: "metadata",
       },

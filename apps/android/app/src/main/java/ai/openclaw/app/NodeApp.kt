@@ -120,8 +120,8 @@ class NodeApp : Application() {
 
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
-    // The process runtime survives Activity recreation, so retained text and
-    // serialized Home Canvas state need an explicit locale refresh signal.
+    // The process runtime survives Activity recreation, so retained text needs an
+    // explicit locale refresh signal.
     NativeStringResources.setConfigurationLocales(newConfig)
     notifyNativeLocaleChanged()
   }

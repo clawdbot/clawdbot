@@ -50,6 +50,10 @@ import {
 } from "./repair-plan.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
 import {
+  assertCronStateSchemaSupported,
+  rethrowSqliteSchemaVersionError,
+} from "./schema-safety.js";
+import {
   collectStoredCronCodexRuntimePolicyTargets,
   cronCodexRuntimePolicyTargetKey,
   normalizeStoredCronJobs,
@@ -123,6 +127,7 @@ export async function loadLegacyCronRepairState(params: {
   const legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
   const legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
+  assertCronStateSchemaSupported(params.env);
   if (
     params.onlyIfLegacyDetected &&
     !legacyStoreDetected &&
@@ -220,6 +225,7 @@ export async function applyLegacyCronStoreRepair(params: {
   migrateCodexModelRefs?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
 }): Promise<LegacyCronRepairResult> {
+  assertCronStateSchemaSupported();
   const { state } = params;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -242,6 +248,12 @@ export async function applyLegacyCronStoreRepair(params: {
       shouldMigrateCodexRuntimePolicyTarget: (target) =>
         !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
     });
+  warnings.push(
+    ...normalized.unsupportedLegacyTriggerScriptJobs.map(
+      (job) =>
+        `Cron trigger script for ${job} uses legacy Code Mode APIs that cannot be safely converted; inspect the automation and update its trigger script manually to use direct tool calls.`,
+    ),
+  );
   const legacyWebhook = normalizeOptionalString(
     (params.cfg.cron as Record<string, unknown> | undefined)?.webhook,
   );
@@ -303,6 +315,7 @@ export async function applyLegacyCronStoreRepair(params: {
         saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
     } catch (err) {
+      rethrowSqliteSchemaVersionError(err);
       return {
         changes,
         warnings: [
@@ -331,6 +344,7 @@ export async function applyLegacyCronStoreRepair(params: {
     try {
       importedRunLogs = (await migrateLegacyCronRunLogsToSqlite(state.storePath)).importedFiles;
     } catch (err) {
+      rethrowSqliteSchemaVersionError(err);
       warnings.push(
         `Failed importing legacy cron run logs at ${shortenHomePath(state.storePath)}: ${errorMessage(err)}`,
       );
@@ -347,6 +361,7 @@ export async function applyLegacyCronStoreRepair(params: {
         try {
           markLegacyCronMigrationSourceRemoved(state.legacyMigrationSource);
         } catch (err) {
+          rethrowSqliteSchemaVersionError(err);
           warnings.push(
             `Cron store was archived, but its migration receipt could not be finalized: ${errorMessage(err)}`,
           );
@@ -377,6 +392,11 @@ export async function applyLegacyCronStoreRepair(params: {
       `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
     );
   }
+  if (normalized.legacyTriggerScriptJobs.length > 0) {
+    changes.push(
+      `Rewrote ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} to canonical direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}.`,
+    );
+  }
 
   return {
     changes,
@@ -400,6 +420,7 @@ export async function repairLegacyCronStoreWithoutPrompt(params: {
       onlyIfLegacyDetected: true,
     });
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return {
       changes: [],
       warnings: [
@@ -427,6 +448,7 @@ export async function collectCronCodexRuntimePolicyTargetsReadOnly(params: {
       warnings: [],
     };
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return {
       targets: [],
       warnings: [
@@ -455,6 +477,7 @@ export async function repairCronCodexModelRefsAfterConfigWrite(params: {
         })
       : { changes: [], warnings: [] };
   } catch (err) {
+    rethrowSqliteSchemaVersionError(err);
     return {
       changes: [],
       warnings: [

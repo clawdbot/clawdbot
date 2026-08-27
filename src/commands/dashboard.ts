@@ -1,6 +1,7 @@
 // Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
 import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
@@ -199,11 +200,18 @@ export async function dashboardCommand(
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
       opened = await openUrl(browserUrl);
-      hint = opened
-        ? undefined
-        : copied
-          ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
-          : "Browser launch failed. Open the Dashboard URL above manually.";
+      if (!opened && !copied && isRemoteEnvironment()) {
+        hint = formatControlUiSshHint({
+          port,
+          basePath,
+        });
+      } else {
+        hint = opened
+          ? undefined
+          : copied
+            ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
+            : "Browser launch failed. Open the Dashboard URL above manually.";
+      }
     } else {
       hint = formatControlUiSshHint({
         port,

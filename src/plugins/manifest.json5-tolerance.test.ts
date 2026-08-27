@@ -342,6 +342,11 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     onConfigPaths: ["browser", ""],
     onCapabilities: ["provider", "tool", "wat"]
   },
+  cliCommands: [
+    { name: "models", description: "Inspect provider models", hasSubcommands: true },
+    { name: "bad command", description: "ignored", hasSubcommands: false },
+    { name: "models", description: "duplicate", hasSubcommands: false }
+  ],
   setup: {
     providers: [
       { id: "openai", authMethods: ["api-key", ""], envVars: ["OPENAI_API_KEY", ""] },
@@ -366,6 +371,13 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         onConfigPaths: ["browser"],
         onCapabilities: ["provider", "tool"],
       });
+      expect(result.manifest.cliCommands).toEqual([
+        {
+          name: "models",
+          description: "Inspect provider models",
+          hasSubcommands: true,
+        },
+      ]);
       expect(result.manifest.setup).toEqual({
         providers: [
           {

@@ -215,16 +215,16 @@ Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default image
-`ghcr.io/matrix-construct/tuwunel:v1.8.2`, pinned to its multi-architecture OCI
+`ghcr.io/matrix-construct/tuwunel:v1.8.3`, pinned to its multi-architecture OCI
 index digest; server name `matrix-qa.test`, port `28008`), registers temporary
 driver, SUT, and observer users, seeds the required rooms, and records the
 redacted request/response boundary. It then runs the real Matrix plugin inside
 a child QA gateway scoped to that transport (no `qa-channel`) and tears the
 environment down.
 
-The v1.8.2 GHCR index resolves to
-`sha256:6f950bb139411a7964781e986321e395e045e4a6a52240a4dda9d23d04075f78`.
-`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.8.2`
+The v1.8.3 GHCR index resolves to
+`sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74`.
+`docker buildx imagetools inspect ghcr.io/matrix-construct/tuwunel:v1.8.3`
 reports manifests for `linux/arm64`, `linux/amd64`, `linux/amd64/v2`, and
 `linux/amd64/v3`.
 
@@ -609,11 +609,21 @@ Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
+- `discord-progress-draft-lifecycle` - runs a deterministic tool turn, verifies
+  the final answer has no synthesized activity receipt, confirms the working
+  draft is deleted after a successful final, and confirms an error final keeps
+  its draft visible as diagnostic context.
 - `discord-voice-autojoin` - opt-in voice scenario. Runs by itself, enables
   `channels.discord.voice.autoJoin`, and verifies the SUT bot's current
   Discord voice state is the target voice/stage channel. Convex Discord
   credentials may include optional `voiceChannelId`; otherwise the runner
   adapter discovers the first visible voice/stage channel in the guild.
+- `discord-transcripts-voice-authorization` - opt-in live-model scenario. A
+  real driver-bot message first proves a sender excluded from the target voice
+  channel receives a visible transcript-tool denial without a join. The same
+  sender is then allowlisted and must start, stop, and leave live capture. The
+  scenario writes redacted JSON evidence and deletes its known Discord
+  messages during cleanup.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by
   itself because it switches the SUT to always-on, tool-only guild replies
   with `messages.statusReactions.enabled=true`, then captures a REST
@@ -629,6 +639,16 @@ Run the Discord voice auto-join scenario explicitly:
 pnpm openclaw qa discord \
   --scenario discord-voice-autojoin \
   --provider-mode mock-openai
+```
+
+Run the transcript authorization scenario with a Convex lease:
+
+```bash
+pnpm openclaw qa discord \
+  --scenario discord-transcripts-voice-authorization \
+  --provider-mode live-frontier \
+  --credential-source convex \
+  --credential-role maintainer
 ```
 
 Run the Mantis status-reaction scenario explicitly:
@@ -1077,7 +1097,8 @@ sutAuthTag?: string }` - `relayUrl` must use `wss://`, with `ws://` allowed only
   for loopback relays; `roomId` must be a channel UUID, and the identities must
   be distinct.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string,
-driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
+driverBotToken: string, sutBotToken: string, sutApplicationId: string,
+voiceChannelId?: string }`.
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string,
 sutToken: string }` - `groupId` must be a numeric chat-id string.
 - Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken:
@@ -1184,9 +1205,11 @@ provider names.
 ## Transport adapters
 
 `qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is
-the synthetic default. `crabline` starts local provider-shaped servers and
-runs OpenClaw's normal channel plugins against them. `live` is reserved for
-real provider credentials and external channels.
+the synthetic default. `crabline` starts separate local provider servers and
+runs OpenClaw's normal channel plugins against their provider-shaped REST and
+streaming boundaries; it does not use Crabline's fixture-level local mock
+providers. `live` is reserved for real provider credentials and external
+channels.
 
 At the architecture level, the split is:
 

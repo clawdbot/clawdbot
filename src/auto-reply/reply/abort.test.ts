@@ -450,6 +450,27 @@ describe("abort detection", () => {
     expect(isAbortRequestText(" توقف ")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+    expect(
+      isAbortRequestText("/stop@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/stop@unresolved_bot!", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/queue@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(false);
+    expect(
+      isAbortRequestText("/stop@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(false);
 
     expect(isAbortRequestText("/status")).toBe(false);
     expect(isAbortRequestText("wait")).toBe(false);

@@ -40,6 +40,12 @@ import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const completedCompactionEvent = (reason: "threshold" | "overflow", willRetry: boolean) =>
+  expect.objectContaining({
+    type: "compaction_end",
+    reason,
+    outcome: expect.objectContaining({ status: "completed", willRetry }),
+  });
 
 describe("AgentSession loop correctness", () => {
   it("publishes a queued user message only after its transcript entry is committed", async () => {
@@ -454,9 +460,7 @@ describe("AgentSession loop correctness", () => {
         content: [{ type: "text", text: "complete answer" }],
       }),
     );
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
   it("surfaces threshold safeguard rejection without appending compaction state", async () => {
@@ -486,8 +490,7 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({
         type: "compaction_end",
         reason: "threshold",
-        aborted: true,
-        willRetry: false,
+        outcome: { status: "aborted" },
       }),
     );
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
@@ -612,9 +615,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("finish now");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
   it("compacts and retries a high-usage length-truncated response", async () => {
@@ -642,9 +643,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("long request");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledTimes(2);
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "overflow", willRetry: true }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("overflow", true));
     expect(session.getLastAssistantText()).toBe("complete retry");
   });
 
@@ -686,9 +685,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("long request");
 
     expect({ agentRequests, summaryRequests }).toEqual({ agentRequests: 2, summaryRequests: 2 });
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "overflow", willRetry: true }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("overflow", true));
     const compactionEntry = sessionManager.getBranch().find((entry) => entry.type === "compaction");
     expect(compactionEntry).toMatchObject({ type: "compaction", fromHook: false });
     expect(compactionEntry?.summary).toContain("recovered default summary");
@@ -773,9 +770,11 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({
         type: "compaction_end",
         reason: "overflow",
-        willRetry: false,
-        errorMessage:
-          "Context overflow recovery failed: Turn prefix summarization failed: model returned no summary text",
+        outcome: {
+          status: "failed",
+          reason:
+            "Context overflow recovery failed: Turn prefix summarization failed: model returned no summary text",
+        },
       }),
     );
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
@@ -831,10 +830,8 @@ describe("AgentSession loop correctness", () => {
       expect(compactionEvents[0]).toMatchObject({
         type: "compaction_end",
         reason: "overflow",
-        aborted: true,
-        willRetry: false,
+        outcome: { status: "aborted" },
       });
-      expect(compactionEvents[0]?.errorMessage).toBeUndefined();
       expect(created.sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(
         false,
       );
@@ -874,9 +871,11 @@ describe("AgentSession loop correctness", () => {
       expect.objectContaining({
         type: "compaction_end",
         reason: "overflow",
-        willRetry: false,
-        errorMessage:
-          "Context overflow recovery failed: Turn prefix summarization failed: provider unavailable",
+        outcome: {
+          status: "failed",
+          reason:
+            "Context overflow recovery failed: Turn prefix summarization failed: provider unavailable",
+        },
       }),
     );
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
@@ -935,9 +934,7 @@ describe("AgentSession loop correctness", () => {
     await session.prompt("long request");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(compactionEvents).toContainEqual(
-      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
-    );
+    expect(compactionEvents).toContainEqual(completedCompactionEvent("threshold", false));
   });
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {

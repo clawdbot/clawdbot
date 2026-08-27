@@ -3,16 +3,31 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  recordInboundSession,
+  type ensureConfiguredBindingRouteReady,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient } from "./client.js";
+import {
+  matchIMessageAcpConversation,
+  normalizeIMessageAcpConversationId,
+} from "./conversation-id.js";
 import { monitorIMessageProvider } from "./monitor.js";
+import * as iMessageMediaStaging from "./monitor/media-staging.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
@@ -47,6 +62,7 @@ type MonitorRunParams = {
   session?: Record<string, unknown>;
   messages?: Record<string, unknown>;
   agents?: Record<string, unknown>;
+  bindings?: OpenClawConfig["bindings"];
   runtime?: MonitorIMessageOpts["runtime"];
   allowlist?: boolean;
 };
@@ -144,6 +160,9 @@ const waitForTransportReadyMock = vi.hoisted(() =>
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() =>
+  vi.fn<typeof ensureConfiguredBindingRouteReady>(async () => ({ ok: true })),
+);
 const dispatchReplyWithBufferedBlockDispatcherMock = vi.hoisted(() =>
   vi.fn<typeof dispatchReplyWithBufferedBlockDispatcher>(async () => ({
     queuedFinal: false,
@@ -207,6 +226,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
+    ensureConfiguredBindingRouteReady: ensureConfiguredBindingRouteReadyMock,
     readChannelAllowFromStore: readChannelAllowFromStoreMock,
     upsertChannelPairingRequest: vi.fn(),
   };
@@ -268,6 +288,7 @@ describe("iMessage monitor last-route updates", () => {
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     readChannelAllowFromStoreMock.mockReset().mockResolvedValue([]);
+    ensureConfiguredBindingRouteReadyMock.mockReset().mockResolvedValue({ ok: true });
     dispatchReplyWithBufferedBlockDispatcherMock.mockClear();
     createChannelInboundDebouncerMock.mockClear();
     debouncerControl.reset();
@@ -276,6 +297,7 @@ describe("iMessage monitor last-route updates", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    resetPluginRuntimeStateForTest();
     vi.useRealTimers();
     await Promise.all(openClawStates.splice(0).map((state) => state.cleanup()));
     vi.unstubAllEnvs();
@@ -296,13 +318,24 @@ describe("iMessage monitor last-route updates", () => {
   function createInboundMessage(
     message: Pick<IMessagePayload, "id" | "guid" | "text"> &
       Partial<
-        Pick<IMessagePayload, "chat_id" | "sender" | "is_from_me" | "is_group" | "created_at">
+        Pick<
+          IMessagePayload,
+          | "chat_id"
+          | "chat_guid"
+          | "chat_identifier"
+          | "sender"
+          | "is_from_me"
+          | "is_group"
+          | "created_at"
+        >
       >,
   ): IMessagePayload {
     return {
       id: message.id,
       guid: message.guid,
       chat_id: message.chat_id ?? 123,
+      chat_guid: message.chat_guid,
+      chat_identifier: message.chat_identifier,
       sender: message.sender ?? DEFAULT_SENDER,
       is_from_me: message.is_from_me ?? false,
       text: message.text,
@@ -310,6 +343,167 @@ describe("iMessage monitor last-route updates", () => {
       created_at: message.created_at ?? new Date().toISOString(),
     };
   }
+
+  it.each([
+    {
+      label: "SMS chat with service unset",
+      configuredService: undefined,
+      chatGuid: "SMS;-;+15550001111",
+      expectedService: "sms",
+    },
+    {
+      label: "SMS chat with service auto",
+      configuredService: "auto",
+      chatGuid: "SMS;-;+15550001111",
+      expectedService: "sms",
+    },
+    {
+      label: "iMessage chat with service unset",
+      configuredService: undefined,
+      chatGuid: "iMessage;-;+15550001111",
+      expectedService: "imessage",
+    },
+    {
+      label: "explicit SMS override for an iMessage chat",
+      configuredService: "sms",
+      chatGuid: "iMessage;-;+15550001111",
+      expectedService: "sms",
+    },
+    {
+      label: "explicit iMessage override for an SMS chat",
+      configuredService: "imessage",
+      chatGuid: "SMS;-;+15550001111",
+      expectedService: "imessage",
+    },
+    {
+      label: "unknown direct chat service",
+      configuredService: undefined,
+      chatGuid: "any;-;+15550001111",
+      expectedService: "auto",
+    },
+    {
+      label: "absent direct chat GUID",
+      configuredService: undefined,
+      chatGuid: undefined,
+      expectedService: "auto",
+    },
+  ] as const)(
+    "preserves the inbound direct service through early typing, final delivery, and last-route ($label)",
+    async ({ label, configuredService, chatGuid, expectedService }) => {
+      setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
+      const stateDir = createTestStateDir(
+        `openclaw-imsg-direct-route-${label.replaceAll(" ", "-")}-`,
+      );
+      const configuredStore = path.join(stateDir, "sessions.json");
+      const storePath = resolveStorePath(configuredStore, { agentId: "main" });
+      dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+        await params.dispatcherOptions.deliver(
+          { text: "reply over the originating service" },
+          {
+            kind: "final",
+          },
+        );
+        return EMPTY_DISPATCH_RESULT;
+      });
+      const client = await runMessageCase({
+        auxiliaryRequests: {
+          read: { ok: true },
+          send: { guid: "sms-reply-guid" },
+          typing: { ok: true },
+        },
+        message: createInboundMessage({
+          id: 101,
+          guid: `direct-route-${expectedService}-${label}`,
+          chat_guid: chatGuid,
+          chat_identifier: "+15550001111",
+          text: "reply to this direct chat",
+        }),
+        monitor: {
+          imessage: configuredService ? { service: configuredService } : {},
+          session: { dmScope: "per-channel-peer", store: configuredStore },
+        },
+      });
+      const auxiliaryClient = client.auxiliaryClient!;
+
+      await vi.waitFor(() => {
+        expect(auxiliaryClient.request).toHaveBeenCalledWith(
+          "typing",
+          expect.objectContaining({ service: expectedService, to: DEFAULT_SENDER, typing: true }),
+          expect.any(Object),
+        );
+      });
+      const expectedReadTarget = chatGuid ? { chat_guid: chatGuid } : { to: DEFAULT_SENDER };
+      expect(auxiliaryClient.request).toHaveBeenCalledWith(
+        "read",
+        expect.objectContaining(expectedReadTarget),
+        expect.any(Object),
+      );
+      expect(auxiliaryClient.request).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({
+          service: expectedService,
+          text: "reply over the originating service",
+          to: DEFAULT_SENDER,
+        }),
+        expect.any(Object),
+      );
+      const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
+      expect(dispatchParams?.ctx).toMatchObject({
+        From: `${expectedService}:${DEFAULT_SENDER}`,
+        To: `${expectedService}:${DEFAULT_SENDER}`,
+      });
+      await vi.waitFor(() => {
+        expect(
+          getSessionEntry({
+            storePath,
+            sessionKey: `agent:main:imessage:direct:${DEFAULT_SENDER}`,
+          }),
+        ).toMatchObject({
+          delivery: {
+            context: { channel: "imessage", to: `${expectedService}:${DEFAULT_SENDER}` },
+            route: { target: { to: `${expectedService}:${DEFAULT_SENDER}` } },
+          },
+        });
+      });
+    },
+  );
+
+  it("keeps group chat_id routing unchanged through final delivery", async () => {
+    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing", "read"]);
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async (params) => {
+      await params.dispatcherOptions.deliver({ text: "group reply" }, { kind: "final" });
+      return EMPTY_DISPATCH_RESULT;
+    });
+    const client = await runMessageCase({
+      auxiliaryRequests: {
+        read: { ok: true },
+        send: { guid: "group-reply-guid" },
+        typing: { ok: true },
+      },
+      message: createInboundMessage({
+        id: 103,
+        guid: "group-route-guid",
+        chat_id: 456,
+        chat_guid: "iMessage;+;chat456",
+        is_group: true,
+        text: "reply to this group",
+      }),
+      monitor: { allowlist: false, imessage: { groupPolicy: "open" } },
+    });
+    const auxiliaryClient = client.auxiliaryClient!;
+
+    expect(auxiliaryClient.request).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ chat_id: 456, service: "auto", text: "group reply" }),
+      expect.any(Object),
+    );
+    const dispatchParams = dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.at(0)?.[0];
+    expect(dispatchParams?.ctx).toMatchObject({
+      ChatType: "group",
+      From: "imessage:group:456",
+      To: "chat_id:456",
+    });
+  });
 
   function createAnchorlessDirectPair(id: number, text: string, isFromMe: boolean) {
     return {
@@ -402,6 +596,7 @@ describe("iMessage monitor last-route updates", () => {
         },
         messages: { inbound: { debounceMs: 0 }, ...params.messages },
         ...(params.agents ? { agents: params.agents } : {}),
+        ...(params.bindings ? { bindings: params.bindings } : {}),
         session: { mainKey: "main", ...params.session },
       } as never,
       runtime: params.runtime ?? { error: vi.fn(), exit: vi.fn(), log: vi.fn() },
@@ -446,6 +641,150 @@ describe("iMessage monitor last-route updates", () => {
     await runIMessageMonitor(monitor);
     return client;
   }
+
+  function createConfiguredBindingMonitor(
+    overrides: Omit<MonitorRunParams, "bindings"> = {},
+  ): MonitorRunParams {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: {
+            id: "imessage",
+            bindings: {
+              compileConfiguredBinding: ({ conversationId }) =>
+                normalizeIMessageAcpConversationId(conversationId),
+              matchInboundConversation: ({ compiledBinding, conversationId }) =>
+                matchIMessageAcpConversation({
+                  bindingConversationId: compiledBinding.conversationId,
+                  conversationId,
+                }),
+            } satisfies NonNullable<ChannelPlugin["bindings"]>,
+          },
+        },
+      ]),
+    );
+    return {
+      ...overrides,
+      agents: { list: [{ id: "main" }, { id: "codex" }] },
+      bindings: [
+        { agentId: "main", match: { channel: "imessage", accountId: "default" } },
+        {
+          type: "acp",
+          agentId: "codex",
+          match: {
+            channel: "imessage",
+            accountId: "default",
+            peer: { kind: "direct", id: DEFAULT_SENDER },
+          },
+        },
+      ],
+    };
+  }
+
+  it("waits for configured ACP target readiness before dispatching an authorized message", async () => {
+    let releaseReadiness: ((value: { ok: true }) => void) | undefined;
+    ensureConfiguredBindingRouteReadyMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseReadiness = resolve;
+        }),
+    );
+    createIMessageWatchClient({
+      onClose: async (notify) => {
+        notify(createInboundMessage({ id: 81, guid: "acp-ready-81", text: "start the agent" }));
+        await vi.waitFor(() => {
+          expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+        });
+        expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+        releaseReadiness?.({ ok: true });
+        await vi.waitFor(() => {
+          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
+        });
+      },
+    });
+
+    await runIMessageMonitor(createConfiguredBindingMonitor());
+
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledWith({
+      cfg: expect.any(Object),
+      bindingResolution: expect.objectContaining({
+        record: expect.objectContaining({
+          conversation: expect.objectContaining({
+            channel: "imessage",
+            accountId: "default",
+            conversationId: DEFAULT_SENDER,
+          }),
+        }),
+      }),
+    });
+    expect(ensureConfiguredBindingRouteReadyMock.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchReplyWithBufferedBlockDispatcherMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("drops unavailable configured ACP messages before typing, reads, media, history, or dispatch", async () => {
+    setAvailablePrivateApiMethods(["watch.subscribe", "typing", "read"]);
+    const stageAttachments = vi.spyOn(iMessageMediaStaging, "stageIMessageAttachments");
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "ACP backend unavailable",
+    });
+    const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
+    const stateDir = createTestStateDir("openclaw-imsg-acp-readiness-effects-");
+
+    const client = await runMessageCase({
+      requests: {
+        "watch.subscribe": { subscription: 1 },
+        "messages.history": { messages: [] },
+      },
+      auxiliaryRequests: { typing: { ok: true }, read: { ok: true } },
+      message: {
+        ...createInboundMessage({ id: 82, guid: "acp-failed-82", text: "start the agent" }),
+        attachments: [{ mime_type: "image/png", missing: true }],
+      },
+      monitor: createConfiguredBindingMonitor({
+        runtime,
+        imessage: { includeAttachments: true, dmHistoryLimit: 3 },
+        session: { dmScope: "per-channel-peer", store: path.join(stateDir, "sessions.json") },
+      }),
+    });
+
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect({
+      nativeEffects: client.auxiliaryClient!.request.mock.calls.map(([method]) => method),
+      historyLoads: client.request.mock.calls.filter(([method]) => method === "messages.history")
+        .length,
+      mediaLoads: stageAttachments.mock.calls.length,
+      dispatches: dispatchReplyWithBufferedBlockDispatcherMock.mock.calls.length,
+    }).toEqual({ nativeEffects: [], historyLoads: 0, mediaLoads: 0, dispatches: 0 });
+    expect([...runtime.error.mock.calls, ...runtime.log.mock.calls].flat()).toContainEqual(
+      expect.stringContaining("ACP backend unavailable"),
+    );
+  });
+
+  it("does not provision configured ACP targets for unauthorized or reflected messages", async () => {
+    await runMessageCase({
+      messages: [
+        createInboundMessage({
+          id: 83,
+          guid: "acp-unauthorized-83",
+          sender: "+15550009999",
+          text: "unauthorized sender",
+        }),
+        createInboundMessage({
+          id: 84,
+          guid: "acp-reflected-84",
+          text: "<thinking>echoed internal content</thinking>",
+        }),
+      ],
+      monitor: createConfiguredBindingMonitor(),
+    });
+
+    expect(ensureConfiguredBindingRouteReadyMock).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcherMock).not.toHaveBeenCalled();
+  });
 
   function expectWatchSubscription(
     client: ReturnType<typeof createIMessageWatchClient>,
@@ -845,13 +1184,13 @@ describe("iMessage monitor last-route updates", () => {
           kind: "external",
           context: {
             channel: "imessage",
-            to: "imessage:+15550001111",
+            to: "auto:+15550001111",
             accountId: "default",
           },
           route: {
             channel: "imessage",
             accountId: "default",
-            target: { to: "imessage:+15550001111" },
+            target: { to: "auto:+15550001111" },
           },
         },
       });

@@ -119,6 +119,72 @@ describe("resolveMcpTransportConfig", () => {
     );
   });
 
+  it("warns once per blocked stdio env key and server", () => {
+    const repeatedResolutions = Array.from({ length: 3 }, () =>
+      resolveMcpTransportConfig("repeat-server", {
+        command: "node",
+        env: {
+          PYTHONPATH: "/tmp/workspace",
+        },
+      }),
+    );
+    const sameKeyDifferentServer = resolveMcpTransportConfig("other-server", {
+      command: "node",
+      env: {
+        PYTHONPATH: "/tmp/other-workspace",
+      },
+    });
+    const sameServerDifferentKey = resolveMcpTransportConfig("repeat-server", {
+      command: "node",
+      env: {
+        NODE_OPTIONS: "--require=./evil.js",
+      },
+    });
+    const firstCollidingPair = resolveMcpTransportConfig("svc", {
+      command: "node",
+      env: {
+        "LD_A:LD_B": "/tmp/workspace",
+      },
+    });
+    const secondCollidingPair = resolveMcpTransportConfig("svc:LD_A", {
+      command: "node",
+      env: {
+        LD_B: "/tmp/workspace",
+      },
+    });
+
+    for (const resolved of [
+      ...repeatedResolutions,
+      sameKeyDifferentServer,
+      sameServerDifferentKey,
+      firstCollidingPair,
+      secondCollidingPair,
+    ]) {
+      expect(resolved).toEqual(expect.objectContaining({ env: {} }));
+    }
+    expect(logWarn).toHaveBeenCalledTimes(5);
+    expect(logWarn).toHaveBeenNthCalledWith(
+      1,
+      'bundle-mcp: server "repeat-server": env "PYTHONPATH" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenNthCalledWith(
+      2,
+      'bundle-mcp: server "other-server": env "PYTHONPATH" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenNthCalledWith(
+      3,
+      'bundle-mcp: server "repeat-server": env "NODE_OPTIONS" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenNthCalledWith(
+      4,
+      'bundle-mcp: server "svc": env "LD_A:LD_B" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenNthCalledWith(
+      5,
+      'bundle-mcp: server "svc:LD_A": env "LD_B" is blocked for stdio startup safety and was ignored.',
+    );
+  });
+
   it("uses an explicit empty stdio env when all configured env keys are blocked", () => {
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",

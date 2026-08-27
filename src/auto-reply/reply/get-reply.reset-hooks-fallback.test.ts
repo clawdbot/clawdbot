@@ -5,10 +5,13 @@ import {
   buildNativeResetContext,
   createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
+  registerGetReplyBaselineBypass,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
+
+registerGetReplyBaselineBypass();
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),

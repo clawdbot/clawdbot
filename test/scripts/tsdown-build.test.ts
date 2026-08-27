@@ -2,6 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -10,32 +11,72 @@ import {
   TSDOWN_UNIFIED_CONFIG_GROUP,
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
-import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   cleanTsdownOutputRoots,
   createTsdownOutputScanner,
+  describeInsufficientTsdownHeap,
   listTsdownOutputRoots,
   parseTsdownBuildArgs,
+  prepareTsdownBuildExecution,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
   pruneStaleRuntimeSymlinks,
   pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   resolveTsdownBuildInvocations,
+  resolveTsdownBuildPlan,
   resolveTsdownCleanOutputRoots,
   runTsdownBuildInvocation,
-  signalTsdownBuildProcessTree,
 } from "../../scripts/tsdown-build.mts";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const TEST_PHYSICAL_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
+// Memory detection is a process-global input. Freeze it for this suite so fake cgroup
+// fixtures prove only their declared hierarchy instead of inheriting the runner's RAM.
+vi.spyOn(os, "totalmem").mockReturnValue(TEST_PHYSICAL_MEMORY_BYTES);
+const readFileSync = fs.readFileSync.bind(fs);
+vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) =>
+  filePath === "/proc/meminfo" && options === "utf8"
+    ? "MemTotal:       16777216 kB\nMemAvailable:   16777216 kB\n"
+    : readFileSync(filePath, options),
+);
 const NO_MEMORY_LIMIT = {
+  availableMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
   cgroupMemoryLimitPaths: [],
+  constrainedMemoryBytes: 0,
+  physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
   procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
 };
 
-function expectedTaskkillPath(): string {
-  return resolveWindowsTaskkillPath();
+function createMemoryFileSystem(
+  files: ReadonlyMap<string, string | Error>,
+  onRead?: (filePath: string) => void,
+) {
+  return {
+    readFileSync(filePath: string) {
+      onRead?.(filePath);
+      const contents = files.get(filePath);
+      if (contents === undefined) {
+        throw Object.assign(new Error(`ENOENT: ${filePath}`), { code: "ENOENT" });
+      }
+      if (contents instanceof Error) {
+        throw contents;
+      }
+      return contents;
+    },
+  };
+}
+
+type TsdownInvocationParams = NonNullable<Parameters<typeof resolveTsdownBuildInvocation>[0]>;
+
+function resolveTestNodeOptions(params: TsdownInvocationParams) {
+  return resolveTsdownBuildInvocation({
+    nodeExecPath: "/usr/bin/node",
+    npmExecPath: "/tmp/pnpm.cjs",
+    env: {},
+    ...params,
+  }).options.env.NODE_OPTIONS;
 }
 
 async function expectPathMissing(targetPath: string) {
@@ -256,6 +297,74 @@ describe("resolveTsdownBuildInvocation", () => {
     }
   });
 
+  it.each(["tsdown.config.ts", "."])(
+    "keeps cleanup one-time when canonical config %s is serialized",
+    (config) => {
+      const args = ["--config", config, "--clean"];
+      const results = resolveTsdownBuildInvocations({
+        args,
+        env: {},
+        ...NO_MEMORY_LIMIT,
+      });
+
+      expect(resolveTsdownCleanOutputRoots(args)).toEqual(
+        resolveTsdownCleanOutputRoots(["--config", "tsdown.config.ts", "--clean"]),
+      );
+      expect(results.length).toBeGreaterThan(1);
+      for (const result of results) {
+        expect(result.args).toContain("--no-clean");
+        expect(result.args).not.toContain("--clean");
+      }
+    },
+  );
+
+  it("preserves explicit cleanup for a custom config-owned output", () => {
+    const [result] = resolveTsdownBuildInvocations({
+      args: ["--config", "custom.tsdown.config.ts", "--clean"],
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(result).toBeDefined();
+    expect(result?.args.indexOf("--clean")).toBeGreaterThan(
+      result?.args.indexOf("--no-clean") ?? -1,
+    );
+  });
+
+  it("cleans an explicit output directory once before serialized children", () => {
+    const args = ["--out-dir", "tmp/custom-dist", "--clean"];
+    const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+
+    expect(resolveTsdownCleanOutputRoots(args)).toEqual(["tmp/custom-dist"]);
+    expect(results.length).toBeGreaterThan(1);
+    for (const result of results) {
+      expect(result.args).toContain("--no-clean");
+      expect(result.args).not.toContain("--clean");
+    }
+  });
+
+  it("sorts explicit known filters into canonical dependency order", () => {
+    const results = resolveTsdownBuildInvocations({
+      args: [
+        "--config",
+        "tsdown.config.ts",
+        "--filter",
+        "openclaw-dts-base",
+        "--filter",
+        TSDOWN_PACKAGE_CONFIG_GROUP,
+      ],
+      env: {},
+      ...NO_MEMORY_LIMIT,
+    });
+
+    expect(
+      results.map((result) => {
+        const filterIndex = result.args.indexOf("--filter");
+        return result.args[filterIndex + 1];
+      }),
+    ).toEqual([TSDOWN_PACKAGE_CONFIG_GROUP, "openclaw-dts-base"]);
+  });
+
   it.each([
     ["long filter", ["--filter", "openclaw-unified"]],
     ["long assigned filter", ["--filter=openclaw-unified"]],
@@ -294,6 +403,318 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.args.slice(-args.length)).toEqual(args);
+  });
+
+  it.each([
+    ["long", ["--watch"]],
+    ["long path", ["--watch", "src"]],
+    ["long assigned", ["--watch=src"]],
+    ["short", ["-w"]],
+    ["short assigned", ["-w=src"]],
+  ])("keeps an explicit-config %s watch in one owning process", (_label, watchArgs) => {
+    const args = ["--config", "tsdown.config.ts", ...watchArgs];
+    const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.args.slice(-args.length)).toEqual(args);
+  });
+
+  it.each([["--watch"], ["-w"]])(
+    "rejects default %s mode before splitting long-lived watchers",
+    (watchArg) => {
+      expect(() =>
+        resolveTsdownBuildInvocations({ args: [watchArg], env: {}, ...NO_MEMORY_LIMIT }),
+      ).toThrow("watch mode requires an explicit --config/-c or --no-config selector");
+    },
+  );
+
+  it("keeps an explicit config-free positional entry in one small plan", () => {
+    const args = ["--no-config", "packages/normalization-core/src/mountinfo-path.ts"];
+    const plan = resolveTsdownBuildPlan({
+      args,
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(plan.heapShortfall).toBeNull();
+    expect(plan.invocations).toHaveLength(1);
+    expect(plan.invocations[0]?.args.slice(-args.length)).toEqual(args);
+  });
+
+  it("preserves canonical admission and serialization for config-enabled positional entries", () => {
+    const args = ["packages/normalization-core/src/mountinfo-path.ts"];
+    const plan = resolveTsdownBuildPlan({
+      args,
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(plan.heapShortfall?.fatal).toBe(true);
+    expect(plan.invocations.length).toBeGreaterThan(1);
+    for (const invocation of plan.invocations) {
+      expect(invocation.args.at(-1)).toBe(args[0]);
+    }
+  });
+
+  it("keeps an explicit config-free positional-entry watcher in one owning process", () => {
+    const args = ["--no-config", "packages/normalization-core/src/mountinfo-path.ts", "--watch"];
+    const invocations = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]?.args.slice(-args.length)).toEqual(args);
+  });
+
+  it("freezes one heap budget for admission and every full-build invocation", () => {
+    let memoryReads = 0;
+    const result = resolveTsdownBuildPlan({
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      fs: {
+        readFileSync(filePath: string) {
+          if (filePath !== "/test/memory.max") {
+            throw new Error(`unexpected path ${filePath}`);
+          }
+          memoryReads += 1;
+          return `${(memoryReads === 1 ? 5 : 4) * 1024 * 1024 * 1024}\n`;
+        },
+      },
+    });
+
+    expect(memoryReads).toBe(1);
+    expect(result.heapShortfall).toBeNull();
+    expect(result.invocations).not.toHaveLength(0);
+    for (const invocation of result.invocations) {
+      expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
+    }
+  });
+
+  it.each([
+    ["custom config", ["--config", "custom.tsdown.config.ts"]],
+    ["disabled config", ["--no-config", "src/index.ts"]],
+    ["package-only filtered build", ["--filter", TSDOWN_PACKAGE_CONFIG_GROUP]],
+  ])("does not apply full-build admission to a %s", (_label, args) => {
+    const result = resolveTsdownBuildPlan({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall).toBeNull();
+  });
+
+  it("applies admission to the direct unified declaration plan", () => {
+    const result = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts", "--filter", TSDOWN_UNIFIED_CONFIG_GROUP],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.invocations).toHaveLength(1 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(
+      resolveTsdownBuildPlan({
+        args: ["--filter", TSDOWN_UNIFIED_CONFIG_GROUP],
+        env: {},
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      }).heapShortfall?.fatal,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["long", ["--filter", TSDOWN_PACKAGE_CONFIG_GROUP, "--filter", TSDOWN_UNIFIED_CONFIG_GROUP]],
+    [
+      "long reversed",
+      ["--filter", TSDOWN_UNIFIED_CONFIG_GROUP, "--filter", TSDOWN_PACKAGE_CONFIG_GROUP],
+    ],
+    [
+      "long assigned",
+      [`--filter=${TSDOWN_PACKAGE_CONFIG_GROUP}`, `--filter=${TSDOWN_UNIFIED_CONFIG_GROUP}`],
+    ],
+    ["short", ["-F", TSDOWN_PACKAGE_CONFIG_GROUP, "-F", TSDOWN_UNIFIED_CONFIG_GROUP]],
+    ["short reversed", ["-F", TSDOWN_UNIFIED_CONFIG_GROUP, "-F", TSDOWN_PACKAGE_CONFIG_GROUP]],
+    ["short assigned", [`-F=${TSDOWN_PACKAGE_CONFIG_GROUP}`, `-F=${TSDOWN_UNIFIED_CONFIG_GROUP}`]],
+  ])("admits repeated %s filters and cleans the complete output set", (_label, args) => {
+    const result = resolveTsdownBuildPlan({
+      args,
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(
+      result.invocations
+        .slice(1)
+        .map((invocation) =>
+          invocation.args.filter(
+            (_arg, index, invocationArgs) => invocationArgs[index - 1] === "--filter",
+          ),
+        ),
+    ).toEqual([[TSDOWN_PACKAGE_CONFIG_GROUP], [TSDOWN_UNIFIED_CONFIG_GROUP]]);
+    expect(new Set(resolveTsdownCleanOutputRoots(args))).toEqual(new Set(listTsdownOutputRoots()));
+  });
+
+  it.each([
+    ["explicit", ["--config", "tsdown.config.ts"]],
+    ["default", []],
+  ])("preserves tsdown OR semantics for %s config with an unmatched filter", (_label, config) => {
+    const args = [...config, "--filter", TSDOWN_PACKAGE_CONFIG_GROUP, "--filter", "missing-group"];
+
+    const results = resolveTsdownBuildInvocations({ args, env: {}, ...NO_MEMORY_LIMIT });
+
+    expect(results).toHaveLength(config.length === 0 ? 2 : 1);
+    expect(results.at(-1)?.args.slice(-args.length)).toEqual(args);
+  });
+
+  it("applies admission when tsdown selects the root config by cwd", () => {
+    const args = ["--config", "tsdown.config.ts", "--filter", "."];
+    const result = resolveTsdownBuildPlan({
+      args,
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(
+      result.invocations.map((invocation) => {
+        const filterIndex = invocation.args.indexOf("--filter");
+        return invocation.args[filterIndex + 1];
+      }),
+    ).toEqual([
+      TSDOWN_PACKAGE_CONFIG_GROUP,
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    ]);
+    expect(new Set(resolveTsdownCleanOutputRoots(args))).toEqual(
+      new Set(listTsdownOutputRoots().filter((root) => root !== "packages/ai/dist")),
+    );
+    expect(
+      new Set(resolveTsdownCleanOutputRoots([...args, "--filter", TSDOWN_PACKAGE_CONFIG_GROUP])),
+    ).toEqual(new Set(listTsdownOutputRoots().filter((root) => root !== "packages/ai/dist")));
+
+    const defaultConfigPlan = resolveTsdownBuildPlan({
+      args: ["--filter=."],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+    expect(defaultConfigPlan.heapShortfall?.fatal).toBe(true);
+    expect(defaultConfigPlan.invocations).toHaveLength(1 + result.invocations.length);
+    expect(
+      defaultConfigPlan.invocations.slice(1).map((invocation) => {
+        return invocation.args.filter(
+          (_arg, index, invocationArgs) => invocationArgs[index - 1] === "--filter",
+        );
+      }),
+    ).toEqual([
+      [TSDOWN_PACKAGE_CONFIG_GROUP],
+      [TSDOWN_UNIFIED_CONFIG_GROUP],
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((group) => [group]),
+    ]);
+    expect(
+      new Set(
+        resolveTsdownCleanOutputRoots(["--filter=.", `--filter=${TSDOWN_PACKAGE_CONFIG_GROUP}`]),
+      ),
+    ).toEqual(new Set(listTsdownOutputRoots()));
+  });
+
+  it.each([
+    ["--config", "tsdown.config.ts"],
+    ["--config=tsdown.config.ts"],
+    ["-c", "tsdown.config.ts"],
+    ["-c=tsdown.config.ts"],
+    ["--config", "."],
+    ["--config=."],
+    ["-c", "."],
+    ["-c=."],
+  ])("applies admission to canonical config form %j", (...args) => {
+    expect(
+      resolveTsdownBuildPlan({
+        args,
+        env: {},
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      }).heapShortfall?.fatal,
+    ).toBe(true);
+  });
+
+  it("applies admission to the unfiltered canonical config but not a package-only selector", () => {
+    const full = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts"],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+    const packages = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts", "--filter", TSDOWN_PACKAGE_CONFIG_GROUP],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(full.heapShortfall?.fatal).toBe(true);
+    expect(full.invocations).toHaveLength(2 + TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.length);
+    expect(
+      full.invocations.map((invocation) => {
+        const filterIndex = invocation.args.indexOf("--filter");
+        return invocation.args[filterIndex + 1];
+      }),
+    ).toEqual([
+      TSDOWN_PACKAGE_CONFIG_GROUP,
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    ]);
+    expect(packages.heapShortfall).toBeNull();
+    expect(packages.invocations).toHaveLength(1);
+  });
+
+  it("keeps a full-build dot selector serialized when combined with an unknown filter", () => {
+    const result = resolveTsdownBuildPlan({
+      args: ["--config", "tsdown.config.ts", "--filter", ".", "--filter", "missing"],
+      env: {},
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(
+      result.invocations.map((invocation) => {
+        const filterIndex = invocation.args.indexOf("--filter");
+        return invocation.args[filterIndex + 1];
+      }),
+    ).toEqual([
+      TSDOWN_PACKAGE_CONFIG_GROUP,
+      TSDOWN_UNIFIED_CONFIG_GROUP,
+      ...TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
+    ]);
+  });
+
+  it.each([
+    ["Docker default", [], { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }],
+    ["CLI override", ["--no-dts"], {}],
+  ])("applies the unified-runtime threshold to a %s plan", (_label, args, env) => {
+    const result = resolveTsdownBuildPlan({
+      args,
+      platform: "linux",
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env,
+      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1280);
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.invocations).toHaveLength(2);
+  });
+
+  it("restores declaration-build admission when --dts overrides the Docker default", () => {
+    const result = resolveTsdownBuildPlan({
+      args: ["--dts"],
+      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
+      cgroupMemoryLimitBytes: 2 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.heapShortfall?.fatal).toBe(true);
   });
 
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
@@ -384,47 +805,885 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("keeps default tsdown heap below the container memory limit", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024 })).toBe(
+      "--max-old-space-size=6400",
+    );
+  });
+
+  it("deducts memory already used by a shared limiting cgroup", () => {
+    const cgroupFiles = new Map([
+      ["/test/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+      ["/test/memory.current", `${1664 * 1024 * 1024}\n`],
+      [
+        "/test/memory.stat",
+        `anon ${512 * 1024 * 1024}\nshmem ${256 * 1024 * 1024}\nfile ${768 * 1024 * 1024}\ninactive_file ${768 * 1024 * 1024}\nkernel ${128 * 1024 * 1024}\n`,
+      ],
+    ]);
+    const fsFixture = createMemoryFileSystem(cgroupFiles);
+    const result = resolveTsdownBuildPlan({
       env: {},
-      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      processResidentMemoryBytes: 64 * 1024 * 1024,
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      fs: fsFixture,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    // Credit 768 MiB of inactive file pages and this wrapper's 64 MiB RSS. Anonymous memory,
+    // shmem, and the remaining 128 MiB kernel charge all compete with the child heap.
+    expect(result.maxOldSpaceMb).toBe(3520);
+    expect(result.heapShortfall?.fatal).toBe(true);
+
+    cgroupFiles.set("/test/memory.current", `${832 * 1024 * 1024}\n`);
+    cgroupFiles.set(
+      "/test/memory.stat",
+      `anon ${64 * 1024 * 1024}\nshmem 0\nfile ${768 * 1024 * 1024}\ninactive_file ${768 * 1024 * 1024}\nkernel 0\n`,
+    );
+    const isolated = resolveTsdownBuildPlan({
+      env: {},
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      processResidentMemoryBytes: 64 * 1024 * 1024,
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      fs: fsFixture,
+    });
+    expect(isolated.maxOldSpaceMb).toBe(4352);
+    expect(isolated.heapShortfall).toBeNull();
+  });
+
+  it("refuses to start when the host budget cannot fit the build", () => {
+    // 1500MiB minus the 768MiB headroom leaves 732MB, well under what the packages pass needs.
+    const shortfall = describeInsufficientTsdownHeap({
+      env: {},
+      cgroupMemoryLimitBytes: 1500 * 1024 * 1024,
+    });
+
+    expect(shortfall?.fatal).toBe(true);
+    expect(shortfall?.message).toContain("resolved OpenClaw build heap is 732MB");
+    expect(shortfall?.message).toContain("OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
+  });
+
+  it("refuses a host whose slice cannot hold the whole-build peak", () => {
+    // A 4GiB slice resolves a 3328MB heap and clears the early invocations, then dies partway
+    // through the third: the binding constraint is the 4730MiB whole-build peak, not one pass.
+    expect(
+      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 })
+        ?.fatal,
+    ).toBe(true);
+  });
+
+  it("points Docker refusals at the public build heap override", () => {
+    const shortfall = describeInsufficientTsdownHeap({
+      env: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "" },
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(shortfall?.fatal).toBe(true);
+    expect(shortfall?.message).toContain("set OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
+    expect(shortfall?.message).not.toContain("set OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB=<MB>");
+  });
+
+  it("admits the smallest slice measured to complete a full build", () => {
+    expect(
+      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 5 * 1024 * 1024 * 1024 }),
+    ).toBeNull();
+  });
+
+  it("uses an explicit heap override as the operator's opt-in for the complete plan", () => {
+    const plan = resolveTsdownBuildPlan({
+      env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4096" },
+      cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(plan.heapShortfall?.fatal).toBe(false);
+    expect(plan.heapShortfall?.message).toContain(
+      "Continuing because OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB explicitly requests 4096MB",
+    );
+    for (const invocation of plan.invocations) {
+      expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4096");
+    }
+  });
+
+  it("refuses a fatal plan before cleanup and lets an explicit override proceed", () => {
+    const fatalCleanup = vi.fn();
+    const fatalReport = vi.fn();
+    const fatalPlan = prepareTsdownBuildExecution(
+      { env: {}, cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024 },
+      { cleanup: fatalCleanup, reportShortfall: fatalReport },
+    );
+
+    expect(fatalPlan).toBeNull();
+    expect(fatalReport).toHaveBeenCalledWith(expect.objectContaining({ fatal: true }));
+    expect(fatalCleanup).not.toHaveBeenCalled();
+
+    const optedInCleanup = vi.fn();
+    const optedInPlan = prepareTsdownBuildExecution(
+      {
+        env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4096" },
+        cgroupMemoryLimitBytes: 4 * 1024 * 1024 * 1024,
+      },
+      { cleanup: optedInCleanup },
+    );
+
+    expect(optedInPlan).not.toBeNull();
+    expect(optedInCleanup).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["repeated named configs", ["--config", "custom.ts", "-c=tsdown.config.ts"]],
+    ["config then no-config", ["--config", "tsdown.config.ts", "--no-config", "src/index.ts"]],
+    ["no-config then config", ["--no-config", "src/index.ts", "-c=tsdown.config.ts"]],
+  ])("rejects %s before cleanup", (_label, args) => {
+    const cleanup = vi.fn();
+
+    expect(() =>
+      prepareTsdownBuildExecution(
+        {
+          args,
+          env: {},
+          ...NO_MEMORY_LIMIT,
+        },
+        { cleanup },
+      ),
+    ).toThrow("tsdown build accepts only one --config/-c/--no-config selector");
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["missing output directory", ["--out-dir", "--watch"]],
+    ["empty assigned output directory", ["--out-dir="]],
+    ["repeated output directories", ["--out-dir", "first", "-d=second"]],
+  ])("rejects %s before cleanup", (_label, args) => {
+    const cleanup = vi.fn();
+
+    expect(() =>
+      prepareTsdownBuildExecution(
+        {
+          args,
+          env: {},
+          ...NO_MEMORY_LIMIT,
+        },
+        { cleanup },
+      ),
+    ).toThrow(/tsdown build .* --out-dir\/-d value/u);
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["bare long filter", ["--filter"]],
+    ["bare short filter", ["-F"]],
+    ["empty assigned filter", ["--filter="]],
+    ["missing repeated filter", ["--filter", "openclaw-packages", "-F", "--watch"]],
+  ])("rejects %s before cleanup", (_label, args) => {
+    const cleanup = vi.fn();
+
+    expect(() =>
+      prepareTsdownBuildExecution(
+        {
+          args,
+          env: {},
+          ...NO_MEMORY_LIMIT,
+        },
+        { cleanup },
+      ),
+    ).toThrow("tsdown build requires one concrete --filter/-F value");
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("stays silent when the host budget fits the build", () => {
+    expect(
+      describeInsufficientTsdownHeap({ env: {}, cgroupMemoryLimitBytes: 8 * 1024 * 1024 * 1024 }),
+    ).toBeNull();
+  });
+
+  it("never sizes the heap above a cgroup limit smaller than the old floor", () => {
+    // A floor applied on top of a real limit yields a heap the cgroup cannot honour, so the
+    // build is OOM-killed instead of merely running smaller.
+    // 1500 MiB budget minus the 768 MiB headroom, not the former 2048 MiB floor.
+    expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes: 1500 * 1024 * 1024 })).toBe(
+      "--max-old-space-size=732",
+    );
+  });
+
+  it.each([4096, 1024 * 1024 - 1])(
+    "keeps a %i-byte cgroup limit bounded instead of treating it as unbounded",
+    (cgroupMemoryLimitBytes) => {
+      expect(resolveTestNodeOptions({ cgroupMemoryLimitBytes })).toBe("--max-old-space-size=1");
+    },
+  );
+
+  it("keeps a parsed zero-byte cgroup limit bounded", () => {
+    expect(
+      resolveTestNodeOptions({
+        cgroupMemoryLimitPaths: ["/test/memory.max"],
+        fs: createMemoryFileSystem(new Map([["/test/memory.max", "0\n"]])),
+      }),
+    ).toBe("--max-old-space-size=1");
+  });
+
+  it("uses Node's constrained-memory result as a canonical cgroup candidate", () => {
+    expect(
+      resolveTestNodeOptions({
+        constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
+        cgroupMemoryLimitPaths: [],
+      }),
+    ).toBe("--max-old-space-size=4352");
+  });
+
+  it("uses physical memory when cgroups and procfs are unavailable", () => {
+    const result = resolveTsdownBuildPlan({
+      platform: "darwin",
+      env: {},
+      constrainedMemoryBytes: 0,
+      cgroupMemoryLimitPaths: [],
+      availableMemoryBytes: 4 * 1024 * 1024 * 1024,
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(3328);
+    expect(result.heapShortfall?.fatal).toBe(true);
+  });
+
+  it("does not gate macOS builds on Node's instantaneous free-page count", () => {
+    const result = resolveTsdownBuildPlan({
+      platform: "darwin",
+      env: {},
+      cgroupMemoryLimitPaths: [],
+      constrainedMemoryBytes: 0,
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(12288);
+    expect(result.heapShortfall).toBeNull();
+  });
+
+  it("caps a non-cgrouped build by currently available host memory", () => {
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      cgroupMemoryLimitPaths: [],
+      constrainedMemoryBytes: 0,
+      procMemTotalBytes: 16 * 1024 * 1024 * 1024,
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      availableMemoryBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(3328);
+    expect(result.heapShortfall?.fatal).toBe(true);
+  });
+
+  it("caps a finite cgroup by host MemAvailable and preserves zero", () => {
+    const base = {
+      env: {},
+      cgroupMemoryLimitBytes: 8 * 1024 * 1024 * 1024,
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      platform: "linux",
+      procMeminfoPath: "/test/meminfo",
+      fs: createMemoryFileSystem(
+        new Map([["/test/meminfo", "MemTotal:       16777216 kB\nMemAvailable:    4194304 kB\n"]]),
+      ),
+    };
+
+    expect(resolveTsdownBuildPlan(base).maxOldSpaceMb).toBe(3328);
+    expect(resolveTsdownBuildPlan({ ...base, availableMemoryBytes: 0 }).maxOldSpaceMb).toBe(1);
+  });
+
+  it("caps an oversized cgroup limit by physical memory", () => {
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      cgroupMemoryLimitBytes: 64 * 1024 * 1024 * 1024,
+      procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+      physicalMemoryBytes: 4 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(3328);
+    expect(result.heapShortfall?.fatal).toBe(true);
+  });
+
+  it("caps the tsdown heap using the process's own cgroup slice budget", () => {
+    const slicePath = "/user.slice/user-999.slice/user@999.service";
+    // Only the ancestor slice carries a budget; the leaf unit and the v2 root
+    // are unlimited, which is what a systemd-managed build actually looks like.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::${slicePath}/app.slice/openclaw-main-update.service\n`],
+      [`/sys/fs/cgroup${slicePath}/memory.high`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    // 5 GiB slice budget minus the 768 MiB build headroom.
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("uses the tightest finite cgroup ancestor when the leaf is also bounded", () => {
+    const leafPath = "/user.slice/openclaw.service";
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::${leafPath}\n`],
+      [`/sys/fs/cgroup${leafPath}/memory.max`, `${6 * 1024 * 1024 * 1024}\n`],
+      ["/sys/fs/cgroup/user.slice/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("uses a resolved v1 memory limit when a hybrid host's v2 view is inherited", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    // A legacy/hybrid host publishes the budget through the v1 memory controller, and the
+    // unified record carries no controllers, so only the v1 walk can find this limit.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::/\n7:memory:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /.. /sys/fs/cgroup/unified rw,nosuid - cgroup2 cgroup2 rw\n" +
+          "31 25 0:27 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.use_hierarchy`, "1\n"],
+      ["/sys/fs/cgroup/memory/user.slice/memory.use_hierarchy", "0\n"],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.limit_in_bytes`, `${6 * 1024 * 1024 * 1024}\n`],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.usage_in_bytes`, `${1280 * 1024 * 1024}\n`],
+      [
+        `/sys/fs/cgroup/memory${slicePath}/memory.stat`,
+        `rss ${64 * 1024 * 1024}\ntotal_rss ${512 * 1024 * 1024}\ncache ${768 * 1024 * 1024}\ntotal_inactive_file ${768 * 1024 * 1024}\n`,
+      ],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      processResidentMemoryBytes: 64 * 1024 * 1024,
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=4928");
+  });
+
+  it("uses host memory when hybrid v1 memory is visibly unlimited and v2 is inherited", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::/\n7:memory:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /.. /sys/fs/cgroup/unified rw,nosuid - cgroup2 cgroup2 rw\n" +
+          "31 25 0:27 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.use_hierarchy`, "1\n"],
+      ["/sys/fs/cgroup/memory/user.slice/memory.use_hierarchy", "0\n"],
+      [`/sys/fs/cgroup/memory${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      availableMemoryBytes: 16 * 1024 * 1024 * 1024,
+      physicalMemoryBytes: 16 * 1024 * 1024 * 1024,
+      procMemTotalBytes: 16 * 1024 * 1024 * 1024,
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=12288");
+  });
+
+  it("refuses a default heap when an inherited namespace mount hides the process limit", () => {
+    // cgroup_namespaces(7): an inherited mount rooted at "/.." exposes a parent while the
+    // process record is relative to a hidden child. The parent cannot prove the child budget.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/\n7:memory:/hidden.slice\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /.. /sys/fs/cgroup/unified rw,nosuid - cgroup2 cgroup2 rw\n" +
+          "31 25 0:27 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      ["/sys/fs/cgroup/memory.max", "max\n"],
+      ["/proc/meminfo", `MemTotal:       ${16 * 1024 * 1024} kB\n`],
+    ]);
+    const fsFixture = createMemoryFileSystem(cgroupFiles);
+
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      fs: fsFixture,
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1);
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.heapShortfall?.message).toContain(
+      "process memory limit is not visible through this cgroup mount namespace",
+    );
+    expect(result.heapShortfall?.message).toContain(
+      "run the build where the process cgroup limit is visible",
+    );
+
+    const cleanup = vi.fn();
+    const partialPlan = prepareTsdownBuildExecution(
+      { args: ["--config", "custom.ts"], env: {}, fs: fsFixture },
+      { cleanup },
+    );
+    expect(partialPlan).toBeNull();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    const optedIn = resolveTsdownBuildPlan({
+      env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4096" },
+      fs: fsFixture,
+    });
+    expect(optedIn.maxOldSpaceMb).toBe(4096);
+    expect(optedIn.heapShortfall?.fatal).toBe(false);
+  });
+
+  it("refuses cleanup when a cgroup record has no readable controller mount", () => {
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/hidden.slice/openclaw.service\n"],
+      ["/proc/self/mountinfo", ""],
+      ["/proc/meminfo", `MemTotal:       ${16 * 1024 * 1024} kB\n`],
+    ]);
+    const cleanup = vi.fn();
+
+    const plan = prepareTsdownBuildExecution(
+      {
+        args: ["--config", "custom.ts"],
+        env: {},
+        fs: createMemoryFileSystem(cgroupFiles),
+      },
+      { cleanup },
+    );
+
+    expect(plan).toBeNull();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("refuses cleanup when Linux process cgroup membership is unreadable", () => {
+    const cgroupFiles = new Map([
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      [
+        "/proc/meminfo",
+        `MemTotal:       ${16 * 1024 * 1024} kB\nMemAvailable:   ${16 * 1024 * 1024} kB\n`,
+      ],
+      ["/sys/fs/cgroup/memory.max", "max\n"],
+      ["/sys/fs/cgroup/memory.high", "max\n"],
+    ]);
+    const cleanup = vi.fn();
+
+    const plan = prepareTsdownBuildExecution(
+      {
+        args: ["--config", "custom.ts"],
+        env: {},
+        platform: "linux",
+        fs: createMemoryFileSystem(cgroupFiles),
+      },
+      { cleanup },
+    );
+
+    expect(plan).toBeNull();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("uses host memory at an observed unconstrained cgroup-v2 root", () => {
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/\n"],
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      [
+        "/proc/meminfo",
+        `MemTotal:       ${16 * 1024 * 1024} kB\nMemAvailable:   ${16 * 1024 * 1024} kB\n`,
+      ],
+    ]);
+
+    const plan = resolveTsdownBuildPlan({
+      env: {},
+      fs: createMemoryFileSystem(cgroupFiles),
+      physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
+    });
+
+    expect(plan.maxOldSpaceMb).toBe(12288);
+    expect(plan.heapShortfall).toBeNull();
+  });
+
+  it("uses host memory when an observed v2 hierarchy disables the memory controller", () => {
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/user.slice/openclaw.service\n"],
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      [
+        "/proc/meminfo",
+        `MemTotal:       ${16 * 1024 * 1024} kB\nMemAvailable:   ${16 * 1024 * 1024} kB\n`,
+      ],
+      ["/sys/fs/cgroup/user.slice/openclaw.service/cgroup.controllers", "cpu io\n"],
+    ]);
+
+    const plan = resolveTsdownBuildPlan({
+      env: {},
+      fs: createMemoryFileSystem(cgroupFiles),
+      physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
+    });
+
+    expect(plan.maxOldSpaceMb).toBe(12288);
+    expect(plan.heapShortfall).toBeNull();
+  });
+
+  it("does not treat an unreadable v2 limit as a disabled memory controller", () => {
+    const cgroupFiles = new Map<string, string | Error>([
+      ["/proc/self/cgroup", "0::/user.slice/openclaw.service\n"],
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      ["/sys/fs/cgroup/user.slice/openclaw.service/cgroup.controllers", "cpu io\n"],
+      [
+        "/sys/fs/cgroup/user.slice/openclaw.service/memory.max",
+        Object.assign(new Error("EACCES: memory.max"), { code: "EACCES" }),
+      ],
+    ]);
+
+    const plan = resolveTsdownBuildPlan({
+      env: {},
+      fs: createMemoryFileSystem(cgroupFiles),
+      physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
+    });
+
+    expect(plan.maxOldSpaceMb).toBe(1);
+    expect(plan.heapShortfall?.fatal).toBe(true);
+  });
+
+  it("fails closed when one applicable cgroup limit is readable and another is not", () => {
+    const cgroupDir = "/sys/fs/cgroup/openclaw.service";
+    const memoryMaxPath = `${cgroupDir}/memory.max`;
+    const memoryHighPath = `${cgroupDir}/memory.high`;
+    const cgroupFiles = new Map<string, string | Error>([
+      [memoryMaxPath, `${8 * 1024 * 1024 * 1024}\n`],
+      [memoryHighPath, Object.assign(new Error(`EACCES: ${memoryHighPath}`), { code: "EACCES" })],
+    ]);
+
+    const plan = resolveTsdownBuildPlan({
+      env: {},
+      cgroupMemoryLimitPaths: [memoryMaxPath, memoryHighPath],
+      fs: createMemoryFileSystem(cgroupFiles),
+      physicalMemoryBytes: TEST_PHYSICAL_MEMORY_BYTES,
+    });
+
+    expect(plan.maxOldSpaceMb).toBe(1);
+    expect(plan.heapShortfall?.fatal).toBe(true);
+  });
+
+  it("refuses a default heap when a v1 memory record has no matching visible mount", () => {
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "7:memory:/hidden.slice/openclaw.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "31 25 0:27 /other.slice /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      ["/proc/meminfo", `MemTotal:       ${16 * 1024 * 1024} kB\n`],
+    ]);
+
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1);
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.heapShortfall?.message).toContain(
+      "process memory limit is not visible through this cgroup mount namespace",
+    );
+  });
+
+  it("rejects parent segments in a cgroup record instead of escaping the mount", () => {
+    const pathsRead: string[] = [];
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/../peer.slice\n"],
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n"],
+      ["/proc/meminfo", `MemTotal:       ${7 * 1024 * 1024} kB\n`],
+    ]);
+
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      constrainedMemoryBytes: 1024 * 1024 * 1024,
+      fs: createMemoryFileSystem(cgroupFiles, (filePath) => pathsRead.push(filePath)),
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1);
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.heapShortfall?.message).toContain(
+      "process memory limit is not visible through this cgroup mount namespace",
+    );
+    expect(pathsRead.some((filePath) => filePath.includes("/sys/fs/peer.slice"))).toBe(false);
+  });
+
+  it("fails closed on an unrelated mounted subtree for a namespace-root record", () => {
+    // A "/" record plus a mount rooted elsewhere is not a kernel-proven match, so the
+    // limit behind that subtree may belong to an unrelated cgroup while this process's
+    // real limit stays hidden. Neither that limit nor host memory is safe for admission.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/2f1a9c /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1);
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.heapShortfall?.message).toContain(
+      "process memory limit is not visible through this cgroup mount namespace",
+    );
+  });
+
+  it("caps the tsdown heap when the cgroup mount point is octal-escaped in mountinfo", () => {
+    const slicePath = "/user.slice/user-999.slice/user@999.service";
+    // The kernel escapes a space in the mount point as \040. Matching the field
+    // verbatim misses this mount, and heap sizing silently falls back to host memory.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `0::${slicePath}/app.slice/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup\\040dir rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      [`/sys/fs/cgroup dir${slicePath}/memory.high`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    // 5 GiB slice budget minus the 768 MiB build headroom.
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("translates an octal-escaped cgroup mount root before reading the limit", () => {
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/user.slice/user 999.slice/openclaw.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /user.slice/user\\040999.slice /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/openclaw.service/memory.high", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("caps the tsdown heap when v1 controllers are co-mounted at the cgroup root", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    // Co-mounted v1 puts memory.limit_in_bytes under the slice directly, with no
+    // per-controller directory, so the mount point has to come from mountinfo.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `2:memory,cpu,cpuacct:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory,cpu,cpuacct\n",
+      ],
+      [`/sys/fs/cgroup${slicePath}/memory.use_hierarchy`, "1\n"],
+      ["/sys/fs/cgroup/user.slice/memory.use_hierarchy", "0\n"],
+      [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("ignores a co-mounted cgroup-v1 soft limit when the hard limit is unbounded", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    const cgroupFiles = new Map([
+      [`/proc/self/cgroup`, `2:memory,cpu:${slicePath}/openclaw-main-update.service\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory,cpu\n",
+      ],
+      [`/sys/fs/cgroup${slicePath}/memory.use_hierarchy`, "1\n"],
+      ["/sys/fs/cgroup/user.slice/memory.use_hierarchy", "0\n"],
+      [`/sys/fs/cgroup${slicePath}/memory.soft_limit_in_bytes`, `${5 * 1024 * 1024 * 1024}\n`],
+      [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      // Node/libuv reports the v1 soft limit as constrained memory. The owner walk must
+      // discard that advisory candidate and use only the hard limit plus host memory.
+      constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
+      procMemTotalBytes: 16 * 1024 * 1024 * 1024,
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=12288");
+  });
+
+  it("preserves process rlimits while ignoring a cgroup-v1 soft limit", () => {
+    const slicePath = "/user.slice/user-999.slice";
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `2:memory:${slicePath}/openclaw-main-update.service\n`],
+      ["/proc/self/mountinfo", "30 25 0:26 / /sys/fs/cgroup rw,nosuid - cgroup cgroup rw,memory\n"],
+      [
+        "/proc/self/limits",
+        `Max data size            ${4 * 1024 * 1024 * 1024}        unlimited            bytes\nMax address space        ${6 * 1024 * 1024 * 1024}        unlimited            bytes\n`,
+      ],
+      [`/sys/fs/cgroup${slicePath}/memory.use_hierarchy`, "1\n"],
+      ["/sys/fs/cgroup/user.slice/memory.use_hierarchy", "0\n"],
+      [`/sys/fs/cgroup${slicePath}/memory.limit_in_bytes`, "9223372036854771712\n"],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      platform: "linux",
+      constrainedMemoryBytes: 5 * 1024 * 1024 * 1024,
+      procMemTotalBytes: 16 * 1024 * 1024 * 1024,
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=3328");
+  });
+
+  it("ignores a cgroup-v1 parent limit when hierarchy accounting is disabled", () => {
+    const leafPath = "/parent/leaf";
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", `2:memory:${leafPath}\n`],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      [`/sys/fs/cgroup/memory${leafPath}/memory.limit_in_bytes`, `${8 * 1024 * 1024 * 1024}\n`],
+      ["/sys/fs/cgroup/memory/parent/memory.use_hierarchy", "0\n"],
+      ["/sys/fs/cgroup/memory/parent/memory.limit_in_bytes", `${4 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=7424");
+  });
+
+  it("refuses cleanup when cgroup-v1 hierarchy metadata is unreadable", () => {
+    const cgroupFiles = new Map<string, string | Error>([
+      ["/proc/self/cgroup", "7:memory:/parent/leaf\n"],
+      [
+        "/proc/self/mountinfo",
+        "31 25 0:27 / /sys/fs/cgroup/memory rw,nosuid - cgroup cgroup rw,memory\n",
+      ],
+      ["/sys/fs/cgroup/memory/parent/leaf/memory.limit_in_bytes", "9223372036854771712\n"],
+      ["/sys/fs/cgroup/memory/memory.use_hierarchy", "0\n"],
+      [
+        "/sys/fs/cgroup/memory/parent/memory.use_hierarchy",
+        Object.assign(new Error("EACCES: memory.use_hierarchy"), { code: "EACCES" }),
+      ],
+      [
+        "/proc/meminfo",
+        `MemTotal:       ${16 * 1024 * 1024} kB\nMemAvailable:   ${16 * 1024 * 1024} kB\n`,
+      ],
+    ]);
+    const cleanup = vi.fn();
+
+    const plan = prepareTsdownBuildExecution(
+      {
+        args: ["--config", "custom.ts"],
+        env: {},
+        platform: "linux",
+        fs: createMemoryFileSystem(cgroupFiles),
+      },
+      { cleanup },
+    );
+
+    expect(plan).toBeNull();
+    expect(cleanup).not.toHaveBeenCalled();
+  });
+
+  it("caps the tsdown heap when the cgroup mount exposes only a subtree", () => {
+    // A container mount roots cgroupfs at the container's own cgroup, so /proc/self/cgroup
+    // records stay host-absolute and only translate to a visible path via the mount root.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/docker/abc123/openclaw-main-update.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/abc123 /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/openclaw-main-update.service/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("keeps a representable cgroup mount when a later view cannot represent it", () => {
+    // Several mounts can expose one hierarchy; only the first covers this process here, so
+    // retaining just the last-seen view would lose the budget entirely.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/docker/abc123/openclaw-main-update.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/abc123 /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n" +
+          "31 25 0:26 /other/branch /mnt/peer-cgroup rw - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/openclaw-main-update.service/memory.max", `${5 * 1024 * 1024 * 1024}\n`],
+      ["/test/meminfo", "MemTotal: 7340032 kB\n"],
+    ]);
+
+    const nodeOptions = resolveTestNodeOptions({
+      procMeminfoPath: "/test/meminfo",
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(nodeOptions).toBe("--max-old-space-size=4352");
+  });
+
+  it("fails closed on a mount that cannot represent this process's cgroup", () => {
+    // An inherited namespace can leave a mount whose subtree holds someone else's cgroup.
+    // The process's real limit is hidden, so neither that subtree nor host RAM is authoritative.
+    const cgroupFiles = new Map([
+      ["/proc/self/cgroup", "0::/other/branch/openclaw-main-update.service\n"],
+      [
+        "/proc/self/mountinfo",
+        "30 25 0:26 /docker/abc123 /sys/fs/cgroup rw,nosuid - cgroup2 cgroup2 rw\n",
+      ],
+      ["/sys/fs/cgroup/memory.max", `${1024 * 1024 * 1024}\n`],
+      ["/test/meminfo", "MemTotal: 7340032 kB\n"],
+    ]);
+
+    const result = resolveTsdownBuildPlan({
+      env: {},
+      procMeminfoPath: "/test/meminfo",
+      fs: createMemoryFileSystem(cgroupFiles),
+    });
+
+    expect(result.maxOldSpaceMb).toBe(1);
+    expect(result.heapShortfall?.fatal).toBe(true);
+    expect(result.heapShortfall?.message).toContain(
+      "process memory limit is not visible through this cgroup mount namespace",
+    );
   });
 
   it("clamps explicit tsdown heap settings to the container memory limit", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=12288" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
+    expect(nodeOptions).toBe("--trace-warnings --max-old-space-size=6400");
   });
 
   it("honors OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB over platform and memory defaults", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "3072" },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=3072");
+    expect(nodeOptions).toBe("--max-old-space-size=3072");
   });
 
   it("keeps memory detection when OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB is blank", () => {
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
+    const nodeOptions = resolveTestNodeOptions({
       env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "  " },
       cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    expect(nodeOptions).toBe("--max-old-space-size=6400");
   });
 
   it("uses OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB to normalize inherited NODE_OPTIONS", () => {
@@ -456,27 +1715,18 @@ describe("resolveTsdownBuildInvocation", () => {
   });
 
   it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
-    const fsMock = {
-      readFileSync: vi.fn((filePath: string) => {
-        if (filePath === "/test/memory.max") {
-          return "max\n";
-        }
-        if (filePath === "/test/meminfo") {
-          return "MemTotal: 7340032 kB\n";
-        }
-        throw new Error(`unexpected path ${filePath}`);
-      }),
-    };
-    const result = resolveTsdownBuildInvocation({
-      nodeExecPath: "/usr/bin/node",
-      npmExecPath: "/tmp/pnpm.cjs",
-      env: {},
-      fs: fsMock,
+    const nodeOptions = resolveTestNodeOptions({
+      fs: createMemoryFileSystem(
+        new Map([
+          ["/test/memory.max", "max\n"],
+          ["/test/meminfo", "MemTotal: 7340032 kB\n"],
+        ]),
+      ),
       cgroupMemoryLimitPaths: ["/test/memory.max"],
       procMeminfoPath: "/test/meminfo",
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+    expect(nodeOptions).toBe("--max-old-space-size=6400");
   });
 
   it("can run tsdown without invoking pnpm", () => {
@@ -663,6 +1913,63 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(fsPromises.readFile(coreFile, "utf8")).resolves.toBe("keep\n");
   });
 
+  it("cleans an absolute explicit output directory without rebasing it under cwd", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-absolute-clean-");
+    const outputDir = path.join(rootDir, "custom-dist");
+    const staleFile = path.join(outputDir, "stale.js");
+    await fsPromises.mkdir(outputDir, { recursive: true });
+    await fsPromises.writeFile(staleFile, "stale\n");
+
+    cleanTsdownOutputRoots({ cwd: path.join(rootDir, "checkout"), roots: [outputDir] });
+
+    await expectPathMissing(outputDir);
+  });
+
+  it("refuses to clean the working directory and leaves it intact", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-cwd-clean-");
+    const keepFile = path.join(rootDir, "keep.js");
+    await fsPromises.writeFile(keepFile, "keep\n");
+
+    expect(() => cleanTsdownOutputRoots({ cwd: rootDir, roots: ["."] })).toThrow(
+      "Cannot clean the current working directory",
+    );
+
+    await expect(fsPromises.readFile(keepFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("refuses to clean a working-directory ancestor and leaves it intact", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-ancestor-clean-");
+    const checkoutDir = path.join(rootDir, "checkout");
+    const keepFile = path.join(rootDir, "keep.js");
+    await fsPromises.mkdir(checkoutDir);
+    await fsPromises.writeFile(keepFile, "keep\n");
+
+    expect(() => cleanTsdownOutputRoots({ cwd: checkoutDir, roots: [".."] })).toThrow(
+      "Cannot clean the current working directory or one of its ancestors",
+    );
+
+    await expect(fsPromises.readFile(keepFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it.each([
+    ["drive", "D:\\"],
+    ["UNC share", "\\\\server\\share\\"],
+  ])("refuses to clean a Windows %s root", (_label, outputRoot) => {
+    const rmSync = vi.spyOn(fs, "rmSync");
+    try {
+      expect(() =>
+        cleanTsdownOutputRoots({
+          cwd: "C:\\openclaw",
+          pathImpl: path.win32,
+          roots: [outputRoot],
+        }),
+      ).toThrow("Cannot clean a filesystem root");
+      expect(rmSync).not.toHaveBeenCalled();
+    } finally {
+      rmSync.mockRestore();
+    }
+  });
+
   it("removes CLI startup metadata during default tsdown clean", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-metadata-default-");
     const metadataFile = path.join(rootDir, "dist", "cli-startup-metadata.json");
@@ -775,6 +2082,23 @@ describe("resolveTsdownBuildInvocation", () => {
 
     expect(fs.readlinkSync(distLink)).toBe(targetDir);
     await expect(fsPromises.readFile(targetFile, "utf8")).resolves.toBe("stale\n");
+  });
+
+  it("refuses an output root behind an intermediate symlink", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-clean-parent-symlink-");
+    const checkoutDir = path.join(rootDir, "checkout");
+    const targetDir = path.join(rootDir, "external", "dist");
+    const targetFile = path.join(targetDir, "keep.js");
+    await fsPromises.mkdir(checkoutDir);
+    await fsPromises.mkdir(targetDir, { recursive: true });
+    await fsPromises.writeFile(targetFile, "keep\n");
+    await fsPromises.symlink(path.dirname(targetDir), path.join(checkoutDir, "linked"), "dir");
+
+    expect(() =>
+      cleanTsdownOutputRoots({ cwd: checkoutDir, roots: [path.join("linked", "dist")] }),
+    ).toThrow(/symbolic link/u);
+
+    await expect(fsPromises.readFile(targetFile, "utf8")).resolves.toBe("keep\n");
   });
 
   it("refuses to prune stale root chunks through a symlinked output root", async () => {
@@ -1051,59 +2375,6 @@ describe("runTsdownBuildInvocation", () => {
     expect(result.status).toBeNull();
     expect(result.signal).toBe("SIGTERM");
     expect(output.chunks.join("")).toContain("timeout after 50ms");
-  });
-
-  it("signals Windows tsdown process trees with taskkill", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-
-    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
-  });
-
-  it("force-kills Windows tsdown process trees when graceful taskkill fails", () => {
-    const childKill = vi.fn(() => true);
-    const runTaskkill = vi
-      .fn()
-      .mockReturnValueOnce({ error: undefined, status: 1 })
-      .mockReturnValueOnce({ error: undefined, status: 0 });
-
-    signalTsdownBuildProcessTree({ pid: 123, kill: childKill }, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, expectedTaskkillPath(), ["/PID", "123", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(
-      2,
-      expectedTaskkillPath(),
-      ["/PID", "123", "/T", "/F"],
-      {
-        stdio: "ignore",
-      },
-    );
-    expect(childKill).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32")(

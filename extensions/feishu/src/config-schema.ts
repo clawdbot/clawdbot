@@ -3,14 +3,15 @@ import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   DmPolicySchema,
   GroupPolicySchema,
+  ReplyToModeSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildMultiAccountChannelSchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
-export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
+export { z };
 
 const ChannelActionsSchema = z
   .object({
@@ -204,6 +205,7 @@ const FeishuSharedConfigShape = {
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
   configWrites: z.boolean().optional(),
+  replyToMode: ReplyToModeSchema.optional(),
   dmPolicy: DmPolicySchema.optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: FeishuGroupPolicySchema.optional(),

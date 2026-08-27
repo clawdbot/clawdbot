@@ -130,6 +130,34 @@ describe("session companion context", () => {
     );
   });
 
+  it("keeps complete recent context when older tool rows exhaust the scan byte budget", async () => {
+    const scope = createScope("companion-context-byte-budget");
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const messages = Array.from({ length: 384 }, (_, index) => {
+      const isContextMessage = index % 9 === 0;
+      return {
+        eventId: `message-${index}`,
+        parentId: index === 0 ? null : `message-${index - 1}`,
+        message: isContextMessage
+          ? { role: "user" as const, content: `useful ${index}`, timestamp: index }
+          : { role: "toolResult" as const, content: "x".repeat(4000), timestamp: index },
+      };
+    });
+    await persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: true });
+
+    const result = await defaultSessionCompanionContextReader.read(scope);
+
+    expect(result.kind).toBe("ready");
+    if (result.kind !== "ready") {
+      return;
+    }
+    expect(result.context.messages.length).toBeGreaterThan(0);
+    expect(result.context.messages.at(-1)?.text).toBe("useful 378");
+    expect(result.context.messages.every((message) => message.text.startsWith("useful"))).toBe(
+      true,
+    );
+  });
+
   it.each([
     { expectedKind: "ready", unsupportedCount: 4095 },
     { expectedKind: "unavailable", unsupportedCount: 4096 },

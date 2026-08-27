@@ -55,6 +55,19 @@ describe("schedule column codec round-trip", () => {
     });
   });
 
+  it("round-trips store-private scheduled caller origin without adding a column", () => {
+    const job = projectCronJobThroughStorageCodec({
+      ...makeCronJob({}),
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "local" },
+      },
+    });
+
+    expect(job.toolsAllowProvenance?.callerOrigin).toEqual({ kind: "local" });
+  });
+
   it("keeps private runtime authority out of job_json", () => {
     const runtimeAuthority = {
       version: 1 as const,

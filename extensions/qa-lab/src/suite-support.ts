@@ -121,7 +121,7 @@ export function remapModelRefForForcedRuntime(params: {
   return `openai/${split.model}`;
 }
 
-export function appendNodeOption(raw: string | undefined, option: string) {
+function appendNodeOption(raw: string | undefined, option: string) {
   const parts = (raw ?? "").split(/\s+/u).filter(Boolean);
   return parts.includes(option) ? parts.join(" ") : [...parts, option].join(" ");
 }

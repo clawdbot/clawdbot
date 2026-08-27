@@ -4,6 +4,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import type { GatewayBrowserClient, GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -53,11 +54,11 @@ function createGatewayHarness() {
   return {
     gateway,
     request,
-    emit(payload: unknown) {
+    emit(payload: unknown, event = CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT) {
       for (const listener of eventListeners) {
         listener({
           type: "event",
-          event: CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+          event,
           payload,
           seq: 1,
         });
@@ -80,6 +81,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       getRows: () => [],
       getSelectedAgentId: () => "main",
       getGateway: () => harness.gateway,
+      getSessions: () => undefined,
     });
 
     controller.hostConnected();
@@ -103,6 +105,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       getRows: () => [row],
       getSelectedAgentId: () => "main",
       getGateway: () => harness.gateway,
+      getSessions: () => undefined,
     });
 
     controller.hostConnected();
@@ -157,6 +160,7 @@ describe("SessionPullRequestIndicatorsController", () => {
       getRows: () => [row],
       getSelectedAgentId: () => selectedAgentId,
       getGateway: () => harness.gateway,
+      getSessions: () => undefined,
     });
     controller.hostConnected();
     controller.hostUpdated();
@@ -187,5 +191,47 @@ describe("SessionPullRequestIndicatorsController", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+  });
+
+  it("clears a structural session's indicator while replacement data is pending", async () => {
+    vi.useFakeTimers();
+    const host = new TestHost();
+    const harness = createGatewayHarness();
+    const row = {
+      key: "agent:main:demo",
+      isChild: false,
+      worktreeId: "wt-demo",
+    } as SidebarRecentSession;
+    const epoch = {};
+    const setPullRequestSummary = vi.fn();
+    const controller = new SessionPullRequestIndicatorsController(host, {
+      getConnected: () => true,
+      getRows: () => [row],
+      getSelectedAgentId: () => "main",
+      getGateway: () => harness.gateway,
+      getSessions: () =>
+        ({
+          capturePullRequestEpoch: vi.fn(() => epoch),
+          setPullRequestSummary,
+        }) as unknown as SessionCapability,
+    });
+    controller.hostConnected();
+    controller.hostUpdated();
+    await vi.advanceTimersByTimeAsync(0);
+    harness.emit({
+      sessions: {
+        [row.key]: {
+          pullRequests: [{ number: 1, state: "open" }],
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("open");
+
+    harness.emit({ sessionKey: row.key, agentId: "main", reason: "rewind" }, "sessions.changed");
+
+    expect(controller.state(row.key, row.worktreeId ?? "")).toBe("none");
+    expect(setPullRequestSummary).toHaveBeenCalledExactlyOnceWith(row.key, undefined, epoch);
   });
 });

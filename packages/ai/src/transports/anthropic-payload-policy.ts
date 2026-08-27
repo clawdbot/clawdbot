@@ -1,4 +1,4 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import type { Model } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
@@ -11,6 +11,7 @@ import {
  * capabilities allow them.
  */
 import { resolveProviderEndpoint, resolveProviderRequestCapabilities } from "./host-policy.js";
+import { parsePositiveInteger } from "./transport-utils.js";
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -45,13 +46,6 @@ type AnthropicPayloadPolicy = {
   useServerCompaction: boolean;
 };
 
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  return typeof value === "string" ? parseStrictPositiveInteger(value) : undefined;
-}
-
 /** Resolve the Anthropic input-token trigger, including the API's minimum. */
 function resolveAnthropicCompactThreshold(contextWindow: unknown, configured: unknown): number {
   const configuredThreshold = parsePositiveInteger(configured);
@@ -79,7 +73,7 @@ export function resolveAnthropicServerCompactionPlan(
 ): { enabled: boolean; threshold?: number } {
   const provider = normalizeOptionalLowercaseString(model.provider);
   const api = normalizeOptionalLowercaseString(model.api);
-  const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
+  const endpointClass = resolveProviderEndpoint(model).endpointClass;
   const enabled =
     extraParams?.anthropicServerCompaction === true &&
     provider === "anthropic" &&
@@ -297,14 +291,18 @@ function countAnthropicCacheControlMarkers(blocks: unknown): number {
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export function resolveAnthropicPayloadPolicy(
   input: AnthropicPayloadPolicyInput,
+  model?: Model,
 ): AnthropicPayloadPolicy {
-  const capabilities = resolveProviderRequestCapabilities({
-    provider: input.provider,
-    api: input.api,
-    baseUrl: input.baseUrl,
-    capability: "llm",
-    transport: "stream",
-  });
+  const capabilities = resolveProviderRequestCapabilities(
+    {
+      provider: input.provider,
+      api: input.api,
+      baseUrl: input.baseUrl,
+      capability: "llm",
+      transport: "stream",
+    },
+    model,
+  );
   const serverCompactionPlan = resolveAnthropicServerCompactionPlan(input, input.extraParams);
 
   return {

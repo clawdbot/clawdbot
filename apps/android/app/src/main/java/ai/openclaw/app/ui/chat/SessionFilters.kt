@@ -52,7 +52,7 @@ private fun sessionBaseKey(key: String): String {
   return if (parts.size >= 3 && parts[0] == "agent") parts[2].trim() else normalized
 }
 
-/** Builds the selectable recent-session list while preserving the active session. */
+/** Builds the selectable recent-session list while preserving the active and pinned sessions. */
 fun resolveSessionChoices(
   currentSessionKey: String,
   sessions: List<ChatSessionEntry>,
@@ -71,7 +71,7 @@ fun resolveSessionChoices(
     if (aliasKey != null && entry.key == aliasKey) continue
     if (!isSelectableChatSession(entry.key, mainKey)) continue
     if (!seen.add(entry.key)) continue
-    if ((entry.updatedAtMs ?: 0L) < cutoff) continue
+    if (entry.pinned != true && (entry.updatedAtMs ?: 0L) < cutoff) continue
     recent.add(entry)
   }
 
@@ -130,18 +130,21 @@ internal fun compactSessionChoices(
 ): List<ChatSessionEntry> {
   val mainKey = mainSessionKey.trim().ifEmpty { "main" }
   val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
-  val pinnedRank =
-    listOf(mainKey, current)
-      .filter { it.isNotBlank() }
-      .distinct()
-      .withIndex()
-      .associate { it.value to it.index }
-  val unpinnedRank = pinnedRank.size
-
   return choices
     .withIndex()
-    .sortedWith(compareBy({ pinnedRank[it.value.key] ?: unpinnedRank }, { it.index }))
-    .take(maxOptions)
+    .sortedWith(
+      compareBy(
+        {
+          when {
+            it.value.key == mainKey -> 0
+            it.value.key == current -> 1
+            it.value.pinned == true -> 2
+            else -> 3
+          }
+        },
+        { it.index },
+      ),
+    ).take(maxOptions)
     .map { it.value }
 }
 

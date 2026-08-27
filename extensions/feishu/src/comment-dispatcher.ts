@@ -1,18 +1,19 @@
 // Feishu plugin module implements comment dispatcher behavior.
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
+import { createReplyPrefixContext } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { ClawdbotConfig, ReplyPayload, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import {
-  createReplyPrefixContext,
-  type ClawdbotConfig,
-  type ReplyPayload,
-  type RuntimeEnv,
-} from "./comment-dispatcher-runtime-api.js";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
+import { buildFeishuMediaFallbackText } from "./media-fallback.js";
+import {
+  buildFeishuCommentPresentationFallback,
+  resolveFeishuRichReply,
+} from "./presentation-card.js";
 import {
   createFeishuPartialReplyDeliveryError,
   createFeishuReplyDeliveryResult,
@@ -81,15 +82,15 @@ export function createFeishuCommentReplyDispatcher(
         return noVisibleFeishuReplyDelivery;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
-      if (!reply.hasText) {
-        if (reply.hasMedia) {
-          params.runtime.log?.(
-            `feishu[${params.accountId ?? "default"}]: comment reply ignored media-only payload for comment=${params.commentId}`,
-          );
-        }
+      const { presentation } = resolveFeishuRichReply(payload);
+      let { text } = buildFeishuCommentPresentationFallback({ text: reply.text, presentation });
+      for (const mediaUrl of reply.mediaUrls) {
+        text = await buildFeishuMediaFallbackText({ text, mediaUrl, mediaLinkStyle: "plain" });
+      }
+      if (!text.trim()) {
         return noVisibleFeishuReplyDelivery;
       }
-      const chunks = core.channel.text.chunkTextWithMode(reply.text, textChunkLimit, chunkMode);
+      const chunks = core.channel.text.chunkTextWithMode(text, textChunkLimit, chunkMode);
       const results: FeishuReplyDeliverySource[] = [];
       const acceptedChunks: string[] = [];
       for (const chunk of chunks) {
@@ -121,7 +122,7 @@ export function createFeishuCommentReplyDispatcher(
       return createFeishuReplyDeliveryResult({
         results,
         visibleReplySent: results.length > 0,
-        content: reply.text,
+        content: text,
         kind: "text",
       });
     },

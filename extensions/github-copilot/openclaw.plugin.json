@@ -221,7 +221,7 @@
     }
   },
   "contracts": {
-    "memoryEmbeddingProviders": ["github-copilot"],
+    "embeddingProviders": ["github-copilot"],
     "usageProviders": ["github-copilot"]
   },
   "setup": {

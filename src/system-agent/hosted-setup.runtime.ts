@@ -86,38 +86,36 @@ export async function runHostedChannelSetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const {
-    createChannelOnboardingPostWriteHookCollector,
-    runCollectedChannelOnboardingPostWriteHooks,
-    setupChannels,
-  } = await import("../commands/onboard-channels.js");
-  const postWriteHooks = createChannelOnboardingPostWriteHookCollector();
+  const { createChannelSetupTransaction, setupChannels } =
+    await import("../commands/onboard-channels.js");
+  let channelSetup: ReturnType<typeof createChannelSetupTransaction>;
   return await runHostedSetup({
     label: "Channel setup",
     runtime,
     beforePersistentApply,
-    run: async ({ baseConfig, runtime: setupRuntime }) => ({
-      nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
-        initialSelection: [channel],
-        forceAllowFromChannels: [channel],
-        allowIMessageInstall: true,
-        allowSignalInstall: true,
-        deferStatusUntilSelection: true,
-        quickstartDefaults: true,
-        skipDmPolicyPrompt: true,
-        skipConfirm: true,
+    run: async ({ baseConfig, runtime: setupRuntime }) => {
+      channelSetup = createChannelSetupTransaction({
+        runtime: setupRuntime,
         beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-        onPostWriteHook: (hook) => postWriteHooks.collect(hook),
-      }),
-      afterWrite: async (committedConfig) => {
-        await runCollectedChannelOnboardingPostWriteHooks({
-          hooks: postWriteHooks.drain(),
-          cfg: committedConfig,
-          runtime: setupRuntime,
+      });
+      return {
+        nextConfig: await setupChannels(baseConfig, setupRuntime, prompter, {
+          initialSelection: [channel],
+          forceAllowFromChannels: [channel],
+          allowIMessageInstall: true,
+          allowSignalInstall: true,
+          deferStatusUntilSelection: true,
+          quickstartDefaults: true,
+          skipDmPolicyPrompt: true,
+          skipConfirm: true,
           beforePersistentEffect: async () => await beforePersistentApply(setupRuntime),
-        });
-      },
-    }),
+          onPostWriteHook: (hook) => channelSetup.onPostWriteHook(hook),
+        }),
+        afterWrite: async (committedConfig) => {
+          await channelSetup.runPostWriteHooks(committedConfig);
+        },
+      };
+    },
   });
 }
 

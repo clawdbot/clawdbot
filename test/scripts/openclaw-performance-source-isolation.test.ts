@@ -86,6 +86,7 @@ record_env() {
     printf 'OPENCLAW_STATE_DIR=%s\\n' "\${OPENCLAW_STATE_DIR-<unset>}"
     printf 'OPENCLAW_CONFIG_PATH=%s\\n' "\${OPENCLAW_CONFIG_PATH-<unset>}"
     printf 'OPENCLAW_GATEWAY_PORT=%s\\n' "\${OPENCLAW_GATEWAY_PORT-<unset>}"
+    printf 'OPENCLAW_GATEWAY_TOKEN=%s\\n' "\${OPENCLAW_GATEWAY_TOKEN-<unset>}"
     printf 'OPENCLAW_SKIP_CHANNELS=%s\\n' "\${OPENCLAW_SKIP_CHANNELS-<unset>}"
     printf 'OPENCLAW_SKIP_CRON=%s\\n' "\${OPENCLAW_SKIP_CRON-<unset>}"
   } > "$CAPTURE_DIR/$1.env"
@@ -195,6 +196,7 @@ exit "$RG_STATUS"
       for (const name of [
         "OPENCLAW_SKIP_CRON",
         "OPENCLAW_SKIP_CHANNELS",
+        "OPENCLAW_GATEWAY_TOKEN",
         "BASH_ENV",
         "ENV",
         "BASHOPTS",
@@ -247,6 +249,7 @@ exit "$RG_STATUS"
       expect(readFileSync(join(captureDir, "benchmark.config"), "utf8")).toBe(gatewayConfig);
       parse(gatewayConfig, { uniqueKeys: true });
       const parsedConfig = JSON.parse(gatewayConfig) as {
+        gateway?: { auth?: Record<string, unknown> };
         models?: { catalogRefresh?: { enabled?: boolean } };
       };
       expect(parsedConfig).toMatchObject({
@@ -257,13 +260,14 @@ exit "$RG_STATUS"
           mode: "local",
           port: Number(gatewayPort),
           bind: "loopback",
-          auth: { mode: "none" },
+          auth: { mode: "token" },
           controlUi: { enabled: false },
           tailscale: { mode: "off" },
         },
         plugins: { enabled: true, entries: { browser: { enabled: false } } },
       });
       expect(JSON.stringify(parsedConfig)).not.toContain('"dreaming":');
+      expect(parsedConfig.gateway?.auth).toEqual({ mode: "token" });
       if (expectsCatalogRefresh) {
         expect(parsedConfig.models?.catalogRefresh?.enabled).toBe(false);
       } else {
@@ -306,6 +310,9 @@ exit "$RG_STATUS"
       expect(benchmarkEnv.OPENCLAW_CONFIG_PATH).toBe(gatewayConfigPath);
       expect(benchmarkEnv.OPENCLAW_GATEWAY_PORT).toBe(gatewayPort);
       expect(gatewayEnv.OPENCLAW_GATEWAY_PORT).toBe(gatewayPort);
+      expect(gatewayEnv.OPENCLAW_GATEWAY_TOKEN).toMatch(/^[0-9a-f]{64}$/u);
+      expect(healthEnv.OPENCLAW_GATEWAY_TOKEN).toBe(gatewayEnv.OPENCLAW_GATEWAY_TOKEN);
+      expect(benchmarkEnv.OPENCLAW_GATEWAY_TOKEN).toBe(gatewayEnv.OPENCLAW_GATEWAY_TOKEN);
       expect(healthHome).not.toBe(gatewayHome);
       expect(healthState).not.toBe(gatewayState);
       expect(healthConfigPath).not.toBe(gatewayConfigPath);
@@ -323,7 +330,7 @@ exit "$RG_STATUS"
         "--port",
         gatewayPort,
         "--auth",
-        "none",
+        "token",
         "--allow-unconfigured",
         "--force",
       ]);

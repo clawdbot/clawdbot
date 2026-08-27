@@ -30,6 +30,7 @@ import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/se
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
+import { listAgentProvenance } from "../state/agent-provenance.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 import type { GatewayAgentOwnership } from "./agent-list.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
@@ -184,11 +185,11 @@ export function loadGatewaySessionEntryReadOnly(
 }
 
 /** Returns the one canonical entry and the exact persisted key that owns it. */
-export function resolveCanonicalSessionStoreMatchFromStoreKeys(
-  store: Record<string, SessionEntry>,
+export function resolveCanonicalSessionStoreMatchFromStoreKeys<TEntry extends SessionEntry>(
+  store: Record<string, TEntry>,
   storeKeys: string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let selected: { key: string; entry: SessionEntry } | undefined;
+): { key: string; entry: TEntry } | undefined {
+  let selected: { key: string; entry: TEntry } | undefined;
   for (const key of storeKeys) {
     const entry = store[key];
     if (!entry) {
@@ -303,7 +304,7 @@ export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
   options?: {
-    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]>;
+    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[] | undefined>;
     includeSystem?: boolean;
   },
 ): {
@@ -337,6 +338,9 @@ export function listAgentsForGateway(
   const roster = options?.includeSystem
     ? basic.agents
     : basic.agents.filter((entry) => entry.kind !== "system");
+  const provenanceById = new Map(
+    listAgentProvenance().map((record) => [record.agentId, record] as const),
+  );
   const agents = roster.map((entry) => {
     const { id } = entry;
     const meta = configuredById.get(id);
@@ -353,7 +357,9 @@ export function listAgentsForGateway(
         acpRuntime: false,
       }),
     );
-    const agentModelCatalog = options?.modelCatalogByAgentId?.get(id) ?? modelCatalog;
+    const agentModelCatalog = options?.modelCatalogByAgentId?.has(id)
+      ? options.modelCatalogByAgentId.get(id)
+      : (modelCatalog ?? options?.modelCatalogByAgentId?.get(basic.defaultId));
     const thinkingProfile = resolveGatewayModelThinkingProfile({
       cfg,
       agentId: id,
@@ -366,7 +372,7 @@ export function listAgentsForGateway(
     // Must mirror the sessions.create worktree preflight: subdirectory workspaces inside a
     // repo are worktree-capable, so the UI toggle and the create path cannot diverge.
     const workspaceGit = insideGitCheckout(workspace);
-    return Object.assign(
+    const agent = Object.assign(
       {
         id,
         ...(options?.includeSystem ? { kind: entry.kind } : {}),
@@ -382,6 +388,14 @@ export function listAgentsForGateway(
       },
       { model },
     );
+    const provenance = provenanceById.get(id);
+    return provenance
+      ? Object.assign(agent, {
+          createdVia: provenance.createdVia,
+          creatorAgentId: provenance.creatorAgentId,
+          createdAt: provenance.createdAtMs,
+        })
+      : agent;
   });
   return {
     defaultId: basic.defaultId,

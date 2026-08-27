@@ -181,35 +181,6 @@ describe("gateway/node-catalog", () => {
     });
   });
 
-  it("does not infer live session hosting from the connect-time build ceiling", () => {
-    const catalog = createKnownNodeCatalog({
-      pairedDevices: [pairedDevice()],
-      pairedNodes: [pairedNode()],
-      connectedNodes: [
-        {
-          nodeId: "mac-1",
-          connId: "conn-1",
-          client: {} as never,
-          declaredCaps: [],
-          caps: [],
-          declaredCommands: [],
-          commands: [],
-          workerRuns: {
-            bundleHash: "a".repeat(64),
-            openclawVersion: "2026.8.12",
-            protocolFeatures: ["worker-heartbeat-v1"],
-          },
-          declaredNodePluginTools: [],
-          nodePluginTools: [],
-          nodeSkills: [],
-          connectedAtMs: 1,
-        },
-      ],
-    });
-
-    expect(getKnownNode(catalog, "mac-1")?.sessionHost).toBe(false);
-  });
-
   it("keeps the operator node name across live metadata and reconnects", () => {
     const connectedNode = (connId: string, displayName: string) => ({
       nodeId: "mac-1",
@@ -258,6 +229,7 @@ describe("gateway/node-catalog", () => {
       pairedNodes: [
         pairedNode({
           caps: ["system"],
+          sessionHost: true,
           lastSeenAtMs: 456,
           lastSeenReason: "silent_push",
           approvedAtMs: 123,
@@ -275,8 +247,51 @@ describe("gateway/node-catalog", () => {
       lastSeenReason: "silent_push",
       paired: true,
       connected: false,
+      sessionHost: true,
     });
     expect(getKnownNode(catalog, "mac-1")?.lastConnectedAtMs).toBeUndefined();
+    expect(getKnownNode(catalog, "mac-1")?.workerSlots).toBeUndefined();
+  });
+
+  it("lets live runner consent override stored session-host history", () => {
+    const connectedNode = {
+      nodeId: "mac-1",
+      connId: "conn-1",
+      client: {} as never,
+      declaredCaps: [],
+      caps: [],
+      declaredCommands: [],
+      commands: [],
+      declaredNodePluginTools: [],
+      nodePluginTools: [],
+      nodeSkills: [],
+      connectedAtMs: 1,
+    };
+    const storedHostDisabledLive = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice()],
+      pairedNodes: [pairedNode({ sessionHost: true })],
+      connectedNodes: [connectedNode],
+      sessionHostNodeIds: new Set(),
+      workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 0 }]]),
+    });
+    expect(getKnownNode(storedHostDisabledLive, "mac-1")).toMatchObject({
+      connected: true,
+      sessionHost: false,
+      workerSlots: { total: 2, available: 0 },
+    });
+
+    const storedDisabledLiveHost = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice()],
+      pairedNodes: [pairedNode({ sessionHost: false })],
+      connectedNodes: [connectedNode],
+      sessionHostNodeIds: new Set(["mac-1"]),
+      workerSlotsByNodeId: new Map([["mac-1", { total: 2, available: 1 }]]),
+    });
+    expect(getKnownNode(storedDisabledLiveHost, "mac-1")).toMatchObject({
+      connected: true,
+      sessionHost: true,
+      workerSlots: { total: 2, available: 1 },
+    });
   });
 
   it("uses the newest durable last-seen source for offline nodes", () => {

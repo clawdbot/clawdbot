@@ -150,16 +150,13 @@ openclaw browser extension cdp
 openclaw browser extension cdp --json
 ```
 
-- `extension install` copies the bundled runtime into a stable state-directory
-  path and pre-registers its deterministic, origin-locked native bootstrap host
-  in existing Chrome-family user-data roots. Launch Chrome, run this command,
-  and use **Load unpacked** only after it prints the stable path. The command
-  waits while Chrome records that exact path, then verifies the recorded ID
-  against Chromium's path-derived ID. **Load unpacked** is the only manual
-  action in normal setup.
-- `extension status` reports the installed copy, detected IDs/profiles,
-  owned-registration health, and whether manual setup is required. JSON output
-  never includes a pairing string or relay key.
+- `extension install` pre-registers the origin-locked native bootstrap host in
+  existing Chrome-family user-data roots. Run it first, then
+  [add OpenClaw from the Chrome Web Store](https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig).
+  The stable **Load unpacked** path remains available as a development fallback.
+- `extension status` reports Store discovery separately from approved unpacked
+  IDs and paths, plus owned-registration health and whether manual setup is
+  required. JSON output never includes a pairing string or relay key.
 - `extension uninstall-host` removes only verified OpenClaw-owned native-host
   manifests and launchers. It does not remove the extension from Chrome.
 - `extension path` is read-only. It prints the stable installed copy when
@@ -194,8 +191,8 @@ Setup, security model, and recovery steps: [Chrome extension](/tools/chrome-exte
 
 If the extension already attempted automatic setup before the native host
 existed, Chromium retains that miss for the running browser process. Restart
-Chrome once, then repeat the ordered install flow; popup retries alone cannot
-recover that existing process.
+Chrome once, run `extension install`, then reopen the Store extension; popup
+retries alone cannot recover that existing process.
 
 ## Tabs
 
@@ -285,6 +282,8 @@ openclaw browser batch --actions-file - --continue
 ```
 
 `openclaw browser batch` sends a `kind="batch"` `/act` request with nested `BrowserActRequest` actions (`wait`, `click`, `type`, `evaluate`, ...) — not `open`/`navigate`/`snapshot`/`screenshot`, which are CLI subcommands, not `/act` kinds. `--continue` sets `stopOnError=false` (default stops on first error); `--target-id` scopes the whole batch to one tab. A failed nested action makes the command exit nonzero; use `--json` to retain the ordered `results` response. See [Browser batch CLI](/tools/browser-control#browser-batch-cli) for the full contract (ref lifecycle, target id conflicts, error summary). `batch` is not supported on `profile="user"` / existing-session profiles.
+
+`--actions-file` and `--actions-file -` stdin input are capped at 1,000,000 bytes. Split larger plans into multiple `openclaw browser batch` commands.
 
 ## State and storage
 

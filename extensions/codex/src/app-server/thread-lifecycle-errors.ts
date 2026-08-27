@@ -2,7 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 export class CodexThreadStartRequestError extends Error {
   constructor(cause: unknown) {
-    super(formatErrorMessage(cause), { cause });
+    super(`thread/start: ${formatErrorMessage(cause)}`, { cause });
     this.name = "CodexThreadStartRequestError";
   }
 }

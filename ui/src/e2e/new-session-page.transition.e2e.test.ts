@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
+  controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
@@ -23,6 +24,67 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
 }
 
 suite.define(() => {
+  it("creates and lists a session with the default mock Gateway", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill("verify the default mock");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
+        params: { agentId: "main", message: "verify the default mock" },
+      });
+      const sessionKeys = ["agent:main:mock-created-1", "agent:main:mock-created-2"] as const;
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(sessionKeys[0]));
+
+      await page.getByRole("button", { name: "New session" }).first().click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await page.locator(".new-session-page__message").fill("verify another default mock");
+      await page.getByRole("button", { name: "Start session" }).click();
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
+      expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
+        params: { agentId: "main", message: "verify another default mock" },
+      });
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(sessionKeys[1]));
+      for (const sessionKey of sessionKeys) {
+        await expect
+          .poll(() =>
+            page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
+          )
+          .toBe(1);
+      }
+      await expect.poll(() => page.locator(".new-session-page__error").count()).toBe(0);
+      await captureProof(page, "default-mock-created.png");
+
+      const listRequestsBeforeReconnect = (await gateway.getRequests("sessions.list")).length;
+      await gateway.closeLatest(1006, "mock reconnect");
+      await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(1);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(listRequestsBeforeReconnect);
+      for (const sessionKey of sessionKeys) {
+        await expect
+          .poll(() =>
+            page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`).count(),
+          )
+          .toBe(1);
+      }
+      await captureProof(page, "default-mock-reconnected.png");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps the new-session view live until the focused chat is ready", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
@@ -71,6 +133,9 @@ suite.define(() => {
 
       await expect.poll(() => start.getAttribute("aria-busy")).toBe("true");
       const spinner = start.locator("svg");
+      expect(await spinner.evaluate((element) => getComputedStyle(element).animationDuration)).toBe(
+        "2.25s",
+      );
       const initialSpinnerTransform = await spinner.evaluate(
         (element) => getComputedStyle(element).transform,
       );

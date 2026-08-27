@@ -69,8 +69,8 @@ function classifyCloneFailure(params: {
     return new ProjectCloneError(
       "auth_required",
       params.tokenConfigured
-        ? "GitHub rejected the configured credential. Update GH_TOKEN in the Gateway environment and retry."
-        : "GitHub authentication is required. Set GH_TOKEN in the Gateway environment to clone private repositories.",
+        ? "GitHub rejected the active Control UI credential. Update gateway.controlUi.github.token when set; otherwise update the shared Gateway process environment, then retry."
+        : "GitHub authentication is required. Configure gateway.controlUi.github.token or set GH_TOKEN/GITHUB_TOKEN in the shared Gateway process environment to clone private repositories.",
     );
   }
   if (/repository not found|not found/u.test(detail)) {
@@ -81,7 +81,7 @@ function classifyCloneFailure(params: {
         )
       : new ProjectCloneError(
           "auth_required",
-          "The repository was not found or is private. Check the URL, or set GH_TOKEN in the Gateway environment for private repositories.",
+          "The repository was not found or is private. Check the URL, or configure gateway.controlUi.github.token (or the shared Gateway process environment) for private repositories.",
         );
   }
   return new ProjectCloneError(

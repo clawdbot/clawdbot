@@ -1,12 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveAvatar,
-  resolveAvatarImageUrl,
-  resolveIdentityHue,
-  setAvatarGatewayOrigin,
-  settleAvatarImageUrl,
-} from "./identity-avatar.ts";
+import { resolveAvatarImageUrl, settleAvatarImageUrl } from "./identity-avatar-loader.ts";
+import { resolveAvatar, resolveIdentityHue, setAvatarGatewayOrigin } from "./identity-avatar.ts";
 
 afterEach(() => {
   setAvatarGatewayOrigin(null);

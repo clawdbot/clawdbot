@@ -98,7 +98,7 @@ class ChatSwarmProgressTest {
       buildChatSwarmGroups(
         sessions =
           listOf(
-            session("queued", null, active, subagentRunState = "active"),
+            session("queued", "queued", active, hasActiveRun = true),
             session("running", "running", active),
             session("done", "done", active),
             session("failed", "timeout", active),
@@ -252,6 +252,7 @@ class ChatSwarmProgressTest {
     status: String?,
     groupId: String,
     subagentRunState: String? = null,
+    hasActiveRun: Boolean? = null,
   ): ChatSessionEntry =
     ChatSessionEntry(
       key = key,
@@ -261,5 +262,6 @@ class ChatSwarmProgressTest {
       subagentRunState = subagentRunState,
       swarmGroupId = groupId,
       status = status,
+      hasActiveRun = hasActiveRun,
     )
 }

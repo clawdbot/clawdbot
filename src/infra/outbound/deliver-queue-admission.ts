@@ -11,8 +11,9 @@ import {
 import { releaseSpoolArtifacts, stageQueuePayloadMedia } from "./delivery-queue-media-spool.js";
 import { cancelDeliveryQueueMediaRetention } from "./delivery-queue-media-staging.js";
 import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js";
-import { loadPendingDelivery, type QueuedDelivery } from "./delivery-queue-storage.js";
 import {
+  loadPendingDelivery,
+  type QueuedDelivery,
   enqueueDelivery,
   enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce,
@@ -22,6 +23,7 @@ import {
   mapPreparedOutboundAcceptedPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
+import { normalizeOutboundReplyFacts } from "./reply-policy.js";
 
 export function restoreQueuedDeliveryCustody(
   params: DeliverOutboundPayloadsParams,
@@ -126,8 +128,7 @@ export async function stageAndEnqueueOutboundDelivery(
       preparedBatch: queuedPreparedBatch,
       renderedBatchPlan,
       threadId: params.threadId,
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
+      reply: normalizeOutboundReplyFacts(params),
       formatting: params.formatting,
       identity: params.identity,
       bestEffort: params.bestEffort,

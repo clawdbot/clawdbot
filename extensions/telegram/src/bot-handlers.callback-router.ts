@@ -53,6 +53,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveModelListCallback,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -67,6 +68,7 @@ import {
   parseTelegramQuestionCallbackData,
 } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
 
 export function createTelegramCallbackRouter({
   params: {
@@ -142,8 +144,9 @@ export function createTelegramCallbackRouter({
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
       const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
+      const hasReservedModelPrefix = data.startsWith("mdl1~");
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
-      const opaqueCallbackData = parseTelegramOpaqueCallbackData(data);
+      const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
       const callbackCommandText =
         nativeCallbackCommand ?? (opaqueCallbackData ? "" : genericCallbackText);
@@ -170,12 +173,12 @@ export function createTelegramCallbackRouter({
         !isRuntimeControlCallback &&
         inlineButtonsUnavailable &&
         !nativeCallbackCommand &&
-        !hasReservedOpaquePrefix
+        !hasReservedOpaquePrefix &&
+        !hasReservedModelPrefix
       ) {
         return;
       }
 
-      const messageThreadId = callbackMessage.message_thread_id;
       const isForum = await resolveTelegramForumFlag({
         chatId,
         chatType: callbackMessage.chat.type,
@@ -193,7 +196,8 @@ export function createTelegramCallbackRouter({
         senderId,
         threadSpec: resolveTelegramMessageThreadSpec(callbackMessage, isForum),
       });
-      const { resolvedThreadId, dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
+      const threadSpec = eventAuthContext.threadSpec;
+      const { dmThreadId, storeAllowFrom, groupConfig } = eventAuthContext;
       const requireTopic = (groupConfig as { requireTopic?: boolean } | undefined)?.requireTopic;
       if (!isGroup && requireTopic === true && dmThreadId == null) {
         logVerbose(
@@ -204,7 +208,7 @@ export function createTelegramCallbackRouter({
       const actions = createTelegramCallbackMessageActions({
         bot,
         callbackMessage,
-        isForum,
+        threadSpec,
       });
       const clearRoutedCallbackButtons = async () => {
         try {
@@ -226,7 +230,9 @@ export function createTelegramCallbackRouter({
 
       if (
         inlineButtonsUnavailable &&
-        ((nativeCallbackCommand && !legacyApprovalCallback) || hasReservedOpaquePrefix)
+        ((nativeCallbackCommand && !legacyApprovalCallback) ||
+          hasReservedOpaquePrefix ||
+          hasReservedModelPrefix)
       ) {
         await terminalizeUnavailableCallback();
         return;
@@ -262,9 +268,8 @@ export function createTelegramCallbackRouter({
         return;
       }
 
-      const callbackThreadId = resolvedThreadId ?? dmThreadId;
-      const callbackConversationId =
-        callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
+      const callbackConversationId = buildTelegramConversationId({ chatId, thread: threadSpec });
+      const callbackThreadId = threadSpec.id;
       const runtimeCfg = telegramDeps.getRuntimeConfig();
       const approvalRuntime = createTelegramCallbackApprovalRuntime({
         accountId,
@@ -308,6 +313,7 @@ export function createTelegramCallbackRouter({
       }
       if (
         !nativeCallbackCommand &&
+        !hasReservedModelPrefix &&
         !inlineButtonsUnavailable &&
         (await handleTelegramInteractiveCallback({
           accountId,
@@ -344,9 +350,7 @@ export function createTelegramCallbackRouter({
           ctx,
           chatId,
           isGroup,
-          isForum,
-          messageThreadId,
-          resolvedThreadId,
+          threadSpec,
           senderId,
           runtimeCfg,
           telegramDeps,
@@ -355,6 +359,10 @@ export function createTelegramCallbackRouter({
           authorizeCallback,
         })
       ) {
+        return;
+      }
+      if (hasReservedModelPrefix) {
+        await terminalizeUnavailableCallback();
         return;
       }
 
@@ -375,6 +383,7 @@ export function createTelegramCallbackRouter({
         allMedia: [],
         storeAllowFrom,
         options: {
+          threadSpec,
           ...(nativeCallbackCommand ? { commandSource: "native" as const } : {}),
           forceWasMentioned: true,
           messageIdOverride: callback.id,
@@ -416,9 +425,7 @@ async function handleTelegramModelCallback(params: {
   ctx: Pick<TelegramContext, "me">;
   chatId: number;
   isGroup: boolean;
-  isForum: boolean;
-  messageThreadId?: number;
-  resolvedThreadId?: number;
+  threadSpec: ReturnType<typeof resolveTelegramMessageThreadSpec>;
   senderId: string;
   runtimeCfg: OpenClawConfig;
   telegramDeps: RegisterTelegramHandlerParams["telegramDeps"];
@@ -431,9 +438,7 @@ async function handleTelegramModelCallback(params: {
     ctx,
     chatId,
     isGroup,
-    isForum,
-    messageThreadId,
-    resolvedThreadId,
+    threadSpec,
     senderId,
     runtimeCfg,
     telegramDeps,
@@ -465,9 +470,7 @@ async function handleTelegramModelCallback(params: {
       messageRuntime.resolveTelegramSessionState({
         chatId,
         isGroup,
-        isForum,
-        messageThreadId,
-        resolvedThreadId,
+        threadSpec,
         botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
         senderId,
         runtimeCfg,
@@ -514,9 +517,7 @@ async function handleTelegramModelCallback(params: {
     const session = messageRuntime.resolveTelegramSessionState({
       chatId,
       isGroup,
-      isForum,
-      messageThreadId,
-      resolvedThreadId,
+      threadSpec,
       botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
       senderId,
       runtimeCfg,
@@ -544,8 +545,18 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
 
-  if (modelCallback.type === "list") {
-    const { provider, page } = modelCallback;
+  if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
+    const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
+    if (!listSelection) {
+      await retryModelAction(() =>
+        editMessageWithButtons(
+          "This model picker is stale or ambiguous. Reopen /model and try again.",
+          buildTelegramModelsMenuButtons({ providers: providerInfos }),
+        ),
+      );
+      return true;
+    }
+    const { provider, page } = listSelection;
     const modelSet = byProvider.get(provider);
     if (!modelSet || modelSet.size === 0) {
       await retryModelAction(() =>
@@ -582,7 +593,7 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
 
-  if (modelCallback.type !== "select") {
+  if (modelCallback.type !== "select" && modelCallback.type !== "select-ref") {
     return true;
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });

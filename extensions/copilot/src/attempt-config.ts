@@ -1,14 +1,11 @@
 import type { MessageOptions, SessionConfig, Tool as SdkTool } from "@github/copilot-sdk";
 import type { AgentMessage, SandboxContext } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
-
-export { toCopilotError };
 import {
   detectAndLoadAgentHarnessPromptImages,
   getModelProviderRequestTransport,
   resolveUserPath,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { toStringifiedError as toCopilotError } from "openclaw/plugin-sdk/error-runtime";
 import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   COPILOT_ASK_USER_AVAILABLE_TOOLS,
@@ -31,6 +28,8 @@ import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider
 import { computeReplayMetadata, copilotToolMetasHavePotentialSideEffects } from "./replay-shim.js";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
+
+export { toCopilotError };
 export function createResult(
   params: AttemptParamsLike,
   state: {
@@ -60,6 +59,7 @@ export function createResult(
     toolMetas?: AgentHarnessAttemptResult["toolMetas"];
     usage?: AssistantUsageSnapshot;
     yieldDetected?: boolean;
+    yieldAcknowledgment?: string;
   },
 ): AttemptResultWithSdkSessionId {
   const promptError = state.promptError;
@@ -71,7 +71,7 @@ export function createResult(
     params.operation === "settled-tool-finalization"
       ? {
           hadPotentialSideEffects: false,
-          replaySafe: state.nativeReplayInvalid !== true && !transcriptPersistenceFailed,
+          replaySafe: !transcriptPersistenceFailed,
         }
       : computeReplayMetadata({
           priorReplayInvalid:
@@ -137,6 +137,7 @@ export function createResult(
     sessionIdUsed: state.sessionIdUsed ?? readNonEmptyString(params.sessionId) ?? "copilot-session",
     toolMetas,
     yieldDetected: state.yieldDetected === true,
+    ...(state.yieldAcknowledgment ? { yieldAcknowledgment: state.yieldAcknowledgment } : {}),
   };
 }
 export function createPromptError(
@@ -314,29 +315,6 @@ function resolveImageCapabilityModel(params: AttemptParamsLike): { input?: strin
     return { input: (model as { input: string[] }).input };
   }
   return { input: ["image"] };
-}
-export function createSystemMessageContent(
-  params: AttemptParamsLike,
-  workspaceBootstrapInstructions: string | undefined,
-): string | undefined {
-  if (isRawCopilotModelRun(params)) {
-    return undefined;
-  }
-  const sections: string[] = [TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT];
-  const bootstrap = workspaceBootstrapInstructions?.trim();
-  if (bootstrap) {
-    sections.push(bootstrap);
-  }
-  const extraSystemPrompt = readNonEmptyString(params.extraSystemPrompt)?.trim();
-  if (extraSystemPrompt) {
-    const contextHeader =
-      params.promptMode === "minimal" ? "## Subagent Context" : "## Conversation Context";
-    sections.push(`${contextHeader}\n${extraSystemPrompt}`);
-  }
-  return sections.length > 0 ? sections.join("\n\n") : undefined;
-}
-export function isRawCopilotModelRun(params: AttemptParamsLike): boolean {
-  return params.modelRun === true || params.promptMode === "none";
 }
 export { readNonEmptyString };
 export function readResolvedAttemptPath(value: unknown): string | undefined {

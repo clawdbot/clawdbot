@@ -26,6 +26,7 @@ function listPersistedPluginModelCatalogs(agentDir: string) {
 }
 
 vi.mock("./auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: () => [],
   syncExternalCliCredentials: () => false,
 }));

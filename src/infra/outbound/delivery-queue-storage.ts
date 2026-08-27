@@ -55,7 +55,6 @@ export type {
   LegacyQueuedDelivery,
   LegacyQueuedDeliveryPreparation,
   QueuedDelivery,
-  QueuedDeliveryPayload,
   QueuedReplyPayloadSendingHook,
   QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-types.js";
@@ -122,8 +121,7 @@ function createQueuedDelivery(
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    reply: params.reply,
     formatting: params.formatting,
     identity: params.identity,
     bestEffort: params.bestEffort,

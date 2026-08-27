@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolveUserPath } from "../utils.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
@@ -127,8 +128,7 @@ function installRecordPathMatchesPluginRoot(
     }
     const candidatePath = path.resolve(resolveUserPath(candidate, env));
     const resolvedCandidate = safeRealpathSync(candidatePath, realpathCache) ?? candidatePath;
-    const relative = path.relative(resolvedCandidate, resolvedRoot);
-    return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    return isPathInside(resolvedCandidate, resolvedRoot);
   });
 }
 

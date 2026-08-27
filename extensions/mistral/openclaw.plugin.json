@@ -156,7 +156,7 @@
     }
   ],
   "contracts": {
-    "memoryEmbeddingProviders": ["mistral"],
+    "embeddingProviders": ["mistral"],
     "mediaUnderstandingProviders": ["mistral"],
     "realtimeTranscriptionProviders": ["mistral"]
   },

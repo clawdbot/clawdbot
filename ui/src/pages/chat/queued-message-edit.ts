@@ -1,6 +1,6 @@
-// Control UI chat module owns lifting a queued message back into the composer.
+// Control UI chat module owns editing a queued message in its queue row.
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
@@ -13,34 +13,52 @@ import {
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
- * see where the message will land. This records which row the composer owns, the
- * outbox scope that owns the row, the payloads that row still owns, and the
- * position the replacement inherits.
+ * see where the message will land. This records the row-local draft, the outbox
+ * scope that owns the row, the payloads that row still owns, and the position
+ * the replacement inherits.
  */
 export type QueuedMessageEdit = {
   agentId?: string;
   attachments: readonly ChatAttachment[];
+  draftText: string;
   id: string;
   orderKey: number;
+  revision: number;
+  replyToId?: string;
   sessionKey: string;
+  source: ChatQueueItem;
+  sourceWasDurable: boolean;
 };
 
 type QueuedMessageEditHost = ChatQueueScopedSessionHost & {
-  chatMessage: string;
-  chatAttachments: ChatAttachment[];
   chatQueuedEdit?: QueuedMessageEdit | null;
 };
 
-function releaseUnretainedAttachments(
-  owned: readonly ChatAttachment[],
-  retained: readonly ChatAttachment[],
-): void {
-  const retainedIds = new Set(retained.map((attachment) => attachment.id));
-  releaseChatAttachmentPayloads(owned.filter((attachment) => !retainedIds.has(attachment.id)));
+function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueueItem): boolean {
+  return (
+    item.id === edit.source.id &&
+    item.sendRunId === edit.source.sendRunId &&
+    item.sendAttempts === edit.source.sendAttempts &&
+    item.sendState === edit.source.sendState &&
+    item.agentId === edit.source.agentId &&
+    item.sessionKey === edit.source.sessionKey &&
+    item.orderKey === edit.source.orderKey
+  );
 }
 
 /** Closed outcomes so the page owns the operator-visible wording. */
-type QueuedMessageEditResult = "started" | "unavailable" | "composer-busy";
+type QueuedMessageEditResult = "started" | "unavailable";
+
+export const QUEUED_MESSAGE_EDIT_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before editing it here.";
+export const QUEUED_MESSAGE_REMOVAL_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before removing it.";
+export const QUEUED_MESSAGE_REORDER_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before reordering it.";
+export const QUEUED_MESSAGE_RETRY_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before retrying it.";
+export const QUEUED_MESSAGE_STEER_CONFLICT_ERROR =
+  "A queued message is being edited in another pane. Finish or cancel that edit before steering it.";
 
 /**
  * The edit belongs to the scope it started in — session and agent, the pair every
@@ -51,7 +69,19 @@ type QueuedMessageEditResult = "started" | "unavailable" | "composer-busy";
  */
 export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMessageEdit | null {
   const edit = host.chatQueuedEdit;
-  return edit && visibleSessionMatches(host, edit.sessionKey, edit.agentId) ? edit : null;
+  if (!edit || !visibleSessionMatches(host, edit.sessionKey, edit.agentId)) {
+    return null;
+  }
+  // Route changes intentionally release the edit hold so another pane can
+  // drain or update the row. Do not revive a token whose source changed while
+  // away: its replacement CAS would reject the stale captured version and
+  // there would be no safe submit/cancel action to offer on return.
+  const source = readQueuedMessageById(host, edit.id);
+  if (!source || !queuedMessageEditSourceMatches(edit, source)) {
+    host.chatQueuedEdit = null;
+    return null;
+  }
+  return edit;
 }
 
 /**
@@ -62,6 +92,21 @@ export function activeQueuedMessageEdit(host: QueuedMessageEditHost): QueuedMess
  */
 export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: string): boolean {
   return anyChatOutboxPaneMatches(host, (pane) => activeQueuedMessageEdit(pane)?.id === id);
+}
+
+/** Removal is a conflicting shared-outbox action while any pane owns the row draft. */
+export function isQueuedMessageRemovalBlocked(host: QueuedMessageEditHost, id: string): boolean {
+  return isQueuedMessageBeingEdited(host, id);
+}
+
+/** Reordering is also conflicting: submit must not restore a stale position. */
+export function isQueuedMessageReorderBlocked(host: QueuedMessageEditHost, id: string): boolean {
+  return isQueuedMessageBeingEdited(host, id);
+}
+
+/** Retrying must not dispatch the source payload while another pane edits it. */
+export function isQueuedMessageRetryBlocked(host: QueuedMessageEditHost, id: string): boolean {
+  return isQueuedMessageBeingEdited(host, id);
 }
 
 export function beginQueuedMessageEdit(
@@ -75,29 +120,39 @@ export function beginQueuedMessageEdit(
     !item ||
     !isMovableChatQueueItem(item) ||
     item.localCommandName ||
-    activeQueuedMessageEdit(host)
+    activeQueuedMessageEdit(host) ||
+    isQueuedMessageBeingEdited(host, id)
   ) {
     return "unavailable";
   }
-  // Never overwrite newer composer input; the same rule guards command recovery.
-  if (host.chatMessage.trim() || host.chatAttachments.length > 0) {
-    return "composer-busy";
-  }
   // The row is left in storage on purpose: it keeps its place visibly, and the
-  // drain refuses it while this edit owns it (see chat-outbox-drain).
+  // drain refuses it while this edit owns it (see chat-outbox-drain). The draft
+  // belongs to this token rather than the global composer, so editing a queued
+  // row never overwrites text the operator is composing for a different send.
   const agentId = scopedAgentIdForSession(host, host.sessionKey);
-  // The payloads travel with the token because the row they belong to is gone by
-  // the time the edit ends: the write that admits the replacement retires it.
   host.chatQueuedEdit = {
     ...(agentId ? { agentId } : {}),
     attachments: item.attachments ?? [],
+    draftText: item.text,
     id,
     orderKey: chatQueueOrderKey(item),
+    revision: 0,
+    ...(item.replyToId ? { replyToId: item.replyToId } : {}),
     sessionKey: host.sessionKey,
+    source: { ...item },
+    sourceWasDurable: isDurableQueuedMessage(host, id),
   };
-  host.chatMessage = item.text;
-  host.chatAttachments = item.attachments ?? [];
   return "started";
+}
+
+export function updateQueuedMessageEdit(host: QueuedMessageEditHost, draftText: string): boolean {
+  const edit = activeQueuedMessageEdit(host);
+  if (!edit) {
+    return false;
+  }
+  edit.draftText = draftText;
+  edit.revision += 1;
+  return true;
 }
 
 /** Cancel touches storage not at all: the row never left the queue. */
@@ -106,12 +161,10 @@ export function cancelQueuedMessageEdit(host: QueuedMessageEditHost): boolean {
   if (!edit) {
     return false;
   }
-  // The durable row still owns its original payloads, but anything attached in
-  // the composer during the edit has no owner after cancellation.
-  releaseUnretainedAttachments(host.chatAttachments, edit.attachments);
+  // The durable row still owns its original payloads. The row-local draft has
+  // no separate attachment owner, so cancellation has nothing to release or
+  // copy and leaves the main composer exactly as it was.
   host.chatQueuedEdit = null;
-  host.chatMessage = "";
-  host.chatAttachments = [];
   return true;
 }
 
@@ -129,8 +182,12 @@ export function retireEditedQueuedMessageSource(
   host: QueuedMessageEditHost,
   admittedDurably: boolean,
   nextAttachments: readonly ChatAttachment[] = [],
+  editOverride?: QueuedMessageEdit,
 ): void {
-  const edit = activeQueuedMessageEdit(host);
+  const edit = editOverride ?? activeQueuedMessageEdit(host);
+  if (editOverride && host.chatQueuedEdit !== edit) {
+    return;
+  }
   if (!edit || (!admittedDurably && isDurableQueuedMessage(host, edit.id))) {
     return;
   }
@@ -140,5 +197,8 @@ export function retireEditedQueuedMessageSource(
   // ones the replacement still carries must survive, so release only the rest.
   // The payloads come from the token: a successful write already retired the row
   // and told every pane, so re-reading it here would find nothing to release.
-  releaseUnretainedAttachments(edit.attachments, nextAttachments);
+  const retainedIds = new Set(nextAttachments.map((attachment) => attachment.id));
+  releaseChatAttachmentPayloads(
+    edit.attachments.filter((attachment) => !retainedIds.has(attachment.id)),
+  );
 }

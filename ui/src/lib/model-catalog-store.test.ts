@@ -1,0 +1,281 @@
+// Control UI tests cover models behavior.
+import { describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import {
+  peekChatMetadata,
+  rememberChatMetadata,
+  subscribeChatMetadata,
+} from "./chat/chat-metadata-store.ts";
+import { invalidateModelCatalogCache, loadModels } from "./model-catalog-store.ts";
+
+describe("loadModels", () => {
+  it("requests the configured model list view", async () => {
+    const request = vi.fn(async () => ({
+      models: [
+        { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
+      ],
+    }));
+
+    const models = await loadModels({ request } as unknown as GatewayBrowserClient, {
+      agentId: "main",
+    });
+
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+    });
+    expect(models).toEqual([
+      { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
+    ]);
+  });
+
+  it("requests only the prepared catalog for automatic reads", async () => {
+    const request = vi.fn(async () => ({ models: [] }));
+
+    await loadModels({ request } as unknown as GatewayBrowserClient, {
+      agentId: "main",
+      preparedOnly: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "main",
+      preparedOnly: true,
+    });
+  });
+
+  it("revalidates existing metadata after explicit account-model discovery", async () => {
+    const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
+    const discovered = [
+      ...prepared,
+      { id: "discovered", name: "Discovered", provider: "openai", contextWindow: 262_144 },
+    ];
+    const request = vi.fn(async (method: string) => ({
+      models: discovered,
+      ...(method === "chat.metadata" ? { commands: [] } : {}),
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    rememberChatMetadata(client, "main", { commands: [], models: prepared });
+    const listener = vi.fn();
+    const unsubscribe = subscribeChatMetadata(client, "main", listener);
+
+    await loadModels(client, { agentId: "main" });
+
+    await vi.waitFor(() => expect(peekChatMetadata(client, "main")?.models).toEqual(discovered));
+    expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(listener).toHaveBeenCalledOnce();
+    unsubscribe();
+  });
+
+  it("does not revalidate metadata for automatic prepared-only catalog reads", async () => {
+    const models = [{ id: "prepared", name: "Prepared", provider: "openai" }];
+    const request = vi.fn(async () => ({ models }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    rememberChatMetadata(client, "main", { commands: [], models });
+
+    await loadModels(client, { agentId: "main", preparedOnly: true });
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalledWith("chat.metadata", expect.anything());
+  });
+
+  it("reuses the configured model list while the cache is fresh", async () => {
+    const request = vi.fn(async () => ({
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const first = await loadModels(client, { agentId: "main" });
+    const second = await loadModels(client, { agentId: "main" });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(first).toBe(second);
+  });
+
+  it("keeps model catalogs scoped by agent", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId?: string }) => ({
+      models: [
+        {
+          id: params.agentId ?? "default-model",
+          name: params.agentId ?? "Default Model",
+          provider: "openai",
+        },
+      ],
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const writer = await loadModels(client, { agentId: "writer" });
+    const reviewer = await loadModels(client, { agentId: "reviewer" });
+    await loadModels(client, { agentId: "writer" });
+
+    expect(writer[0]?.id).toBe("writer");
+    expect(reviewer[0]?.id).toBe("reviewer");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "writer",
+    });
+  });
+
+  it("keeps a Models refresh visible when route re-entry uses a prepared read", async () => {
+    const prepared = [{ id: "prepared", name: "Prepared", provider: "openai" }];
+    const exact = [{ id: "exact", name: "Exact", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: prepared })
+      .mockResolvedValueOnce({ models: exact });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main", preparedOnly: true })).toEqual(prepared);
+    expect(await loadModels(client, { agentId: "main", refresh: true })).toEqual(exact);
+    expect(await loadModels(client, { agentId: "main", preparedOnly: true })).toEqual(exact);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a late stale response from clobbering a fresher refresh result", async () => {
+    const stale = [{ id: "stale", name: "Stale", provider: "openai" }];
+    const fresh = [{ id: "fresh", name: "Fresh", provider: "openai" }];
+    let releaseStale: (() => void) | undefined;
+    const staleGate = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        await staleGate;
+        return { models: stale };
+      })
+      .mockImplementationOnce(async () => ({ models: fresh }));
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const stalePromise = loadModels(client, { agentId: "main" });
+    const freshModels = await loadModels(client, { agentId: "main", refresh: true });
+    releaseStale?.();
+    await stalePromise;
+
+    expect(freshModels).toEqual(fresh);
+    expect(await loadModels(client, { agentId: "main" })).toEqual(fresh);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent refreshes without reusing a completed refresh", async () => {
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const request = vi.fn(async () => {
+      await refreshGate;
+      return { models: [{ id: "fresh", name: "Fresh", provider: "openai" }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    const first = loadModels(client, { agentId: "writer", refresh: true });
+    const concurrent = loadModels(client, { agentId: "writer", refresh: true });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+    releaseRefresh?.();
+    expect(await concurrent).toBe(await first);
+
+    await loadModels(client, { agentId: "writer", refresh: true });
+
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("joins an active picker refresh instead of returning the cooldown cache", async () => {
+    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
+    const refreshed = [{ id: "refreshed", name: "Refreshed", provider: "openai" }];
+    let releaseRefresh: (() => void) | undefined;
+    const refreshGate = new Promise<void>((resolve) => {
+      releaseRefresh = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: initial })
+      .mockImplementationOnce(async () => {
+        await refreshGate;
+        return { models: refreshed };
+      });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
+    const first = loadModels(client, { agentId: "main", refreshIfDue: true });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const concurrent = loadModels(client, { agentId: "main", refreshIfDue: true });
+    releaseRefresh?.();
+
+    expect(await concurrent).toBe(await first);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes an account catalog once per picker cooldown", async () => {
+    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
+    const refreshed = [{ id: "refreshed", name: "Refreshed", provider: "openai" }];
+    const later = [{ id: "later", name: "Later", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: initial })
+      .mockResolvedValueOnce({ models: refreshed })
+      .mockResolvedValueOnce({ models: later });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    try {
+      expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      now.mockReturnValue(1_000 + 60_000 + 1);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(refreshed);
+      expect(request).toHaveBeenCalledTimes(2);
+
+      now.mockReturnValue(1_000 + 5 * 60_000 + 1);
+      expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(later);
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls.slice(1).map((call) => call[1])).toEqual([
+        { view: "configured", agentId: "main", refresh: true },
+        { view: "configured", agentId: "main", refresh: true },
+      ]);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("retires a picker catalog when its logical Gateway connection changes", async () => {
+    const beforeReconnect = [{ id: "before", name: "Before", provider: "openai" }];
+    const afterReconnect = [{ id: "after", name: "After", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: beforeReconnect })
+      .mockResolvedValueOnce({ models: afterReconnect });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
+      beforeReconnect,
+    );
+
+    invalidateModelCatalogCache(client);
+
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(
+      afterReconnect,
+    );
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a failed account catalog refresh retryable", async () => {
+    const initial = [{ id: "initial", name: "Initial", provider: "openai" }];
+    const recovered = [{ id: "recovered", name: "Recovered", provider: "openai" }];
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ models: initial })
+      .mockRejectedValueOnce(new Error("probe timed out"))
+      .mockResolvedValueOnce({ models: recovered });
+    const client = { request } as unknown as GatewayBrowserClient;
+
+    expect(await loadModels(client, { agentId: "main" })).toEqual(initial);
+    await expect(
+      loadModels(client, { agentId: "main", refreshIfDue: true, rejectOnFailure: true }),
+    ).rejects.toThrow("probe timed out");
+    expect(await loadModels(client, { agentId: "main", refreshIfDue: true })).toEqual(recovered);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+});

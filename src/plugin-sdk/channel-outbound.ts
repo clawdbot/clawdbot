@@ -4,6 +4,10 @@ import type {
   DurableMessageSendContext,
   DurableMessageSendContextParams,
 } from "../channels/message/runtime.js";
+import {
+  resolveChannelProgressDraftConfig as readProgressDraftConfig,
+  type StreamingCompatEntry as ProgressDraftCompatEntry,
+} from "../channels/streaming.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 type ChannelDurableDeliveryModule = typeof import("../channels/turn/durable-delivery.js");
@@ -21,25 +25,33 @@ export {
 export type { OutboundMessageIdentity } from "../channels/message/outbound-echo.js";
 export {
   bindIngressLifecycleToReplyOptions,
-  CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressError,
   createChannelIngressDrain,
-  createChannelIngressMonitor,
-  createReplyPrefixContext,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  createChannelReplyPipeline as createChannelMessageReplyPipeline,
   // Narrow drain seam by maintainer decision (#108924): factory, lifecycle binding,
   // tuning constants, and processPidFromOwnerId (telegram transport display). All other
   // claim/retry/adoption internals stay core-owned; test helpers live on the
   // private-local plugin-state-test-runtime subpath.
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "../channels/message/ingress-drain.js";
+export {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressError,
+  createChannelIngressMonitor,
+} from "../channels/message/ingress-monitor.js";
+export {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "../channels/message/ingress-retry-policy.js";
+export {
   INGRESS_CLAIM_PROCESS_ID,
   processPidFromOwnerId,
+} from "../channels/message/ingress-claim-owner.js";
+export {
+  createChannelReplyPipeline as createChannelMessageReplyPipeline,
+  createReplyPrefixContext,
+  createReplyPrefixOptions,
+  createTypingCallbacks,
   resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
-} from "../channels/message/index.js";
+} from "../channels/message/reply-pipeline.js";
 // Bare interval/stop orchestration for channels that own their typing renewal
 // policy (e.g. per-message reply budgets) instead of the createTypingCallbacks lifecycle.
 export { createTypingKeepaliveLoop } from "../channels/typing-lifecycle.js";
@@ -121,30 +133,67 @@ export type {
 } from "../channels/streaming.js";
 export {
   createChannelProgressDraftCompositor,
-  createChannelProgressReceiptTracker,
+  createChannelProgressWorkCounter,
 } from "../channels/progress-draft-compositor.js";
+
+/** @deprecated The streaming.progress.render key was retired (#122927). */
+export type ChannelProgressDraftRenderMode = "rich" | "text";
+
+/**
+ * @deprecated Load-only bridge: the published Slack channel package
+ * (2026.7.2-beta.7 and earlier) imports this at module top level, so removing
+ * it makes the installed plugin fail to load after a core upgrade. The config
+ * key it read is retired and doctor strips it, so this resolves the same
+ * "text"/"rich" answer pre-doctor configs produced and the default otherwise.
+ * Remove once managed releases have replaced the old npm latest/extended-stable
+ * packages and their upgrade window has closed.
+ */
+export function resolveChannelProgressDraftRender(
+  entry: ProgressDraftCompatEntry | null | undefined,
+  defaultValue: ChannelProgressDraftRenderMode = "text",
+): ChannelProgressDraftRenderMode {
+  const configured = (readProgressDraftConfig(entry) as { render?: unknown }).render;
+  return configured === "rich" || configured === "text" ? configured : defaultValue;
+}
 export type {
   ChannelProgressDraftCompositorLine,
   ChannelProgressDraftCompositorSnapshot,
 } from "../channels/progress-draft-compositor.js";
+export { deriveDurableFinalDeliveryRequirements } from "../channels/message/capabilities.js";
+export { defineChannelMessageAdapter } from "../channels/message/adapter.js";
+export { createChannelMessageAdapterFromOutbound } from "../channels/message/outbound-bridge.js";
+export { createDurableInboundReceiveJournalFromQueue } from "../channels/message/durable-receive.js";
 export {
-  createChannelMessageAdapterFromOutbound,
-  createDurableInboundReceiveJournalFromQueue,
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-  createMessageReceiveContext,
-  createPreviewMessageReceipt,
-  defineFinalizableLivePreviewAdapter,
-  deriveDurableFinalDeliveryRequirements,
-  deliverWithFinalizableLivePreviewAdapter,
-  defineChannelMessageAdapter,
-  resolveMessageReceiptPrimaryId,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
   verifyDurableFinalCapabilityProofs,
-} from "../channels/message/index.js";
+} from "../channels/message/contracts.js";
+export {
+  createPreviewMessageReceipt,
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
+} from "../channels/message/live.js";
+export {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+  resolveMessageReceiptPrimaryId,
+} from "../channels/message/receipt.js";
+export { createMessageReceiveContext } from "../channels/message/receive.js";
+export type { ChannelIngressDrain } from "../channels/message/ingress-drain.js";
+export type {
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
+} from "../channels/message/ingress-monitor.js";
+export type {
+  ChannelIngressQueue,
+  ChannelIngressQueueClaim,
+  ChannelIngressQueueClaimRef,
+  ChannelIngressQueueCorruptClaim,
+  ChannelIngressQueueRecord,
+} from "../channels/message/ingress-queue.js";
+export type { MessageAckPolicy, MessageReceiveContext } from "../channels/message/receive.js";
 export type {
   ChannelMessageAdapterShape,
   ChannelMessageDurableFinalAdapter,
@@ -154,21 +203,11 @@ export type {
   ChannelMessageSendTextContext,
   ChannelMessageUnknownSendContext,
   ChannelMessageUnknownSendReconciliationResult,
-  ChannelIngressDrain,
-  ChannelIngressMonitorDeliveryResult,
-  ChannelIngressMonitorLifecycle,
-  ChannelIngressQueue,
-  ChannelIngressQueueClaim,
-  ChannelIngressQueueClaimRef,
-  ChannelIngressQueueCorruptClaim,
-  ChannelIngressQueueRecord,
-  MessageAckPolicy,
-  MessageReceiveContext,
   MessageReceipt,
   MessageReceiptPart,
   MessageReceiptPartKind,
   MessageReceiptSourceResult,
-} from "../channels/message/index.js";
+} from "../channels/message/types.js";
 
 /** Lazily forwards inbound reply delivery through the channel turn durable-delivery module. */
 export const deliverInboundReplyWithMessageSendContext: ChannelDurableDeliveryModule["deliverInboundReplyWithMessageSendContextCore"] =

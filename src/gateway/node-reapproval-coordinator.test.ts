@@ -1,5 +1,6 @@
 // Covers paired-node reapproval reuse and changed-surface write limits.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -7,7 +8,7 @@ import {
   releaseNodePairingCleanupClaim,
   requestNodePairing,
 } from "../infra/device-pairing-node.js";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 

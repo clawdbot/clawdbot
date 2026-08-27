@@ -4,8 +4,10 @@ import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseVideoGenerationModelRef } from "../media-generation/model-ref.js";
-import { getVideoGenerationProvider } from "../media-generation/registry.js";
-import { listVideoGenerationProviders } from "../media-generation/registry.js";
+import {
+  getVideoGenerationProvider,
+  listVideoGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,

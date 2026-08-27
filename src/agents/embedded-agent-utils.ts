@@ -163,9 +163,10 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
       if (!block || typeof block !== "object") {
         return "";
       }
-      const record = block as unknown as Record<string, unknown>;
-      if (record.type === "thinking" && typeof record.thinking === "string") {
-        const thinking = record.thinking.trim();
+      const type: unknown = Reflect.get(block, "type");
+      const rawThinking = Reflect.get(block, "thinking");
+      if (type === "thinking" && typeof rawThinking === "string") {
+        const thinking = rawThinking.trim();
         if (thinking) {
           return thinking;
         }
@@ -175,7 +176,8 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
         // .filter(Boolean) below drops the bubble — a diagnostic placeholder is not reasoning
         // content and must not be shown on any channel. The signed block stays on the message
         // for API replay; this only governs display.
-        if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
+        const thinkingSignature = Reflect.get(block, "thinkingSignature");
+        if (typeof thinkingSignature === "string" && thinkingSignature.trim()) {
           return "";
         }
       }

@@ -9,6 +9,8 @@ title: "Camera capture"
 
 OpenClaw supports camera capture for agent workflows on paired **iOS**, **Android**, **macOS**, and **Linux** nodes: capture a photo (`jpg`) or a short video clip (`mp4`, with optional audio) via Gateway `node.invoke`.
 
+When a capture request includes `deviceId`, the selected camera must match that ID exactly. An unknown ID fails instead of capturing from a different camera; run `camera.list` to refresh device IDs, which change when cameras are reconnected.
+
 The macOS app can also physically pan, tilt, and zoom supported USB UVC cameras. PTZ moves the camera hardware; it does not rotate, crop, or otherwise transform a captured image.
 
 All camera access is gated behind a user-controlled setting per platform.
@@ -48,7 +50,7 @@ All camera access is gated behind a user-controlled setting per platform.
 
 ### iOS foreground requirement
 
-Like `canvas.*`, the iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
+The iOS node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE`.
 
 ### CLI helper
 
@@ -81,7 +83,7 @@ The app prompts for runtime permissions when possible.
 
 ### Android foreground requirement
 
-Like `canvas.*`, the Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
+The Android node only allows `camera.*` commands in the **foreground**. Background invocations return `NODE_BACKGROUND_UNAVAILABLE: command requires foreground`.
 
 ### Android commands (via Gateway `node.invoke`)
 
@@ -134,7 +136,7 @@ Physical PTZ is implemented by the Mac app for USB cameras that expose standard 
 
 Always pass an explicit `deviceId` returned by `camera.list`. OpenClaw never chooses a default camera for physical movement.
 
-- `camera.ptz.status` is a safe read command. Request: `{ "deviceId": "<camera-id>" }`.
+- `camera.ptz.status` reads the current position without moving the camera. Request: `{ "deviceId": "<camera-id>" }`.
   - The response contains only executable `pan`, `tilt`, and `zoom` axes under `axes`.
   - Pan and tilt values are degrees. Zoom values are percentages.
   - Each axis reports `current`, `min`, `max`, `step`, `unit`, `canSet`, and `canMove`. `default` appears only when the camera successfully reports a device default.
@@ -146,7 +148,9 @@ Always pass an explicit `deviceId` returned by `camera.list`. OpenClaw never cho
 
 `set` and `move` require at least one finite axis value. Omitted axes remain unchanged, and move deltas for zoom are percentage points. `home` restores the device-advertised defaults; it returns `CAMERA_PTZ_UNSUPPORTED` without moving the camera when `canHome` is false. The Mac app clamps and snaps requested values to the camera's range and resolution; the response returns the post-operation `state` and lists changed request fields in `adjusted`. Requesting an unsupported axis returns `CAMERA_PTZ_AXIS_UNSUPPORTED`.
 
-Pan/tilt and zoom use separate hardware writes and cannot be atomic. If an earlier control group succeeds but a later write or final status read fails, `CAMERA_PTZ_PARTIAL` names the applied groups, includes best-effort resulting state when readable, and tells the caller to run `camera.ptz.status` before retrying.
+Both PTZ commands briefly open a live camera stream because supported cameras only service UVC controls while streaming. This activates the camera and its privacy indicator for the duration, including when `camera.ptz.status` only reads the position. Frames are not retained, and no photo, video, or file is produced.
+
+Pan/tilt and zoom use separate hardware writes and cannot be atomic. OpenClaw verifies the resulting position through a fresh control connection. If a later write or final status read fails, or an axis does not reach its requested position within the camera's reported resolution, `CAMERA_PTZ_PARTIAL` names the acknowledged control groups, includes the independently observed state when readable, and tells the caller to run `camera.ptz.status` before retrying. Position failures also report the requested and observed values; check that a video stream reaches the camera and disable on-camera AI framing or tracking that can override UVC controls.
 
 `camera.ptz.control` is dangerous and remains disarmed until the operator explicitly adds it to `gateway.nodes.commands.allow`:
 

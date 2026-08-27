@@ -276,11 +276,11 @@ function resolveCodexHarnessThinkingLevel(raw: string | undefined): CodexHarness
   return normalized as CodexHarnessThinkingLevel;
 }
 
-function resolveCodexHarnessExpectedEffort(modelId: string): string | null {
+function resolveCodexHarnessExpectedRequestEffort(modelId: string): string | null {
   const configured = process.env.OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT;
   if (configured?.trim()) {
     const expected = resolveCodexHarnessThinkingLevel(configured);
-    return expected === "off" ? null : expected;
+    return expected === "off" ? null : expected === "ultra" ? "max" : expected;
   }
   const supported = CODEX_HARNESS_SUPPORTED_EFFORTS.get(modelId);
   if (!supported) {
@@ -289,14 +289,14 @@ function resolveCodexHarnessExpectedEffort(modelId: string): string | null {
   if (CODEX_HARNESS_THINKING === "off") {
     return null;
   }
-  // Independent oracle for the pinned Codex model catalog. Lower requested
-  // levels choose the nearest advertised effort; Ultra remains explicit.
+  // Codex preserves Ultra in config but intentionally sends Max to the model.
+  // Compare the request-facing lifecycle event to that wire contract.
   const candidates =
     CODEX_HARNESS_THINKING === "ultra"
       ? supported
       : supported.filter((effort) => effort !== "ultra");
   const requestedRank = CODEX_HARNESS_REASONING_EFFORTS.indexOf(CODEX_HARNESS_THINKING);
-  return (
+  const configuredEffort =
     candidates.find(
       (effort) =>
         CODEX_HARNESS_REASONING_EFFORTS.indexOf(
@@ -304,8 +304,8 @@ function resolveCodexHarnessExpectedEffort(modelId: string): string | null {
         ) >= requestedRank,
     ) ??
     candidates.at(-1) ??
-    null
-  );
+    null;
+  return configuredEffort === "ultra" ? "max" : configuredEffort;
 }
 
 function logCodexLiveStep(step: string, details?: Record<string, unknown>): void {
@@ -320,7 +320,7 @@ function readCodexNativeUsageSnapshots(
   events: readonly CapturedAgentEvent[],
 ): CodexNativeUsageSnapshot[] {
   return events.flatMap((event) => {
-    if (event.stream !== "codex_app_server.usage") {
+    if (event.stream !== "usage") {
       return [];
     }
     const activeContextTokens = event.data?.activeContextTokens;
@@ -709,7 +709,6 @@ async function writeLiveGatewayConfig(params: {
       },
       entries: {
         dev: {
-          default: true,
           workspace: params.workspace,
           thinkingDefault: CODEX_HARNESS_THINKING,
           model: { primary: params.modelKey },
@@ -846,7 +845,7 @@ function recordCodexAttemptIdentity(params: {
   expect(turnStarting?.data).toMatchObject({ model: expectedModel });
   const actualEffort = turnStarting?.data?.effort;
   const actualCollaborationEffort = turnStarting?.data?.collaborationEffort;
-  const expectedEffort = resolveCodexHarnessExpectedEffort(expectedModel);
+  const expectedEffort = resolveCodexHarnessExpectedRequestEffort(expectedModel);
   expect(actualEffort ?? null).toBe(expectedEffort);
   expect(actualCollaborationEffort ?? null).toBe(actualEffort ?? null);
   if (CODEX_HARNESS_FULL_CONTEXT) {
@@ -2156,6 +2155,7 @@ describeLive("gateway live (Codex harness)", () => {
           auth: { mode: "token", token },
           controlUiEnabled: false,
         });
+        await server.startupSettled;
         client = await connectTestGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -2480,6 +2480,7 @@ describeLive("gateway live (Codex harness)", () => {
               auth: { mode: "token", token },
               controlUiEnabled: false,
             });
+            await server.startupSettled;
             client = await connectTestGatewayClient({
               url: `ws://127.0.0.1:${port}`,
               token,

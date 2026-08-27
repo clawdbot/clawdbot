@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
@@ -19,12 +20,10 @@ import {
   isPromotionOriginBlocked,
 } from "./dreaming-consolidation-candidates.js";
 import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
-import {
-  DREAMING_DAILY_PROVENANCE_NAMESPACE,
-  readMemoryCoreWorkspaceEntries,
-} from "./dreaming-state.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
+import { reconcileMemoryEntryOrigins } from "./memory-entry-origins.js";
 import {
+  buildPromotionMarker,
   hashMemoryContent,
   isAtomicReplacePermissionError,
   MemoryWriteConflictError,
@@ -56,7 +55,6 @@ import {
 } from "./short-term-promotion-utils.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
-const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MEMORY_WRITE_LOCK_OPTIONS = {
   retries: { retries: 100, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
@@ -81,7 +79,7 @@ function buildPromotionSection(
     for (const candidate of groupCandidates) {
       const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
       const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
-      lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
+      lines.push(buildPromotionMarker(candidate.key));
       // Cap only the visible MEMORY.md text. The recall store keeps the full
       // rehydrated snippet so ranking, provenance, and dream narratives remain
       // tied to the source entry instead of this presentation budget.
@@ -258,13 +256,12 @@ export async function applyShortTermPromotions(
   const maxAgeDays = toFiniteNonNegativeInt(options.maxAgeDays, -1);
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
 
-  const dailyProvenanceEntries = await readMemoryCoreWorkspaceEntries<{
-    fileHash: string;
-    originClass: "agent" | "untrusted";
-    observedAt: number;
-  }>({ namespace: DREAMING_DAILY_PROVENANCE_NAMESPACE, workspaceDir });
+  const dailyProvenanceEntries = await listMemoryArtifactProvenance({ workspaceDir });
   const dailyProvenanceByPath = new Map(
-    dailyProvenanceEntries.map((entry) => [entry.key.replaceAll("\\", "/"), entry.value]),
+    dailyProvenanceEntries.map((entry) => [
+      entry.relativePath.replaceAll("\\", "/"),
+      entry.provenance,
+    ]),
   );
   const store = await withShortTermLock(workspaceDir, async () => readStore(workspaceDir, nowIso));
   const currentCandidates = options.candidates.map((candidate) => {
@@ -285,43 +282,40 @@ export async function applyShortTermPromotions(
     // sacrifices trusted lines in a mixed file so untrusted text cannot promote.
     return withDailyFileQuarantine(authoritative, dailyProvenanceByPath);
   });
-  const selected = currentCandidates
-    .filter((candidate) => {
-      const latest = store.entries[candidate.key];
-      // Explicit untrusted/system origins never promote on ANY path (append or
-      // consolidation): recall frequency must never launder externally-derived
-      // content into MEMORY.md. Workspace memory files index as 'agent', so
-      // legitimate daily-note candidates stay eligible.
-      if (isPromotionOriginBlocked(candidate)) {
-        return false;
-      }
-      if (options.consolidation && (!latest || !isConsolidationCandidateEligible(candidate))) {
-        return false;
-      }
-      if (isContaminatedDreamingSnippet(candidate.snippet)) {
-        return false;
-      }
-      if (candidate.promotedAt) {
-        return false;
-      }
-      if (candidate.score < minScore) {
-        return false;
-      }
-      if (candidate.signalCount < minRecallCount) {
-        return false;
-      }
-      if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
-        return false;
-      }
-      if (maxAgeDays >= 0 && candidate.ageDays > maxAgeDays) {
-        return false;
-      }
-      if (latest?.promotedAt) {
-        return false;
-      }
-      return true;
-    })
-    .slice(0, limit);
+  const rejectionReasons = new Map<string, string>();
+  const eligible = currentCandidates.filter((candidate) => {
+    const latest = store.entries[candidate.key];
+    const queryCount = Math.max(candidate.uniqueQueries, candidate.recallDays.length);
+    // Explicit untrusted/system origins never promote on ANY path (append or
+    // consolidation): recall frequency must never launder externally-derived
+    // content into MEMORY.md. Workspace memory files index as 'agent', so
+    // legitimate daily-note candidates stay eligible.
+    const reason = isPromotionOriginBlocked(candidate)
+      ? `origin filter (${candidate.provenance?.originClass})`
+      : options.consolidation && (!latest || !isConsolidationCandidateEligible(candidate))
+        ? "consolidation origin/session filter"
+        : isContaminatedDreamingSnippet(candidate.snippet)
+          ? "contamination filter"
+          : candidate.promotedAt || latest?.promotedAt
+            ? "already promoted"
+            : candidate.score < minScore
+              ? `score threshold (${candidate.score.toFixed(3)} < ${minScore})`
+              : candidate.signalCount < minRecallCount
+                ? `signal threshold (${candidate.signalCount} < ${minRecallCount})`
+                : queryCount < minUniqueQueries
+                  ? `query threshold (${queryCount} < ${minUniqueQueries})`
+                  : maxAgeDays >= 0 && candidate.ageDays > maxAgeDays
+                    ? `age threshold (${candidate.ageDays.toFixed(1)}d > ${maxAgeDays}d)`
+                    : undefined;
+    if (reason) {
+      rejectionReasons.set(candidate.key, reason);
+    }
+    return !reason;
+  });
+  const selected = eligible.slice(0, limit);
+  for (const candidate of eligible.slice(limit)) {
+    rejectionReasons.set(candidate.key, `selection limit (${limit})`);
+  }
 
   const rehydratedSelected: PromotionCandidate[] = [];
   const plannedSourceFingerprints = new Map<string, string>();
@@ -341,6 +335,15 @@ export async function applyShortTermPromotions(
     ) {
       rehydratedSelected.push(rehydrated);
       plannedSourceFingerprints.set(candidate.key, sourceFingerprintAfter);
+    } else {
+      rejectionReasons.set(
+        candidate.key,
+        !rehydrated
+          ? "source rehydration failed"
+          : sourceFingerprintBefore !== sourceFingerprintAfter
+            ? "source changed during apply"
+            : "contamination filter after rehydration",
+      );
     }
   }
 
@@ -351,6 +354,10 @@ export async function applyShortTermPromotions(
       appended: 0,
       reconciledExisting: 0,
       appliedCandidates: [],
+      rejectedCandidates: currentCandidates.map((candidate) => ({
+        candidate,
+        reason: rejectionReasons.get(candidate.key) ?? "candidate changed during apply",
+      })),
       compactedSections: 0,
       compactedDates: [],
     };
@@ -406,6 +413,7 @@ export async function applyShortTermPromotions(
       : null;
   let consolidationResult: Awaited<ReturnType<typeof applyMemoryConsolidationPlan>> = null;
   let committedCandidates: PromotionCandidate[] = [];
+  let committedMemoryContent: string | undefined;
   let appendedCandidates = 0;
   let rewriteSkippedReason: string | undefined;
   const promotionLockTarget = await resolveMemoryPromotionLockTarget(workspaceDir);
@@ -513,6 +521,7 @@ export async function applyShortTermPromotions(
             expectedHash: consolidationBaseMemoryHash,
             content: consolidationResult.content,
           });
+          committedMemoryContent = consolidationResult.content;
           for (const candidate of toAppend) {
             successfulCandidates.set(candidate.key, candidate);
           }
@@ -577,6 +586,7 @@ export async function applyShortTermPromotions(
             allowInPlaceFallback: true,
             content,
           });
+          committedMemoryContent = content;
           for (const candidate of toAppend) {
             successfulCandidates.set(candidate.key, candidate);
           }
@@ -604,6 +614,21 @@ export async function applyShortTermPromotions(
         Math.max(nowMs, Number.isFinite(latestUpdatedAtMs) ? latestUpdatedAtMs : 0),
       );
       await writeStore(workspaceDir, latestStore);
+      if (options.agentId && committedMemoryContent) {
+        reconcileMemoryEntryOrigins({
+          agentIds: [options.agentId, ...(options.workspaceAgentIds ?? [])],
+          previousMemory: existingMemory,
+          currentMemory: committedMemoryContent,
+          operations:
+            consolidationResult && consolidationPlan
+              ? consolidationPlan.operations
+              : toAppend.map((candidate) => ({
+                  candidateKey: candidate.key,
+                  action: "added" as const,
+                  priorEntries: [],
+                })),
+        });
+      }
       committedCandidates = [...successfulCandidates.values()];
     });
   });
@@ -650,6 +675,12 @@ export async function applyShortTermPromotions(
     appended: appendedCandidates,
     reconciledExisting: alreadyWritten.length,
     appliedCandidates: committedCandidates,
+    rejectedCandidates: currentCandidates
+      .filter((candidate) => !committedCandidates.some((applied) => applied.key === candidate.key))
+      .map((candidate) => ({
+        candidate,
+        reason: rejectionReasons.get(candidate.key) ?? "candidate changed during apply",
+      })),
     compactedSections: compactedDates.length,
     compactedDates,
   };

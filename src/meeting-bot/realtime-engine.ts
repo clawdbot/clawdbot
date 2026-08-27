@@ -48,6 +48,7 @@ export type MeetingRealtimeEngineConfig = {
   chrome: { audioFormat: MeetingRealtimeAudioFormat };
   realtime: {
     strategy: string;
+    agentId?: string;
     provider?: string;
     transcriptionProvider?: string;
     voiceProvider?: string;
@@ -485,6 +486,7 @@ export async function startMeetingRealtimeEngine(params: {
     bridge = harness.createBridge({
       provider: resolved.provider,
       cfg: params.fullConfig,
+      agentId: params.config.realtime.agentId,
       providerConfig: resolved.providerConfig,
       audioFormat: resolveMeetingRealtimeAudioFormat(params.config.chrome.audioFormat),
       instructions: params.config.realtime.instructions,

@@ -1,5 +1,4 @@
 // Xai API module exposes the plugin public contract.
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyXaiModelCompat,
   HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
@@ -26,20 +25,4 @@ export { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 export { applyXaiModelCompat, HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING, XAI_TOOL_SCHEMA_PROFILE };
 export { resolveXaiTransport } from "./provider-routing.js";
 
-export function isXaiModelHint(modelId: string): boolean {
-  return getModelProviderHint(modelId) === "x-ai";
-}
-
 export { normalizeNativeXaiModelId as normalizeXaiModelId };
-
-function getModelProviderHint(modelId: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return null;
-  }
-  return trimmed.slice(0, slashIndex) || null;
-}

@@ -14,6 +14,7 @@ import {
 import {
   claimAgentRunContext,
   getAgentRunContext,
+  getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
   registerAgentRunContext,
   releaseAgentRunContext,
@@ -55,14 +56,15 @@ type OwnedLiveRun = {
   trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type WorkerLiveCredentialRotation = Readonly<{
-  credentialHash: string;
-  environmentId: string;
-  newProcessTurn?: boolean;
-  previousCredentialHash: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
+type WorkerLiveCredentialRotation = Readonly<
+  {
+    credentialHash: string;
+    environmentId: string;
+    previousCredentialHash: string;
+    runEpoch: number;
+    sessionId: string;
+  } & ({ newProcessTurn: true; ackedSeq: number } | { newProcessTurn?: false })
+>;
 
 type LiveEventWindow = {
   activeRuns: Map<string, OwnedLiveRun>;
@@ -172,13 +174,21 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.runEpoch === rotation.runEpoch
     ) {
       if (rotation.newProcessTurn === true) {
+        if (
+          !Number.isSafeInteger(rotation.ackedSeq) ||
+          rotation.ackedSeq < 0 ||
+          rotation.ackedSeq > window.ackedSeq
+        ) {
+          return false;
+        }
         // A per-turn credential is an unforgeable process boundary. Retire only
-        // the prior process's transient run claims/fences while preserving the
-        // durable ACK cursor; cron may intentionally reuse its durable run id.
+        // the prior process's transient state and rewind previews to the durable
+        // ACK cursor; cron may intentionally reuse its durable run id.
         for (const [runId, owned] of window.activeRuns) {
           releaseAgentRunContext(runId, owned.claimId);
         }
         window.activeRuns.clear();
+        window.ackedSeq = rotation.ackedSeq;
         window.pending.clear();
         window.pendingBytes = 0;
         window.terminalRuns.clear();
@@ -491,13 +501,9 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    // A dispatch-owned turn context (e.g. a worker-routed turn) owns the run's
-    // Control UI visibility; adopt it so worker live events keep reaching the
-    // visible clients that started the turn. Identity still has to match, so a
-    // foreign run is rejected; only the visibility preference is inherited. With
-    // no pre-existing turn context we scope live events to this session.
+    // Existing dispatch contexts must admit their outer terminal. Ownerless contexts still need
+    // worker-owned cleanup so a definitive worker terminal cannot leave the session active.
     const controlUiVisible = existingContext?.isControlUiVisible ?? false;
-    const adoptExistingUnowned = existingContext !== undefined;
     if (
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
@@ -508,8 +514,10 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     ) {
       return invalidEvent();
     }
-    let emissionMode: OwnedLiveRun["emissionMode"] = "exclusive";
-    let claimId = claimAgentRunContext(
+    const hasExistingTrackedOwner =
+      getAgentRunContextOwnership(runId)?.lifecycleGeneration === lifecycleGeneration;
+    const emissionMode: OwnedLiveRun["emissionMode"] = existingContext ? "shared" : "exclusive";
+    const claimId = claimAgentRunContext(
       runId,
       {
         ...(window.target.agentId ? { agentId: window.target.agentId } : {}),
@@ -520,44 +528,16 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         sessionKey: window.target.sessionKey,
       },
       {
-        adoptExistingUnowned,
-        exclusive: true,
+        exclusive: existingContext === undefined,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
             fenceReleasedRun(window, runId);
           }
         },
-        ownsContext: true,
+        ownsContext: !hasExistingTrackedOwner,
         trackOwner: true,
       },
     );
-    if (!claimId && existingContext) {
-      // Cron and other Gateway-owned handoffs retain a non-exclusive claim while the
-      // assigned worker runs. Share only that corroborated identity; exclusive owners
-      // still reject this claim and prevent a foreign execution from joining the run.
-      claimId = claimAgentRunContext(
-        runId,
-        {
-          ...(window.target.agentId ? { agentId: window.target.agentId } : {}),
-          isControlUiVisible: controlUiVisible,
-          lifecycleGeneration,
-          projectSessionActive: true,
-          sessionId: window.sessionId,
-          sessionKey: window.target.sessionKey,
-        },
-        {
-          exclusive: false,
-          onClearRequested: (clearedClaimId) => {
-            if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
-              fenceReleasedRun(window, runId);
-            }
-          },
-          ownsContext: false,
-          trackOwner: true,
-        },
-      );
-      emissionMode = "shared";
-    }
     if (!claimId) {
       return invalidEvent();
     }

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { registerCuaDriverDoctorChecks } from "./api.js";
 import { createCuaComputerProvider } from "./src/commands.js";
 import { verifyInstalledCuaDriverArtifacts } from "./src/driver-artifacts.js";
+import { createCuaComputerNodeInvokePolicy } from "./src/node-invoke-policy.js";
 
 const CuaComputerConfigSchema = z.strictObject({
   // Keep the shipped daemon setting as a named no-op: strict validation accepts
@@ -33,10 +34,6 @@ export default definePluginEntry({
     registerComputerUseProvider(api, createCuaComputerProvider());
     // Dangerous plugin command: excluded from default allowlists, and the
     // Gateway fails closed when this policy registration is missing.
-    api.registerNodeInvokePolicy({
-      commands: ["computer.act"],
-      dangerous: true,
-      handle: async (context) => await context.invokeNode(),
-    });
+    api.registerNodeInvokePolicy(createCuaComputerNodeInvokePolicy());
   },
 });

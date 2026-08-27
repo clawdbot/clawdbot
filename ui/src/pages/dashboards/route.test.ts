@@ -22,11 +22,28 @@ async function loadDashboards(
 }
 
 describe("dashboards route", () => {
-  it("requests the dashboard face from the server before pagination", async () => {
-    const list = vi.fn(async () => null);
+  it("seeds the exact managed dashboard query without calling the raw list API", async () => {
+    const result = {
+      ts: 1,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [],
+    };
+    let snapshot = {
+      result: null as typeof result | null,
+      agentId: null,
+      loading: false,
+      error: null,
+    };
+    const list = vi.fn();
+    const listSnapshot = vi.fn(() => snapshot);
+    const refreshList = vi.fn(async () => {
+      snapshot = { ...snapshot, result };
+    });
     const context = {
       basePath: "",
-      sessions: { list, canonicalListRevision: 4 },
+      sessions: { list, listSnapshot, refreshList },
       agentSelection: { state: { selectedId: "main", scopeId: null } },
       agents: { state: { agentsList: null } },
       gateway: { snapshot: { hello: null } },
@@ -37,10 +54,17 @@ describe("dashboards route", () => {
 
     await loadDashboards(context, loaderOptions);
 
-    expect(list).toHaveBeenCalledWith({
+    expect(refreshList).toHaveBeenCalledWith({
+      limit: 50,
+      boardFace: "dashboard",
+      archivedFilter: "all",
+      force: true,
+    });
+    expect(listSnapshot).toHaveBeenLastCalledWith({
       limit: 50,
       boardFace: "dashboard",
       archivedFilter: "all",
     });
+    expect(list).not.toHaveBeenCalled();
   });
 });

@@ -40,7 +40,7 @@ import {
   readPositiveIntegerParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
-import { callGatewayTool } from "./gateway.js";
+import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
 import { resolveAgentNode, resolveAgentNodeId } from "./nodes-utils.js";
 
 export const MEDIA_INVOKE_ACTIONS = {
@@ -185,7 +185,7 @@ async function executeCameraSnap({
   const details: Array<Record<string, unknown>> = [];
 
   for (const target of targets) {
-    const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+    const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
       nodeId,
       command: "camera.snap",
       params: {
@@ -198,7 +198,7 @@ async function executeCameraSnap({
       },
       idempotencyKey: crypto.randomUUID(),
     });
-    const payload = parseCameraSnapPayload(raw?.payload);
+    const payload = parseCameraSnapPayload(raw?.payload, { expectedHost: resolvedNode.remoteIp });
     const normalizedFormat = normalizeLowercaseStringOrEmpty(payload.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported camera.snap format: ${payload.format}`);
@@ -256,7 +256,7 @@ async function executePhotosLatest({
       max: 1,
       message: "quality must be between 0 and 1",
     }) ?? DEFAULT_PHOTOS_QUALITY;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
     nodeId,
     command: "photos.latest",
     params: {
@@ -281,7 +281,7 @@ async function executePhotosLatest({
 
   // Reject every malformed batch member before creating any capture artifact.
   const photos = payload.photos.map((photoRaw) => {
-    const photo = parseCameraSnapPayload(photoRaw);
+    const photo = parseCameraSnapPayload(photoRaw, { expectedHost: resolvedNode.remoteIp });
     const normalizedFormat = normalizeLowercaseStringOrEmpty(photo.format);
     if (normalizedFormat !== "jpg" && normalizedFormat !== "jpeg" && normalizedFormat !== "png") {
       throw new Error(`unsupported photos.latest format: ${photo.format}`);
@@ -349,7 +349,7 @@ async function executeCameraClip({
       ? params.deviceId.trim()
       : undefined;
   const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(timeouts.gatewayOpts, {
     nodeId,
     command: "camera.clip",
     params: {
@@ -399,7 +399,7 @@ async function executeScreenRecord({
   const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
   const timeouts = resolveRecordingTimeouts({ input: params, gatewayOpts, durationMs });
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", timeouts.gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(timeouts.gatewayOpts, {
     nodeId,
     command: "screen.record",
     params: {
@@ -442,7 +442,7 @@ async function executeScreenSnapshot({
   // The node owns the encoding choice, so ask for the one the caller's filename
   // already promises instead of letting the default contradict it.
   const requestedFormat = outPath ? screenSnapshotFormatForPath(outPath) : undefined;
-  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+  const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(gatewayOpts, {
     nodeId,
     command: "screen.snapshot",
     params: { screenIndex, maxWidth, format: requestedFormat },

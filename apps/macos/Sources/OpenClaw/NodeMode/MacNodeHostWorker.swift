@@ -102,6 +102,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     private var processGeneration: UUID?
     private var launchedWorker: MacNodeHostWorkerLaunch?
     private var stdoutBuffer = Data()
+    // Bounded head of worker stderr. CLI startup failures print their cause
+    // first; without this the operator-visible error is just "exited(1)".
+    private var stderrHead = ""
+    private static let maxStderrHeadLength = 700
     private var manifest: MacNodeHostManifest?
     private var inventoryData: Data?
     private var route: GatewayNodeSessionRoute?
@@ -182,6 +186,9 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                     ])
                     for control in self.takePendingInvokeControlsLocked(invokeId: request.id) {
                         try self.enqueueInvokeControlLocked(control, invokeId: request.id)
+                        if case .cancel = control {
+                            self.finishCancelledInvokeLocked(invokeId: request.id)
+                        }
                     }
                 } catch {
                     self.invokeContinuations.removeValue(forKey: request.id)?.resume(returning:
@@ -211,6 +218,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 let control = PendingInvokeControl.cancel
                 if self.invokeContinuations[invokeId] != nil {
                     try? self.enqueueInvokeControlLocked(control, invokeId: invokeId)
+                    self.finishCancelledInvokeLocked(invokeId: invokeId)
                 } else if self.process?.isRunning == true, self.manifest != nil {
                     self.bufferInvokeControlLocked(control, invokeId: invokeId)
                 }
@@ -266,6 +274,11 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 "invokeId": invokeId,
             ])
         }
+    }
+
+    private func finishCancelledInvokeLocked(invokeId: String) {
+        self.invokeContinuations.removeValue(forKey: invokeId)?.resume(returning:
+            Self.unavailableResponse(invokeId, "UNAVAILABLE: node-host worker invocation cancelled"))
     }
 
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
@@ -341,7 +354,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        guard fcntl(stdinPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1) != -1 else {
+        guard stdinPipe.fileHandleForWriting.disableSIGPIPE() else {
             self.finishStartLocked(.failure(WorkerError.unavailable("could not protect worker input pipe")))
             return
         }
@@ -368,13 +381,13 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
             let state = self.process?.isRunning == true ? "running" : "exited"
             self.finishStartLocked(.failure(WorkerError.unavailable(
                 "node-host worker startup timed out (process \(state), buffered \(self.stdoutBuffer.count) bytes)")))
-            self.stopLocked(reason: "worker startup timed out")
+            self.stopLocked(reason: "worker startup timed out", notifyUnexpectedExit: true)
         }
         self.startTimer = timer
         timer.resume()
 
         let configuration = Subprocess.Configuration(
-            .path(.init(executable)),
+            executable: .path(.init(executable)),
             arguments: Arguments(Array(command.dropFirst())),
             environment: ManagedProcess.environment(from: environment),
             workingDirectory: launch.currentDirectoryURL.map { .init($0.path) })
@@ -439,6 +452,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 !message.isEmpty
             {
                 self.logger.error("node-host worker stderr: \(message, privacy: .private)")
+                if self.stderrHead.count < Self.maxStderrHeadLength {
+                    self.stderrHead.append(self.stderrHead.isEmpty ? message : "\n" + message)
+                    self.stderrHead = String(self.stderrHead.prefix(Self.maxStderrHeadLength))
+                }
             }
         }
         self.stderrSource = stderrSource
@@ -711,8 +728,12 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         preserveStart: Bool = false,
         notifyUnexpectedExit: Bool = false) -> Task<Void, Never>?
     {
-        let wasReady = self.manifest != nil
         let stoppedWorker = self.launchedWorker
+        // A worker that dies before its ready manifest still needs its stderr
+        // surfaced: the raw exit status alone cannot explain a CLI bootstrap
+        // refusal (missing runtime, incompatible state database, bad install).
+        let detailedReason = self.stderrHead.isEmpty ? reason : "\(reason): \(self.stderrHead)"
+        self.stderrHead = ""
         self.startTimer?.cancel()
         self.startTimer = nil
         self.launchedWorker = nil
@@ -721,7 +742,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         self.inventoryData = nil
         self.route = nil
         if !preserveStart {
-            self.finishStartLocked(.failure(WorkerError.unavailable(reason)))
+            self.finishStartLocked(.failure(WorkerError.unavailable(detailedReason)))
         }
         if let processCleanupTask = self.processCleanupTask { return processCleanupTask }
         let pending = self.invokeContinuations
@@ -731,7 +752,10 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         for (id, continuation) in pending {
             continuation.resume(returning: Self.unavailableResponse(id, "UNAVAILABLE: node-host worker stopped"))
         }
-        if notifyUnexpectedExit, wasReady, let stoppedWorker {
+        // Startup-time exits count too: without this, a worker that dies before
+        // its ready manifest never consumes retry budget and the coordinator
+        // respawns a broken CLI forever instead of latching retry exhaustion.
+        if notifyUnexpectedExit, let stoppedWorker {
             self.onUnexpectedExit(stoppedWorker.configurationGeneration)
         }
         guard let process = self.process else {

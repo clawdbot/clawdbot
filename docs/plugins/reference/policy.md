@@ -16,7 +16,7 @@ Adds policy-backed doctor checks for workspace conformance.
 
 ## Surface
 
-plugin
+CLI commands: `openclaw policy`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
