@@ -157,12 +157,17 @@ describe("device-pair doctor notify migration", () => {
     await expect(store.lookup(notifySubscriberStoreKey(first))).resolves.toEqual(canonical);
   });
 
-  it("imports legacy notify subscribers into plugin state", async () => {
+  it.each([
+    {},
+    { accountId: "telegram-default" },
+    { messageThreadId: 271 },
+    { accountId: "telegram-default", messageThreadId: 0 },
+    { accountId: "telegram-default", messageThreadId: "271" },
+  ])("imports legacy notify subscribers into plugin state (%j)", async (target) => {
     const sourcePath = path.join(stateDir, DEVICE_PAIR_NOTIFY_LEGACY_STATE_FILE);
     const subscriber: NotifySubscription = {
       to: "chat-123",
-      accountId: "telegram-default",
-      messageThreadId: 271,
+      ...target,
       mode: "persistent",
       addedAtMs: 1,
     };
