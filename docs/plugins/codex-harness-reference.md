@@ -562,7 +562,9 @@ read, fork, rename, archive, and unarchive those threads. Fork a thread before
 continuing it in OpenClaw; independent Codex processes do not coordinate
 concurrent writers for the same thread.
 
-That `homeScope` opt-in applies to ordinary harness sessions. A Chat created
+That `homeScope` opt-in applies to ordinary harness sessions. Hosted web search
+and settled-turn finalization use private temporary homes and OpenClaw auth
+even when ordinary sessions share the user home. A Chat created
 through Codex Sessions uses its private supervision connection instead, which
 preserves the native connection's auth and provider configuration for the
 canonical branch and future resumes.
