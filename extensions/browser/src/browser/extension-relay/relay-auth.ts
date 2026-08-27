@@ -49,18 +49,21 @@ export async function ensureExtensionRelayToken(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<string> {
   const secretPath = resolveExtensionRelaySecretPath(env);
-  let createError: unknown;
+  let lastError: unknown;
   for (let attempt = 0; attempt < RELAY_SECRET_REREAD_ATTEMPTS; attempt += 1) {
+    let canCreate = false;
     try {
       const winner = readExtensionRelayToken(env);
       if (winner) {
         return winner;
       }
-    } catch {
+      canCreate = attempt === 0;
+    } catch (err) {
       // An exclusive writer can expose an empty final file before ensure starts;
-      // even the first read belongs inside this bounded handoff.
+      // retry adoption without invoking the stricter credential creation guards.
+      lastError = err;
     }
-    if (attempt === 0) {
+    if (canCreate) {
       const token = crypto.randomBytes(32).toString("hex");
       try {
         await createSecretFileAtomic({
@@ -73,7 +76,7 @@ export async function ensureExtensionRelayToken(
         if ((err as NodeJS.ErrnoException).code !== "secret-exists") {
           throw err;
         }
-        createError = err;
+        lastError = err;
       }
     }
     await new Promise<void>((resolve) => {
@@ -81,6 +84,6 @@ export async function ensureExtensionRelayToken(
     });
   }
   throw new Error("extension relay secret exists but is unreadable/malformed", {
-    cause: createError,
+    cause: lastError,
   });
 }

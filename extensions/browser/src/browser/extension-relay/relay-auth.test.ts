@@ -64,12 +64,20 @@ describe("extension relay host-local secret", () => {
   });
 
   it.each([
-    { name: "simultaneous first callers", writerStarted: false },
-    { name: "a writer already in progress", writerStarted: true },
-  ])("adopts the first writer's token with $name", async ({ writerStarted }) => {
+    { name: "simultaneous first callers", writerStarted: false, symlink: false },
+    { name: "a writer already in progress", writerStarted: true, symlink: false },
+    { name: "a writer in progress through a directory alias", writerStarted: true, symlink: true },
+  ])("adopts the first writer's token with $name", async ({ writerStarted, symlink }) => {
     const writerToken = "a1".repeat(32);
-    fs.mkdirSync(path.dirname(secretPath), { mode: 0o700 });
-    const fd = writerStarted ? fs.openSync(secretPath, "wx", 0o600) : undefined;
+    const credentials = path.dirname(secretPath);
+    const target = symlink ? path.join(stateDir, "credential-target") : credentials;
+    fs.mkdirSync(target, { mode: 0o700 });
+    if (symlink) {
+      fs.symlinkSync(target, credentials, "junction");
+    }
+    const fd = writerStarted
+      ? fs.openSync(path.join(target, path.basename(secretPath)), "wx", 0o600)
+      : undefined;
     try {
       const before = fd === undefined ? undefined : fs.fstatSync(fd);
       const tokens = Promise.all([ensureExtensionRelayToken(env), ensureExtensionRelayToken(env)]);
@@ -80,6 +88,7 @@ describe("extension relay host-local secret", () => {
       const [first, second] = await tokens;
       expect(second).toBe(first);
       expect(readExtensionRelayToken(env)).toBe(first);
+      expect(fs.lstatSync(credentials).isSymbolicLink()).toBe(symlink);
       if (before) {
         expect(first).toBe(writerToken);
         expect(fs.readFileSync(secretPath, "utf8")).toBe(`${writerToken}\n`);
@@ -92,6 +101,15 @@ describe("extension relay host-local secret", () => {
     }
   });
 
+  it("rejects creating a missing key through a symlinked credential directory", async () => {
+    const target = path.join(stateDir, "credential-target");
+    fs.mkdirSync(target, { mode: 0o700 });
+    fs.symlinkSync(target, path.dirname(secretPath), "junction");
+    await expect(ensureExtensionRelayToken(env)).rejects.toThrow("must not be a symlink");
+    expect(fs.readdirSync(target)).toEqual([]);
+    expect(fs.lstatSync(path.dirname(secretPath)).isSymbolicLink()).toBe(true);
+  });
+
   it.each([
     { name: "empty", content: "" },
     { name: "whitespace", content: " \n\t" },
@@ -100,7 +118,9 @@ describe("extension relay host-local secret", () => {
     fs.mkdirSync(path.dirname(secretPath), { mode: 0o700 });
     fs.writeFileSync(secretPath, content, { flag: "wx", mode: 0o600 });
     const before = fs.statSync(secretPath);
-    await expect(ensureExtensionRelayToken(env)).rejects.toThrow();
+    await expect(ensureExtensionRelayToken(env)).rejects.toMatchObject({
+      cause: expect.any(Error),
+    });
     expect(fs.readFileSync(secretPath, "utf8")).toBe(content);
     expect(fs.statSync(secretPath)).toMatchObject({ dev: before.dev, ino: before.ino });
   });
