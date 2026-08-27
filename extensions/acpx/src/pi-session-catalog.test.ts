@@ -1,6 +1,9 @@
-import { execFile } from "node:child_process";`nimport { constants as fsConstants } from "node:fs";`nimport fs from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";`nimport { promisify } from "node:util";
+import path from "node:path";
+import { promisify } from "node:util";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,7 +61,8 @@ import { listPiSummaryPage } from "./pi-session-store.js";
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
-const PI_SESSION_READ_LIMIT_BYTES = 32 * 1024 * 1024;`nconst execFileAsync = promisify(execFile);
+const PI_SESSION_READ_LIMIT_BYTES = 32 * 1024 * 1024;
+const execFileAsync = promisify(execFile);
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
