@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,

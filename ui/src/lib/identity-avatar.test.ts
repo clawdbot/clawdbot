@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
 import { resolveAvatarImageUrl, settleAvatarImageUrl } from "./identity-avatar-loader.ts";
-import { resolveAvatar, resolveIdentityHue, setAvatarGatewayOrigin } from "./identity-avatar.ts";
+import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
 
 afterEach(() => {
   setAvatarGatewayOrigin(null);
@@ -107,10 +108,12 @@ describe("resolveAvatar gateway origin trust", () => {
     (pageOrigin, basePath, avatarUrl, expectedPath) => {
       vi.stubGlobal("location", { origin: pageOrigin });
       setAvatarGatewayOrigin("wss://gw.example.com/ws", null, basePath);
-      expect(resolveAvatar({ id: "research", profileAvatarUrl: avatarUrl })).toEqual({
-        kind: "profile",
-        url: `https://gw.example.com${expectedPath}`,
-      });
+      for (const identity of [undefined, { type: "agent" as const, id: "research" }]) {
+        expect(resolveAvatar({ id: "research", identity, profileAvatarUrl: avatarUrl })).toEqual({
+          kind: "profile",
+          url: `https://gw.example.com${expectedPath}`,
+        });
+      }
     },
   );
 
@@ -192,21 +195,66 @@ describe("resolveAvatar gateway origin trust", () => {
 });
 
 describe("resolveAvatar profile-id senders", () => {
-  it("derives the canonical avatar route from a UUID-shaped sender id", () => {
-    expect(resolveAvatar({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f", name: "steipete" })).toEqual(
-      {
-        kind: "profile",
-        url: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
-      },
-    );
+  it("preserves unqualified sender whitespace normalization", () => {
+    expect(resolveAvatar({ id: " c3e32452-0467-47e5-aafa-233cd5dae29f " })).toEqual({
+      kind: "profile",
+      url: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
+    });
   });
+
+  it.each([undefined, "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar"])(
+    "does not upgrade a typed remote participant from its id or display metadata: %s",
+    (profileAvatarUrl) => {
+      expect(
+        resolveAvatar({
+          id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+          name: "steipete",
+          profileAvatarUrl,
+          identity: {
+            type: "observation",
+            id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+            pluginId: "test",
+            accountId: null,
+            senderKind: "unknown",
+          },
+        }),
+      ).toMatchObject({ kind: "initials" });
+    },
+  );
 
   it("resolves the derived route against the gateway origin", () => {
     setAvatarGatewayOrigin("wss://gw.example.com/ws");
-    expect(resolveAvatar({ id: "c3e32452-0467-47e5-aafa-233cd5dae29f" })).toEqual({
+    expect(
+      resolveAvatar({
+        id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+        identity: { type: "profile", id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
+      }),
+    ).toEqual({
       kind: "profile",
       url: "https://gw.example.com/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
     });
+  });
+
+  it.each([undefined, "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar"])(
+    "does not turn a typed agent into a profile from a UUID or user image: %s",
+    (profileAvatarUrl) => {
+      const id = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+      expect(
+        resolveAvatar({ id, identity: { type: "agent", id }, profileAvatarUrl }),
+      ).toMatchObject({
+        kind: "initials",
+      });
+    },
+  );
+
+  it("keeps a typed profile in the user image namespace", () => {
+    expect(
+      resolveAvatar({
+        id: "person",
+        identity: { type: "profile", id: "person" },
+        profileAvatarUrl: "/avatar/research",
+      }),
+    ).toEqual({ kind: "profile", url: "/api/users/person/avatar" });
   });
 
   it("keeps non-UUID sender ids on initials (no route probing)", () => {

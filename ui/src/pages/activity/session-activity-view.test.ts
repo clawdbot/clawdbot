@@ -4,7 +4,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { setAvatarGatewayOrigin } from "../../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { renderSessionActivityView } from "./session-activity-view.ts";
 
@@ -14,7 +14,11 @@ function row(
   updatedAt: number,
   overrides: Partial<GatewaySessionRow> = {},
 ) {
-  const actor = { type: "human" as const, ...owner };
+  const actor = {
+    type: "human" as const,
+    ...owner,
+    identity: { type: "profile" as const, id: owner.id },
+  };
   return {
     key,
     kind: "direct",
@@ -26,7 +30,9 @@ function row(
   } satisfies GatewaySessionRow;
 }
 
-function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0]> = {}) {
+function props(
+  overrides: Partial<Parameters<typeof renderSessionActivityView>[0]> = {},
+): Parameters<typeof renderSessionActivityView>[0] {
   return {
     context: {
       basePath: "",
@@ -40,6 +46,27 @@ function props(overrides: Partial<Parameters<typeof renderSessionActivityView>[0
     presenceViewers: [] as PresenceViewer[],
     retainedIdentity: null,
     rows: [] as GatewaySessionRow[],
+    result: {
+      ts: 1,
+      path: "",
+      count: overrides.rows?.length ?? 0,
+      sessions: [...(overrides.rows ?? [])],
+      defaults: { model: null, modelProvider: null, contextTokens: null },
+      people: [
+        {
+          identity: { type: "profile" as const, id: "online" },
+          label: "Online person",
+          sessionCount: 1,
+        },
+        {
+          identity: { type: "profile" as const, id: "offline" },
+          label: "Offline person",
+          sessionCount: 1,
+        },
+      ],
+    },
+    loading: false,
+    onRetry: vi.fn(),
     expandedAutomationDays: new Set<string>(),
     onAutomationDayToggle: vi.fn(),
     onFiltersChange: vi.fn(),
@@ -65,7 +92,7 @@ describe("session activity semantics", () => {
     expect(container.querySelectorAll("main")).toHaveLength(0);
   });
 
-  it("renders agent-owned session and people images without replacing human pictures", async () => {
+  it("renders agent-owned sessions and profile pictures without making agents or channels people", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test");
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : input.toString();
@@ -82,32 +109,58 @@ describe("session activity semantics", () => {
     const agent = {
       type: "agent" as const,
       id: "research",
+      identity: { type: "agent" as const, id: "research" },
       label: "Research",
       avatarUrl: "/avatar/research",
     };
     const human = {
       type: "human" as const,
       id: "person",
+      identity: { type: "profile" as const, id: "person" },
       label: "Person",
       avatarUrl: "/api/users/person/avatar",
     };
     const container = document.createElement("div");
     document.body.append(container);
+    const channel = {
+      ...human,
+      identity: { type: "legacy" as const, actorType: "human", source: "channel", id: "person" },
+    };
+    const rows = [
+      row("Human session", human, Date.now(), { owner: { actor: human } }),
+      row("Agent session", agent, Date.now() - 1, {
+        owner: { actor: agent },
+        createdActor: agent,
+      }),
+      row("Unattributed session", agent, Date.now() - 2, {
+        owner: undefined,
+        createdActor: undefined,
+        agentId: "research",
+      }),
+      row("Channel session", channel, Date.now() - 3, {
+        owner: { actor: channel },
+        createdActor: channel,
+      }),
+    ];
     render(
       renderSessionActivityView(
         props({
-          rows: [
-            row("Human session", human, Date.now(), { owner: { actor: human } }),
-            row("Agent session", agent, Date.now() - 1, {
-              owner: { actor: agent },
-              createdActor: agent,
-            }),
-            row("Unattributed session", agent, Date.now() - 2, {
-              owner: undefined,
-              createdActor: undefined,
-              agentId: "research",
-            }),
-          ],
+          rows,
+          result: {
+            ts: 1,
+            path: "",
+            count: rows.length,
+            sessions: rows,
+            defaults: { model: null, modelProvider: null, contextTokens: null },
+            people: [
+              {
+                identity: human.identity,
+                label: human.label,
+                avatarUrl: human.avatarUrl,
+                sessionCount: 1,
+              },
+            ],
+          },
         }),
       ),
       container,
@@ -120,8 +173,10 @@ describe("session activity semantics", () => {
         container.querySelector('[data-activity-session="Agent session"] img')?.getAttribute("src"),
       ).toBe("blob:agent");
       expect(
-        container.querySelector('[data-activity-person="research"] img')?.getAttribute("src"),
-      ).toBe("blob:agent");
+        container.querySelector('[data-activity-person="person"] img')?.getAttribute("src"),
+      ).toBe("blob:human");
+      expect(container.querySelector('[data-activity-person="research"]')).toBeNull();
+      expect(container.querySelector('[data-activity-session="Channel session"] img')).toBeNull();
       expect(
         container
           .querySelector('[data-activity-session="Unattributed session"] img')
@@ -136,7 +191,7 @@ describe("session activity people filter", () => {
     document.body.innerHTML = "";
   });
 
-  it("separates raw fallback identities and maps presence dots by exact viewer id", () => {
+  it("uses the server people facet, excludes raw identities, and maps presence by exact profile id", () => {
     const now = Date.now();
     const container = document.createElement("div");
     document.body.append(container);
@@ -171,11 +226,14 @@ describe("session activity people filter", () => {
     ).toBeNull();
     expect(
       container.querySelector('[data-activity-person="offline"] .activity-feed__last-active'),
-    ).not.toBeNull();
-    const unresolved = container.querySelector("[data-activity-unresolved]");
-    expect(unresolved?.textContent).toContain("14759118…");
-    expect(unresolved?.textContent).not.toContain("147591189530201337");
-    expect(unresolved?.querySelector('[data-activity-person="explicit-id"]')).toBeNull();
+    ).toBeNull();
+    expect(container.querySelector('[data-activity-person="147591189530201337"]')).toBeNull();
+    expect(container.querySelector('[data-activity-person="explicit-id"]')).toBeNull();
+    expect(
+      container
+        .querySelector('[data-activity-person="offline"] .activity-feed__people-count')
+        ?.textContent?.trim(),
+    ).toBe("1");
   });
 
   it("shows the client IP and self-reported time zone on the device row", () => {

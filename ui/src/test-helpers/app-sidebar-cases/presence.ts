@@ -127,7 +127,7 @@ describe("AppSidebar viewer presence", () => {
       row.label = row.key === "global" ? "Research global" : `Visible ${index}`;
       row.updatedAt = Date.now() - index * 60_000;
       if (index === 2) {
-        row.participants = [{ type: "human", id: "alice", label: "Alice" }];
+        row.participants = [{ identity: { type: "profile", id: "alice" }, label: "Alice" }];
       }
       if (index === 3) {
         row.createdActor = { type: "agent", id: "alice" };

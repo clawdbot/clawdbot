@@ -14,9 +14,8 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
-import { resolveSessionStoreTargets } from "../config/sessions/targets.js";
+import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -1517,30 +1516,18 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
-  const configuredAgentDatabaseTargets = resolveSessionStoreTargets(
-    params.cfg,
-    { allAgents: true },
-    { env },
-  ).map((target) => {
-    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
-      agentId: target.agentId,
-      defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
-        ? target.agentId
-        : resolveSessionStoreCompatibilityAgentId(params.cfg),
-      env,
-    });
-    return { agentId: resolved.agentId ?? target.agentId, path: resolved.path };
-  });
-  const transcriptDirectives = migrateHistoricalTranscriptDirectives({
-    configuredAgentDatabaseTargets,
+  const agentMigrationOptions = {
+    configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  };
+  // Media owns the historical cutover and stopped-writer lease before current consumers.
   const mediaPersistence =
     params.doctorOnlyStateMigrations === true
-      ? migrateLegacyMediaPersistence({
-          configuredAgentDatabaseTargets,
-          env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-        })
+      ? await migrateLegacyMediaPersistence(agentMigrationOptions)
+      : { changes: [], warnings: [] };
+  const transcriptDirectives =
+    mediaPersistence.warnings.length === 0
+      ? migrateHistoricalTranscriptDirectives(agentMigrationOptions)
       : { changes: [], warnings: [] };
   if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
     return {

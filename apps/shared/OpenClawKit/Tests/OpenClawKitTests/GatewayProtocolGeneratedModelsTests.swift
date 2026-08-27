@@ -3,6 +3,44 @@ import OpenClawProtocol
 import Testing
 
 struct GatewayProtocolGeneratedModelsTests {
+    @Test(arguments: [
+        (#"{"type":"profile","id":"same"}"#, "profile"),
+        (#"{"type":"agent","id":"same"}"#, "agent"),
+        (#"{"type":"remote","pluginId":"slack","domain":"workspace","idKind":"user","id":"same"}"#, "remote"),
+        (#"{"type":"observation","pluginId":null,"accountId":null,"senderKind":"unknown","id":"same"}"#, "observation"),
+        (#"{"type":"legacy","actorType":"human","source":null,"id":"same"}"#, "legacy"),
+    ])
+    func `inline object union branches have typed declarations and round trip`(
+        json: String,
+        expectedType: String) throws
+    {
+        let data = Data(#"{"identity":\#(json)}"#.utf8)
+        let participant = try JSONDecoder().decode(SessionParticipant.self, from: data)
+        switch participant.identity {
+        case .profile: #expect(expectedType == "profile")
+        case .agent: #expect(expectedType == "agent")
+        case .remote: #expect(expectedType == "remote")
+        case .observation: #expect(expectedType == "observation")
+        case .legacy: #expect(expectedType == "legacy")
+        }
+        let encoded = try JSONEncoder().encode(participant)
+        let actual = try #require(JSONSerialization.jsonObject(with: encoded) as? NSDictionary)
+        let expected = try #require(JSONSerialization.jsonObject(with: data) as? NSDictionary)
+        #expect(actual == expected)
+    }
+
+    @Test(arguments: [
+        #"{"type":"unknown","id":"same"}"#,
+        #"{"type":"profile"}"#,
+        #"{"type":"profile","id":"same","pluginId":"slack"}"#,
+        #"{"type":"remote","id":"same"}"#,
+    ])
+    func `inline object union decoding rejects unknown incomplete and mixed variants`(json: String) {
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(SessionParticipantIdentity.self, from: Data(json.utf8))
+        }
+    }
+
     @Test
     func `generated frames decode legacy minimums and additive fields`() throws {
         let request = try JSONDecoder().decode(

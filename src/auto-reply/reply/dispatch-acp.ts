@@ -29,6 +29,7 @@ import { toolPolicyRestrictsTools } from "../../agents/tool-policy.js";
 import { recordRuntimeActionDecision } from "../../audit/runtime-action-decision.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { readChannelContextAdmissionEvidence } from "../../channels/message-access/admission-evidence.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
@@ -42,6 +43,10 @@ import {
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  prepareChannelParticipantObservation,
+  recordAcceptedSessionParticipantInput,
+} from "../../sessions/session-participant-input.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { cleanDeferredFinalText, shouldDeferFinalTtsText } from "../../tts/captioned-final.js";
@@ -465,6 +470,7 @@ export async function tryDispatchAcpReplyCore(params: {
   if (!sessionKey || params.bypassForCommand) {
     return null;
   }
+  prepareChannelParticipantObservation(params.ctx);
 
   const { getAcpSessionManager } = await loadDispatchAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
@@ -475,6 +481,15 @@ export async function tryDispatchAcpReplyCore(params: {
   if (acpResolution.kind === "none") {
     return null;
   }
+  const canonicalSessionKey = acpResolution.sessionKey;
+  const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const participantTarget = {
+    agentId: acpAgentId,
+    sessionKey: canonicalSessionKey,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId: acpAgentId }),
+    onError: (error: unknown) =>
+      logVerbose(`dispatch-acp: participant persistence failed: ${formatErrorMessage(error)}`),
+  };
   const pendingAnswerText = resolveAcpPromptText(params.ctx);
   if (
     pendingAnswerText &&
@@ -486,13 +501,12 @@ export async function tryDispatchAcpReplyCore(params: {
       text: pendingAnswerText,
     }))
   ) {
+    recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const counts = params.dispatcher.getQueuedCounts();
     params.recordProcessed("completed", { reason: "acp_question_answer" });
     params.markIdle("message_completed");
     return { queuedFinal: false, counts };
   }
-  const canonicalSessionKey = acpResolution.sessionKey;
-  const acpAgentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
   const progressSessionKeys = isDiagnosticsEnabled(params.cfg)
     ? Array.from(
         new Set(
@@ -879,6 +893,7 @@ export async function tryDispatchAcpReplyCore(params: {
       },
       onAdmitted: channelAdmission.onAdmitted,
     }).admit("acp");
+    recordAcceptedSessionParticipantInput(params.ctx, participantTarget);
     const turnAdmission = admittedRunContext;
     const elicitationParams = {
       sourceSessionKey: sessionKey,
