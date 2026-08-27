@@ -185,7 +185,7 @@ function safeCwd(): string {
   }
 }
 
-function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | null {
+function resolveScopedProjectNpmrc(scope: NpmConfigScope): string | null {
   const scopedCwd = scope.npmConfigCwd?.trim();
   if (scopedCwd) {
     return path.join(scopedCwd, ".npmrc");
@@ -198,7 +198,7 @@ function resolveScopedProjectNpmrc(scope: NpmFreshnessConfigScope): string | nul
   }
 }
 
-function resolveScopedGlobalNpmrc(scope: NpmFreshnessConfigScope): string | null {
+function resolveScopedGlobalNpmrc(scope: NpmConfigScope): string | null {
   const prefix = scope.npmConfigPrefix?.trim();
   return prefix ? path.join(prefix, "etc", "npmrc") : null;
 }
