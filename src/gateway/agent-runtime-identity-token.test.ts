@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +14,10 @@ import { readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import {
+  readAgentRuntimeExecutionLineage,
+  withAgentRuntimeExecutionLineage,
+} from "./agent-runtime-execution-lineage.js";
 
 const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
@@ -39,6 +44,32 @@ function readExecApprovals(): {
   socket?: { token?: string };
 } {
   return readExecApprovalsSnapshot().file;
+}
+
+function rewriteSignedPayload(
+  token: string,
+  mutate: (payload: Record<string, unknown>) => void,
+): string {
+  const [payloadPart] = token.split(".");
+  if (!payloadPart) {
+    throw new Error("missing payload");
+  }
+  const payload = JSON.parse(Buffer.from(payloadPart, "base64url").toString("utf8")) as Record<
+    string,
+    unknown
+  >;
+  mutate(payload);
+  const rewritten = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const secret = readExecApprovals().socket?.token;
+  if (!secret) {
+    throw new Error("missing signing secret");
+  }
+  const signature = createHmac("sha256", secret)
+    .update("openclaw:gateway-agent-runtime-identity-token:v1")
+    .update("\0")
+    .update(rewritten)
+    .digest("base64url");
+  return `${rewritten}.${signature}`;
 }
 
 async function importRuntimeTokenModule(): Promise<
@@ -169,6 +200,59 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips explicit local turn provenance without inferring it from the session key", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const run = operationalRun();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operationalRunInstance: run.operationalRunInstance,
+      turnSourceLocal: true,
+    });
+
+    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      turnSourceLocal: true,
+    });
+    await expect(
+      runtimeToken.mintAgentRuntimeIdentityToken({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        operationalRunInstance: run.operationalRunInstance,
+        turnSourceChannel: "discord",
+        turnSourceLocal: true,
+      }),
+    ).rejects.toThrow("cannot be both local and channel-bound");
+  });
+
+  it("preserves the signed payload structural acceptance boundary", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      ...operationalRun(),
+    });
+
+    const withUnknownField = rewriteSignedPayload(token, (payload) => {
+      payload.futurePayloadField = { version: 2 };
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(withUnknownField),
+    ).resolves.toMatchObject({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+
+    const withInvalidKnownField = rewriteSignedPayload(token, (payload) => {
+      payload.turnSourceLocal = false;
+    });
+    await expect(
+      runtimeToken.verifyAgentRuntimeIdentityToken(withInvalidKnownField),
+    ).resolves.toBeUndefined();
+  });
+
   it("omits execution identity from a different operational run", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
@@ -187,27 +271,52 @@ describe("agent runtime identity token", () => {
     });
   });
 
-  it("round-trips a signed visible-session spawn policy", async () => {
+  it("round-trips spawn policy without serializing private lineage", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
+    const parentExecutionIdentity = createExecutionIdentityAdmissionToken("run-1", {
+      contextId: "parent-context",
+      executionId: "parent-execution",
+    });
     const token = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
       ...operationalRun(),
-      sessionSpawnContext: {
-        completionOwnerSessionKey: " agent:main:discord:direct:alice ",
-        inheritedToolPolicy: {
-          version: 1,
-          allow: [" read ", "sessions_spawn"],
-          deny: ["exec"],
+      executionIdentityToken: parentExecutionIdentity,
+      sessionSpawnContext: withAgentRuntimeExecutionLineage(
+        {
+          completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+          inheritedToolPolicy: {
+            version: 1,
+            allow: [" read ", "sessions_spawn"],
+            deny: ["exec"],
+          },
         },
-      },
+        {
+          relation: "sessions_spawn",
+          requesterRef: "private-requester-ref",
+          controllerRef: "private-controller-ref",
+          depth: 2,
+          applicableGrantRefs: ["tool:sessions_spawn"],
+          localPolicyRefs: ["local-policy"],
+          runtimeAssuranceRefs: ["spawn-runtime:subagent"],
+          targetPolicyRefs: ["target-policy"],
+          externalNativeActions: "observable",
+        },
+      ),
     });
 
-    await expect(runtimeToken.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
+    const [payload] = token.split(".");
+    const decodedPayload = Buffer.from(payload ?? "", "base64url").toString("utf8");
+    expect(decodedPayload).not.toContain("private-requester-ref");
+    expect(decodedPayload).not.toContain("private-controller-ref");
+
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(identity).toMatchObject({
       kind: "agentRuntime",
       agentId: "main",
       sessionKey: "agent:main:main",
+      executionIdentity: parentExecutionIdentity,
       sessionSpawnContext: {
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy: {
@@ -217,6 +326,7 @@ describe("agent runtime identity token", () => {
         },
       },
     });
+    expect(readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext)).toBeUndefined();
   });
 
   it("round-trips a short-lived cron self-management capability", async () => {
@@ -353,6 +463,9 @@ describe("agent runtime identity token", () => {
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
+        requesterSenderName: "Sender One",
+        requesterSenderUsername: "sender-one",
+        requesterSenderE164: "+15551234567",
         toolContext: {
           currentChannelProvider: "matrix",
           currentChannelId: "!room:example.org",
@@ -375,6 +488,9 @@ describe("agent runtime identity token", () => {
         sessionId: "session-id-1",
         requesterAccountId: "ops",
         requesterSenderId: "sender-1",
+        requesterSenderName: "Sender One",
+        requesterSenderUsername: "sender-one",
+        requesterSenderE164: "+15551234567",
         toolContext: {
           currentChannelProvider: "matrix",
           currentChannelId: "!room:example.org",

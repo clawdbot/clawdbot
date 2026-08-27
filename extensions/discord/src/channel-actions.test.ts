@@ -54,7 +54,6 @@ describe("discordMessageActions", () => {
     });
 
     expect(discovery?.capabilities).toEqual(["presentation"]);
-    expect(discovery?.schema).toBeUndefined();
     expect(discovery?.actions).toEqual([
       "send",
       "poll",
@@ -328,6 +327,13 @@ describe("discordMessageActions", () => {
       "event-list",
       "event-create",
     ]);
+    expect(defaultDiscovery?.schema).toBeUndefined();
+    expect(workDiscovery?.schema).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: { description: expect.stringContaining('action:"emoji-list"') },
+      },
+    });
   });
 
   it("hides upload-file when Discord message actions are disabled", () => {
@@ -351,7 +357,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).not.toContain("delete");
   });
 
-  it("does not expose Discord-native message tool schema", () => {
+  it("describes usable custom emoji formats and available server emoji discovery", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
@@ -361,10 +367,19 @@ describe("discordMessageActions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toMatchObject({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: {
+          description: expect.stringMatching(
+            /Unicode.*name:id.*<:name:id>.*<a:name:id>.*emoji-list/,
+          ),
+        },
+      },
+    });
   });
 
-  it.each(["read", "search", "edit", "delete", "react", "pin", "poll", "channel-info"])(
+  it.each(["read", "search", "edit", "delete", "react", "pin", "channel-info"])(
     "routes %s actions through gateway execution mode",
     (action) => {
       expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
@@ -375,6 +390,7 @@ describe("discordMessageActions", () => {
 
   it.each([
     "send",
+    "poll",
     "upload-file",
     "thread-reply",
     "sticker",
@@ -510,6 +526,11 @@ describe("discordMessageActions", () => {
       readFile: mediaReadFile,
     };
     const mediaLocalRoots = ["/tmp/media"];
+    const reply = {
+      source: "implicit" as const,
+      replyToId: "source-message-1",
+      mode: "first" as const,
+    };
 
     await discordMessageActions.handleAction?.({
       channel: "discord",
@@ -525,6 +546,7 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
+      reply,
     });
 
     expect(handleDiscordMessageActionMock).toHaveBeenCalledWith({
@@ -540,6 +562,7 @@ describe("discordMessageActions", () => {
       mediaLocalRoots,
       mediaReadFile,
       conversationReadOrigin: "delegated",
+      reply,
     });
   });
 });

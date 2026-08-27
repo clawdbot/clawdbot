@@ -14,22 +14,9 @@ export type SkillHistoryScanBatchSession = SkillHistoryScanPromptSession & {
 
 const HISTORY_SCAN_MAX_CANDIDATES = 60;
 const HISTORY_SCAN_MAX_SESSIONS = 20;
-const HISTORY_SCAN_MAX_TRANSCRIPT_CHARS = 80_000;
 export const HISTORY_SCAN_MAX_SESSION_CHARS = 16_000;
 export const HISTORY_SCAN_SESSION_OVERHEAD_CHARS = 256;
-const HISTORY_SCAN_DEFAULT_CONTEXT_TOKENS = 8_192;
 const HISTORY_SCAN_MIN_MODEL_ITERATIONS = 6;
-
-export function resolveSkillHistoryScanTranscriptBudget(contextTokens?: number): number {
-  const effectiveContextTokens =
-    Number.isFinite(contextTokens) && (contextTokens ?? 0) > 0
-      ? Math.floor(contextTokens as number)
-      : HISTORY_SCAN_DEFAULT_CONTEXT_TOKENS;
-  return Math.min(
-    HISTORY_SCAN_MAX_TRANSCRIPT_CHARS,
-    Math.max(256, Math.floor(effectiveContextTokens * 0.35)),
-  );
-}
 
 export async function readHistoryScanSession(params: {
   agentId: string;
@@ -79,7 +66,7 @@ export async function readHistoryScanSession(params: {
 export async function collectSkillHistoryScanBatch(params: {
   candidates: readonly SkillHistoryScanCandidate[];
   isSessionActive?: (candidate: SkillHistoryScanCandidate) => boolean;
-  maxTranscriptChars?: number;
+  maxTranscriptChars: number;
   readSession: (
     candidate: SkillHistoryScanCandidate,
   ) => Promise<SkillHistoryScanPromptSession | undefined>;
@@ -90,7 +77,7 @@ export async function collectSkillHistoryScanBatch(params: {
 }> {
   const considered: SkillHistoryScanCandidate[] = [];
   const sessions: SkillHistoryScanBatchSession[] = [];
-  const maxTranscriptChars = params.maxTranscriptChars ?? HISTORY_SCAN_MAX_TRANSCRIPT_CHARS;
+  const maxTranscriptChars = params.maxTranscriptChars;
   let blockedByActive = false;
   let transcriptChars = 0;
   for (const candidate of params.candidates.slice(0, HISTORY_SCAN_MAX_CANDIDATES)) {

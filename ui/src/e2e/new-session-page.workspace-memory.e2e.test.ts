@@ -17,6 +17,7 @@ import {
   pollLocatorText,
   projectProofArtifactDir,
   waitForCommittedChatRoute,
+  waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -27,6 +28,7 @@ const DESKTOP_CONTEXT: BrowserContextOptions = {
 };
 const MOBILE_CONTEXT: BrowserContextOptions = {
   ...BASE_CONTEXT,
+  hasTouch: true,
   viewport: { height: 740, width: 364 },
 };
 const MODELS = [
@@ -100,7 +102,7 @@ async function withNewSessionPage(
 }
 
 suite.define(() => {
-  it("keeps the mobile footer controls separated and reveals session modes on hover or focus", async () => {
+  it("keeps rail privacy visible and shows the mobile footer mode without hover", async () => {
     await withNewSessionPage(MOBILE_CONTEXT, async (page) => {
       await installMockGateway(page, {
         models: [
@@ -117,16 +119,16 @@ suite.define(() => {
             contextWindow: 200_000,
           },
         ],
+        allowedSessionVisibilities: ["shared", "draft"],
         hasMultipleSessionSharingIdentities: true,
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const footer = page.locator(".new-session-page__composer .agent-chat__composer-footer");
       const attach = page.getByRole("button", { name: "Add attachment" });
       const takePhoto = page.getByRole("menuitem", { name: "Take photo" });
-      const draft = page.getByRole("switch", { name: "Draft" });
+      const draft = page.locator('.new-session-page__draft-toggle[aria-label^="Draft:"]');
       const incognito = page.getByRole("switch", { name: "Incognito" });
       const model = page.locator(".new-session-page__composer .chat-composer-model-control");
-      const message = page.locator(".new-session-page__message");
       await Promise.all([
         footer.waitFor(),
         attach.waitFor(),
@@ -139,42 +141,55 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await expect
         .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await footer.hover();
-      await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
-      await page.mouse.move(0, 0);
       await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("0");
-      await message.focus();
-      await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
+        .poll(() => draft.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
+      expect(
+        await incognito.evaluate(
+          (element) => element.closest(".new-session-page__incognito-rail") != null,
+        ),
+      ).toBe(true);
 
-      const [footerBox, attachBox, draftBox, incognitoBox, modelBox] = await Promise.all([
+      const [footerBox, attachBox, draftBox, modelBox] = await Promise.all([
         footer.boundingBox(),
         attach.boundingBox(),
         draft.boundingBox(),
-        incognito.boundingBox(),
         model.boundingBox(),
       ]);
       expect(footerBox).not.toBeNull();
       expect(attachBox).not.toBeNull();
       expect(draftBox).not.toBeNull();
-      expect(incognitoBox).not.toBeNull();
       expect(modelBox).not.toBeNull();
-      expect((attachBox?.x ?? 0) + (attachBox?.width ?? 0)).toBeLessThanOrEqual(draftBox?.x ?? 0);
-      expect((draftBox?.x ?? 0) + (draftBox?.width ?? 0)).toBeLessThanOrEqual(incognitoBox?.x ?? 0);
-      for (const control of [attachBox, draftBox, incognitoBox, modelBox]) {
+      // The row reads as the settings for the next turn, in the order the
+      // operator decides them: attachments, draft visibility, then the model and
+      // its reasoning. This viewport is narrow enough that
+      // the row wraps, so the comparison is reading order — which line a control
+      // is on first, then where it sits on that line.
+      const followsInReadingOrder = (
+        previous: { x: number; y: number; height: number } | null,
+        next: { x: number; y: number; height: number } | null,
+      ) => {
+        if (!previous || !next) {
+          return false;
+        }
+        const previousCenter = previous.y + previous.height / 2;
+        const nextCenter = next.y + next.height / 2;
+        const sameLine = Math.abs(nextCenter - previousCenter) <= previous.height / 2;
+        return sameLine ? next.x > previous.x : nextCenter > previousCenter;
+      };
+      const sequence = [attachBox, modelBox];
+      for (let index = 1; index < sequence.length; index += 1) {
+        expect(followsInReadingOrder(sequence[index - 1] ?? null, sequence[index] ?? null)).toBe(
+          true,
+        );
+      }
+      for (const control of [attachBox, modelBox]) {
         expect(control?.x ?? 0).toBeGreaterThanOrEqual(footerBox?.x ?? 0);
         expect((control?.x ?? 0) + (control?.width ?? 0)).toBeLessThanOrEqual(
           (footerBox?.x ?? 0) + (footerBox?.width ?? 0),
         );
       }
-      // The new-session footer keeps flex (not the shared chat mobile grid), so
-      // its transient mode switches can wrap before the model picker overflows.
       const controlsOverflow = await footer.evaluate(
         (element) => element.scrollWidth - element.clientWidth,
       );
@@ -182,13 +197,23 @@ suite.define(() => {
 
       await attach.click();
       await expect.poll(() => takePhoto.isVisible()).toBe(true);
+      // The plus becomes a close mark while its menu is up: one glyph rotating,
+      // so the button that opened the menu visibly is the one that dismisses it.
+      // A CSS rotation matrix is [cos, sin, -sin, cos], so the sine term carries
+      // the direction: negative is counter-clockwise, turning back against the
+      // upward travel of the menu rather than with it.
+      const attachGlyphSine = () =>
+        attach.evaluate((element) => {
+          const { transform } = getComputedStyle(element.querySelector("svg") as SVGElement);
+          return transform === "none"
+            ? 0
+            : Number(transform.slice(transform.indexOf("(") + 1).split(",")[1]);
+        });
+      await expect.poll(attachGlyphSine).toBeCloseTo(-Math.SQRT1_2, 3);
       await page.keyboard.press("Escape");
+      await expect.poll(attachGlyphSine).toBe(0);
       await incognito.click();
-      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-      await page.mouse.move(0, 0);
-      await expect
-        .poll(() => incognito.evaluate((element) => getComputedStyle(element).opacity))
-        .toBe("1");
+      await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("true");
     });
   });
 
@@ -230,7 +255,7 @@ suite.define(() => {
       await expect.poll(pickerOpen).toBe(false);
       await expect
         .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
-        .toBe(true);
+        .toBe(false);
       await modelSelect.click();
       await expect.poll(pickerOpen).toBe(true);
       await page.mouse.click(8, 8);
@@ -264,12 +289,41 @@ suite.define(() => {
         .toBe(true);
       const secondShortcut = secondModel.locator('[data-chat-model-shortcut-number="2"]');
       await expect.poll(() => secondShortcut.count()).toBe(1);
-      const menuBoxBeforeFocus = await page.locator(".chat-controls__model-menu").boundingBox();
-      const actionBoxBeforeFocus = await secondModel
-        .locator(".chat-controls__model-option-action")
-        .boundingBox();
-      expect(menuBoxBeforeFocus).not.toBeNull();
-      expect(actionBoxBeforeFocus).not.toBeNull();
+      // wa-popup updates its anchored position asynchronously. Gate the atomic
+      // baseline on that settlement. After focus, poll the same exact geometry so
+      // transient frames settle before enforcing the opacity-only no-reflow contract.
+      const menuGeometry = () =>
+        page.evaluate(() => {
+          const anchor = document.querySelector('[data-chat-model-select="true"]');
+          const menu = document.querySelector(".chat-controls__model-menu");
+          const action = document.querySelector(
+            '[data-chat-model-option="anthropic/claude-sonnet-4-6"] .chat-controls__model-option-action',
+          );
+          if (!anchor || !menu || !action) {
+            return null;
+          }
+          const anchorBox = anchor.getBoundingClientRect();
+          const menuBox = menu.getBoundingClientRect();
+          const actionBox = action.getBoundingClientRect();
+          return {
+            anchorGap: Math.round(anchorBox.top - menuBox.bottom),
+            menu: {
+              dx: menuBox.x - anchorBox.x,
+              dy: menuBox.y - anchorBox.y,
+              width: menuBox.width,
+              height: menuBox.height,
+            },
+            action: {
+              dx: actionBox.x - menuBox.x,
+              dy: actionBox.y - menuBox.y,
+              width: actionBox.width,
+              height: actionBox.height,
+            },
+          };
+        });
+      await expect.poll(async () => (await menuGeometry())?.anchorGap).toBe(6);
+      const geometryBeforeFocus = await menuGeometry();
+      expect(geometryBeforeFocus).not.toBeNull();
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");
@@ -281,12 +335,7 @@ suite.define(() => {
       await expect
         .poll(() => secondShortcut.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("0");
-      expect(await page.locator(".chat-controls__model-menu").boundingBox()).toEqual(
-        menuBoxBeforeFocus,
-      );
-      expect(
-        await secondModel.locator(".chat-controls__model-option-action").boundingBox(),
-      ).toEqual(actionBoxBeforeFocus);
+      await expect.poll(menuGeometry).toEqual(geometryBeforeFocus);
       await search.press("1");
       await expect.poll(() => search.inputValue()).toBe("1");
       await expect.poll(() => picker.getAttribute("open")).toBe("");
@@ -473,9 +522,8 @@ suite.define(() => {
       }, WORKSPACE);
       await gateway.setMethodResponse("agents.list", mainAgentList(WORKSPACE, false));
       await page.reload();
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
-      const storedWorktree = (await readMainPreference(page))?.worktree;
-      expect(storedWorktree).toBe(false);
+      await expect.poll(async () => (await readMainPreference(page))?.worktree).toBe(false);
+      await expect.poll(() => placeTrigger.count()).toBe(0);
     });
   });
 
@@ -537,10 +585,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const trigger = page.locator("#new-session-project-trigger");
       await trigger.click();
-      expect(await page.locator('[data-value="recent::/shared"]').count()).toBe(0);
+      expect(await page.locator('[data-value="recent:/shared"]').count()).toBe(0);
       expect(await page.locator('[data-value="recent-project:registered"]').count()).toBe(0);
       const project = page.locator('[data-value="project:registered"]');
-      const recentFolder = page.locator(`[data-value="recent::${WORKSPACE}/scratch"]`);
+      const recentFolder = page.locator(`[data-value="recent:${WORKSPACE}/scratch"]`);
       await project.waitFor();
       await recentFolder.waitFor();
       await captureProjectUiProof(page, "identity-project-recents-after.png");
@@ -724,7 +772,7 @@ suite.define(() => {
     });
   });
 
-  it("blocks an immediate submit until remembered model and worktree choices validate", async () => {
+  it("reuses ready model metadata while a remembered worktree choice validates", async () => {
     await withNewSessionPage(BASE_CONTEXT, async (page) => {
       const models = MODELS;
       const branches = GIT_BRANCHES;
@@ -752,23 +800,23 @@ suite.define(() => {
       await waitForCommittedChatRoute(page);
       const metadataRequests = (await gateway.getRequests("chat.metadata")).length;
       const branchRequests = (await gateway.getRequests("worktrees.branches")).length;
-      await gateway.deferNext("chat.metadata");
       await gateway.deferNext("worktrees.branches");
       await navigateInApp(page, "new-session");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect
         .poll(async () => (await gateway.getRequests("chat.metadata")).length)
-        .toBe(metadataRequests + 1);
+        .toBe(metadataRequests);
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequests + 1);
+      await expect
+        .poll(() => modelSelect.getAttribute("data-chat-select-value"))
+        .toBe("anthropic/claude-sonnet-4-6");
 
       await page.locator(".new-session-page__message").fill("keep both remembered choices");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
-      await gateway.resolveDeferred("chat.metadata", { models });
-      await expect.poll(() => start.isDisabled()).toBe(true);
       await gateway.rejectDeferred("worktrees.branches", {
         code: "UNAVAILABLE",
         message: "branch lookup unavailable",
@@ -776,11 +824,17 @@ suite.define(() => {
       // A failed lookup disables the worktree toggle, so restoring the stored
       // choice would strand the draft behind a control the user cannot clear.
       // The draft drops it and stays submittable; storage keeps the preference.
-      await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => placeTrigger.count()).toBe(0);
       await expect.poll(() => start.isDisabled()).toBe(false);
+      await waitForCommittedNewSessionDraft(page, "keep both remembered choices", 0);
 
       await page.reload();
-      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      // The composer persists drafts across hard reloads; refilling here races
+      // the async restore, which can append the stored draft to the typed text.
+      // Waiting for the restored value asserts the documented persistence.
+      await expect
+        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .toBe("keep both remembered choices");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");

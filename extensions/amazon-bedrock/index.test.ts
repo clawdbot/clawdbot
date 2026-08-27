@@ -11,9 +11,8 @@ import {
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 // Amazon Bedrock tests cover index plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
-import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
 
 type BedrockClientResult =
@@ -317,11 +316,6 @@ describe("amazon-bedrock provider plugin", () => {
     destroyBedrockClient.mockClear();
     refreshSharedConfigCache.mockClear();
     sendBedrockCommand.mockClear();
-    resetBedrockDiscoveryCacheForTest();
-  });
-
-  afterEach(() => {
-    resetBedrockDiscoveryCacheForTest();
   });
 
   afterAll(() => {

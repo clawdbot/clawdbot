@@ -60,6 +60,11 @@ export type GatewayActiveWorkSnapshot = {
   blockers: GatewayActiveWorkBlocker[];
 };
 
+type GatewayActiveWorkWaitResult = {
+  drained: boolean;
+  snapshot: GatewayActiveWorkSnapshot;
+};
+
 export type GatewayActiveWorkInspectors = {
   getQueueSize: () => number;
   getPendingReplies: () => number;
@@ -198,4 +203,33 @@ export function createGatewayActiveWorkSnapshot(
   }
 
   return { idle: counts.totalActive === 0, counts, blockers };
+}
+
+const GATEWAY_ACTIVE_WORK_POLL_MS = 250;
+
+/** Waits for the complete process-wide active-work inventory to become idle. */
+export async function waitForGatewayActiveWork(
+  timeoutMs?: number,
+  options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
+): Promise<GatewayActiveWorkWaitResult> {
+  const timeout =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(0, Math.floor(timeoutMs))
+      : undefined;
+  const deadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
+
+  while (true) {
+    const snapshot = createGatewayActiveWorkSnapshot();
+    options.onSnapshot?.(snapshot);
+    if (snapshot.idle) {
+      return { drained: true, snapshot };
+    }
+    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      return { drained: false, snapshot };
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(GATEWAY_ACTIVE_WORK_POLL_MS, remainingMs ?? Infinity));
+    });
+  }
 }

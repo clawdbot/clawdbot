@@ -38,7 +38,7 @@ Put under `plugins.entries.voice-call.config`:
   provider: "twilio", // or "telnyx" | "plivo" | "mock"
   fromNumber: "+15550001234",
   toNumber: "+15550005678",
-  sessionScope: "per-phone", // or "per-call"
+  sessionScope: "per-phone", // or "per-call" | "main"
 
   twilio: {
     accountSid: "ACxxxxxxxx",
@@ -67,7 +67,7 @@ Put under `plugins.entries.voice-call.config`:
   // Public exposure (pick one):
   // publicUrl: "https://example.ngrok.app/voice/webhook",
   // tunnel: { provider: "ngrok" },
-  // tailscale: { mode: "funnel", path: "/voice/webhook" }
+  // tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" }
 
   outbound: {
     defaultMode: "notify", // or "conversation"
@@ -98,13 +98,14 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- `tailscale.port` defaults to `443` and owns the external HTTPS port for both legacy `tailscale.mode` and unified Tailscale tunnel providers. Funnel supports `443`, `8443`, or `10000`; Serve accepts any valid TCP port.
 - Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - Runtime accepts canonical config only. If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
-- `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh.
+- `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh. Use `main` to share the configured agent's main session, honoring core `session.mainKey` and global scope.
 - `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
 - `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
 

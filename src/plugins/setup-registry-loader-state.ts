@@ -6,5 +6,6 @@ import {
 
 export const pluginSetupRegistryLoaderState = {
   moduleLoaders: createPluginModuleLoaderCache(),
+  moduleRoots: new Map<string, string>(),
   moduleLoaderFactory: undefined as PluginModuleLoaderFactory | undefined,
 };

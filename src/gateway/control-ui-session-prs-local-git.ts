@@ -7,7 +7,7 @@ import {
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-const LOCAL_GIT_CACHE_MS = 10_000;
+const LOCAL_GIT_CACHE_MS = 75_000;
 const LOCAL_GIT_CACHE_LIMIT = 100;
 
 /** GitHub repo + branch resolved from a session's git checkout. */
@@ -36,9 +36,9 @@ type LocalGitCacheEntry<T> = { expiresAt: number; promise: Promise<T> };
 
 function createLocalGitCache<T>() {
   const entries = new Map<string, LocalGitCacheEntry<T>>();
-  return (key: string, load: () => Promise<T>): Promise<T> => {
+  return (key: string, refresh: boolean, load: () => Promise<T>): Promise<T> => {
     const cached = entries.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (!refresh && cached && cached.expiresAt > Date.now()) {
       entries.delete(key);
       entries.set(key, cached);
       return cached.promise;
@@ -51,16 +51,17 @@ function createLocalGitCache<T>() {
   };
 }
 
-// Process-local and bounded: ten seconds keeps sidebar checkout/tree facts
-// responsive; removing this freshness window respawns Git for every row.
+// Outlive the 60-second subscription poll so unchanged rows do not respawn
+// Git every cycle; explicit structural refreshes still bypass both caches.
 const cachedGitContext = createLocalGitCache<SessionPullRequestGitContext | null>();
 const cachedBranchFacts = createLocalGitCache<SessionPullRequestBranchFacts | undefined>();
 
 export function resolveCachedGitContext(
   root: string,
   deps: SessionPullRequestLocalGitDeps,
+  refresh = false,
 ): Promise<SessionPullRequestGitContext | null> {
-  return cachedGitContext(root, async () => {
+  return cachedGitContext(root, refresh, async () => {
     const output = deps.gitOutput ?? gitOutput;
     const branch = await output(root, ["rev-parse", "--abbrev-ref", "HEAD"]);
     if (!branch || branch === "HEAD") {
@@ -84,7 +85,8 @@ export function resolveCachedSessionBranchFacts(
   context: SessionPullRequestGitContext & { root: string },
   mergedHeads: readonly MergedPullHead[],
   load: () => Promise<SessionPullRequestBranchFacts | undefined>,
+  refresh = false,
 ): Promise<SessionPullRequestBranchFacts | undefined> {
   const landingKey = JSON.stringify([context.defaultBranch ?? null, mergedHeads]);
-  return cachedBranchFacts(`${context.root}\0${context.branch}\0${landingKey}`, load);
+  return cachedBranchFacts(`${context.root}\0${context.branch}\0${landingKey}`, refresh, load);
 }

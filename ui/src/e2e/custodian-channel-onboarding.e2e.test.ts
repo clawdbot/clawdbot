@@ -76,6 +76,7 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      deferredMethods: ["channels.status"],
       featureMethods: [
         "chat.metadata",
         "chat.startup",
@@ -96,12 +97,12 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
         "openclaw.setup.detect": {
           candidates: [
             {
-              kind: "codex-cli",
+              kind: "openai-api-key",
               brandId: "openai",
-              label: "Codex CLI",
-              detail: "Signed in locally",
+              label: "OpenAI API key",
+              detail: "Saved credentials are available",
               modelRef: "openai/gpt-5",
-              recommended: true,
+              recommended: false,
               credentials: true,
             },
           ],
@@ -126,20 +127,32 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-setup?firstRun=1`);
       expect(response?.status()).toBe(200);
-      await page.getByRole("button", { name: "Test & use" }).click();
-      const continueSetup = page.getByRole("button", { name: "Continue setup" });
-      await continueSetup.waitFor();
-      await page.screenshot({
-        animations: "disabled",
-        path: path.join(artifactDir, "01-after-model-ready-continue-setup.png"),
-      });
-
-      await continueSetup.click();
       await waitForControlUiRoute(page, {
         pathname: "/custodian",
         routeId: "custodian",
         search: "?onboarding=1",
       });
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(artifactDir, "01-after-automatic-model-setup.png"),
+      });
+      await gateway.waitForRequest("channels.status");
+      await gateway.rejectDeferred("channels.status", {
+        code: "UNAVAILABLE",
+        message: "channel status temporarily unavailable",
+        retryable: true,
+      });
+      const channelStatusError = page.getByRole("alert").filter({
+        hasText: "Channel status is unavailable",
+      });
+      await channelStatusError.waitFor();
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(artifactDir, "02-channel-status-error-before-retry.png"),
+      });
+
+      await gateway.setMethodResponse("channels.status", emptyChannelSnapshot);
+      await channelStatusError.getByRole("button", { name: "Retry" }).click();
       const channelNudge = page.locator(".custodian__nudge--channel-onboarding");
       await channelNudge.waitFor();
       await expect.poll(() => channelNudge.textContent()).toContain("The web app already works");
@@ -185,8 +198,9 @@ describeControlUiE2e("Control UI Custodian channel onboarding mocked Gateway E2E
       await page.setViewportSize({ height: 900, width: 1280 });
 
       const channelStatusRequests = await gateway.getRequests("channels.status");
-      expect(channelStatusRequests).toHaveLength(1);
+      expect(channelStatusRequests).toHaveLength(2);
       expect(channelStatusRequests[0]?.params).toMatchObject({ probe: false });
+      expect(channelStatusRequests[1]?.params).toMatchObject({ probe: false });
 
       await page.getByRole("button", { name: "Set up a channel" }).click();
       await waitForControlUiRoute(page, {

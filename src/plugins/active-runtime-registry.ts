@@ -1,6 +1,7 @@
 // Stores active runtime plugin registry state and activation metadata.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 
@@ -79,6 +80,29 @@ export function registryContainsRuntimePluginIds(
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
 
+export function registryMatchesManifestPluginIds(
+  registry: PluginRegistry,
+  manifestPlugins: readonly PluginManifestRecord[] | undefined,
+  pluginIds: readonly string[],
+): boolean {
+  if (!manifestPlugins) {
+    return false;
+  }
+  const records = new Map(registry.plugins.map((plugin) => [plugin.id, plugin]));
+  const manifests = new Map(manifestPlugins.map((plugin) => [plugin.id, plugin]));
+  return pluginIds.every((pluginId) => {
+    const record = records.get(pluginId);
+    const manifest = manifests.get(pluginId);
+    return Boolean(
+      record &&
+      manifest &&
+      record.origin === manifest.origin &&
+      (record.origin === "bundled" ||
+        (record.rootDir === manifest.rootDir && record.source === manifest.source)),
+    );
+  });
+}
+
 export function getLoadedRuntimePluginRegistry(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -92,10 +116,18 @@ export function getLoadedRuntimePluginRegistry(
   );
   if (params.loadOptions && requiredPluginIds?.length !== 0) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
+    if (compatible && registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
+      return compatible;
+    }
+    // Exact cache-key reuse fails for every caller whose options differ from the
+    // composition root's load (scoped ids, derived config, no gateway bindings),
+    // which used to force a cold scoped load even when the active registry already
+    // holds the requested runtime plugins. An explicit id list proves what the
+    // caller needs, so fall through to the containment check below; unscoped
+    // requests keep exact-key semantics because no id list bounds their intent.
+    if (requiredPluginIds === undefined) {
       return undefined;
     }
-    return compatible;
   }
 
   const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();

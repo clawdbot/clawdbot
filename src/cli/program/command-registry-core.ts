@@ -90,7 +90,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         exportName: "registerAuditCommand",
       },
       {
-        commandNames: ["doctor", "dashboard", "reset", "uninstall"],
+        commandNames: ["doctor", "triage", "dashboard", "reset", "uninstall"],
         loadModule: () => import("./register.maintenance.js"),
         exportName: "registerMaintenanceCommands",
       },
@@ -114,11 +114,6 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         commandNames: ["transcripts"],
         loadModule: () => import("./register.transcripts.js"),
         exportName: "registerTranscriptsCli",
-      },
-      {
-        commandNames: ["delivery"],
-        loadModule: () => import("./register.delivery.js"),
-        exportName: "registerDeliveryCommand",
       },
     ]),
   ),

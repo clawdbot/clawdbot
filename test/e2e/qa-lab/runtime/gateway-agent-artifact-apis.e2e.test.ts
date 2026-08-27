@@ -19,37 +19,15 @@ import {
   getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "../../../../src/gateway/test-helpers.env.js";
+import type { WorkerEnvironmentServiceRecord } from "../../../../src/gateway/worker-environments/service-contract.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { createTaskRecord, deleteTaskRecordById } from "../../../../src/tasks/task-registry.js";
 import { captureEnv, setTestEnvValue } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-type WorkerRecord = {
-  environmentId: string;
-  providerId: string;
-  leaseId: string | null;
-  state:
-    | "requested"
-    | "provisioning"
-    | "bootstrapping"
-    | "ready"
-    | "attached"
-    | "idle"
-    | "draining"
-    | "destroying"
-    | "destroyed"
-    | "failed"
-    | "orphaned";
-  ownerEpoch: number;
-  createdAtMs: number;
-  idleSinceAtMs: number | null;
-  attachedSessionIds: readonly string[];
-  tunnelStatus: "stopped" | "connecting" | "connected" | "reconnecting";
-};
-
 const injectedWorkerService = vi.hoisted(() => {
-  const records = new Map<string, WorkerRecord>();
+  const records = new Map<string, WorkerEnvironmentServiceRecord>();
   const idempotency = new Map<string, string>();
   let createCount = 0;
 
@@ -63,15 +41,18 @@ const injectedWorkerService = vi.hoisted(() => {
       }
       createCount += 1;
       const environmentId = `worker-qa-${createCount}`;
-      const record: WorkerRecord = {
+      const record: WorkerEnvironmentServiceRecord = {
         environmentId,
         providerId: profileId,
         leaseId: `lease-${createCount}`,
+        sharedHost: null,
         state: "ready",
         ownerEpoch: 1,
         createdAtMs: 1_800_000_000_000,
         idleSinceAtMs: null,
         attachedSessionIds: [],
+        desktopAvailable: false,
+        desktopApps: [],
         tunnelStatus: "stopped",
       };
       records.set(environmentId, record);

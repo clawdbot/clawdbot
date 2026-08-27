@@ -3,7 +3,7 @@
  */
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelDefinition } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
@@ -14,7 +14,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isChutesModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const CHUTES_MANIFEST_CATALOG = manifest.modelCatalog.providers.chutes;
@@ -36,13 +35,10 @@ function decorateChutesModelDefinition(model: ModelDefinitionConfig): ModelDefin
 }
 
 /** Bundled fallback Chutes model catalog, normalized from the plugin manifest. */
-export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = CHUTES_MANIFEST_CATALOG.models.map(
-  buildManifestModelDefinition({
-    providerId: "chutes",
-    catalog: CHUTES_MANIFEST_CATALOG,
-    decorate: decorateChutesModelDefinition,
-  }),
-);
+export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = buildManifestModelProviderConfig({
+  providerId: "chutes",
+  catalog: CHUTES_MANIFEST_CATALOG,
+}).models.map(decorateChutesModelDefinition);
 
 interface ChutesModelEntry {
   id: string;
@@ -107,9 +103,6 @@ function projectChutesModels(rows: readonly unknown[]): ModelDefinitionConfig[] 
 
 /** Discovers Chutes models dynamically, falling back to the bundled static catalog. */
 export async function discoverChutesModels(accessToken?: string): Promise<ModelDefinitionConfig[]> {
-  if (isChutesModelDiscoveryTestEnvironment()) {
-    return structuredClone(CHUTES_MODEL_CATALOG);
-  }
   const provider = await buildLiveModelProviderConfig({
     providerId: "chutes",
     endpoint: `${CHUTES_BASE_URL}/models`,

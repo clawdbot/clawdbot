@@ -16,6 +16,7 @@ const {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerWarnMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -24,6 +25,9 @@ const {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 } = vi.hoisted(() => {
   type EventHandler = (...args: unknown[]) => unknown;
   type MockConnection = {
@@ -121,9 +125,11 @@ const {
     createConnectionMock: createConnectionMockLocal,
     getVoiceConnectionMock: getVoiceConnectionMockLocal,
     joinVoiceChannelMock: vi.fn(() => createConnectionMockLocal()),
-    entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
-      return undefined;
-    }),
+    entersStateMock: vi.fn(
+      async (_target?: unknown, _state?: string, _timeoutOrSignal?: number | AbortSignal) => {
+        return undefined;
+      },
+    ),
     createAudioResourceMock: vi.fn(),
     createAudioPlayerMock: vi.fn(() => ({
       on: vi.fn(),
@@ -158,8 +164,13 @@ const {
     ),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn(),
+    loggerWarnMock: vi.fn(),
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
-      () => {
+      (params?: {
+        configuredProviderId?: string;
+        isProviderAvailable?: (provider: { id: string }) => boolean;
+        assertProviderAvailable?: (provider: { id: string }) => void;
+      }) => {
         provider: {
           id: string;
           capabilities?: { supportsActivationNameGating?: boolean };
@@ -190,6 +201,11 @@ const {
     decodeOpusStreamChunksMock: vi.fn(),
     updateVoiceStateMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
+    assertSecretOwnerAvailableMock: vi.fn(),
+    isSecretOwnerAvailableMock: vi.fn((_ownerKind: string, _ownerId: string) => true),
+    canonicalizeRealtimeVoiceProviderIdMock: vi.fn((providerId: string | undefined) =>
+      providerId?.trim().toLowerCase(),
+    ),
   };
 });
 
@@ -209,6 +225,7 @@ export const voiceTestMocks = {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerWarnMock,
   resolveConfiguredRealtimeVoiceProviderMock,
   createRealtimeVoiceBridgeSessionMock,
   controlRealtimeVoiceAgentRunMock,
@@ -217,7 +234,21 @@ export const voiceTestMocks = {
   decodeOpusStreamChunksMock,
   updateVoiceStateMock,
   enqueueSystemEventMock,
+  assertSecretOwnerAvailableMock,
+  isSecretOwnerAvailableMock,
+  canonicalizeRealtimeVoiceProviderIdMock,
 };
+
+vi.mock("openclaw/plugin-sdk/channel-secret-owner-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-secret-owner-runtime")
+  >("openclaw/plugin-sdk/channel-secret-owner-runtime");
+  return {
+    ...actual,
+    assertSecretOwnerAvailable: assertSecretOwnerAvailableMock,
+    isSecretOwnerAvailable: isSecretOwnerAvailableMock,
+  };
+});
 
 vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({
@@ -277,6 +308,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   );
   return {
     ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: loggerWarnMock,
+    }),
     logVerbose: logVerboseMock,
   };
 });
@@ -295,6 +330,7 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   );
   return {
     ...actual,
+    canonicalizeRealtimeVoiceProviderId: canonicalizeRealtimeVoiceProviderIdMock,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
     createRealtimeVoiceSessionHarness: (
       params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
@@ -394,6 +430,7 @@ vi.mock("./participant-context.js", async () => {
 
 vi.mock("../runtime.js", () => ({
   getDiscordRuntime: () => ({
+    agent: { runCommandFromIngress: agentCommandMock },
     mediaUnderstanding: {
       transcribeAudioFile: transcribeAudioFileMock,
     },

@@ -10,6 +10,7 @@ const GATEWAY_PROBE_ROUTES = new Map<string, "live" | "ready" | "startup">([
 export const MCP_APP_STANDALONE_PATH = "/__openclaw__/mcp-app";
 export const MCP_APP_STANDALONE_VIEW_PATH = `${MCP_APP_STANDALONE_PATH}/view`;
 const WORKER_GATEWAY_PATH = "/__openclaw__/worker";
+const NODE_WORKER_BUNDLE_TRANSFER_NAMESPACE = "/__openclaw__/worker-bundle";
 const NODE_WORKSPACE_TRANSFER_NAMESPACE = "/__openclaw__/worker-transfer";
 
 export function classifyGatewayProbePath(
@@ -43,6 +44,13 @@ export function classifyWorkerGatewayPath(pathname: string): "worker" | "namespa
     return "worker";
   }
   return pathname.startsWith(`${WORKER_GATEWAY_PATH}/`) ? "namespace" : "outside";
+}
+
+export function classifyNodeWorkerBundleTransferPath(pathname: string): "namespace" | "outside" {
+  return pathname === NODE_WORKER_BUNDLE_TRANSFER_NAMESPACE ||
+    pathname.startsWith(`${NODE_WORKER_BUNDLE_TRANSFER_NAMESPACE}/`)
+    ? "namespace"
+    : "outside";
 }
 
 export function classifyNodeWorkspaceTransferPath(pathname: string): "namespace" | "outside" {

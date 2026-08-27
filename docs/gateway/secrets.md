@@ -102,6 +102,7 @@ In interactive onboarding, choosing SecretRef storage runs preflight validation 
 - Env refs: validates the env var name and confirms a non-empty value is visible during setup.
 - Provider refs (`file`, `exec`, or `store`): validates provider selection, resolves `id`, and checks the resolved value type.
 - Quickstart flow: when `gateway.auth.token` is already a SecretRef, onboarding resolves it before probe/dashboard bootstrap (for `env`, `file`, `exec`, and `store` refs) using the same fail-fast gate.
+- Generated gateway token: setup mints `gateway.auth.token` itself, so reference mode has nothing to prompt for. With `OPENCLAW_GATEWAY_TOKEN` exported it writes an `env` ref to that variable, keeping a later rotation authoritative; otherwise it writes the token to the secret store under `OPENCLAW_GATEWAY_TOKEN` and stores a `store` ref. An existing store entry is reused rather than rotated, so re-running setup never invalidates already-paired clients.
 
 Validation failure shows the error and lets you retry.
 
@@ -275,12 +276,12 @@ but are not displayed because resolver output can contain credential material.
 
 The shared secret store is a Gateway-wide, team-scoped place for secrets and environment values that should be available to every Gateway process using the same state database. Manage it from **Settings → Secrets** in the Control UI or locally with `openclaw secrets store`. The CLI commands operate on the local state database and do not accept Gateway URL or token options.
 
-Entries have a `secret` or `env` kind. The kind controls CLI disclosure, not SecretRef resolution:
+Entries have two explicit access modes. Both retain the existing `secret` and `env` storage kinds, and either kind can back a SecretRef:
 
-- `secret` values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC.
-- `env` values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. Team-scoped `env` entries are also added to the environment of commands run by OpenClaw's own exec tool, after inherited process values and before explicit per-call env. Protected host keys and sandbox-blocked credential names are ignored with a visible warning. This covers direct tool calls, Code Mode (whose guest reaches shell through the same `openclaw:core:exec` tool), sandboxed exec, and `node` -hosted exec.
+- **Protected secret** (`kind: "secret"`) values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC. A protected value is inert until a supported config field references it with a SecretRef or an enabled, destination-bound [secret egress proxy](#secret-egress-proxy) uses it.
+- **Agent-readable environment** (`kind: "env"`) values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. OpenClaw adds them as plaintext to Gateway-hosted commands run through its exec tool, after inherited process values and before explicit per-call env. The agent can print, transmit, or persist these values. Protected host keys are ignored with a visible warning.
 
-It does not cover commands executed inside a provider-native harness — the Codex app-server and its sandbox exec-server, or ACP children such as Claude Code. Those harnesses assemble their own child environment and never pass through OpenClaw's exec preparation, so store entries are absent there. The store snapshot is also read once per agent run, so entries added mid-run apply from the next run onward.
+Agent-readable environment values do not reach Codex native shell, the Codex sandbox exec-server, ACP children such as Claude Code, OpenClaw sandbox exec, or remote `node` exec. Those paths assemble a different child environment. In eligible Codex app-server turns, use `gateway_exec` to deliberately re-enter the OpenClaw Gateway execution path; `gateway_process` provides the existing per-session background follow-up. Native Codex shell remains preferred for ordinary local work. The store snapshot is read once per agent run, so entries added or changed mid-run apply from the next run onward.
 
 By default, `secret` entries are never injected into subprocess environments. When the default-off [secret egress proxy](#secret-egress-proxy) is enabled, Gateway-hosted exec commands receive process-local sentinels instead of plaintext values.
 
@@ -301,6 +302,8 @@ Reference an entry from `openclaw.json` with the `store` source:
 ```
 
 Control UI set/delete operations automatically refresh the active secrets runtime when the changed name is referenced by a `store` SecretRef in the active source config. Names that are not referenced skip that work. Direct CLI writes remain an offline/local path; after changing a config-referenced value with the CLI, run `openclaw secrets reload` so the active in-memory snapshot picks it up.
+
+The agent can also ask you to add an entry with the [`secrets` tool](/tools/secrets): it names the entry and the reason, you type the value into a masked prompt, and the Gateway writes it directly into the store. The value never enters the chat, the transcript, or the model's context, and the same automatic runtime refresh applies.
 
 <Warning>
 Store values are not encrypted at rest. They are stored unencrypted in the shared state SQLite database (`state/openclaw.sqlite`), protected by the same `0600` file and `0700` directory permissions as other credentials in that database. Operators who need stronger storage isolation should use an external exec provider such as the [1Password plugin](/plugins/onepassword) or [Vault SecretRefs](/plugins/vault).
@@ -347,6 +350,7 @@ Equivalent config:
   secrets: {
     egressProxy: {
       enabled: true,
+      allowedHosts: ["api.openai.com"],
       bypassHosts: ["pinned-api.example.com"],
     },
   },
@@ -356,6 +360,7 @@ Equivalent config:
 When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
 
 - `HTTPS_PROXY` and `HTTP_PROXY`, with per-run credentials embedded in the loopback proxy URL
+- `NODE_USE_ENV_PROXY=1`, which makes supported Node.js global `fetch` clients honor `HTTP_PROXY` and `HTTPS_PROXY` without using `NODE_OPTIONS`
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, and `REQUESTS_CA_BUNDLE`, pointing at the ephemeral CA certificate
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
 
@@ -371,8 +376,21 @@ The CA is generated once per Gateway start under the state directory. Its direct
 
 `bypassHosts` contains exact hostnames that must remain end-to-end TLS for certificate-pinned clients. Those hosts use an authenticated blind CONNECT tunnel. No substitution is possible inside the tunnel; a sentinel sent there is safe by construction because it is authenticated ciphertext rather than a credential, so the vendor sees an invalid credential and rejects it.
 
+### Traffic allowlist
+
+Destination binding protects secrets, not traffic: a request that carries no sentinel can reach any host once a run holds proxy credentials. Set `secrets.egressProxy.allowedHosts` to also restrict where non-sentinel traffic may go:
+
+```bash
+openclaw config set secrets.egressProxy.allowedHosts '["api.openai.com"]' --strict-json
+```
+
+When the list is present, the proxy forwards only to hostnames in the list, hosts bound to a secret registered for the current agent run, and `bypassHosts`, so an existing `--allow-host` binding keeps working without listing its host twice. A request or CONNECT tunnel to any other host is refused with `Host "<host>" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host <host>, then restart the Gateway.`
+
+An empty array is lockdown mode: only per-secret bound hosts and `bypassHosts` remain reachable. Omitting `allowedHosts` leaves traffic unrestricted. Hostnames follow the same rules as secret bindings: exact lowercase ASCII/punycode match, no wildcards or ports. Restart the Gateway after changing the allowlist.
+
 Current limits:
 
+- The traffic allowlist constrains only cooperating clients that honor the proxy environment (`HTTPS_PROXY` and the CA variables). A subprocess can ignore those variables and open raw sockets, so the allowlist is defense in depth; destination-bound sentinels remain the primary defense because they survive proxy bypass.
 - HTTP/2 upstream connections are not supported; the proxy uses HTTP/1.1 upstream.
 - WebSocket rewriting is not supported.
 - Non-443 HTTPS substitution is not a supported compatibility target.
@@ -891,7 +909,7 @@ For static credentials, runtime no longer depends on plaintext legacy auth stora
 
 ## Control UI
 
-Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. Credential-like names default to `secret`; clear **Auto-detect secrets** to import all entries as visible environment values.
+Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Choose **Protected secret** for write-only values used by SecretRefs or destination-bound Gateway egress. Choose **Agent-readable environment** only when Gateway-hosted agent commands must receive plaintext and the agent may print, transmit, or persist it. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. **Protect credential-like names automatically** defaults credential-shaped names to protected mode.
 
 This store page manages values only. Configure the corresponding `store` SecretRef on a supported field through its settings form or the raw editor. Identity-scoped entries are reserved for a later release and are not exposed by this page.
 

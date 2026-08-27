@@ -42,12 +42,16 @@ export type {
   PluginStateSyncKeyedStore,
 } from "./plugin-state-store.types.js";
 
+export type { PluginDoctorRawStateEntry } from "./plugin-state-store.sqlite.js";
+
 export {
   closePluginStateDatabase,
   countPluginStateLiveEntries,
   getPluginStateCapacity,
-  isPluginStateDatabaseOpen,
   MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
+  MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
+  pluginStateDeleteEntriesIfUnchanged,
+  pluginStateDoctorEntriesInKeyRange,
   pluginStateEntriesInKeyRange,
   resolveMaxPluginStateEntriesPerPlugin,
   sweepExpiredPluginStateEntries,

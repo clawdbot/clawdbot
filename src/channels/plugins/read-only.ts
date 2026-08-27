@@ -31,6 +31,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/p
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
@@ -53,6 +54,7 @@ import { listChannelPlugins } from "./registry.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleRoots = new Map<string, string>();
 const log = createSubsystemLogger("channels");
 
 type ReadOnlyChannelPluginOptions = {
@@ -67,6 +69,7 @@ type ReadOnlyChannelPluginOptions = {
 
 type ReadOnlyChannelPluginResolution = {
   plugins: ChannelPlugin[];
+  manifestRecords: readonly PluginManifestRecord[];
   configuredChannelIds: string[];
   missingConfiguredChannelIds: string[];
   loadFailures: ReadOnlyChannelPluginLoadFailure[];
@@ -86,6 +89,7 @@ let nextReadOnlyChannelPluginObjectId = 1;
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   readOnlyChannelPluginResolutionCache.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots });
 });
 
 function cloneReadOnlyChannelPluginResolution(
@@ -93,6 +97,7 @@ function cloneReadOnlyChannelPluginResolution(
 ): ReadOnlyChannelPluginResolution {
   return {
     plugins: [...resolution.plugins],
+    manifestRecords: [...resolution.manifestRecords],
     configuredChannelIds: [...resolution.configuredChannelIds],
     missingConfiguredChannelIds: [...resolution.missingConfiguredChannelIds],
     loadFailures: resolution.loadFailures.map((failure) => ({ ...failure })),
@@ -430,6 +435,7 @@ function loadSetupChannelPluginFromManifestRecord(params: {
     return {};
   }
   try {
+    moduleRoots.set(params.record.setupSource, params.record.rootDir);
     const moduleLoader = getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath: params.record.setupSource,
@@ -862,6 +868,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const plugins = [...byId.values()];
   const resolution = {
     plugins,
+    manifestRecords,
     configuredChannelIds,
     missingConfiguredChannelIds: configuredChannelIds.filter((channelId) => !byId.has(channelId)),
     loadFailures,

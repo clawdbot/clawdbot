@@ -398,7 +398,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     );
   }
 
-  api.registerMemoryEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
+  api.registerEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
   const baseWrapStreamFn = ({
     modelId,

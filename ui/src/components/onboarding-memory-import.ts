@@ -10,6 +10,8 @@ import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
+import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/onboarding-memory-import.css";
@@ -23,20 +25,7 @@ type ProviderResult =
   | { kind: "error"; message: string };
 
 function toErrorMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim()
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : t("onboarding.memoryImport.unknownError");
-}
-
-function createIdempotencyKey(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
+  return formatUiError(error, t("onboarding.memoryImport.unknownError"));
 }
 
 function plannedItems(provider: MemoryMigrationProviderPlan) {
@@ -247,7 +236,7 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
         const result = await client.request<MigrationsMemoryApplyResult>(
           "migrations.memory.apply",
           {
-            idempotencyKey: createIdempotencyKey(),
+            idempotencyKey: generateUUID(),
             agentId,
             providerId: provider.providerId,
             planFingerprint,
@@ -349,7 +338,9 @@ class OnboardingMemoryImport extends OpenClawLightDomElement {
                   </span>`
                 : result?.kind === "error"
                   ? html`<span role="alert">
-                      ${t("onboarding.memoryImport.providerError", { error: result.message })}
+                      ${t("onboarding.memoryImport.providerError", {
+                        error: formatUiExternalText(result.message),
+                      })}
                     </span>`
                   : nothing}
         </div>

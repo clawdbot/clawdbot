@@ -19,6 +19,7 @@ import {
 } from "../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
+import { runPostSessionPluginDoctorStateRepairs } from "../infra/state-migrations.doctor.js";
 import { shortenHomePath } from "../utils.js";
 import {
   repairCanonicalSessionKeys,
@@ -26,6 +27,7 @@ import {
 } from "./doctor-session-canonical-keys.js";
 import {
   repairCanonicalSessionDeliveryStates,
+  repairCanonicalSessionResolvedSkills,
   type SessionDeliveryStateRepairReport,
 } from "./doctor-session-delivery-state.js";
 import {
@@ -35,6 +37,7 @@ import {
 import {
   DoctorSqliteMaintenanceLockUnavailableError,
   withDoctorSqliteMaintenanceLock,
+  type DoctorSqliteMaintenanceAuthority,
 } from "./doctor-sqlite-maintenance-lock.js";
 import { isLegacyCodexProviderId } from "./doctor/shared/codex-route-model-ref.js";
 
@@ -523,6 +526,11 @@ async function noteSessionSqliteMigrationHealth(params: {
     repaired: 0,
     scannedStores: 0,
   };
+  let resolvedSkillsReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
   let canonicalKeyReport: CanonicalSessionKeyRepairReport = {
     archivedTranscriptDirectories: [],
     foundGroups: 0,
@@ -538,7 +546,7 @@ async function noteSessionSqliteMigrationHealth(params: {
         >
       >
     | undefined;
-  const runSessionSqlite = async () => {
+  const runSessionSqlite = async (maintenanceAuthority?: DoctorSqliteMaintenanceAuthority) => {
     const report = await runDoctorSessionSqlite({
       allAgents: true,
       ...(params.cfg ? { cfg: params.cfg } : {}),
@@ -557,6 +565,12 @@ async function noteSessionSqliteMigrationHealth(params: {
       cfg: params.cfg ?? {},
       env: params.env,
     });
+    // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
+    resolvedSkillsReport = repairCanonicalSessionResolvedSkills({
+      apply: params.shouldRepair,
+      cfg: params.cfg ?? {},
+      env: params.env,
+    });
     // Import may create the first durable SQLite row for a colliding legacy key.
     reservedKeyReport = repairReservedIncognitoSessionKeys({
       apply: params.shouldRepair,
@@ -568,6 +582,15 @@ async function noteSessionSqliteMigrationHealth(params: {
       cfg: params.cfg ?? {},
       env: params.env,
     });
+    const pluginRepair = await runPostSessionPluginDoctorStateRepairs({
+      config: params.cfg ?? {},
+      env: params.env,
+      maintenanceAuthority,
+    });
+    const pluginMessages = [...pluginRepair.changes, ...pluginRepair.warnings];
+    if (pluginMessages.length > 0) {
+      note(pluginMessages.join("\n"), "Plugin session repair");
+    }
     return report;
   };
   let report: Awaited<ReturnType<typeof runSessionSqlite>>;
@@ -610,6 +633,14 @@ async function noteSessionSqliteMigrationHealth(params: {
       params.shouldRepair
         ? `- Canonicalized delivery state for ${deliveryReport.repaired} durable session row(s).`
         : `- Found ${deliveryReport.found} durable session row(s) with legacy delivery fields. Run "openclaw doctor --fix" to canonicalize them.`,
+      "Session SQLite",
+    );
+  }
+  if (resolvedSkillsReport.found > 0) {
+    note(
+      params.shouldRepair
+        ? `- Stripped the runtime-only skills catalog from ${resolvedSkillsReport.repaired} durable session row(s). Logical SQLite pages are freed; shrinking the on-disk database requires "openclaw doctor --session-sqlite compact --session-sqlite-all-agents".`
+        : `- Found ${resolvedSkillsReport.found} durable session row(s) carrying a runtime-only skills catalog. Run "openclaw doctor --fix" to strip it.`,
       "Session SQLite",
     );
   }

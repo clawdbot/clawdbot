@@ -93,10 +93,7 @@ describe("runEmbeddedAttempt memory flush tool forwarding", () => {
       expect(result.content).toEqual([
         { type: "text", text: `Appended content to ${MEMORY_RELATIVE_PATH}.` },
       ]);
-      expect(result.details).toEqual({
-        path: MEMORY_RELATIVE_PATH,
-        appendOnly: true,
-      });
+      expect(result.details).toEqual({ changed: true });
       await expect(fs.readFile(memoryFile, "utf-8")).resolves.toBe("seed\nnew durable note");
       await expect(
         wrapped.execute("call-memory-flush-deny", {

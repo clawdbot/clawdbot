@@ -237,6 +237,7 @@ export function toolSearchOutputHasCandidate(output: unknown, targetTool: string
 export function buildQaToolSearchArgs(
   targetTool: string,
   failureMode: boolean,
+  prompt = "",
 ): Record<string, unknown> {
   if (failureMode && targetTool === "web_search") {
     return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
@@ -298,7 +299,46 @@ export function buildQaToolSearchArgs(
   if (targetTool === "message") {
     return { action: "send", message: "runtime parity message fixture" };
   }
+  if (targetTool === "openclaw") {
+    return {
+      message: "Reply exactly QA-SYSTEM-AGENT-DELEGATE-INFERENCE-OK. Do not call tools.",
+    };
+  }
   if (targetTool === "ask_user") {
+    if (/\bask_user_fixture=single\b/i.test(prompt)) {
+      return {
+        questions: [
+          {
+            id: "deploy_target",
+            header: "Deploy",
+            question: "Where should this deploy?",
+            options: [
+              { label: "Staging (Recommended)", description: "Safer default" },
+              { label: "Production 🚀", description: "Ship to users" },
+            ],
+          },
+        ],
+        timeoutSeconds: 60,
+      };
+    }
+    if (/\bask_user_fixture=multi\b/i.test(prompt)) {
+      return {
+        questions: [
+          {
+            id: "checks",
+            header: "Checks",
+            question: "Which checks should run?",
+            options: [
+              { label: "Unit (Recommended)", description: "Fast focused coverage" },
+              { label: "E2E", description: "Full user-path coverage" },
+              { label: "Lint", description: "Static checks" },
+            ],
+            multiSelect: true,
+          },
+        ],
+        timeoutSeconds: 60,
+      };
+    }
     return {
       questions: [
         {

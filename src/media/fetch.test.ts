@@ -1,7 +1,10 @@
 // Media fetch tests cover remote media download limits and validation.
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { hasErrnoCode } from "../infra/errors.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -745,6 +748,61 @@ describe("readRemoteMediaBuffer", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "buffer reads",
+      fetchMedia: (options: Parameters<ReadRemoteMediaBuffer>[0]) => readRemoteMediaBuffer(options),
+    },
+    {
+      name: "store writes",
+      fetchMedia: (options: Parameters<ReadRemoteMediaBuffer>[0]) => saveRemoteMedia(options),
+    },
+  ])("cancels retry backoff for $name", async ({ fetchMedia }) => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(503).end("busy");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a local media test server address");
+      }
+      const controller = new AbortController();
+      const operation = fetchMedia({
+        url: `http://127.0.0.1:${address.port}/retry.bin`,
+        requestInit: { signal: controller.signal },
+        retry: {
+          attempts: 2,
+          minDelayMs: 25,
+          maxDelayMs: 25,
+          jitter: 0,
+          onRetry: () => {
+            setImmediate(() => controller.abort());
+          },
+        },
+      });
+
+      await expect(operation).rejects.toMatchObject({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        cause: { name: "AbortError" },
+      });
+      expect(requests).toBe(1);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("does not retry SSRF guard blocks", async () => {
     const fetchImpl = vi.fn();
 
@@ -859,6 +917,22 @@ describe("readRemoteMediaBuffer", () => {
       url: "https://example.com/file.bin",
       timeoutMs: 1234,
       signal: parent.signal,
+    });
+  });
+
+  it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/favicon.ico",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      requireHttps: true,
+    });
+
+    expect(requireFetchGuardRequest()).toMatchObject({
+      url: "https://example.com/favicon.ico",
+      requireHttps: true,
     });
   });
 
@@ -1396,15 +1470,34 @@ describe("readRemoteMediaBuffer", () => {
     },
   );
 
-  it("saves bodyless successful responses without unbounded buffering", async () => {
-    const saved = await saveResponseMedia(new Response(null, { status: 204 }), {
-      sourceUrl: "https://example.com/empty",
-      fallbackContentType: "application/octet-stream",
-      maxBytes: 8,
-    });
+  it("rejects bodyless successful responses without saving an empty file", async () => {
+    const inboundDir = path.join(tempHome.home, ".openclaw", "media", "inbound");
+    const listInboundFiles = async () => {
+      try {
+        return (await fs.readdir(inboundDir)).toSorted();
+      } catch (error) {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return [];
+        }
+        throw error;
+      }
+    };
+    const before = await listInboundFiles();
 
-    expect(saved.size).toBe(0);
-    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.alloc(0));
+    await expect(
+      saveResponseMedia(new Response(null, { status: 204 }), {
+        sourceUrl: "https://example.com/empty",
+        fallbackContentType: "application/octet-stream",
+        maxBytes: 8,
+      }),
+    ).rejects.toMatchObject({
+      name: "MediaFetchError",
+      code: "http_error",
+      status: 204,
+      message:
+        "Failed to fetch media from https://example.com/empty: HTTP 204; empty response body",
+    });
+    await expect(listInboundFiles()).resolves.toEqual(before);
   });
 
   it("uses caller filename hints for MIME detection without preserving storage basenames", async () => {

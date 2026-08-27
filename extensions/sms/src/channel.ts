@@ -105,11 +105,18 @@ const collectSmsSecurityWarnings = createConditionalWarningCollector<ResolvedSms
   (account) =>
     account.dangerouslyDisableSignatureValidation &&
     "- SMS: Twilio signature validation is disabled. Only use this for local testing.",
-  (account) =>
-    account.dmPolicy === "open" &&
-    account.allowFrom.includes("*") &&
-    '- SMS: dmPolicy="open" allows any phone number to message the bot.',
 );
+const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
+  collectWarnings: createConditionalWarningCollector<ResolvedSmsAccount>(
+    (account) =>
+      account.dmPolicy === "open" &&
+      account.allowFrom.includes("*") &&
+      '- SMS: dmPolicy="open" allows any phone number to message the bot.',
+  ),
+  checkId: "channels.sms.dm.open",
+  severity: "critical",
+  title: "SMS security warning",
+});
 
 function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
@@ -520,7 +527,10 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
   },
   security: {
     resolveDmPolicy: resolveSmsDmPolicy,
-    collectWarnings: ({ account }) => collectSmsSecurityWarnings(account),
+    collectWarnings: ({ account }) => [
+      ...collectSmsSecurityWarnings(account),
+      ...collectSmsOpenDmFindings(account),
+    ],
   },
   outbound: {
     deliveryMode: "gateway",

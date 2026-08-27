@@ -32,9 +32,9 @@ export async function ensureManagerRuntimeHandle(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   meta: SessionAcpMeta;
+  selectedBackend?: string;
   deps: Pick<AcpSessionManagerDeps, "requireRuntimeBackend">;
   runtimeHandles: ManagerRuntimeHandleCache;
-  enforceConcurrentSessionLimit: (params: { cfg: OpenClawConfig; sessionKey: string }) => void;
   writeSessionMeta: WriteManagerSessionMeta;
 }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
   const agent =
@@ -44,7 +44,12 @@ export async function ensureManagerRuntimeHandle(params: {
   const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
-  const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+  const configuredBackend = (
+    params.selectedBackend ||
+    params.meta.backend ||
+    params.cfg.acp?.backend ||
+    ""
+  ).trim();
   const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
   const cached = params.runtimeHandles.get(params.sessionKey);
   if (cached) {
@@ -82,15 +87,13 @@ export async function ensureManagerRuntimeHandle(params: {
     });
   }
 
-  params.enforceConcurrentSessionLimit({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-  });
-
   const backend = params.deps.requireRuntimeBackend(configuredBackend || undefined);
   const runtime = backend.runtime;
   const previousMeta = params.meta;
-  const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
+  const persistedIdentity = resolveSessionIdentityFromMeta(previousMeta);
+  // Identifiers belong to their persisted backend; a new backend may recover its own named session.
+  const backendOwnsPreviousIdentity = previousMeta.backend === backend.id;
+  const previousIdentity = backendOwnsPreviousIdentity ? persistedIdentity : undefined;
   let identityForEnsure = previousIdentity;
   const persistedResumeSessionId =
     mode === "persistent" ? resolveRuntimeResumeSessionId(previousIdentity) : undefined;
@@ -193,7 +196,7 @@ export async function ensureManagerRuntimeHandle(params: {
   const shouldPersistMeta =
     previousMeta.backend !== nextMeta.backend ||
     previousMeta.runtimeSessionName !== nextMeta.runtimeSessionName ||
-    !identityEquals(previousIdentity, nextIdentity) ||
+    !identityEquals(persistedIdentity, nextIdentity) ||
     previousMeta.agent !== nextMeta.agent ||
     previousMeta.cwd !== nextMeta.cwd ||
     !runtimeOptionsEqual(previousMeta.runtimeOptions, nextMeta.runtimeOptions) ||

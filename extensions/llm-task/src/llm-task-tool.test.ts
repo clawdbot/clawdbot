@@ -272,6 +272,76 @@ describe("llm-task tool (json-only)", () => {
     expect(call.model).toBe("anthropic/claude-4-sonnet");
   });
 
+  it("does not misparse a slash-containing model id as a provider separator", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
+      prompt: "x",
+      provider: "groq",
+      model: "openai/gpt-oss-20b",
+    });
+    expect(call.model).toBe("groq/openai/gpt-oss-20b");
+  });
+
+  it("preserves a configured provider for a slash-containing default model", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        pluginConfig: {
+          defaultProvider: "groq",
+          defaultModel: "openai/gpt-oss-20b",
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x" });
+
+    expect(firstIsolatedCompletionCall().model).toBe("groq/openai/gpt-oss-20b");
+  });
+
+  it("lets a qualified requested model override a configured provider", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        pluginConfig: {
+          defaultProvider: "groq",
+          defaultModel: "openai/gpt-oss-20b",
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x", model: "google/gemini-3-flash-preview" });
+
+    expect(firstIsolatedCompletionCall().model).toBe("google/gemini-3-flash-preview");
+  });
+
+  it("resolves configured model aliases before applying an explicit provider", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "google/gemini-3-flash-preview": { alias: "gemini-flash" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "groq",
+      model: "gemini-flash",
+    });
+
+    const call = firstIsolatedCompletionCall();
+    expect(call.model).toBe("google/gemini-3-flash-preview");
+  });
+
   it("resolves configured model aliases before dispatching isolated completion", async () => {
     mockIsolatedCompletionJson({ ok: true });
     const tool = createLlmTaskTool(
@@ -380,6 +450,20 @@ describe("llm-task tool (json-only)", () => {
     expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
     expect(call.systemPrompt).toContain("JSON-only");
     expect(call.messages).toEqual([{ role: "user", content: expect.stringContaining("TASK:\nx") }]);
+  });
+
+  it("forwards caller cancellation to the isolated completion", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("caller cancelled");
+    complete.mockImplementationOnce(async (params) => {
+      controller.abort(cancellation);
+      params.signal?.throwIfAborted();
+      return completionResult(params, '{"ok":true}');
+    });
+
+    const tool = createLlmTaskTool(fakeApi());
+    await expect(tool.execute("id", { prompt: "x" }, controller.signal)).rejects.toBe(cancellation);
+    expect(firstIsolatedCompletionCall().signal).toBe(controller.signal);
   });
 
   it("rejects malformed numeric run options before dispatch", async () => {

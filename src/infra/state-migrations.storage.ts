@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import {
   copyPluginInstallRecordMap,
   createPluginInstallRecordMap,
@@ -18,12 +19,11 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { deliveryQueueMetadata } from "./delivery-queue-sqlite-bound.js";
 import {
-  classifyLegacySessionTerminalPolicy,
-  compactDeliveryTerminalEntry,
-  FAILED_TERMINAL_RECOVERY_STATE,
-  unknownDeliveryTerminalPolicy,
-} from "./delivery-queue-terminal-policy.js";
+  inferDeliveryQueueFailureRetention,
+  projectDeliveryQueueTerminalEntry,
+} from "./delivery-queue-sqlite.types.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
@@ -911,93 +911,77 @@ function readLegacyDeliveryQueueEntry(sourcePath: string): Record<string, unknow
   }
 }
 
-function legacyQueueMetadata(entry: Record<string, unknown>): {
-  entryKind: string | null;
-  sessionKey: string | null;
-  channel: string | null;
-  target: string | null;
-  accountId: string | null;
-} {
-  const session = entry.session as { key?: unknown } | undefined;
-  const route = entry.route as { channel?: unknown; to?: unknown; accountId?: unknown } | undefined;
-  const deliveryContext = entry.deliveryContext as
-    | { channel?: unknown; to?: unknown; accountId?: unknown }
-    | undefined;
-  const stringOrNull = (value: unknown) => (typeof value === "string" ? value : null);
-  return {
-    entryKind: stringOrNull(entry.kind) ?? "outbound",
-    sessionKey: stringOrNull(entry.sessionKey) ?? stringOrNull(session?.key),
-    channel:
-      stringOrNull(entry.channel) ??
-      stringOrNull(route?.channel) ??
-      stringOrNull(deliveryContext?.channel),
-    target: stringOrNull(entry.to) ?? stringOrNull(route?.to) ?? stringOrNull(deliveryContext?.to),
-    accountId:
-      stringOrNull(entry.accountId) ??
-      stringOrNull(route?.accountId) ??
-      stringOrNull(deliveryContext?.accountId),
-  };
-}
-
 function buildLegacyDeliveryQueueRow(params: {
   queueName: string;
   id: string;
   status: "pending" | "failed";
   entry: Record<string, unknown>;
   now: number;
-}): SqliteBindRow {
-  const enqueuedAt =
-    typeof params.entry.enqueuedAt === "number" ? params.entry.enqueuedAt : params.now;
-  const retryCount = typeof params.entry.retryCount === "number" ? params.entry.retryCount : 0;
-  const failedAt =
-    params.status === "failed"
-      ? typeof params.entry.failedAt === "number"
-        ? params.entry.failedAt
-        : typeof params.entry.lastAttemptAt === "number"
-          ? params.entry.lastAttemptAt
-          : enqueuedAt
-      : null;
-  const meta = legacyQueueMetadata(params.entry);
-  const retainedEntry = { ...params.entry, id: params.id, enqueuedAt, retryCount };
-  const replay =
-    params.status === "failed" && params.queueName === "session"
-      ? classifyLegacySessionTerminalPolicy(retainedEntry, params.id, failedAt)
-      : undefined;
-  const failedEntry =
-    params.status === "failed"
-      ? replay?.classified
-        ? { ...retainedEntry, terminalPolicy: replay.policy }
-        : compactDeliveryTerminalEntry({
-            id: params.id,
-            enqueuedAt,
-            retryCount,
-            terminalPolicy: unknownDeliveryTerminalPolicy(),
-          })
-      : undefined;
-  const compactFailure = failedEntry?.terminalPolicy?.detail === "compacted";
+}): SqliteBindRow | null {
+  const originalEnqueuedAt =
+    asSafeIntegerInRange(params.entry.enqueuedAt, { min: 0 }) ?? params.now;
+  const retryCount = asSafeIntegerInRange(params.entry.retryCount, { min: 0 }) ?? 0;
+  const lastAttemptAt = asSafeIntegerInRange(params.entry.lastAttemptAt, { min: 0 });
+  const platformSendStartedAt = asSafeIntegerInRange(params.entry.platformSendStartedAt, {
+    min: 0,
+  });
+  const failed = params.status === "failed";
+  const retention = failed
+    ? inferDeliveryQueueFailureRetention(params.entry, params.id, params.queueName)
+    : undefined;
+  if (failed && !retention) {
+    return null;
+  }
+  const failedAt = failed
+    ? (asSafeIntegerInRange(params.entry.failedAt, { min: 0 }) ??
+      lastAttemptAt ??
+      originalEnqueuedAt)
+    : null;
+  const enqueuedAt = failedAt ?? originalEnqueuedAt;
+  const meta = failed ? undefined : deliveryQueueMetadata(params.queueName, params.entry);
+  const retainedEntry: Record<string, unknown> = {
+    ...params.entry,
+    id: params.id,
+    enqueuedAt,
+    retryCount,
+  };
+  if (lastAttemptAt === undefined) {
+    delete retainedEntry.lastAttemptAt;
+  } else {
+    retainedEntry.lastAttemptAt = lastAttemptAt;
+  }
+  if (platformSendStartedAt === undefined) {
+    delete retainedEntry.platformSendStartedAt;
+  } else {
+    retainedEntry.platformSendStartedAt = platformSendStartedAt;
+  }
+  const failedEntry = failed
+    ? projectDeliveryQueueTerminalEntry(
+        { id: params.id, retryCount },
+        enqueuedAt,
+        "failed",
+        retention,
+      )
+    : undefined;
   return {
     queue_name: params.queueName,
     id: params.id,
     status: params.status,
-    entry_kind: meta.entryKind,
-    session_key: compactFailure ? null : meta.sessionKey,
-    channel: compactFailure ? null : meta.channel,
-    target: compactFailure ? null : meta.target,
-    account_id: compactFailure ? null : meta.accountId,
+    entry_kind: meta?.entryKind ?? null,
+    session_key: meta?.sessionKey ?? null,
+    channel: meta?.channel ?? null,
+    target: meta?.target ?? null,
+    account_id: meta?.accountId ?? null,
     retry_count: retryCount,
-    last_attempt_at:
-      typeof params.entry.lastAttemptAt === "number" ? params.entry.lastAttemptAt : null,
+    last_attempt_at: !failed ? (lastAttemptAt ?? null) : null,
     last_error:
-      compactFailure || typeof params.entry.lastError !== "string" ? null : params.entry.lastError,
-    recovery_state: compactFailure
-      ? FAILED_TERMINAL_RECOVERY_STATE
+      !failed && typeof params.entry.lastError === "string" ? params.entry.lastError : null,
+    recovery_state: failed
+      ? (failedEntry?.recoveryState ?? null)
       : typeof params.entry.recoveryState === "string"
         ? params.entry.recoveryState
         : null,
-    platform_send_started_at:
-      !compactFailure && typeof params.entry.platformSendStartedAt === "number"
-        ? params.entry.platformSendStartedAt
-        : null,
+    platform_send_started_at: !failed ? (platformSendStartedAt ?? null) : null,
     entry_json: JSON.stringify(failedEntry ?? retainedEntry),
     enqueued_at: enqueuedAt,
     updated_at: params.now,
@@ -1116,6 +1100,9 @@ export async function migrateLegacyDeliveryQueues(params: {
               entry,
               now,
             });
+            if (!row) {
+              continue;
+            }
             const existing = db
               .prepare(
                 `

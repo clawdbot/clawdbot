@@ -5,8 +5,6 @@ import {
   createStatusReactionController,
   DEFAULT_EMOJIS,
   DEFAULT_TIMING,
-  CODING_TOOL_TOKENS,
-  WEB_TOOL_TOKENS,
   type StatusReactionAdapter,
 } from "./status-reactions.js";
 
@@ -111,18 +109,6 @@ function countCallsForEmoji(calls: Array<{ method: string; emoji: string }>, emo
   }
   return count;
 }
-function expectArrayContainsAll(values: readonly string[], expected: readonly string[]) {
-  expected.forEach((value) => {
-    expect(values).toContain(value);
-  });
-}
-
-function expectObjectHasKeys(value: Record<string, unknown>, keys: readonly string[]) {
-  keys.forEach((key) => {
-    expect(value).toHaveProperty(key);
-  });
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -176,6 +162,8 @@ describe("resolveToolEmoji", () => {
     };
 
     expect(resolveToolEmoji("exec", emojis, overrides)).toBe("🧪");
+    expect(resolveToolEmoji("read", emojis, overrides)).toBe("🧪");
+    expect(resolveToolEmoji("write", emojis, overrides)).toBe("🧪");
     expect(resolveToolEmoji("web_search", emojis, overrides)).toBe("🛰️");
     expect(resolveToolEmoji("message", emojis, overrides)).toBe("🔧");
   });
@@ -680,43 +668,5 @@ describe("createStatusReactionController", () => {
     await vi.runAllTimersAsync();
 
     expect(onError).toHaveBeenCalled();
-  });
-});
-
-describe("constants", () => {
-  it("should export CODING_TOOL_TOKENS", () => {
-    expectArrayContainsAll(CODING_TOOL_TOKENS, ["exec", "read", "write"]);
-  });
-
-  it("should export WEB_TOOL_TOKENS", () => {
-    expectArrayContainsAll(WEB_TOOL_TOKENS, ["web_search", "browser"]);
-  });
-
-  it("should export DEFAULT_EMOJIS with all required keys", () => {
-    expectObjectHasKeys(DEFAULT_EMOJIS, [
-      "queued",
-      "thinking",
-      "compacting",
-      "tool",
-      "coding",
-      "web",
-      "deploy",
-      "build",
-      "concierge",
-      "done",
-      "error",
-      "stallSoft",
-      "stallHard",
-    ]);
-  });
-
-  it("should export DEFAULT_TIMING with all required keys", () => {
-    expectObjectHasKeys(DEFAULT_TIMING, [
-      "debounceMs",
-      "stallSoftMs",
-      "stallHardMs",
-      "doneHoldMs",
-      "errorHoldMs",
-    ]);
   });
 });

@@ -55,48 +55,28 @@ type NativeCommandProviderLookupOptions = {
   includeBundledChannelFallback?: boolean;
 };
 
-/** Resolves provider-specific native command names while preserving registry defaults. */
-function resolveNativeName(
-  command: ChatCommandDefinition,
+function createNativeCommandNameMapper(
   provider?: string,
   options?: NativeCommandProviderLookupOptions,
-): string | undefined {
-  if (!command.nativeName) {
-    return undefined;
-  }
-  if (!provider) {
-    return command.nativeName;
-  }
-  const channelPlugin =
-    options?.includeBundledChannelFallback === false
-      ? getLoadedChannelPlugin(provider)
-      : getChannelPlugin(provider);
-  return (
-    channelPlugin?.commands?.resolveNativeCommandName?.({
-      commandKey: command.key,
-      defaultName: command.nativeName,
-    }) ?? command.nativeName
-  );
-}
-
-function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
-  const spec: NativeCommandSpec = {
-    name: resolveNativeName(command, provider) ?? command.key,
-    description: command.description,
-    acceptsArgs: Boolean(command.acceptsArgs),
-    args: command.args,
+): (command: ChatCommandDefinition) => Array<{ name: string; normalizedName?: string }> {
+  // Registry state is lifecycle-owned, so resolve the adapter once per list or lookup operation.
+  const resolveNativeCommandName = !provider
+    ? undefined
+    : (options?.includeBundledChannelFallback === false
+        ? getLoadedChannelPlugin(provider)
+        : getChannelPlugin(provider)
+      )?.commands?.resolveNativeCommandName;
+  return (command) => {
+    const primary = command.nativeName
+      ? (resolveNativeCommandName?.({
+          commandKey: command.key,
+          defaultName: command.nativeName,
+        }) ?? command.nativeName)
+      : undefined;
+    return [primary, ...(command.nativeAliases ?? [])]
+      .filter((name): name is string => Boolean(name))
+      .map((name) => ({ name, normalizedName: normalizeOptionalLowercaseString(name) }));
   };
-  if (command.descriptionLocalizations) {
-    spec.descriptionLocalizations = command.descriptionLocalizations;
-  }
-  return spec;
-}
-
-function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
-  const primary = resolveNativeName(command, provider);
-  return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
-    Boolean(name),
-  );
 }
 
 function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
@@ -115,29 +95,30 @@ function supportsNativeProvider(command: ChatCommandDefinition, provider?: strin
 function listNativeSpecsFromCommands(
   commands: ChatCommandDefinition[],
   provider?: string,
+  options?: NativeCommandProviderLookupOptions,
 ): NativeCommandSpec[] {
+  const mapNativeCommandNames = createNativeCommandNameMapper(provider, options);
   return commands
     .filter(
       (command) =>
         command.scope !== "text" && command.nativeName && supportsNativeProvider(command, provider),
     )
     .flatMap((command) => {
-      const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name, index) => {
+      return mapNativeCommandNames(command).map(({ name }, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
-          description: spec.description,
-          acceptsArgs: spec.acceptsArgs,
+          description: command.description,
+          acceptsArgs: Boolean(command.acceptsArgs),
         };
         // Native aliases carry the same payload shape but are marked for channel registration.
         if (index > 0) {
           nativeSpec.isAlias = true;
         }
-        if (spec.args) {
-          nativeSpec.args = spec.args;
+        if (command.args) {
+          nativeSpec.args = command.args;
         }
-        if (spec.descriptionLocalizations) {
-          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
+        if (command.descriptionLocalizations) {
+          nativeSpec.descriptionLocalizations = command.descriptionLocalizations;
         }
         return nativeSpec;
       });
@@ -145,22 +126,32 @@ function listNativeSpecsFromCommands(
 }
 
 /** Lists native command specs registered for a provider, including skill commands. */
-export function listNativeCommandSpecs(params?: {
-  skillCommands?: SkillCommandSpec[];
-  provider?: string;
-}): NativeCommandSpec[] {
+export function listNativeCommandSpecs(
+  params?: {
+    skillCommands?: SkillCommandSpec[];
+    provider?: string;
+  } & NativeCommandProviderLookupOptions,
+): NativeCommandSpec[] {
   return listNativeSpecsFromCommands(
     listChatCommands({ skillCommands: params?.skillCommands }),
     params?.provider,
+    params,
   );
 }
 
 /** Lists native command specs that are enabled for the provided config. */
 export function listNativeCommandSpecsForConfig(
   cfg: OpenClawConfig,
-  params?: { skillCommands?: SkillCommandSpec[]; provider?: string },
+  params?: {
+    skillCommands?: SkillCommandSpec[];
+    provider?: string;
+  } & NativeCommandProviderLookupOptions,
 ): NativeCommandSpec[] {
-  return listNativeSpecsFromCommands(listChatCommandsForConfig(cfg, params), params?.provider);
+  return listNativeSpecsFromCommands(
+    listChatCommandsForConfig(cfg, params),
+    params?.provider,
+    params,
+  );
 }
 
 export function mergeNativeCommandSpecs(params: {
@@ -203,13 +194,12 @@ export function findCommandByNativeName(
   if (!normalized) {
     return undefined;
   }
+  const mapNativeCommandNames = createNativeCommandNameMapper(provider, options);
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
       supportsNativeProvider(command, provider) &&
-      [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
-        (nameLocal) => normalizeOptionalLowercaseString(nameLocal) === normalized,
-      ),
+      mapNativeCommandNames(command).some(({ normalizedName }) => normalizedName === normalized),
   );
 }
 

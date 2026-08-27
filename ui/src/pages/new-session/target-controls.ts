@@ -27,6 +27,7 @@ export function renderAgentSelect(params: {
         }))}
         .value=${selectedId}
         .accessibleLabel=${t("newSession.agent")}
+        .menuLabel=${t("newSession.agents")}
         .disabled=${params.disabled}
         .onSelect=${params.onSelect}
       ></openclaw-agent-select>

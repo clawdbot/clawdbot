@@ -26,10 +26,7 @@ type AuthProfileTargetDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "auth_profile_store" | "auth_profile_state"
 >;
-type SharedAuthProfileTargetDatabase = Pick<
-  OpenClawStateDatabase,
-  "auth_profile_stores" | "auth_profile_state"
->;
+type SharedAuthProfileTargetDatabase = Pick<OpenClawStateDatabase, "config_machine_state">;
 
 export type AuthProfileMigrationSourceReceipt = {
   sourceKey: string;
@@ -263,6 +260,20 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
   };
 }
 
+// Shared auth payloads moved to config_machine_state at v13; project the KV
+// cell back to the receipt-era row shape for sha comparison.
+function projectSharedStoreCell(
+  row: { value_json: string } | undefined,
+): { store_json: string } | undefined {
+  return row ? { store_json: row.value_json } : undefined;
+}
+
+function projectSharedStateCell(
+  row: { value_json: string } | undefined,
+): { state_json: string } | undefined {
+  return row ? { state_json: row.value_json } : undefined;
+}
+
 function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceReceipt): void {
   const hasExpectedProfiles = Object.keys(receipt.expectedProfileSha256 ?? {}).length > 0;
   if (!hasExpectedProfiles && !receipt.expectedStateSha256) {
@@ -274,12 +285,14 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
     if (hasExpectedProfiles && receipt.expectedProfileSha256) {
       const row =
         targetStoreKey === "shared"
-          ? executeSqliteQueryTakeFirstSync(
-              db,
-              getNodeSqliteKysely<SharedAuthProfileTargetDatabase>(db)
-                .selectFrom("auth_profile_stores")
-                .select("store_json")
-                .where("store_key", "=", "shared"),
+          ? projectSharedStoreCell(
+              executeSqliteQueryTakeFirstSync(
+                db,
+                getNodeSqliteKysely<SharedAuthProfileTargetDatabase>(db)
+                  .selectFrom("config_machine_state")
+                  .select("value_json")
+                  .where("state_key", "=", "authProfiles.store"),
+              ),
             )
           : executeSqliteQueryTakeFirstSync(
               db,
@@ -298,12 +311,14 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
     if (receipt.expectedStateSha256) {
       const row =
         targetStoreKey === "shared"
-          ? executeSqliteQueryTakeFirstSync(
-              db,
-              getNodeSqliteKysely<SharedAuthProfileTargetDatabase>(db)
-                .selectFrom("auth_profile_state")
-                .select("state_json")
-                .where("store_key", "=", "shared"),
+          ? projectSharedStateCell(
+              executeSqliteQueryTakeFirstSync(
+                db,
+                getNodeSqliteKysely<SharedAuthProfileTargetDatabase>(db)
+                  .selectFrom("config_machine_state")
+                  .select("value_json")
+                  .where("state_key", "=", "authProfiles.state"),
+              ),
             )
           : executeSqliteQueryTakeFirstSync(
               db,

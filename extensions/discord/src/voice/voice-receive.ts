@@ -48,6 +48,7 @@ export class DiscordVoiceReceive {
 
   constructor(
     private readonly params: {
+      accountId: string;
       admissionAllowFrom?: string[];
       botUserId: () => string | undefined;
       cfg: OpenClawConfig;
@@ -58,7 +59,7 @@ export class DiscordVoiceReceive {
       isFollowOwnedGuild: (guildId: string) => boolean;
       join: (
         params: { guildId: string; channelId: string },
-        options?: { preserveFollowState?: boolean },
+        options?: { preserveFollowState?: boolean; autoJoinWhenOccupied?: boolean },
       ) => Promise<VoiceOperationResult>;
       leave: (
         params: { guildId: string },
@@ -273,6 +274,7 @@ export class DiscordVoiceReceive {
   }): Promise<void> {
     await processDiscordVoiceSegment({
       ...params,
+      accountId: this.params.accountId,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,
       admissionAllowFrom: this.params.admissionAllowFrom,
@@ -438,6 +440,7 @@ export class DiscordVoiceReceive {
     );
     const turn = await runDiscordVoiceAgentTurn({
       entry,
+      accountId: this.params.accountId,
       userId,
       message,
       cfg: this.params.cfg,
@@ -536,7 +539,7 @@ export class DiscordVoiceReceive {
     }
     const result = await this.params.join(
       { guildId: entry.guildId, channelId: entry.channelId },
-      { preserveFollowState },
+      { preserveFollowState, autoJoinWhenOccupied: entry.autoJoinWhenOccupied },
     );
     if (!result.ok) {
       logger.warn(`discord voice: rejoin after decrypt failures failed: ${result.message}`);

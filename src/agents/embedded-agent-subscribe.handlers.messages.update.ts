@@ -203,8 +203,10 @@ export function handleMessageUpdate(
   // early unphased deltas from durable block replies until that decision exists.
   const isPhasePendingAnthropicText =
     evtType !== "text_end" && !deliveryPhase && isAnthropicAssistantMessage(partialAssistant);
-  const isPhasePendingCompletionsText =
-    !deliveryPhase && isOpenAiCompletionsAssistantMessage(partialAssistant);
+  const isCompletionsAssistant = isOpenAiCompletionsAssistantMessage(partialAssistant);
+  const isPhasePendingCompletionsText = !deliveryPhase && isCompletionsAssistant;
+  const isReasoningCompletionsText =
+    isCompletionsAssistant && partialAssistant.openclawDelivery?.textPhaseRequiresTerminal === true;
   const hasResponsesContentIndex =
     streamContentIndex !== undefined && isResponsesApiAssistantMessage(partialAssistant);
   let streamItemChanged = false;
@@ -250,14 +252,13 @@ export function handleMessageUpdate(
     if (isResponsesCommentary && chunk) {
       // Keep cumulative end events monotonic without feeding commentary into reply buffers.
       ctx.state.deltaBuffer += chunk;
+      ctx.state.deltaBufferIsCommentary = true;
     }
-    const commentaryText =
-      !chunk && (!isResponsesCommentary || !hadResponsesCommentaryText)
-        ? coerceChatContentText(extractAssistantCommentaryText(streamAssistant))
-        : undefined;
-    const commentaryData = chunk
-      ? buildAssistantStreamData({ delta: chunk, phase: "commentary", itemId: deliveryItemId })
-      : commentaryText
+    const commentaryText = isResponsesCommentary
+      ? ctx.state.deltaBuffer
+      : coerceChatContentText(extractAssistantCommentaryText(streamAssistant));
+    const commentaryData =
+      commentaryText && (chunk || !hadResponsesCommentaryText)
         ? buildAssistantStreamData({
             text: commentaryText,
             replace: true,
@@ -279,8 +280,15 @@ export function handleMessageUpdate(
   const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
+  // A completions stream cannot classify text interrupted by later reasoning
+  // until terminal. Keep that text out of live reply lanes until its phase resolves.
+  if (isReasoningCompletionsText) {
+    return;
+  }
+
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
+    ctx.state.deltaBufferIsCommentary = false;
     if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
       if (!isPhasePendingAnthropicText && !isPhasePendingCompletionsText) {
         appendBlockReplyChunk(ctx, chunk);

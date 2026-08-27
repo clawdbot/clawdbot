@@ -60,19 +60,53 @@ describe("resolveNpmInstallSpecsForUpdateChannel", () => {
     ).toThrow("requires an exact core version");
   });
 
-  it("preserves beta behavior", () => {
+  it("targets the exact core version for a stable version-bound plugin", () => {
     expect(
       resolveNpmInstallSpecsForUpdateChannel({
-        spec: "@openclaw/discord@latest",
-        updateChannel: "beta",
-        officialPackageName: "@openclaw/discord",
-        coreVersion: "2026.7.33",
+        spec: "@openclaw/codex",
+        updateChannel: "stable",
+        officialPackageName: "@openclaw/codex",
+        coreVersion: "2026.8.1",
+        versionBoundToCore: true,
       }),
     ).toEqual({
-      installSpec: "@openclaw/discord@beta",
-      recordSpec: "@openclaw/discord@latest",
-      fallbackSpec: "@openclaw/discord@latest",
-      fallbackLabel: "@openclaw/discord@beta",
+      installSpec: "@openclaw/codex@2026.8.1",
+      recordSpec: "@openclaw/codex",
+    });
+  });
+
+  it.each([
+    { channel: "stable" as const, expectedVersion: "2026.7.1" },
+    { channel: "extended-stable" as const, expectedVersion: "2026.7.1" },
+  ])("preserves the $channel release-cohort contract", ({ channel, expectedVersion }) => {
+    expect(
+      resolveNpmInstallSpecsForUpdateChannel({
+        spec: "@openclaw/codex",
+        updateChannel: channel,
+        officialPackageName: "@openclaw/codex",
+        coreVersion: "2026.7.1-2",
+        versionBoundToCore: true,
+      }),
+    ).toEqual({
+      installSpec: `@openclaw/codex@${expectedVersion}`,
+      recordSpec: "@openclaw/codex",
+    });
+  });
+
+  it("preserves beta behavior for a version-bound plugin", () => {
+    expect(
+      resolveNpmInstallSpecsForUpdateChannel({
+        spec: "@openclaw/codex@latest",
+        updateChannel: "beta",
+        officialPackageName: "@openclaw/codex",
+        coreVersion: "2026.8.1-beta.3",
+        versionBoundToCore: true,
+      }),
+    ).toEqual({
+      installSpec: "@openclaw/codex@beta",
+      recordSpec: "@openclaw/codex@latest",
+      fallbackSpec: "@openclaw/codex@latest",
+      fallbackLabel: "@openclaw/codex@beta",
     });
   });
 });

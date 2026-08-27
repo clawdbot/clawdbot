@@ -80,6 +80,7 @@ disable-model-invocation: true
     expect(result.skills).toEqual([
       expect.objectContaining({
         name: "json5-metadata",
+        displayName: "JSON5 Metadata",
         description: "Skill with JSON5-style metadata.",
         disableModelInvocation: true,
         filePath: skillFile,

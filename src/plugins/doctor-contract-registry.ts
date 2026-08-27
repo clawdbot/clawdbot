@@ -35,7 +35,6 @@ type PluginDoctorContractSurface = keyof PluginManifestDoctorContract;
 
 export type {
   PluginDoctorStateMigration,
-  PluginDoctorStateMigrationContext,
   PluginDoctorStateMigrationDetection,
 } from "./doctor-contract-module.js";
 

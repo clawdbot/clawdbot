@@ -40,6 +40,7 @@ Account keys:
 
 - `enabled` - master toggle for this account.
 - `name` - optional display label.
+- `responsePrefix` - automatic reply prefix; account overrides win. Accepts a literal, `"auto"` for the agent identity name, a template such as `"[{model}]"`, or `""` to disable an inherited prefix.
 - `baseUrl` - synthetic bus URL. The account counts as configured once this is set.
 - `botUserId` - synthetic bot user id used in target grammar (default: `openclaw`).
 - `botDisplayName` - display name for outbound messages (default: `OpenClaw QA`).
@@ -76,6 +77,15 @@ Full repo-backed scenario suite:
 
 ```bash
 pnpm openclaw qa suite
+```
+
+The isolated `channel-participant-identity-inspection` scenario enables
+execution identity before startup, exercises DM, group, senderless, same- and
+mixed-participant collect paths, proves an ingress rejection creates no audit
+rows, and compares JSON plus human CLI inspection across Gateway restart:
+
+```bash
+pnpm openclaw qa suite --scenario channel-participant-identity-inspection
 ```
 
 Runs scenarios in parallel against the QA gateway lane. See [QA overview](/concepts/qa-e2e-automation) for scenarios, profiles, and provider modes.

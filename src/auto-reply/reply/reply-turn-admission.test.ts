@@ -47,10 +47,9 @@ vi.mock(
       ...actual,
       releaseMainSessionRecoveryOwner: async (
         lease: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[0],
-        options: Parameters<typeof actual.releaseMainSessionRecoveryOwner>[1],
       ) => {
         await recoveryOwnerReleaseMocks.beforeRelease();
-        return await actual.releaseMainSessionRecoveryOwner(lease, options);
+        return await actual.releaseMainSessionRecoveryOwner(lease);
       },
     };
   },
@@ -494,7 +493,7 @@ describe("reply turn admission", () => {
     },
   );
 
-  it("waits through deferred owner release retries beyond one settle slice", async () => {
+  it("keeps deferred owner release retries from retaining a successor", async () => {
     vi.useFakeTimers();
     try {
       const sessionKey = "agent:main:telegram:topic:deferred-recovery-release";
@@ -524,15 +523,15 @@ describe("reply turn admission", () => {
       }
       const applySessionEntryReplacements = sessionAccessor.applySessionEntryReplacements;
       let failures = 0;
-      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementation(
-        async (params) => {
-          if (failures < 15) {
+      const accessorSpy = vi
+        .spyOn(sessionAccessor, "applySessionEntryReplacements")
+        .mockImplementation(async (params) => {
+          if (failures < 3) {
             failures += 1;
-            throw new Error("transient session-store failure");
+            throw new Error("SQLite session entry changed before replacement");
           }
           return await applySessionEntryReplacements(params);
-        },
-      );
+        });
 
       owner.operation.complete();
       const successor = admitTestReplyTurn({
@@ -545,10 +544,9 @@ describe("reply turn admission", () => {
       void successor.then(() => {
         successorSettled = true;
       });
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS + 1);
-      expect(successorSettled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(20_000);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(successorSettled).toBe(true);
+      accessorSpy.mockRestore();
       const admitted = await successor;
       expect(admitted.status).toBe("owned");
       if (admitted.status === "owned") {
@@ -926,7 +924,6 @@ describe("reply turn admission", () => {
   });
 
   it("waits for visible turns and reuses the active session id", async () => {
-    const waitChanges: boolean[] = [];
     const active = createTestReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "active-session",
@@ -936,7 +933,6 @@ describe("reply turn admission", () => {
     const admitted = admitTestReplyTurn({
       sessionKey: "agent:main:telegram:topic:42",
       sessionId: "new-session",
-      onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
 
     let settled = false;
@@ -947,11 +943,9 @@ describe("reply turn admission", () => {
       setImmediate(resolve);
     });
     expect(settled).toBe(false);
-    expect(waitChanges).toEqual([true]);
 
     active.complete();
     const result = await admitted;
-    expect(waitChanges).toEqual([true, false]);
 
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
@@ -1024,7 +1018,6 @@ describe("reply turn admission", () => {
   });
 
   it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
-    const waitChanges: boolean[] = [];
     const active = createTestReplyOperation({
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "active-session",
@@ -1037,7 +1030,6 @@ describe("reply turn admission", () => {
       sessionKey: "agent:main:discord:channel:42",
       sessionId: "queued-session",
       kind: "queued_followup",
-      onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
     });
     let settled = false;
     void admitted.then(() => {
@@ -1049,13 +1041,9 @@ describe("reply turn admission", () => {
     await Promise.resolve();
 
     expect(settled).toBe(false);
-    await vi.waitFor(() => {
-      expect(waitChanges).toEqual([true]);
-    });
 
     releaseBarrier();
     const result = await admitted;
-    expect(waitChanges).toEqual([true, false]);
     expect(result.status).toBe("owned");
     if (result.status === "owned") {
       result.operation.complete();
@@ -1411,13 +1399,11 @@ describe("reply turn admission", () => {
       active.setPhase("running");
       active.recordActivity();
       const abortController = new AbortController();
-      const waitChanges: boolean[] = [];
       let settled = false;
       const result = admitTestReplyTurn({
         sessionKey: "agent:main:telegram:topic:fresh-visible",
         sessionId: "waiting-session",
         upstreamAbortSignal: abortController.signal,
-        onReplyAdmissionWaitChange: (waiting) => waitChanges.push(waiting),
       }).then((admission) => {
         settled = true;
         return admission;
@@ -1425,7 +1411,6 @@ describe("reply turn admission", () => {
 
       await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
       expect(settled).toBe(false);
-      expect(waitChanges).toEqual([true]);
       expect(replyRunRegistry.get("agent:main:telegram:topic:fresh-visible")).toBe(active);
 
       abortController.abort();
@@ -1434,7 +1419,6 @@ describe("reply turn admission", () => {
         reason: "aborted",
         activeOperation: active,
       });
-      expect(waitChanges).toEqual([true, false]);
     } finally {
       await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();

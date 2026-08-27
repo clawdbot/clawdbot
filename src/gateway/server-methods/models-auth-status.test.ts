@@ -6,7 +6,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
-import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  replaceRuntimeAuthProfileStoreSnapshots,
+  type AuthProfileStore,
+} from "../../agents/auth-profiles.js";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { UsageSummary } from "../../infra/provider-usage.types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
@@ -54,6 +57,11 @@ const mocks = vi.hoisted(() => ({
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
+  listProviderUsagePluginDescriptors: vi.fn(() => [
+    { provider: "anthropic", displayName: "Claude" },
+    { provider: "deepseek", displayName: "DeepSeek" },
+    { provider: "openai", displayName: "OpenAI" },
+  ]),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -93,6 +101,10 @@ vi.mock("../../agents/auth-health.js", async () => {
 
 vi.mock("../../infra/provider-usage.load.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  listProviderUsagePluginDescriptors: mocks.listProviderUsagePluginDescriptors,
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
@@ -201,6 +213,7 @@ let preparedMetadataSnapshot: unknown;
 
 function setPreparedAuthStore(store: AuthProfileStore): void {
   preparedAuthStore = store;
+  replaceRuntimeAuthProfileStoreSnapshots([{ agentDir: "/tmp/agent", store }]);
 }
 
 function setPreparedMetadataSnapshot(snapshot: unknown): void {
@@ -389,7 +402,12 @@ describe("models.authStatus", () => {
   ])(
     "resolves an $name agentId against the configured roster",
     async ({ params, expectedAgentId }) => {
-      const cfg = { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } };
+      const cfg = {
+        agents: {
+          defaults: { systemAgent: { agentId: "main" } },
+          list: [{ id: "main" }, { id: "writer" }],
+        },
+      };
       mocks.getRuntimeConfig.mockReturnValue(cfg);
       mocks.listAgentIds.mockReturnValue(["main", "writer"]);
 
@@ -630,6 +648,339 @@ describe("models.authStatus", () => {
     const provider = await firstAuthStatusProvider();
 
     expect(provider?.profiles[0]?.logoutSupported).toBeUndefined();
+  });
+
+  it("reports external CLI-managed OAuth as signed in across access-token expiry", async () => {
+    const profileId = "anthropic:claude-cli";
+    const profile = {
+      profileId,
+      provider: "claude-cli",
+      type: "oauth",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore(
+      Object.assign(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "expired-access",
+              refresh: "cli-owned-refresh",
+              expires: 1,
+            } satisfies AuthProfileStore["profiles"][string],
+          },
+        },
+        { runtimeExternalCliProfileIds: [profileId] },
+      ),
+    );
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "claude-cli",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider).toMatchObject({
+      provider: "claude-cli",
+      status: "ok",
+      profiles: [{ profileId, status: "expired" }],
+    });
+    expect(provider?.expiry).toBeUndefined();
+  });
+
+  it("keeps an unrelated effective token expiry visible beside owned CLI OAuth", async () => {
+    const profileId = "anthropic:claude-cli";
+    const ownedProfile = {
+      profileId,
+      provider: "claude-cli",
+      type: "oauth",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    const manualToken = {
+      profileId: "anthropic:manual-token",
+      provider: "claude-cli",
+      type: "token",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: "anthropic:manual-token",
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore(
+      Object.assign(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "expired-access",
+              refresh: "cli-owned-refresh",
+              expires: 1,
+            } satisfies AuthProfileStore["profiles"][string],
+          },
+        },
+        { runtimeExternalCliProfileIds: [profileId] },
+      ),
+    );
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles: [ownedProfile, manualToken],
+      providers: [
+        {
+          provider: "claude-cli",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles: [ownedProfile, manualToken],
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
+  });
+
+  it("keeps persisted MiniMax CLI OAuth expiry visible", async () => {
+    const profileId = "minimax-portal:minimax-cli";
+    const profile = {
+      profileId,
+      provider: "minimax-portal",
+      type: "oauth",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "minimax-portal",
+          access: "expired-access",
+          refresh: "persisted-refresh",
+          expires: 1,
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        {
+          provider: "minimax-portal",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider).toMatchObject({ provider: "minimax-portal", status: "expired" });
+  });
+
+  it("keeps a missing Anthropic row when its model route has independent auth config", async () => {
+    const profileId = "anthropic:claude-cli";
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: { profiles: { [profileId]: { provider: "anthropic", mode: "token" } } },
+      models: { providers: { anthropic: { auth: "oauth" } } },
+    });
+    const profile = {
+      profileId,
+      provider: "claude-cli",
+      type: "oauth",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore(
+      Object.assign(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "expired-access",
+              refresh: "cli-owned-refresh",
+              expires: 1,
+            } satisfies AuthProfileStore["profiles"][string],
+          },
+        },
+        { runtimeExternalCliProfileIds: [profileId] },
+      ),
+    );
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        { provider: "anthropic", status: "missing", profiles: [] },
+        {
+          provider: "claude-cli",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const result = await readAuthStatus();
+
+    expect(result.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "anthropic", status: "missing" }),
+      ]),
+    );
+  });
+
+  it("keeps a missing Anthropic row when another Anthropic auth profile is configured", async () => {
+    const profileId = "anthropic:claude-cli";
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          [profileId]: { provider: "anthropic", mode: "token" },
+          "anthropic:manual": { provider: "anthropic", mode: "oauth" },
+        },
+      },
+    });
+    const profile = {
+      profileId,
+      provider: "claude-cli",
+      type: "oauth",
+      status: "expired",
+      expiresAt: 1,
+      remainingMs: -1,
+      source: "store",
+      label: profileId,
+    } satisfies AuthHealthSummary["profiles"][number];
+    setPreparedAuthStore(
+      Object.assign(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "expired-access",
+              refresh: "cli-owned-refresh",
+              expires: 1,
+            } satisfies AuthProfileStore["profiles"][string],
+          },
+        },
+        { runtimeExternalCliProfileIds: [profileId] },
+      ),
+    );
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles: [profile],
+      providers: [
+        { provider: "anthropic", status: "missing", profiles: [] },
+        {
+          provider: "claude-cli",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles: [profile],
+        },
+      ],
+    });
+
+    const result = await readAuthStatus();
+
+    expect(result.providers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ provider: "anthropic", status: "missing" }),
+      ]),
+    );
+  });
+
+  it("preserves expiry when an effective OAuth sibling is not CLI-owned", async () => {
+    const cliProfileId = "anthropic:claude-cli";
+    const manualProfileId = "anthropic:manual";
+    const profiles = [cliProfileId, manualProfileId].map(
+      (profileId) =>
+        ({
+          profileId,
+          provider: "claude-cli",
+          type: "oauth",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          source: "store",
+          label: profileId,
+        }) satisfies AuthHealthSummary["profiles"][number],
+    );
+    setPreparedAuthStore(
+      Object.assign(
+        {
+          version: 1,
+          profiles: Object.fromEntries(
+            profiles.map((profile) => [
+              profile.profileId,
+              {
+                type: "oauth",
+                provider: "claude-cli",
+                access: "expired-access",
+                refresh: "stored-refresh",
+                expires: 1,
+              } satisfies AuthProfileStore["profiles"][string],
+            ]),
+          ),
+        },
+        { runtimeExternalCliProfileIds: [cliProfileId] },
+      ),
+    );
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 2,
+      warnAfterMs: 0,
+      profiles,
+      providers: [
+        {
+          provider: "claude-cli",
+          status: "expired",
+          expiresAt: 1,
+          remainingMs: -1,
+          profiles,
+        },
+      ],
+    });
+
+    const provider = await firstAuthStatusProvider();
+
+    expect(provider).toMatchObject({ provider: "claude-cli", status: "expired" });
   });
 
   it("does not offer logout for config-bound token profiles", async () => {
@@ -1010,6 +1361,8 @@ describe("models.authStatus", () => {
   });
 
   it("routes claude-cli OAuth profiles to Anthropic usage with plan and billing", async () => {
+    const runtimeConfig = {};
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
     const profile = {
       profileId: "claude-cli",
       provider: "claude-cli",
@@ -1044,7 +1397,9 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["anthropic"],
       agentDir: "/tmp/agent",
-      timeoutMs: 3500,
+      authStore: preparedAuthStore,
+      config: runtimeConfig,
+      timeoutMs: 5_000,
     });
     let result: ModelAuthStatusResult | undefined;
     await waitForFast(async () => {
@@ -1087,7 +1442,9 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
       providers: ["deepseek"],
       agentDir: "/tmp/agent",
-      timeoutMs: 3500,
+      authStore: preparedAuthStore,
+      config: expect.any(Object),
+      timeoutMs: 5_000,
     });
     let result: ModelAuthStatusResult | undefined;
     await waitForFast(async () => {
@@ -1225,7 +1582,9 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).toHaveBeenLastCalledWith({
       providers: ["openai"],
       agentDir: "/tmp/rebound-agent",
-      timeoutMs: 3500,
+      authStore: preparedAuthStore,
+      config: expect.any(Object),
+      timeoutMs: 5_000,
     });
   });
 
@@ -1260,7 +1619,7 @@ describe("models.authStatus", () => {
       expect(warmed.providers[0]?.usage?.windows[0]?.usedPercent).toBe(10);
     });
 
-    setPreparedAuthStore({
+    const rotatedStore: AuthProfileStore = {
       version: 1,
       profiles: {
         "openai:default": {
@@ -1271,14 +1630,20 @@ describe("models.authStatus", () => {
           expires: 1_000_000,
         },
       },
-    });
+    };
+    // Prepared catalog refresh can replace its owner before the ambient snapshot revision advances.
+    preparedAuthStore = rotatedStore;
     const rotated = await readAuthStatus();
+    expect(mocks.buildAuthHealthSummary.mock.calls.at(-1)?.[0].store).toBe(rotatedStore);
     expect(rotated.providers[0]?.usage).toBeUndefined();
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);
+    expect(mocks.loadProviderUsageSummary).toHaveBeenLastCalledWith(
+      expect.objectContaining({ authStore: rotatedStore }),
+    );
   });
 
   it("does not reuse usage after a direct provider key rotates", async () => {
-    const cfg = {
+    let cfg = {
       models: { providers: { deepseek: { apiKey: "first-direct-value" } } },
     };
     mocks.getRuntimeConfig.mockReturnValue(cfg);
@@ -1306,7 +1671,10 @@ describe("models.authStatus", () => {
       expect(warmed.providers[0]?.usage?.summary).toBe("Balance 10");
     });
 
-    cfg.models.providers.deepseek.apiKey = "second-direct-value";
+    cfg = {
+      models: { providers: { deepseek: { apiKey: "second-direct-value" } } },
+    };
+    mocks.getRuntimeConfig.mockReturnValue(cfg);
     const rotated = await readAuthStatus();
     expect(rotated.providers[0]?.usage).toBeUndefined();
     expect(mocks.loadProviderUsageSummary).toHaveBeenCalledTimes(2);

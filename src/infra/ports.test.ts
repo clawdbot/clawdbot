@@ -623,7 +623,6 @@ describeUnix("inspectPortUsage", () => {
 
     const result = await inspectPortConnections(18789);
 
-    expect(result.connections).toHaveLength(2);
     expect(result.connections).toEqual([
       expect.objectContaining({
         pid: 111,

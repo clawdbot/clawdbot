@@ -2,6 +2,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { afterAll, afterEach, beforeAll, describe } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiE2eWaitTimeoutMs,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
@@ -57,6 +58,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       throw new Error("Control UI E2E browser accessed before suite setup");
     }
     const context = await browser.newContext(contextOptions);
+    // Harness owns the wait budget; per-test setDefaultTimeout sprinkles defeat CI scaling.
+    context.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     openBrowserContexts.add(context);
     return context;
   };

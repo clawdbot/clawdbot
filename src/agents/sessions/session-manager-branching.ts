@@ -102,6 +102,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
   }
 
   async createBranchedSession(leafId: string): Promise<string | undefined> {
+    this.ensureCompletePersistedHistory();
     const previousSessionId = this.sessionId;
     const branchPath = this.collectBranchedSessionPath(leafId);
     if (branchPath.entries.length === 0) {
@@ -165,9 +166,7 @@ export class SessionManagerBranching extends SessionManagerEntries {
     const updatedAt = Date.now();
     const nextTarget = { ...persistenceTarget, sessionId: newSessionId };
     const nextEntry = {
-      ...(previousEntry
-        ? projectCanonicalSessionEntryShape(previousEntry as unknown as Record<string, unknown>)
-        : { updatedAt }),
+      ...(previousEntry ? projectCanonicalSessionEntryShape({ ...previousEntry }) : { updatedAt }),
       sessionId: newSessionId,
       updatedAt,
     };

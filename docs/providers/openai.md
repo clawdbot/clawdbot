@@ -80,16 +80,17 @@ endpoint and adapter:
 | Explicit exact official endpoint using HTTP                                                                                                                                     | Rejected              |
 | Route with an authored provider/model request override                                                                                                                          | OpenClaw              |
 
-Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid
-cutoff keys are typed agent-runtime controls, not authored provider request
-params. They do not disqualify implicit Codex selection or select a runtime by
-themselves. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"`
-when a recipe depends on one runtime.
+Valid model-scoped `params.fastMode` / `params.fast_mode`, cutoff, and `thinking`
+values are typed agent-runtime controls, not authored provider request params.
+Affirmative reasoning support and native reasoning-effort metadata also preserve
+Codex selection. See [Runtime selection](/concepts/agent-runtimes#runtime-selection)
+for the supported capability values and the request overrides that remain protected.
 
-An explicit non-default provider/model `agentRuntime.id` remains authoritative.
-For example, `agentRuntime.id: "openclaw"` keeps an otherwise Codex-eligible
-route on OpenClaw, while `agentRuntime.id: "codex"` requires Codex and fails
-closed when the effective route is not declared Codex-compatible.
+An explicit `agentRuntime.id: "openclaw"` keeps a Codex-eligible route on
+OpenClaw. Explicit `agentRuntime.id: "codex"` requires a registered Codex harness;
+unsupported routes/auth fail closed, except that authored request overrides may
+use Codex's declared exact-request OpenClaw fallback before execution. Inspect
+the completed result's actual harness when a recipe depends on native execution.
 Runtime selection does not change credential type or billing: Platform API-key
 auth and ChatGPT/Codex subscription auth remain distinct.
 
@@ -479,7 +480,7 @@ for the full example.
     OpenClaw treats native model capacity and the active runtime budget as
     separate values:
 
-    - `contextWindow` declares the provider's total model window.
+    - `contextWindow` declares the model's native window.
     - `contextTokens` caps how much of that window OpenClaw uses for active input.
 
     ChatGPT/Codex OAuth follows the live Codex account catalog. The current
@@ -487,9 +488,8 @@ for the full example.
     Direct API-key GPT-5.5 and GPT-5.6 models also default to `272000`
     `contextTokens`, even though the Platform API exposes a larger native
     window. This keeps the normal latency, quality, and cost profile consistent
-    across auth modes. A configured `agents.defaults.contextTokens` value can
-    lower that budget further, but it cannot raise a model above its configured
-    `contextTokens` cap.
+    across auth modes. Override a direct model's active-input budget with
+    `models.providers.openai.models[].contextTokens` on that exact model entry.
 
     For direct API-key GPT-5.5 and GPT-5.6, OpenAI documents a `1050000`
     token provider window and `128000` maximum output tokens. Reserving the
@@ -1018,9 +1018,9 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     credentials on different sides of the trust boundary. Platform auth mints
     an ephemeral client secret and the browser exchanges SDP directly with
     OpenAI. OAuth auth stays in the Gateway: the existing single-use offer
-    broker sends raw `application/sdp` to
-    `/v1/realtime/calls?model=<model>` and returns only the answer SDP. The
-    OAuth token never reaches the browser. A configured Platform credential
+    broker sends multipart `sdp` plus the canonical browser `session` policy
+    to `/v1/realtime/calls` and returns only the answer SDP. The OAuth token
+    never reaches the browser. A configured Platform credential
     that cannot be resolved still fails closed; repair or remove that source
     before OAuth fallback can apply.
 
@@ -1308,9 +1308,10 @@ request settings, so an otherwise eligible `auto` route stays on OpenClaw
 instead of selecting Codex implicitly. Valid `fastMode` / `fast_mode` values
 and valid cutoff keys are typed agent-runtime controls and do not select a
 runtime. Runtime-specific examples therefore pin `agentRuntime.id` explicitly.
-The native Codex app-server harness owns its own transport and request settings;
-explicit `agentRuntime.id: "codex"` fails closed when the effective route is
-not declared Codex-compatible.
+The native Codex app-server harness owns its transport and request settings.
+Authored embedded-provider settings can therefore select the declared OpenClaw
+fallback even with explicit `agentRuntime.id: "codex"`; see
+[Runtime selection](/concepts/agent-runtimes#runtime-selection).
 
 <AccordionGroup>
   <Accordion title="Transport (WebSocket vs SSE)">
@@ -1558,7 +1559,7 @@ not declared Codex-compatible.
     is already the default) and inert on unsupported provider/model pairs.
 
     With `strict-agentic` active, OpenClaw:
-    - Auto-enables `update_plan` for substantial work
+    - Makes `progress_card` available for substantial work unless `tools.updatePlan` disables it
     - Retries structurally empty or reasoning-only turns with a visible-answer
       continuation
     - Uses explicit harness plan events when the selected harness provides

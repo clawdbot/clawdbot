@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { collectChangedPaths } from "./config-change-paths.js";
 import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
 import { restoreEnvRefsFromMap, resolveWriteEnvSnapshotForPath } from "./env-preserve.js";
-import { formatConfigValidationFailure } from "./io.write-errors.js";
+import { createConfigValidationFailedError } from "./io.write-errors.js";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import { tryResolveLegacyCompatibilityAgentId } from "./legacy.default-agent-owner.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { createMergePatch } from "./merge-patch.js";
+import { setConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 vi.unmock("../agents/agent-scope-config.js");
@@ -668,6 +669,28 @@ describe("config io write prepare", () => {
     testCase.verify?.(persisted);
   });
 
+  it("uses recorded facts instead of placeholder-shaped roster bytes", () => {
+    const literalId = "${AGENT_ID}";
+    const sourceConfigBeforeMigrations = listRoster([{ id: literalId, ...main }]);
+    const resolveRename = () =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: roster({ [literalId]: main }),
+        sourceConfig: roster({ [literalId]: main }),
+        sourceConfigBeforeMigrations,
+        rootAuthoredConfig: listRoster([{ id: literalId, ...main }]),
+        nextConfig: roster({ renamed: main }),
+        explicitSetPaths: [["agents", "list", "0", "id"]],
+        explicitSetValueSource: listRoster([{ id: "renamed", ...main }]),
+        allowedAgentRosterRemovals: [literalId],
+      });
+
+    setConfigResolutionFacts(sourceConfigBeforeMigrations, new Set(["agents.list[0].id"]));
+    expect(resolveRename).toThrow("cannot safely resolve an env-backed renamed agent id");
+
+    setConfigResolutionFacts(sourceConfigBeforeMigrations, new Set());
+    expect(resolveRename()).toEqual(roster({ renamed: main }));
+  });
+
   it("ignores prototype-chain keys when building merge patches", () => {
     const base = { safe: { mode: "local" }, collision: { mode: "owned-base" } };
     const target = Object.create({ collision: { mode: "inherited-target" } }) as Record<
@@ -1089,10 +1112,13 @@ describe("config io write prepare", () => {
   });
 
   it('formats actionable guidance for dmPolicy="open" without wildcard allowFrom', () => {
-    const message = formatConfigValidationFailure(
-      "channels.telegram.allowFrom",
-      'channels.telegram.dmPolicy = "open" requires channels.telegram.allowFrom to include "*"',
-    );
+    const message = createConfigValidationFailedError([
+      {
+        path: "channels.telegram.allowFrom",
+        message:
+          'channels.telegram.dmPolicy = "open" requires channels.telegram.allowFrom to include "*"',
+      },
+    ]).message;
     expect(message).toContain("openclaw config set channels.telegram.allowFrom '[\"*\"]'");
     expect(message).toContain('openclaw config set channels.telegram.dmPolicy "pairing"');
   });

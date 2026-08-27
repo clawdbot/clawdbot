@@ -1,4 +1,5 @@
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct IPadSkillWorkshopScreen: View {
@@ -857,9 +858,9 @@ struct IPadSkillWorkshopScreen: View {
         do {
             let data = try await request(
                 method: "skills.proposals.inspect",
-                params: IPadSkillProposalInspectParams(
-                    agentId: selectedAgentParam,
-                    proposalId: proposalID),
+                params: SkillsProposalInspectParams(
+                    agentid: selectedAgentParam,
+                    proposalid: proposalID),
                 timeoutSeconds: 20)
             let response = try JSONDecoder().decode(IPadSkillProposalInspectResponse.self, from: data)
             self.merge(IPadSkillProposal(inspect: response, previous: self.proposals.first { $0.id == proposalID }))
@@ -870,25 +871,29 @@ struct IPadSkillWorkshopScreen: View {
 
     private func run(_ action: IPadSkillProposalAction.Kind, proposal: IPadSkillProposal) async {
         guard self.canApplyProposalMutations, self.busyAction == nil else { return }
-        self.busyAction = IPadSkillProposalAction(kind: action, proposalID: proposal.id)
+        guard let preparedAction = IPadSkillProposalAction(kind: action, proposal: proposal) else {
+            self.noticeText = nil
+            self.errorText = String(localized: "Review the proposal draft before applying or rejecting it.")
+            return
+        }
+        self.busyAction = preparedAction
         self.errorText = nil
         self.noticeText = nil
         defer { self.busyAction = nil }
 
         do {
-            let method = action == .apply ? "skills.proposals.apply" : "skills.proposals.reject"
             _ = try await self.request(
-                method: method,
-                params: IPadSkillProposalInspectParams(
-                    agentId: self.selectedAgentParam,
-                    proposalId: proposal.id),
+                method: preparedAction.method,
+                params: preparedAction.params(agentID: self.selectedAgentParam),
                 timeoutSeconds: 30)
-            self.noticeText = action == .apply
+            self.noticeText = preparedAction.kind == .apply
                 ? String(localized: "Proposal applied.")
                 : String(localized: "Proposal rejected.")
             await self.loadProposals(force: true)
         } catch {
-            self.errorText = Self.message(for: error)
+            let actionError = Self.message(for: error)
+            await self.loadProposals(force: true)
+            self.errorText = actionError
         }
     }
 
@@ -1128,6 +1133,25 @@ struct IPadSkillProposalAction: Equatable {
 
     let kind: Kind
     let proposalID: String
+    let revisionHash: String
+
+    init?(kind: Kind, proposal: IPadSkillProposal) {
+        guard let revisionHash = proposal.revisionHash else { return nil }
+        self.kind = kind
+        self.proposalID = proposal.id
+        self.revisionHash = revisionHash
+    }
+
+    var method: String {
+        self.kind == .apply ? "skills.proposals.apply" : "skills.proposals.reject"
+    }
+
+    func params(agentID: String?) -> SkillsProposalDecisionParams {
+        SkillsProposalDecisionParams(
+            agentid: agentID,
+            proposalid: self.proposalID,
+            expectedrevisionhash: self.revisionHash)
+    }
 }
 
 private struct IPadSkillProposalManifest: Decodable {
@@ -1154,13 +1178,9 @@ private struct IPadSkillProposalListParams: Encodable {
     let agentId: String?
 }
 
-private struct IPadSkillProposalInspectParams: Encodable {
-    let agentId: String?
-    let proposalId: String
-}
-
 struct IPadSkillProposalInspectResponse: Decodable {
     let record: IPadSkillProposalRecord
+    let revisionHash: String?
     let content: String
     let supportFiles: [IPadSkillProposalSupportFile]?
 }
@@ -1192,6 +1212,7 @@ struct IPadSkillProposal: Identifiable {
     let skillName: String
     let skillKey: String
     let updatedAtMs: Double
+    let revisionHash: String?
     var content: String?
     var supportFiles: [IPadSkillProposalSupportFile]
 
@@ -1203,8 +1224,10 @@ struct IPadSkillProposal: Identifiable {
         self.skillName = entry.skillName
         self.skillKey = entry.skillKey
         self.updatedAtMs = Self.parseDate(entry.updatedAt)
-        self.content = previous?.updatedAtMs == self.updatedAtMs ? previous?.content : nil
-        self.supportFiles = previous?.updatedAtMs == self.updatedAtMs ? previous?.supportFiles ?? [] : []
+        let isSameRevision = previous?.updatedAtMs == self.updatedAtMs
+        self.revisionHash = isSameRevision ? previous?.revisionHash : nil
+        self.content = isSameRevision ? previous?.content : nil
+        self.supportFiles = isSameRevision ? previous?.supportFiles ?? [] : []
     }
 
     init(inspect: IPadSkillProposalInspectResponse, previous: IPadSkillProposal?) {
@@ -1216,6 +1239,7 @@ struct IPadSkillProposal: Identifiable {
         self.skillName = record.target.skillName
         self.skillKey = record.target.skillKey
         self.updatedAtMs = Self.parseDate(record.updatedAt)
+        self.revisionHash = inspect.revisionHash
         self.content = Self.stripFrontmatter(inspect.content)
         self.supportFiles = inspect.supportFiles ?? previous?.supportFiles ?? []
     }

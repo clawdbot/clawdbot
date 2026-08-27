@@ -36,7 +36,10 @@ vi.mock("../talk/agent-consult-runtime.js", () => ({
   consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
 }));
 
-import { createTalkClientAgentConsultRunner } from "./talk-client-gateway-control.js";
+import {
+  createTalkClientAgentConsultRunner,
+  type TalkAgentConsultAuthority,
+} from "./talk-client-gateway-control.js";
 
 const config = {} as OpenClawConfig;
 const coreParams = {
@@ -54,12 +57,16 @@ const coreParams = {
   workspaceDir: "/tmp/workspace",
 } as Parameters<PluginRuntime["agent"]["runEmbeddedAgent"]>[0];
 
-function createRunner(registerRun = vi.fn()) {
+function createRunner(
+  registerRun = vi.fn(),
+  authority: TalkAgentConsultAuthority = { senderIsOwner: false, toolsAllow: ["read"] },
+) {
   return createTalkClientAgentConsultRunner({
     config,
     context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
     agentId: "researcher",
     sessionKey: "agent:researcher:talk",
+    authority,
     getVoiceSessionId: () => "voice-session",
     initialItems: [],
     registerRun,
@@ -107,7 +114,21 @@ describe("Talk client agent consult admission", () => {
         preparedRunAdmission: expect.objectContaining({ close: mocks.close }),
       }),
     );
+    expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: false, toolsAllow: ["read"] }),
+    );
     expect(mocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("preserves full agent authority for administrator consults", async () => {
+    await expect(
+      createRunner(vi.fn(), { senderIsOwner: true }).runPrompt({ prompt: "check" }),
+    ).resolves.toEqual({ text: "done" });
+
+    expect(mocks.consultRealtimeVoiceAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: true }),
+    );
+    expect(mocks.consultRealtimeVoiceAgent.mock.calls[0]?.[0]).not.toHaveProperty("toolsAllow");
   });
 
   it("closes the Talk admission when core execution fails", async () => {

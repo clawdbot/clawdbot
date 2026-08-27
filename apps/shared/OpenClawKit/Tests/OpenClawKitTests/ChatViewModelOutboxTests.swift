@@ -58,8 +58,18 @@ private struct OutboxSendError: Error, LocalizedError {
 }
 
 private actor OutboxTransportState {
+    enum BranchListingBehavior: Sendable {
+        case unsupportedTransport
+        case legacyAdminScopeRejection
+        case unknownMethodRejection
+        case unsupportedTextRejection
+    }
+
     var sessionRoutingContract = "per-sender|main|main"
     var healthy: Bool
+    var advertisedMethods: Set<String>?
+    var branchListingBehavior: BranchListingBehavior = .unsupportedTransport
+    var branchListCalls = 0
     var routeGeneration = 0
     var sendFails: Bool
     var sendFailsAfterRecording = false
@@ -109,6 +119,11 @@ private actor OutboxTransportState {
     func recordHistoryRequest(agentID: String?) {
         self.historyRequestCount += 1
         self.historyRequestAgentIDs.append(agentID)
+    }
+
+    func recordBranchListing() -> BranchListingBehavior {
+        self.branchListCalls += 1
+        return self.branchListingBehavior
     }
 
     func recordSend(
@@ -169,6 +184,11 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
         try await self.requestHistory(sessionKey: sessionKey, agentID: nil, expectedRoute: nil)
     }
 
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        let advertisedMethods = await self.state.advertisedMethods
+        return advertisedMethods.map { $0.contains(method) }
+    }
+
     var supportsSlashCommandCatalog: Bool {
         self.supportsSlashCommands
     }
@@ -180,6 +200,37 @@ private final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransp
     func listCommands(sessionKey _: String) async throws -> [OpenClawChatCommandChoice] {
         await self.state.awaitCommandListGate()
         return []
+    }
+
+    func listSessionBranches(
+        sessionKey _: String,
+        agentID _: String?) async throws -> OpenClawChatSessionBranchesResponse
+    {
+        switch await self.state.recordBranchListing() {
+        case .unsupportedTransport:
+            throw NSError(
+                domain: "OpenClawChatTransport",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "sessions.branches.list not supported by this transport"])
+        case .legacyAdminScopeRejection:
+            throw GatewayResponseError(
+                method: "sessions.branches.list",
+                code: "INVALID_REQUEST",
+                message: "missing scope: operator.admin",
+                details: nil)
+        case .unknownMethodRejection:
+            throw GatewayResponseError(
+                method: "sessions.branches.list",
+                code: "INVALID_REQUEST",
+                message: "unknown method: sessions.branches.list",
+                details: nil)
+        case .unsupportedTextRejection:
+            throw GatewayResponseError(
+                method: "sessions.branches.list",
+                code: "UNSUPPORTED",
+                message: "sessions.branches.list is unsupported on this gateway",
+                details: nil)
+        }
     }
 
     private func requestHistory(
@@ -742,6 +793,91 @@ struct ChatViewModelOutboxTests {
         #expect(await transport.state.sentMessages.isEmpty)
     }
 
+    @Test func `released 2026.7.x gateway without branch listing dispatches queued send without polling branches`()
+        async throws
+    {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false)
+        await transport.state.update {
+            $0.advertisedMethods = ["chat.send", "chat.history", "sessions.list"]
+            $0.branchListingBehavior = .legacyAdminScopeRejection
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        let text = "legacy gateway must flush"
+
+        await MainActor.run { vm.load() }
+        try await sendWhileOffline(vm, text: text)
+        await transport.goOnline()
+
+        try await waitUntil("legacy gateway dispatches queued send") {
+            await transport.state.sentMessages == [text]
+        }
+        #expect(await transport.state.branchListCalls == 0)
+    }
+
+    @Test func `modern gateway unknown-method rejection still releases queued send`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false)
+        await transport.state.update {
+            $0.advertisedMethods = nil
+            $0.branchListingBehavior = .unknownMethodRejection
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        let text = "unknown method still flushes"
+
+        await MainActor.run { vm.load() }
+        try await sendWhileOffline(vm, text: text)
+        await transport.goOnline()
+
+        try await waitUntil("modern gateway dispatches queued send") {
+            await transport.state.sentMessages == [text]
+        }
+        #expect(await transport.state.branchListCalls >= 1)
+    }
+
+    @Test @MainActor func `branch listing unsupported matcher rejects scope denials and accepts definitive absence`() {
+        #expect(!OpenClawChatViewModel.branchListingIsUnsupported(GatewayResponseError(
+            method: "sessions.branches.list",
+            code: "INVALID_REQUEST",
+            message: "missing scope: operator.admin",
+            details: nil)))
+        #expect(OpenClawChatViewModel.branchListingIsUnsupported(GatewayResponseError(
+            method: "sessions.branches.list",
+            code: "INVALID_REQUEST",
+            message: "unknown method: sessions.branches.list",
+            details: nil)))
+        #expect(OpenClawChatViewModel.branchListingIsUnsupported(GatewayResponseError(
+            method: "sessions.branches.list",
+            code: "UNSUPPORTED",
+            message: "sessions.branches.list is unsupported on this gateway",
+            details: nil)))
+        #expect(OpenClawChatViewModel.branchListingIsUnsupported(
+            OpenClawChatViewModel.BranchListingUnadvertisedError()))
+    }
+
+    @Test func `explicit unsupported reply on a pre-catalog gateway still releases queued send`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let transport = OutboxTestTransport(healthy: false)
+        await transport.state.update {
+            $0.advertisedMethods = nil
+            $0.branchListingBehavior = .unsupportedTextRejection
+        }
+        let vm = await makeOutboxViewModel(transport: transport, outbox: store)
+        let text = "explicit unsupported still flushes"
+
+        await MainActor.run { vm.load() }
+        try await sendWhileOffline(vm, text: text)
+        await transport.goOnline()
+
+        try await waitUntil("pre-catalog gateway dispatches queued send") {
+            await transport.state.sentMessages == [text]
+        }
+        #expect(await transport.state.branchListCalls >= 1)
+    }
+
     @Test func `offline queue persists the effective thinking level`() async throws {
         let (store, _, databaseDirectory) = try makeOutboxStore()
         defer { try? FileManager.default.removeItem(at: databaseDirectory) }
@@ -770,10 +906,11 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: store)
 
         await MainActor.run { vm.load() }
-        try await waitUntil("empty outbox restore completes") {
-            await MainActor.run { vm.hasRestoredOutboxMessages }
+        try await waitUntil("empty outbox becomes ready") {
+            await MainActor.run {
+                vm.healthOK && !vm.isLoading && vm.hasRestoredOutboxMessages
+            }
         }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(await MainActor.run { vm.healthOK })
         #expect(await MainActor.run { vm.errorText == nil })
 
@@ -783,10 +920,11 @@ struct ChatViewModelOutboxTests {
         #expect(await store.enqueueCommand(parked))
         let parkedVM = await makeOutboxViewModel(transport: transport, outbox: store)
         await MainActor.run { parkedVM.load() }
-        try await waitUntil("parked outbox restore completes") {
-            await MainActor.run { parkedVM.hasRestoredOutboxMessages }
+        try await waitUntil("parked outbox becomes ready") {
+            await MainActor.run {
+                parkedVM.healthOK && !parkedVM.isLoading && parkedVM.hasRestoredOutboxMessages
+            }
         }
-        try await Task.sleep(for: .milliseconds(50))
         #expect(await MainActor.run { parkedVM.healthOK })
         #expect(await MainActor.run { parkedVM.errorText == nil })
     }

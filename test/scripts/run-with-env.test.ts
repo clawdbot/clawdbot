@@ -4,39 +4,23 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   isRunWithEnvHelpRequest,
   parseRunWithEnvArgs,
   resolveForceKillDelayMs,
   resolveSpawnCommand,
-  signalRunWithEnvChild,
 } from "../../scripts/run-with-env.mts";
 
-const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+// These subprocess fixtures expose explicit ready files. Cold tsx startup can exceed a few
+// seconds on a loaded maintainer host, so this only bounds genuine fixture hangs.
+const PROCESS_READY_TIMEOUT_MS = 30_000;
 
-function restoreEnvValue(key: string, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
-}
-
-function withDefaultWindowsSystemRoot(run: () => void): void {
-  const originalSystemRoot = process.env.SystemRoot;
-  const originalWindir = process.env.WINDIR;
-  try {
-    process.env.SystemRoot = "C:\\Windows";
-    delete process.env.WINDIR;
-    run();
-  } finally {
-    restoreEnvValue("SystemRoot", originalSystemRoot);
-    restoreEnvValue("WINDIR", originalWindir);
-  }
-}
-
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_000): Promise<void> {
+async function waitFor(
+  predicate: () => boolean,
+  label: string,
+  timeoutMs = PROCESS_READY_TIMEOUT_MS,
+): Promise<void> {
   const startedAt = Date.now();
   while (!predicate()) {
     if (Date.now() - startedAt > timeoutMs) {
@@ -218,59 +202,6 @@ describe("run-with-env", () => {
     expect(result.stderr).toContain(
       "OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer",
     );
-  });
-
-  it("signals Windows wrapped command trees with taskkill", () => {
-    withDefaultWindowsSystemRoot(() => {
-      const child = {
-        kill: vi.fn(),
-        pid: 12345,
-      };
-      const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
-
-      signalRunWithEnvChild(child, "SIGTERM", {
-        platform: "win32",
-        runTaskkill,
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
-        stdio: "ignore",
-      });
-
-      signalRunWithEnvChild(child, "SIGKILL", {
-        platform: "win32",
-        runTaskkill,
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
-        stdio: "ignore",
-      });
-      expect(child.kill).not.toHaveBeenCalled();
-    });
-  });
-
-  it("force-kills Windows wrapped command trees when graceful taskkill fails", () => {
-    withDefaultWindowsSystemRoot(() => {
-      const child = {
-        kill: vi.fn(),
-        pid: 12345,
-      };
-      const runTaskkill = vi
-        .fn()
-        .mockReturnValueOnce({ error: undefined, status: 1 })
-        .mockReturnValueOnce({ error: undefined, status: 0 });
-
-      signalRunWithEnvChild(child, "SIGTERM", {
-        platform: "win32",
-        runTaskkill,
-      });
-
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
-        stdio: "ignore",
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
-        stdio: "ignore",
-      });
-      expect(child.kill).not.toHaveBeenCalled();
-    });
   });
 
   it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP", "SIGINT"] as const)(

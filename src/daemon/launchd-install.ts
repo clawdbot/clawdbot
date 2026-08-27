@@ -44,9 +44,12 @@ export async function uninstallLaunchAgent({
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const plistPath = resolveLaunchAgentPlistPath(env);
-  const bootout = await execLaunchctl(["bootout", domain, plistPath]);
-  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-    throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  const probe = await probeLaunchAgentState(`${domain}/${label}`);
+  if (probe.state !== "not-loaded") {
+    const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
   }
 
   try {

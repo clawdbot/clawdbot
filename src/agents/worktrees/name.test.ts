@@ -10,7 +10,10 @@ describe("slugifyWorktreeTitle", () => {
     expect(slugifyWorktreeTitle(title)).toBe(expected);
   });
 
-  it("truncates at the worktree contract limit without a trailing dash", () => {
+  it("truncates at the last complete word within the worktree contract limit", () => {
+    expect(slugifyWorktreeTitle(`${"a".repeat(50)} complete unfinished`)).toBe(
+      `${"a".repeat(50)}-complete`,
+    );
     expect(slugifyWorktreeTitle(`${"a".repeat(63)} two`)).toBe("a".repeat(63));
   });
 

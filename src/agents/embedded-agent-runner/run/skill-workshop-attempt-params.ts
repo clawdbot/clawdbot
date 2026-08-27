@@ -11,6 +11,7 @@ export function resolveSkillWorkshopAttemptParams(
     | "skillWorkshopProposalOnly"
     | "skillWorkshopProposalReviewCompletion"
     | "skillWorkshopCollectionReconcile"
+    | "skillWorkshopProposalRevision"
   >,
 ) {
   return {
@@ -22,5 +23,6 @@ export function resolveSkillWorkshopAttemptParams(
     skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
     skillWorkshopProposalReviewCompletion: params.skillWorkshopProposalReviewCompletion,
     skillWorkshopCollectionReconcile: params.skillWorkshopCollectionReconcile,
+    skillWorkshopProposalRevision: params.skillWorkshopProposalRevision,
   };
 }

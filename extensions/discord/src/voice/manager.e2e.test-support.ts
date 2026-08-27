@@ -44,6 +44,7 @@ export type TestRealtimeSessionEntry = {
 };
 
 export type TestRealtimeBridgeParams = {
+  agentId?: string;
   audioSink: { sendAudio: (audio: Buffer) => void };
   autoRespondToAudio?: boolean;
   cfg?: unknown;

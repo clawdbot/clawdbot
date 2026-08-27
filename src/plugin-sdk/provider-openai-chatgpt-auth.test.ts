@@ -27,6 +27,7 @@ describe("OpenAI Codex provider auth helpers", () => {
           email: "codex@example.com",
         },
       }),
+      email: "credential@example.com",
     });
 
     expect(identity).toEqual({
@@ -63,16 +64,51 @@ describe("OpenAI Codex provider auth helpers", () => {
     );
   });
 
-  it("falls back to account id when the access token has no stable subject", () => {
-    const identity = resolveOpenAICodexAuthIdentity({
-      access: jwt({}),
-      accountId: "acct_only",
+  it("falls back to credential email before synthetic ids", () => {
+    expect(
+      resolveOpenAICodexAuthIdentity({
+        access: jwt({ sub: "jwt-subject" }),
+        email: "credential@example.com",
+      }),
+    ).toEqual({
+      email: "credential@example.com",
+      profileName: "credential@example.com",
+    });
+  });
+
+  it("decodes URL-safe base64 JWT payloads", () => {
+    const access = jwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "w_ébé_1fzcswWN6Pi5zL",
+      },
+    });
+    expect(access.split(".")[1]).toContain("_");
+
+    expect(resolveOpenAICodexAuthIdentity({ access })).toEqual({
+      accountId: "w_ébé_1fzcswWN6Pi5zL",
+    });
+  });
+
+  it("uses the OIDC issuer pair without treating workspace ids as user subjects", () => {
+    expect(
+      resolveOpenAICodexAuthIdentity({
+        access: jwt({ iss: "https://accounts.openai.com", sub: "user-abc" }),
+      }),
+    ).toEqual({
+      profileName: `id-${Buffer.from("https://accounts.openai.com|user-abc").toString("base64url")}`,
     });
 
-    expect(identity).toEqual({
-      accountId: "acct_only",
-      profileName: `id-${Buffer.from("acct_only").toString("base64url")}`,
-    });
+    expect(
+      resolveOpenAICodexAuthIdentity({
+        access: jwt({
+          "https://api.openai.com/auth": { chatgpt_account_id: "workspace-only" },
+        }),
+      }),
+    ).toEqual({ accountId: "workspace-only" });
+  });
+
+  it("returns no identity metadata for non-JWT input", () => {
+    expect(resolveOpenAICodexAuthIdentity({ access: "not-a-jwt" })).toEqual({});
   });
 
   it("resolves access-token expiry from numeric and string JWT exp claims", () => {

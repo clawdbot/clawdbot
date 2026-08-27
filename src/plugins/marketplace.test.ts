@@ -518,6 +518,36 @@ describe("marketplace plugins", () => {
     });
   });
 
+  it("passes install policy acknowledgement through to marketplace path installs", async () => {
+    await withTempDir("openclaw-marketplace-test-", async (rootDir) => {
+      const pluginDir = path.join(rootDir, "plugins", "frontend-design");
+      const manifestPath = await writeLocalMarketplaceFixture({
+        rootDir,
+        pluginDir,
+        manifest: {
+          plugins: [{ name: "frontend-design", source: "./plugins/frontend-design" }],
+        },
+      });
+      installPluginFromPathMock.mockResolvedValue({
+        ok: true,
+        pluginId: "frontend-design",
+        targetDir: "/tmp/frontend-design",
+        version: "0.1.0",
+        extensions: ["index.ts"],
+      });
+      const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
+
+      await installPluginFromMarketplace({
+        marketplace: manifestPath,
+        plugin: "frontend-design",
+        onInstallPolicyWarning,
+      });
+
+      expect(installPluginInput().path).toBe(pluginDir);
+      expect(installPluginInput().onInstallPolicyWarning).toBe(onInstallPolicyWarning);
+    });
+  });
+
   it("resolves Claude-style plugin@marketplace shortcuts from known_marketplaces.json", async () => {
     await withTempDir("openclaw-marketplace-test-", async (homeDir) => {
       const openClawHome = path.join(homeDir, "openclaw-home");

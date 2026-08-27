@@ -34,6 +34,7 @@ export function resolveInstallSafetyOverrides(
   return {
     config: overrides.config,
     dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
+    onInstallPolicyWarning: overrides.onInstallPolicyWarning,
     trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
   };
 }
@@ -62,6 +63,7 @@ export function isTerminalPluginInstallFailure(code?: string): boolean {
   return (
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED ||
+    code === PLUGIN_INSTALL_ERROR_CODE.RELEASE_COHORT_UNAVAILABLE ||
     code === PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN
   );
 }
@@ -159,6 +161,7 @@ async function tryInstallHookPackFromNpmSpec(params: {
   snapshot: ConfigSnapshotForInstallExecution;
   installMode: "install" | "update";
   spec: string;
+  safetyOverrides?: InstallSafetyOverrides;
   pin?: boolean;
   expectedIntegrity?: string;
   expectedPackageKind?: "hook-only";
@@ -168,6 +171,7 @@ async function tryInstallHookPackFromNpmSpec(params: {
     return { ok: false, error: params.snapshot.hookMutation.reason };
   }
   const result = await installHooksFromNpmSpec({
+    ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
     config: params.snapshot.config,
     spec: params.spec,
     mode: params.installMode,
@@ -224,6 +228,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     params.snapshot.hookMutation.mode === "blocked"
   ) {
     const hookProbe = await probeHookPackFromNpmSpec({
+      ...resolveInstallSafetyOverrides(params.safetyOverrides),
       config: params.snapshot.config,
       spec: params.spec,
       mode: params.installMode,
@@ -240,6 +245,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
         snapshot: params.snapshot,
         installMode: params.installMode,
         spec: params.spec,
+        safetyOverrides: params.safetyOverrides,
         pin: params.pin,
         expectedIntegrity: hookProbe.npmResolution?.integrity ?? params.expectedIntegrity,
         expectedPackageKind: "hook-only",
@@ -318,6 +324,7 @@ export async function tryInstallPluginOrHookPackFromNpmSpec(params: {
       snapshot: params.snapshot,
       installMode: params.installMode,
       spec: params.spec,
+      safetyOverrides: params.safetyOverrides,
       pin: params.pin,
       expectedIntegrity: params.expectedIntegrity,
       runtime: params.runtime,

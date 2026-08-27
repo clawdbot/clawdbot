@@ -20,6 +20,7 @@ export const PresenceEntrySchema = closedObject({
   platform: Type.Optional(NonEmptyString),
   deviceFamily: Type.Optional(NonEmptyString),
   modelIdentifier: Type.Optional(NonEmptyString),
+  timeZone: Type.Optional(NonEmptyString),
   mode: Type.Optional(NonEmptyString),
   lastInputSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   reason: Type.Optional(NonEmptyString),
@@ -128,18 +129,6 @@ const HealthSnapshotSchema = closedObject({
           queueName: Type.String(),
           count: Type.Integer({ minimum: 0 }),
           oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
-          full: Type.Optional(Type.Integer({ minimum: 0 })),
-          compacted: Type.Optional(Type.Integer({ minimum: 0 })),
-          safe: Type.Optional(Type.Integer({ minimum: 0 })),
-          ambiguous: Type.Optional(Type.Integer({ minimum: 0 })),
-          ownerManaged: Type.Optional(Type.Integer({ minimum: 0 })),
-          ownerCleanupPending: Type.Optional(Type.Integer({ minimum: 0 })),
-          fenceNone: Type.Optional(Type.Integer({ minimum: 0 })),
-          fencePermanent: Type.Optional(Type.Integer({ minimum: 0 })),
-          fenceProducerBounded: Type.Optional(Type.Integer({ minimum: 0 })),
-          legacyUnknown: Type.Optional(Type.Integer({ minimum: 0 })),
-          payloadBearing: Type.Optional(Type.Integer({ minimum: 0 })),
-          oldestPayloadFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
         }),
       ),
       ingressFailed: Type.Optional(
@@ -151,12 +140,6 @@ const HealthSnapshotSchema = closedObject({
             oldestFailedAt: Type.Optional(Type.Integer({ minimum: 0 })),
           }),
         ),
-      ),
-      maintenance: Type.Optional(
-        closedObject({
-          lastRunAt: Type.Integer({ minimum: 0 }),
-          errors: Type.Integer({ minimum: 0 }),
-        }),
       ),
       ingressPressure: Type.Optional(
         Type.Array(
@@ -231,6 +214,7 @@ const HealthSnapshotSchema = closedObject({
 /** Default session routing keys included in initial gateway snapshots. */
 const SessionDefaultsSchema = closedObject({
   defaultAgentId: NonEmptyString,
+  modelConfigured: Type.Optional(Type.Boolean()),
   ownership: Type.Optional(AgentOwnershipSchema),
   selectionRequired: Type.Optional(Type.Boolean()),
   mainKey: NonEmptyString,

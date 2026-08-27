@@ -1,6 +1,7 @@
 import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { until } from "lit/directives/until.js";
+import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -126,7 +127,7 @@ export function resolveRenderableMessageImages(
       ? resolveAssistantAttachmentAvailability(
           img.url,
           localMediaPreviewRoots,
-          opts?.basePath,
+          opts?.resourceBasePath,
           opts?.authToken,
           opts?.onRequestUpdate,
         )
@@ -135,7 +136,7 @@ export function resolveRenderableMessageImages(
       return [];
     }
     const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket)
+      ? buildAssistantAttachmentUrl(img.url, opts?.resourceBasePath, availability.mediaTicket)
       : img.url;
     return [{ ...img, displayUrl }];
   });
@@ -210,7 +211,10 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
           type="button"
           class="chat-message-image-button"
           aria-label=${t("chat.imageLightbox.open", { title })}
-          @click=${() => openImage(img, previewUrl)}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            openImage(img, previewUrl);
+          }}
         >
           <img
             src=${previewUrl}
@@ -271,7 +275,7 @@ function resolveManagedOutgoingImageBlobUrlCacheKey(
   variant: ManagedImageVariant = "thumbnail",
 ): string {
   const authToken = opts?.authToken?.trim() ?? "";
-  return `${buildManagedOutgoingImageVariantUrl(source, variant)}::${authToken}::${artifactId?.trim() ?? ""}`;
+  return `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${authToken}::${artifactId?.trim() ?? ""}`;
 }
 
 function readManagedOutgoingImageBlobUrl(
@@ -296,7 +300,7 @@ async function resolveManagedOutgoingImageBlobUrl(
     "managed-image",
     cacheKey,
     opts?.onRequestUpdate,
-    `${buildManagedOutgoingImageVariantUrl(source, variant)}::${artifactId?.trim() ?? ""}`,
+    `${buildManagedOutgoingImageVariantUrl(source, variant, opts?.resourceBasePath)}::${artifactId?.trim() ?? ""}`,
   );
   const cached = readManagedImageBlobUrl(cacheKey);
   if (cached) {
@@ -354,13 +358,25 @@ async function resolveManagedOutgoingImageBlobUrl(
   return resource.pending;
 }
 
-function buildManagedOutgoingImageVariantUrl(source: string, variant: ManagedImageVariant): string {
+function buildManagedOutgoingImageVariantUrl(
+  source: string,
+  variant: ManagedImageVariant,
+  resourceBasePath?: string,
+): string {
   try {
     const parsed = new URL(source, window.location.origin);
     parsed.pathname = parsed.pathname.replace(/\/(?:full|thumbnail)$/u, `/${variant}`);
-    return /^https?:\/\//iu.test(source)
-      ? parsed.href
-      : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+    if (/^https?:\/\//iu.test(source)) {
+      return parsed.href;
+    }
+    const normalizedBasePath = normalizeBasePath(resourceBasePath ?? "");
+    const pathname =
+      normalizedBasePath &&
+      (parsed.pathname === normalizedBasePath ||
+        parsed.pathname.startsWith(`${normalizedBasePath}/`))
+        ? parsed.pathname
+        : `${normalizedBasePath}${parsed.pathname}`;
+    return `${pathname}${parsed.search}${parsed.hash}`;
   } catch {
     return source.replace(/\/(?:full|thumbnail)(?=$|[?#])/u, `/${variant}`);
   }
@@ -380,7 +396,11 @@ async function fetchManagedOutgoingImageBlob(
           .resolveArtifactDownload({ sessionKey: requesterSessionKey, artifactId })
           .catch(() => null)
       : null;
-  const requestUrl = buildManagedOutgoingImageVariantUrl(artifactDownload?.url ?? source, variant);
+  const requestUrl = buildManagedOutgoingImageVariantUrl(
+    artifactDownload?.url ?? source,
+    variant,
+    opts?.resourceBasePath,
+  );
   const headers = new Headers({ Accept: "image/*" });
   const authToken = opts?.authToken?.trim();
   if (!artifactDownload && authToken) {
@@ -393,8 +413,8 @@ async function fetchManagedOutgoingImageBlob(
     controller.abort(new DOMException("managed outgoing image fetch timed out", "TimeoutError"));
   }, MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS);
   try {
-    // Managed media is a Gateway API at the origin root. Rebasing it under
-    // the Control UI mount path serves the HTML shell instead of image bytes.
+    // Root deployments use /api directly; subpath deployments expose the same
+    // media route beneath the configured Control UI base path.
     const response = await fetch(requestUrl, {
       method: "GET",
       headers,
@@ -511,7 +531,7 @@ function renderManagedImageActions(
       <button
         type="button"
         class="chat-image-action"
-        title=${t("chat.imageLightbox.openOriginal")}
+        title=${t("chat.imageLightbox.open", { title })}
         aria-label=${t("chat.imageLightbox.open", { title })}
         @click=${onOpen}
       >

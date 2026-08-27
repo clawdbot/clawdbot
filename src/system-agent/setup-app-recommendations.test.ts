@@ -53,6 +53,7 @@ describe("setup app recommendation candidates", () => {
           {
             score: 1,
             slug: `${query.toLocaleLowerCase("en-US")}-tools`,
+            installRef: `@demo-owner/${query.toLocaleLowerCase("en-US")}-tools`,
             ownerHandle: "demo-owner",
             displayName: `${query} Tools`,
           },
@@ -101,18 +102,21 @@ describe("setup app recommendation candidates", () => {
           {
             score: 1,
             slug: "notes-tools",
+            installRef: "@demo-owner/notes-tools",
             ownerHandle: "demo-owner",
             displayName: "Notes Tools",
           },
           {
             score: 0.9,
             slug: "notes-tools",
+            installRef: "@other-owner/notes-tools",
             ownerHandle: "other-owner",
             displayName: "Other Notes Tools",
           },
           {
             score: 0.8,
             slug: "legacy-notes-tools",
+            installRef: "legacy-notes-tools",
             displayName: "Ownerless Notes Tools",
           },
         ],
@@ -146,12 +150,14 @@ describe("setup app recommendation candidates", () => {
       {
         score: 2,
         slug: "notes-tools",
+        installRef: "@demo-owner/notes-tools",
         ownerHandle: "demo-owner",
         displayName: "Duplicate notes",
       },
       {
         score: 1,
         slug: "notes-tools",
+        installRef: "@demo-owner/notes-tools",
         ownerHandle: "demo-owner",
         displayName: "Notes Tools",
         summary: "Work with notes",
@@ -187,7 +193,15 @@ describe("setup app recommendation candidates", () => {
       if (query === "Broken") {
         throw new Error("offline");
       }
-      return [{ score: 1, slug: "working", ownerHandle: "demo-owner", displayName: "Working" }];
+      return [
+        {
+          score: 1,
+          slug: "working",
+          installRef: "@demo-owner/working",
+          ownerHandle: "demo-owner",
+          displayName: "Working",
+        },
+      ];
     });
     const result = await getSetupAppRecommendations({
       inventorySource: async () => [{ label: "Broken" }, { label: "Working" }],
@@ -249,6 +263,7 @@ describe("setup app recommendation matcher", () => {
       {
         score: 1,
         slug: "notes-tools",
+        installRef: "@demo-owner/notes-tools",
         ownerHandle: "demo-owner",
         displayName: "Notes Tools",
         summary: "Work with notes",

@@ -170,7 +170,16 @@ function buildSendSchema(options: {
     ),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
-    asVoice: Type.Optional(Type.Boolean()),
+    asVoice: Type.Optional(
+      Type.Boolean({ description: "Send audio as a voice note; combines with voiceText." }),
+    ),
+    voiceText: Type.Optional(
+      Type.String({ description: "Text to synthesize; message remains visible." }),
+    ),
+    voiceProvider: Type.Optional(
+      Type.String({ description: "Per-send speech provider override." }),
+    ),
+    voiceId: Type.Optional(Type.String({ description: "Per-send speech voice override." })),
     silent: Type.Optional(Type.Boolean()),
     quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
     gifPlayback: Type.Optional(Type.Boolean()),
@@ -233,7 +242,9 @@ function buildReactionSchema() {
         description: "snake_case alias of messageId; same defaults.",
       }),
     ),
-    emoji: Type.Optional(Type.String()),
+    emoji: Type.Optional(
+      Type.String({ description: "Unicode emoji; channels may also support custom emoji." }),
+    ),
     remove: Type.Optional(Type.Boolean()),
     trackToolCalls: Type.Optional(
       Type.Boolean({
@@ -253,7 +264,7 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: optionalPositiveIntegerSchema(),
+    limit: optionalPositiveIntegerSchema({ description: "Maximum number of results to return." }),
     pageSize: optionalPositiveIntegerSchema(),
     pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
@@ -348,7 +359,7 @@ function buildChannelTargetSchema() {
 function buildStickerSchema() {
   return {
     fileId: Type.Optional(Type.String()),
-    emojiName: Type.Optional(Type.String()),
+    emojiName: Type.Optional(Type.String({ description: "Name for an uploaded custom emoji." })),
     stickerId: Type.Optional(Type.Array(Type.String())),
     stickerName: Type.Optional(Type.String()),
     stickerDesc: Type.Optional(Type.String()),

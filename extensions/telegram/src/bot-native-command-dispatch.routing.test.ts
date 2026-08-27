@@ -29,6 +29,17 @@ const { persistentBindingMocks, replyMocks, sessionBindingMocks, sessionMocks } 
 describe("Telegram native command dispatch routing", () => {
   beforeEach(resetSessionMetaMocks);
 
+  it("keeps the owning Gateway dispatcher on a native slash turn", async () => {
+    const dispatchReplyFromConfig = vi.fn();
+    const { handler } = registerAndResolveStatusHandler({ cfg: {}, dispatchReplyFromConfig });
+
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(dispatchChannelInboundTurnMock.mock.calls[0]?.[0].dispatchReplyFromConfig).toBe(
+      dispatchReplyFromConfig,
+    );
+  });
+
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
     const shadowHandler = vi.fn(async () => ({ text: "wrong plugin" }));
     activePluginRegistry.commands.push({
@@ -334,8 +345,10 @@ describe("Telegram native command dispatch routing", () => {
             {
               ctx?: {
                 CommandTargetSessionKey?: string;
+                ConversationRoutePeerId?: string;
                 MessageThreadId?: number;
                 OriginatingTo?: string;
+                ThreadParentId?: string;
               };
             },
           ]
@@ -345,8 +358,10 @@ describe("Telegram native command dispatch routing", () => {
         dispatchCall?.ctx,
         {
           CommandTargetSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+          ConversationRoutePeerId: "-1001234567890:topic:42",
           MessageThreadId: 42,
           OriginatingTo: "telegram:-1001234567890:topic:42",
+          ThreadParentId: "-1001234567890",
         },
         "topic dispatch context",
       );

@@ -5,8 +5,9 @@ import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 // startup/doctor OOM reports. 2026.4.12 intentionally stages Matrix runtime
 // dependencies, including crypto wasm, so packaged installs do not miss Docker
 // and gateway runtime dependencies. Keep the budget below the 2026.3.12 bloat
-// level while allowing that mirrored runtime surface.
-const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 202 * 1024 * 1024;
+// level while allowing that mirrored runtime surface and the installed agent's
+// bundled user documentation.
+const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 204 * 1024 * 1024;
 
 function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;

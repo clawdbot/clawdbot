@@ -1,15 +1,15 @@
 // Openshell plugin module implements fs bridge behavior.
 import fsPromises from "node:fs/promises";
 import path from "node:path";
-import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathInside, root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   SandboxFsBridge,
   SandboxFsStat,
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
-import { FsSafeError, isPathInside } from "openclaw/plugin-sdk/security-runtime";
-import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import type { OpenShellFsBridgeContext, OpenShellMirrorBackend } from "./backend.types.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
@@ -24,8 +24,8 @@ const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "ski
 
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
-  backend: OpenShellSandboxBackend;
-}): SandboxFsBridge {
+  backend: OpenShellMirrorBackend;
+}) {
   return new OpenShellFsBridge(params.sandbox, params.backend);
 }
 
@@ -37,7 +37,7 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
   constructor(
     private readonly sandbox: OpenShellFsBridgeContext,
-    private readonly backend: OpenShellSandboxBackend,
+    private readonly backend: OpenShellMirrorBackend,
   ) {}
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
@@ -308,6 +308,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       const hostPath = relative
         ? path.resolve(workspaceRoot, ...relative.split("/"))
         : workspaceRoot;
+      if (!isPathInside(workspaceRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
       return {
         hostPath,
         relativePath: relative,
@@ -326,6 +329,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
     ) {
       const relative = path.posix.relative(agentContainerRoot, input) || "";
       const hostPath = relative ? path.resolve(agentRoot, ...relative.split("/")) : agentRoot;
+      if (!isPathInside(agentRoot, hostPath)) {
+        throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+      }
       return {
         hostPath,
         relativePath: relative ? agentContainerRoot + "/" + relative : agentContainerRoot,

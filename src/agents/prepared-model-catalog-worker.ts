@@ -8,16 +8,15 @@ import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import type {
-  PreparedModelRuntimeAuth,
-  PreparedModelRuntimeAuthScope,
-} from "./prepared-model-runtime-auth.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
-  fingerprintPreparedRuntimeFacts,
-  markPreparedModelCatalogFull,
-  type PreparedModelRuntimeAgentFacts,
-} from "./prepared-model-runtime.facts.js";
+  setPreparedModelFullCatalogAuth,
+  type PreparedModelRuntimeAuth,
+  type PreparedModelRuntimeAuthScope,
+} from "./prepared-model-runtime-auth.js";
+import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import { fingerprintPreparedRuntimeFacts } from "./prepared-model-runtime.facts.js";
+import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
 export type PreparedModelCatalogWorkerInput = Readonly<{
@@ -26,6 +25,7 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   input: PreparedModelRuntimeInput;
   authStore: AuthProfileStore;
   providerIds: readonly string[];
+  pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
 
 export type PreparedModelWorkerRequest =
@@ -63,22 +63,6 @@ export type PreparedModelWorkerResult =
       authModes: PreparedAgentCredentialModes;
     }>
   | Readonly<{ status: "failed"; requestId: number; error: string }>;
-
-const authByFullCatalog = new WeakMap<
-  object,
-  Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>
->();
-
-function setPreparedModelFullCatalogAuth(
-  modelCatalog: object,
-  auth: Readonly<{ authStore: AuthProfileStore; authModes: PreparedAgentCredentialModes }>,
-): void {
-  authByFullCatalog.set(modelCatalog, auth);
-}
-
-export function getPreparedModelFullCatalogAuth(modelCatalog: object) {
-  return authByFullCatalog.get(modelCatalog);
-}
 
 // Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
@@ -119,7 +103,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
   const input: PreparedModelRuntimeInput = {
     ...(source.agentId ? { agentId: source.agentId } : {}),
     agentDir: source.agentDir,
-    inheritedAuthDir: source.inheritedAuthDir ?? source.agentDir,
+    ...(source.inheritedAuthDir ? { inheritedAuthDir: source.inheritedAuthDir } : {}),
     ...(source.workspaceDir ? { workspaceDir: source.workspaceDir } : {}),
     ...(source.readOnly ? { readOnly: true } : {}),
     skipCredentials: true,
@@ -132,6 +116,8 @@ export function createPreparedModelCatalogWorkerInput(params: {
   };
   const authStore = cloneAuthProfileStore(params.agentFacts.authStore);
   const providerIds = [...params.agentFacts.providerIds];
+  const { normalizePluginId: _normalizePluginId, ...pluginMetadataSnapshot } =
+    params.pluginMetadataSnapshot;
   return {
     kind: "catalog",
     generationFingerprint: fingerprintPreparedModelCatalogGeneration({
@@ -143,6 +129,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
     input,
     authStore,
     providerIds,
+    pluginMetadataSnapshot,
   };
 }
 

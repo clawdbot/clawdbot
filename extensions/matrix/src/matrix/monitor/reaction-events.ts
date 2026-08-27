@@ -1,5 +1,6 @@
 // Matrix plugin module implements reaction events behavior.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -51,7 +52,7 @@ async function retireMatrixApprovalReactionTargets(params: {
   roomId: string;
   targetEventId: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   result: ApprovalResolveResult;
   logVerboseMessage: (message: string) => void;
 }): Promise<void> {
@@ -165,7 +166,7 @@ async function maybeResolveMatrixApprovalReaction(params: {
     params.logVerboseMessage(
       `matrix: approval reaction failed id=${params.target.approvalId} sender=${params.senderId}: ${String(err)}`,
     );
-    return true;
+    throw err;
   }
 }
 

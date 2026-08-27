@@ -1,5 +1,5 @@
 // Doctor-only runtime policy repair for migrated cron Codex model refs.
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tryResolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
@@ -26,7 +26,7 @@ function resolvePolicyOwner(params: {
   cfg: OpenClawConfig;
   target: CronCodexRuntimePolicyTarget;
 }): { owner: MutableRecord; path: string } | undefined {
-  const root = params.cfg as unknown as MutableRecord;
+  const root = isRecord(params.cfg) ? params.cfg : {};
   const agents = ensureRecord(root, "agents");
   const requestedAgentId = params.target.agentId
     ? normalizeAgentId(params.target.agentId)

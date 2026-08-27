@@ -1148,16 +1148,30 @@ function validateClawHubPluginPackage(params: {
     );
   }
 
-  if (
-    compatibility?.minGatewayVersion &&
-    !checkMinHostVersion({
+  const minGatewayVersion = compatibility?.minGatewayVersion;
+  if (minGatewayVersion) {
+    const minGatewayVersionCheck = checkMinHostVersion({
       currentVersion: runtimeVersion,
-      minHostVersion: compatibility.minGatewayVersion,
+      minHostVersion: minGatewayVersion,
       allowLegacyBareSemver: true,
-    }).ok
-  ) {
+    });
+    if (minGatewayVersionCheck.ok) {
+      return null;
+    }
+    if (minGatewayVersionCheck.kind === "invalid") {
+      return buildClawHubInstallFailure(
+        `ClawHub package "${pkg.name}" declares invalid minGatewayVersion metadata "${sanitizeTerminalText(minGatewayVersion)}"; report the package metadata to its publisher.`,
+        CLAWHUB_INSTALL_ERROR_CODE.INVALID_GATEWAY_VERSION,
+      );
+    }
+    if (minGatewayVersionCheck.kind === "unknown_host_version") {
+      return buildClawHubInstallFailure(
+        `Plugin "${pkg.name}" requires OpenClaw >=${minGatewayVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
+        CLAWHUB_INSTALL_ERROR_CODE.UNKNOWN_GATEWAY_VERSION,
+      );
+    }
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires OpenClaw >=${compatibility.minGatewayVersion}, but this host is ${runtimeVersion}.`,
+      `Plugin "${pkg.name}" requires OpenClaw >=${minGatewayVersionCheck.requirement.minimumLabel}, but this host is ${minGatewayVersionCheck.currentVersion}.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY,
     );
   }
@@ -1446,6 +1460,7 @@ export async function installPluginFromClawHub(
       copyPluginInstallTransactionRequest(params, {
         archivePath: archive.archivePath,
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
         trustedSourceLinkedOfficialInstall:
           officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
         config: params.config,

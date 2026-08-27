@@ -60,7 +60,9 @@ openclaw config set 'agents.entries.work.tools.exec.node' "node-id-or-name"
 
 Reads a value from the redacted config snapshot (secrets never print). `--json` prints the same redacted value as JSON; otherwise strings/numbers/booleans print bare and objects/arrays print as formatted JSON.
 
-When the path is missing, `--json` writes `{ "error": "Config path not found: <path>" }` to stdout and exits with status 1. Without `--json`, the diagnostic remains on stderr.
+A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
+`openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
+on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
 
 ```bash
 openclaw config get browser.executablePath
@@ -103,7 +105,7 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 ### `config validate`
 
-Validates the current config against the active schema without starting the gateway.
+Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
 
 ```bash
 openclaw config validate
@@ -365,7 +367,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured missing-path, schema, or resolvability failures when `ok=false`
+    - `errors`: structured failures when `ok=false`; each carries a `kind` of `missing-path`, `schema`, `resolvability`, `model`, or `conflict` (`conflict` means the config file changed while the command was writing, so nothing was changed — re-run to pick up the new file)
 
   </Accordion>
 </AccordionGroup>
@@ -461,13 +463,13 @@ After every successful `config set` / `config patch` / `config unset`, the CLI p
 | `Change will apply without restarting the gateway.` | Hot reload picks it up automatically.  |
 | `No gateway restart needed.`                        | Nothing runtime-relevant changed.      |
 
-Effective changes to `plugins.entries` (or any subpath) require a restart, since the CLI cannot prove every plugin's reload metadata is loaded. Idempotent writes with no effective diff report `No gateway restart needed.`
+Effective changes to `plugins.entries` (or any subpath) require a restart, since the CLI cannot prove every plugin's reload metadata is loaded. Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
 
 ## Write safety
 
 `openclaw config set` and other OpenClaw-owned config writers validate the full post-change config before committing it to disk. If the new payload fails schema validation or looks like a destructive clobber, the active config is left alone and the rejected payload is saved beside it as `openclaw.json.rejected.*`.
 
-OpenClaw-owned writes reserialize JSON5 as standard JSON. When the source contains comments, the writer warns immediately before removing them; use a direct editor when preserving comments matters.
+OpenClaw-owned writes that change config reserialize JSON5 as standard JSON. When the source contains comments, the writer warns immediately before removing them; use a direct editor when preserving comments matters.
 
 <Warning>
 The active config path must be a regular file. Symlinked `openclaw.json` layouts are unsupported for writes; use `OPENCLAW_CONFIG_PATH` to point directly at the real file instead.

@@ -149,8 +149,9 @@ describe("AppSidebar interleaved zone", () => {
     // Pinning is not a status, so it must not claim the row's one leading slot.
     const row = sidebar.querySelector('[data-session-key="agent:main:page"]');
     const plain = sidebar.querySelector('[data-session-key="agent:main:plain"]');
-    expect(row?.querySelector(".sidebar-session-indicator")).toBeNull();
-    expect(plain?.querySelector(".sidebar-session-indicator")).toBeNull();
+    expect(row?.querySelector(".sidebar-session-indicator")?.innerHTML).toBe(
+      plain?.querySelector(".sidebar-session-indicator")?.innerHTML,
+    );
     expect(row?.querySelector(".nav-item__state")).toBeNull();
     expect(row?.querySelector(".session-row-state .sidebar-recent-session__state")).not.toBeNull();
   });
@@ -271,6 +272,61 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
   });
 
+  it("routes active native plugin tabs to their app page and hides inactive tabs", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [
+          {
+            group: "control",
+            id: "workboard",
+            label: "Workboard",
+            placement: "route:workboard",
+            pluginId: "workboard",
+          },
+        ],
+      },
+    });
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
+    sidebar.workboardBoardsReady = true;
+    sidebar.activeRouteId = "workboard";
+    sidebar.activeWorkboardBoardId = "ops";
+    await sidebar.updateComplete;
+
+    const entry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="plugin:workboard/workboard"] > .nav-item',
+    );
+    expect(entry?.textContent).toContain("Workboard");
+    expect(entry?.getAttribute("href")).toBe("/workboard");
+    expect(entry?.classList.contains("nav-item--active")).toBe(true);
+
+    sidebar.sidebarEntries = ["route:workboard", "route:plugins"];
+    await sidebar.updateComplete;
+    const savedEntry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="route:workboard"] > .nav-item',
+    );
+    expect(savedEntry?.getAttribute("href")).toBe("/workboard");
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:workboard/workboard"]')).toBeNull();
+    expect(sidebar.querySelector('[data-sidebar-entry="route:workboard"]')).toBeNull();
+  });
+
   it("renders a pinned Workboard board with its icon, color, label, and route", async () => {
     const { sidebar } = await mountZone();
     sidebar.workboardBoards = [
@@ -295,22 +351,6 @@ describe("AppSidebar interleaved zone", () => {
 
     link?.click();
     expect(onNavigate).toHaveBeenCalledWith("workboard", { pathname: "/workboard/ops" });
-  });
-
-  it("keeps the Workboard parent active when the current board is not pinned", async () => {
-    const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
-    sidebar.workboardBoardsReady = true;
-    sidebar.sidebarEntries = ["route:workboard"];
-    sidebar.activeRouteId = "workboard";
-    sidebar.activeWorkboardBoardId = "ops";
-    await sidebar.updateComplete;
-
-    expect(
-      sidebar
-        .querySelector('[data-sidebar-entry="route:workboard"] .nav-item')
-        ?.classList.contains("nav-item--active"),
-    ).toBe(true);
   });
 
   it("hides Workboard board pins and editor choices when the plugin is inactive", async () => {
@@ -407,7 +447,7 @@ describe("AppSidebar interleaved zone", () => {
       expect(sessions.patch).toHaveBeenCalledWith(
         "agent:main:alpha",
         { pinned: true },
-        { agentId: "main" },
+        { agentId: "main", expectedSessionId: "session:agent:main:alpha" },
       ),
     );
     // The slot write waits for the pin patch to land.
@@ -520,9 +560,7 @@ describe("AppSidebar interleaved zone", () => {
       throw new Error("expected session links");
     }
 
-    alpha.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }),
-    );
+    alpha.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, altKey: true }));
     beta.dispatchEvent(
       new MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }),
     );

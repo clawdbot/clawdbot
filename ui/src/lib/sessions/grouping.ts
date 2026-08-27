@@ -1,4 +1,5 @@
 // Pure grouping helpers for the sessions table "Group by" modes.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { moveSessionOrderEntry, normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
@@ -6,6 +7,7 @@ import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 export const SESSION_GROUP_MODES = [
   "none",
   "category",
+  "person",
   "channel",
   "kind",
   "agent",
@@ -25,14 +27,34 @@ export type SessionRowGroup = {
 };
 
 export type SidebarSessionSection<Row> = {
-  id: "pinned" | "ungrouped" | "groups" | "work" | `category:${string}` | `catalog:${string}`;
+  id:
+    | "pinned"
+    | "ungrouped"
+    | "groups"
+    | "work"
+    | `category:${string}`
+    | `person:${string}`
+    | `catalog:${string}`;
   category?: string;
+  personOwner?: { type: string; id: string; label?: string; avatarUrl?: string };
   /** Built-in smart group-conversation section (kind "group" rows). */
   groups?: boolean;
   /** Built-in smart coding section (worktree/exec-node/ACP sessions). */
   work?: boolean;
   rows: Row[];
 };
+
+export function collectKnownSessionGroups(
+  catalog: readonly string[],
+  rows: readonly GatewaySessionRow[],
+): string[] {
+  const catalogSet = new Set(catalog);
+  const discovered = rows
+    .map((row) => normalizeOptionalString(row.category))
+    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
+    .toSorted((a, b) => a.localeCompare(b));
+  return [...catalog, ...new Set(discovered)];
+}
 
 const DEFAULT_SESSION_SECTION_ORDER = ["ungrouped", "groups", "work"] as const;
 
@@ -97,20 +119,6 @@ export function moveSessionSection(
   return moveSessionOrderEntry(order, source, target, position);
 }
 
-/**
- * Sections that render a header (and therefore can collapse). Pinned rows
- * render headerless like the nav entries above them; every other zone shows
- * one — Threads hosts the sort and new-session actions on its header.
- * Shared by the renderer and keyboard-order walker so collapse behavior
- * cannot drift between them.
- */
-export function sidebarSectionHasHeader(
-  sectionId: string,
-  _grouping: SidebarSessionsGrouping,
-): boolean {
-  return sectionId !== "pinned";
-}
-
 export function normalizeSessionsGroupBy(raw: unknown): SessionsGroupBy {
   return SESSION_GROUP_MODES.includes(raw as SessionsGroupBy) ? (raw as SessionsGroupBy) : "none";
 }
@@ -142,6 +150,8 @@ function resolveSessionGroupId(row: GatewaySessionRow, mode: SessionsGroupBy, no
   switch (mode) {
     case "category":
       return row.category?.trim() ?? UNGROUPED_ID;
+    case "person":
+      return row.owner?.actor.id?.trim() || UNGROUPED_ID;
     case "channel":
       return sessionRowChannel(row);
     case "kind":
@@ -183,16 +193,17 @@ export function groupSessionRows(params: {
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
 }
 
-/** How the sidebar buckets non-pinned rows: category sections or one flat list. */
-export type SidebarSessionsGrouping = "category" | "none";
+/** How the sidebar buckets non-pinned rows before its built-in smart zones. */
+export type SidebarSessionsGrouping = "category" | "person" | "none";
 
 export function normalizeSidebarSessionsGrouping(raw: unknown): SidebarSessionsGrouping {
-  return raw === "none" ? "none" : "category";
+  return raw === "none" || raw === "person" ? raw : "category";
 }
 
 type SidebarGroupableRow = {
   pinned?: boolean;
   category?: string | null;
+  owner?: { actor: { type: string; id?: string; label?: string; avatarUrl?: string } };
   /** Session kind from the gateway row; "group" rows form the Groups zone. */
   kind?: string;
   /** Session bound to a managed worktree or exec node (Coding zone). */
@@ -216,7 +227,7 @@ export function categoryClearReturnsToGroups(
 
 /**
  * Zone partition: pinned, named categories (persisted `knownGroups` order,
- * new ones alphabetical), threads ("ungrouped" — the agent's chat sessions),
+ * new ones alphabetical), other sessions ("ungrouped"),
  * group conversations, then coding (worktree/exec-node/ACP). An explicit user
  * category wins over the smart group/coding classification so manual curation
  * sticks. `grouping: "none"` only disables categories; the kind-based Groups
@@ -230,6 +241,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   options: {
     knownGroups?: readonly string[];
     grouping?: SidebarSessionsGrouping;
+    selfOwnerId?: string | null;
     sectionOrder?: readonly string[];
     catalogIds?: readonly string[];
   } = {},
@@ -240,17 +252,40 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   const groups: Row[] = [];
   const coding: Row[] = [];
   const categories = new Map<string, Row[]>();
+  const knownGroups: string[] = [];
+  const people = new Map<string, SidebarSessionSection<Row>>();
   if (grouping === "category") {
     for (const name of options.knownGroups ?? []) {
       const trimmed = name.trim();
       if (trimmed && !categories.has(trimmed)) {
         categories.set(trimmed, []);
+        knownGroups.push(trimmed);
       }
     }
   }
   for (const row of rows) {
     if (row.pinned === true) {
       pinned.push(row);
+      continue;
+    }
+    const owner = grouping === "person" ? row.owner?.actor : undefined;
+    const ownerId = owner?.id?.trim();
+    if (owner && ownerId) {
+      const personSection = people.get(ownerId);
+      if (personSection) {
+        personSection.rows.push(row);
+      } else {
+        people.set(ownerId, {
+          id: `person:${ownerId}`,
+          personOwner: {
+            type: owner.type,
+            id: ownerId,
+            ...(owner.label ? { label: owner.label } : {}),
+            ...(owner.avatarUrl ? { avatarUrl: owner.avatarUrl } : {}),
+          },
+          rows: [row],
+        });
+      }
       continue;
     }
     const category = grouping === "category" ? row.category?.trim() : undefined;
@@ -278,14 +313,24 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
   if (pinned.length > 0) {
     sections.push({ id: "pinned", rows: pinned });
   }
-  const knownGroups = [
-    ...new Set((options.knownGroups ?? []).map((name) => name.trim()).filter(Boolean)),
-  ];
+  sections.push(
+    ...[...people.values()].toSorted((left, right) => {
+      const leftOwner = left.personOwner!;
+      const rightOwner = right.personOwner!;
+      const leftRank =
+        leftOwner.id === options.selfOwnerId ? 0 : leftOwner.type === "agent" ? 2 : 1;
+      const rightRank =
+        rightOwner.id === options.selfOwnerId ? 0 : rightOwner.type === "agent" ? 2 : 1;
+      return (
+        leftRank - rightRank ||
+        (leftOwner.label || leftOwner.id).localeCompare(rightOwner.label || rightOwner.id) ||
+        leftOwner.id.localeCompare(rightOwner.id)
+      );
+    }),
+  );
   const orderedCategories = [
-    ...knownGroups.filter((name) => categories.has(name)),
-    ...[...categories.keys()]
-      .filter((name) => !knownGroups.includes(name))
-      .toSorted((a, b) => a.localeCompare(b)),
+    ...knownGroups,
+    ...[...categories.keys()].slice(knownGroups.length).toSorted((a, b) => a.localeCompare(b)),
   ];
   const orderedSections: SidebarSessionSection<Row>[] = orderedCategories.map((category) => ({
     id: `category:${category}`,

@@ -139,7 +139,7 @@ describe("package scripts", () => {
   });
 
   it.each([
-    { scriptName: "build:docker", expectedCount: 3 },
+    { scriptName: "build:docker", expectedCount: 2 },
     { scriptName: "build:plugin-sdk:strict-smoke", expectedCount: 1 },
     { scriptName: "build:strict-smoke", expectedCount: 1 },
   ])("runs TypeScript steps in $scriptName through tsx", ({ scriptName, expectedCount }) => {
@@ -182,6 +182,26 @@ describe("package scripts", () => {
     );
   });
 
+  it("builds generated plugin assets before Docker runtime postbuild", () => {
+    const commands = expectDefined(
+      readPackageJson().scripts["build:docker"],
+      "package script build:docker",
+    ).split(" && ");
+
+    expect(commands.indexOf("pnpm plugins:assets:build")).toBeLessThan(
+      commands.indexOf("node scripts/runtime-postbuild.mjs"),
+    );
+  });
+
+  it("cleans package builds before validating release contents", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["build:package"]).toBe("node --import tsx scripts/build-all.mts package");
+    expect(scripts["release:check"]).toBe(
+      "pnpm build:package && pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    );
+  });
+
   it("uses the shipped package launcher for npm start", () => {
     expect(readPackageJson().scripts.start).toBe("node openclaw.mjs");
   });
@@ -207,12 +227,18 @@ describe("package scripts", () => {
     const scripts = readPackageJson().scripts;
     const partScripts = readWindowsCiPartScripts();
     const partTargets = partScripts.map(readWindowsCiTargets);
-    const allTargets = partTargets.flat();
 
+    // Blacksmith's Windows class admits exactly 2 concurrent jobs, so the split
+    // width is pinned here: a 3rd part queues and a single lane serializes.
     expect(scripts["test:windows:ci"]).toBe("pnpm test:windows:ci:1 && pnpm test:windows:ci:2");
-    expect(partTargets.map((targets) => targets.length)).toEqual([24, 41]);
-    expect(new Set(allTargets).size).toBe(65);
-    expect(partTargets[0]?.filter((target) => partTargets[1]?.includes(target))).toEqual([]);
+    expect(scripts["test:windows:ci:3"]).toBeUndefined();
+    for (const [partIndex, targets] of partTargets.entries()) {
+      const laterTargets = new Set(partTargets.slice(partIndex + 1).flat());
+      expect(
+        targets.filter((target) => laterTargets.has(target)),
+        `Windows CI part ${partIndex + 1} overlaps a later part`,
+      ).toEqual([]);
+    }
   });
 
   it("runs node workspace transfer coverage in Windows CI", () => {

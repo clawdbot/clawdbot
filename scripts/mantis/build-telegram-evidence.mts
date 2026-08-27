@@ -47,11 +47,13 @@ type TelegramEvidenceManifest = {
   comparison: {
     candidate: {
       expected: string;
+      expectationMet: boolean;
       status: string;
       fixed: boolean;
       ref?: string;
       sha?: string;
     };
+    outcome: "fail" | "pass";
     pass: boolean;
   };
   artifacts: TelegramEvidenceArtifact[];
@@ -444,7 +446,7 @@ export function buildTelegramEvidenceManifest({
     },
   ];
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "telegram-live",
     title: "Mantis Telegram Live QA",
     summary:
@@ -455,9 +457,11 @@ export function buildTelegramEvidenceManifest({
         ...(candidateSha ? { sha: candidateSha } : {}),
         ...(candidateRef ? { ref: candidateRef } : {}),
         expected: "Telegram live QA scenarios pass",
+        expectationMet: pass,
         status,
         fixed: pass,
       },
+      outcome: pass ? "pass" : "fail",
       pass,
     },
     artifacts,

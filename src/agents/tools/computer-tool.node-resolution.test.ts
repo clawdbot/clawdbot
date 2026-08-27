@@ -82,7 +82,11 @@ describe("createComputerTool node resolution", () => {
         commands: ["computer.act", "screen.snapshot"],
       },
     ]);
-    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as { command?: string }).command === "computer.act"
+        ? { payload: { ok: true } }
+        : screenshotPayload(),
+    );
     const tool = createComputerTool({ modelHasVision: true });
 
     await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();

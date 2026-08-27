@@ -102,12 +102,12 @@ export function normalizeExplicitChatSendOrigin(
 export function validateChatSelectedAgent(params: {
   cfg: OpenClawConfig;
   requestedSessionKey: string;
-  agentId?: string;
+  explicitAgentId?: string;
 }): { ok: true; agentId?: string } | { ok: false; error: string } {
   const resolved = resolveRequestedSessionAgentId(
     params.cfg,
     params.requestedSessionKey,
-    params.agentId,
+    params.explicitAgentId,
   );
   return resolved.ok
     ? { ok: true, agentId: resolved.agentId }

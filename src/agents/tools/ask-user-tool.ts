@@ -6,6 +6,7 @@ import type {
   QuestionRequestQuestion,
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { registerPendingAgentQuestion } from "../harness/gateway-question.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
@@ -15,14 +16,14 @@ import {
   normalizeAskUserParams,
 } from "./ask-user-tool-normalization.js";
 import { type AnyAgentTool, ToolInputError, textResult } from "./common.js";
+import {
+  createGatewayQuestionCanceller,
+  readQuestionErrorReason,
+} from "./gateway-question-lifecycle.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 const ASK_USER_RPC_GRACE_MS = 10_000;
 const ASK_USER_PROMPT_RECHECK_MS = 50;
-const TERMINAL_QUESTION_ERROR_REASONS = new Set([
-  "QUESTION_ALREADY_TERMINAL",
-  "QUESTION_NOT_FOUND",
-]);
 
 const AskUserToolSchema = Type.Object(
   {
@@ -40,7 +41,7 @@ const AskUserToolSchema = Type.Object(
           }),
           question: Type.String({
             minLength: 1,
-            description: "Single-sentence question for the user.",
+            description: "Single-sentence question only. Put all selectable choices in options.",
           }),
           options: Type.Array(
             Type.Object(
@@ -50,9 +51,18 @@ const AskUserToolSchema = Type.Object(
               },
               { additionalProperties: false },
             ),
-            { minItems: 2, maxItems: 4 },
+            {
+              minItems: 2,
+              maxItems: 4,
+              description:
+                "Every selectable choice. Put the recommended choice first; do not repeat choices only in the question text.",
+            },
           ),
-          multiSelect: Type.Optional(Type.Boolean()),
+          multiSelect: Type.Optional(
+            Type.Boolean({
+              description: "True only when the user may choose several options at once.",
+            }),
+          ),
         },
         { additionalProperties: false },
       ),
@@ -84,7 +94,6 @@ type AskUserQuestionState = {
   questions: QuestionRequestQuestion[];
   expiresAtMs: number;
   phase: AskUserQuestionPhase;
-  gatewayCall?: AskUserGatewayCall;
   answer?: Promise<QuestionWaitAnswerResult>;
   claim?: ReturnType<typeof registerPendingAgentQuestion>;
   waiters: Set<() => void>;
@@ -422,25 +431,60 @@ async function waitForPromptDelivery(
   return { error: new Error("ask_user prompt is no longer active") };
 }
 
-function readQuestionErrorReason(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") {
-    return undefined;
+/** Shares question ownership and prompt delivery without installing a plaintext answer claim. */
+export function beginAskUserPromptDelivery(params: {
+  toolCallId: string;
+  sessionKey?: string;
+  runId?: string;
+  agentId?: string;
+  questions: QuestionRequestQuestion[];
+  timeoutSeconds: number;
+}) {
+  const questionId = buildAskUserQuestionId(
+    params.toolCallId,
+    params.sessionKey,
+    params.runId,
+    params.agentId,
+  );
+  const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
+  const reserved = askUserQuestions.get(questionId);
+  const existing = findAskUserQuestionForSession(sessionKey);
+  if ((reserved && reserved.phase.kind !== "reserved") || (existing && existing !== reserved)) {
+    throw new ToolInputError(
+      "a question is already pending for this session; wait for it to resolve before requesting another",
+    );
   }
-  const requestError = error as { details?: unknown; name?: unknown };
-  if (requestError.name !== "GatewayClientRequestError") {
-    return undefined;
-  }
-  const details = requestError.details;
-  if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return undefined;
-  }
-  const reason = (details as { reason?: unknown }).reason;
-  return typeof reason === "string" ? reason : undefined;
-}
-
-function isTerminalQuestionResolveError(error: unknown): boolean {
-  const reason = readQuestionErrorReason(error);
-  return reason !== undefined && TERMINAL_QUESTION_ERROR_REASONS.has(reason);
+  const state: AskUserQuestionState = reserved ?? {
+    questionId,
+    sessionKey,
+    questions: params.questions,
+    expiresAtMs: 0,
+    phase: { kind: "registering" },
+    waiters: new Set(),
+  };
+  Object.assign(state, { sessionKey, questions: params.questions });
+  state.expiresAtMs = Date.now() + params.timeoutSeconds * 1_000;
+  transitionAskUserQuestion(state, { kind: "registering" });
+  askUserQuestions.set(questionId, state);
+  return {
+    questionId,
+    hasSubscriber: reserved !== undefined,
+    markReady() {
+      if (reserved) {
+        markAskUserPromptReady(questionId, params.questions);
+      } else {
+        transitionAskUserQuestion(state, { kind: "answerable" });
+      }
+    },
+    waitForDelivery(signal?: AbortSignal) {
+      return waitForPromptDelivery(state, signal);
+    },
+    release() {
+      if (askUserQuestions.get(questionId) === state) {
+        releaseAskUserQuestion(questionId);
+      }
+    },
+  };
 }
 
 function resetPendingAskUserQuestionsForTest(): void {
@@ -503,44 +547,14 @@ export function createAskUserTool(params: {
           questions: normalized.questions,
           expiresAtMs: Date.now() + timeoutMs,
           phase: { kind: "registering" },
-          gatewayCall,
           waiters: new Set(),
         } satisfies AskUserQuestionState);
-      Object.assign(state, { sessionKey, questions: normalized.questions, gatewayCall });
+      Object.assign(state, { sessionKey, questions: normalized.questions });
       state.expiresAtMs = Date.now() + timeoutMs;
       transitionAskUserQuestion(state, { kind: "registering" });
       askUserQuestions.set(questionId, state);
-      let cancellation:
-        | Promise<Extract<QuestionWaitAnswerResult, { status: "answered" }> | undefined>
-        | undefined;
       let registered = false;
-      const cancelPendingQuestion = (resolvedBy: string) => {
-        cancellation ??= (async () => {
-          try {
-            await gatewayCall(
-              "question.resolve",
-              { timeoutMs: ASK_USER_RPC_GRACE_MS },
-              { id: questionId, cancel: true, resolvedBy },
-            );
-            return undefined;
-          } catch (error) {
-            if (!isTerminalQuestionResolveError(error)) {
-              return undefined;
-            }
-            try {
-              const result = (await gatewayCall(
-                "question.waitAnswer",
-                { timeoutMs: ASK_USER_RPC_GRACE_MS },
-                { id: questionId, timeoutMs: 1_000 },
-              )) as QuestionWaitAnswerResult;
-              return result.status === "answered" ? result : undefined;
-            } catch {
-              return undefined;
-            }
-          }
-        })();
-        return cancellation;
-      };
+      const cancelPendingQuestion = createGatewayQuestionCanceller({ gatewayCall, questionId });
       const cancelOnAbort = () => {
         if (askUserQuestions.get(questionId) === state) {
           releaseAskUserQuestion(questionId);
@@ -654,6 +668,19 @@ export function createAskUserTool(params: {
             const answered = await cancelPendingQuestion("prompt-delivery-failed");
             if (answered) {
               return answeredResult(normalized.questions, answered.answers);
+            }
+            if (
+              isReplyDispatchDeliveryError(deliveryResult.error) &&
+              deliveryResult.error.outcome === "failed-deliver"
+            ) {
+              const details = { status: "delivery_failed" as const };
+              return {
+                ...textResult(
+                  `The prompt became visible, but its controls failed to deliver. The question was cancelled; no retry/fallback should be sent.\n\n${JSON.stringify(details, null, 2)}`,
+                  details,
+                ),
+                terminate: true,
+              };
             }
             throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
           }

@@ -1,13 +1,14 @@
 // Whatsapp plugin module implements inbound dispatch behavior.
 import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  buildChannelInboundEventContext,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
   readAgentRunTerminalOutcome,
   type ChannelInboundTurnPlan,
   toInboundMediaFactsWithMetadata,
+  hasVisibleInboundReplyDispatch,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/channel-inbound";
 import {
   listMessageReceiptPlatformIds,
   resolveChannelStreamingBlockEnabled,
@@ -18,7 +19,10 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import {
+  requireWhatsAppInboundAdmission,
+  resolveWhatsAppAdmissionChannelIngress,
+} from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
@@ -34,6 +38,11 @@ import { createWhatsAppReplyTransportContext } from "../deliver-reply.js";
 import { markWhatsAppVisibleDeliveryError } from "../util.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
+import {
+  projectPreparedChannelInbound,
+  resolveWhatsAppInboundReplyPolicy,
+  type PreparedChannelInbound,
+} from "./prepared-inbound.js";
 import {
   createChannelMessageReplyPipeline,
   getAgentScopedMediaLocalRoots,
@@ -51,12 +60,7 @@ import {
   type LoadConfigFn,
   type ReplyPayload,
   type resolveAgentRoute,
-} from "./inbound-dispatch.runtime.js";
-import {
-  projectPreparedChannelInbound,
-  resolveWhatsAppInboundReplyPolicy,
-  type PreparedChannelInbound,
-} from "./prepared-inbound.js";
+} from "./runtime-api.js";
 
 type ReplyLifecycleKind = "tool" | "block" | "final";
 type ChannelReplyOnModelSelected = NonNullable<
@@ -400,6 +404,7 @@ export async function prepareWhatsAppInboundContext(params: {
   replyThreading?: ReplyThreadingContext;
   visibleReplyTo?: VisibleReplyTarget;
   suppressMessageReceivedHooks?: boolean;
+  buildContext?: typeof buildChannelInboundEventContext;
 }): Promise<{
   inbound: PreparedChannelInbound;
   control: Parameters<typeof projectPreparedChannelInbound>[0]["control"];
@@ -409,6 +414,14 @@ export async function prepareWhatsAppInboundContext(params: {
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
+  const eventId = params.msg.event.id ?? `${conversationId}:${newConnectionId()}`;
+  const channelIngress =
+    (await resolveWhatsAppAdmissionChannelIngress(admission, {
+      agentId: params.route.agentId,
+      sessionKey: params.route.sessionKey,
+      messageId: eventId,
+      inboundEventKind: "user_request",
+    })) ?? admission.channelIngress;
   const wasMentioned = params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned;
   const inboundHistory =
     conversationKind === "group"
@@ -441,6 +454,7 @@ export async function prepareWhatsAppInboundContext(params: {
     messageReceivedHooks: params.suppressMessageReceivedHooks ? "channel" : "core",
   } as const;
   const inbound: PreparedChannelInbound = {
+    channelIngress,
     channel: "whatsapp",
     supplemental: {
       quote: params.visibleReplyTo
@@ -455,13 +469,14 @@ export async function prepareWhatsAppInboundContext(params: {
     },
     media,
     event: {
-      id: params.msg.event.id ?? `${conversationId}:${newConnectionId()}`,
+      id: eventId,
       timestamp: params.msg.event.timestamp,
     },
     from: conversationId,
     sender: {
       id: params.sender.id ?? params.sender.e164,
       name: params.sender.name,
+      isSelf: params.msg.platform.fromMe === true,
     },
     conversation: {
       kind: conversationKind,
@@ -514,7 +529,11 @@ export async function prepareWhatsAppInboundContext(params: {
       location: params.msg.payload.location,
     },
   };
-  const projected = projectPreparedChannelInbound({ inbound, control });
+  const projected = projectPreparedChannelInbound({
+    inbound,
+    control,
+    buildContext: params.buildContext ?? buildChannelInboundEventContext,
+  });
   return {
     inbound,
     control,

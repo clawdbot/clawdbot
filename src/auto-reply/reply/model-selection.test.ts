@@ -70,7 +70,8 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
     sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
 }));
 
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({ plugins: [] }),
 }));
 
@@ -382,6 +383,68 @@ describe("createModelSelectionState catalog loading", () => {
     expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
+  it("carries prepared runtime thinking policy into ordinary configured turns", async () => {
+    vi.mocked(loadModelCatalogLocal).mockClear();
+    catalogRuntimeMocks.loadModelCatalogSnapshot.mockClear();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-mythos-5": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [
+              makeConfiguredModel({
+                id: "claude-mythos-5",
+                name: "Claude Mythos 5",
+                reasoning: false,
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-mythos-5",
+      provider: "anthropic",
+      model: "claude-mythos-5",
+      hasModelDirective: false,
+      preparedModelCatalog: {
+        entries: [
+          {
+            provider: "anthropic",
+            id: "claude-mythos-5",
+            name: "Claude Mythos 5",
+            reasoning: false,
+            configuredReasoning: false,
+            thinkingPolicyProvider: "claude-cli",
+          },
+        ],
+        routeVariants: [],
+        authoritative: true,
+      },
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({
+        provider: "anthropic",
+        id: "claude-mythos-5",
+        thinkingPolicyProvider: "claude-cli",
+      }),
+    ]);
+    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+    expect(catalogRuntimeMocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+
   it("uses manifest metadata before hydrating the runtime thinking catalog", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadManifestModelCatalog).mockClear();
@@ -598,7 +661,7 @@ describe("createModelSelectionState catalog loading", () => {
 
     const state = await createModelSelectionState({
       cfg: {} as OpenClawConfig,
-      agentCfg: { contextTokens: 1_000_000 },
+      agentCfg: {},
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
       provider: "openai",
@@ -609,7 +672,6 @@ describe("createModelSelectionState catalog loading", () => {
     expect(
       resolveContextTokens({
         cfg: {} as OpenClawConfig,
-        agentCfg: { contextTokens: 1_000_000 },
         provider: state.provider,
         model: state.model,
         modelContextWindow: state.modelContextWindow,
@@ -778,44 +840,11 @@ describe("resolveContextTokens", () => {
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
-      agentCfg: undefined,
       provider: "google-gemini-cli",
       model: "gemini-3.1-pro-preview",
     });
 
     expect(result).toBe(1_000_000);
-  });
-
-  it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
-    getContextWindowCaches().discoveredTokenCache.set(
-      providerContextTokenCacheKey("openai", "gpt-5.5"),
-      272_000,
-    );
-
-    const result = resolveContextTokens({
-      cfg: {} as OpenClawConfig,
-      agentCfg: { contextTokens: 1_000_000 },
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-
-    expect(result).toBe(272_000);
-  });
-
-  it("allows agent contextTokens to lower a larger model window", () => {
-    getContextWindowCaches().discoveredTokenCache.set(
-      providerContextTokenCacheKey("qwen", "qwen3.6-plus"),
-      1_000_000,
-    );
-
-    const result = resolveContextTokens({
-      cfg: {} as OpenClawConfig,
-      agentCfg: { contextTokens: 180_000 },
-      provider: "qwen",
-      model: "qwen3.6-plus",
-    });
-
-    expect(result).toBe(180_000);
   });
 });
 

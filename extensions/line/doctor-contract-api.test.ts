@@ -9,36 +9,43 @@ import {
   createChannelIngressQueueForTests as createChannelIngressQueue,
   listChannelIngressQueueAccountIdsForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type {
+  PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorStateMigrationContext,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 
 const migration = stateMigrations[0]!;
 
-function contextFor(stateDir: string): PluginDoctorStateMigrationContext {
+/** `mutable: false` stands in for the detection phase, which the host runs before it
+ *  owns exclusive state: the access entry carries no mutable lane at all. */
+function contextFor(
+  stateDir: string,
+  options?: { mutable?: boolean },
+): PluginDoctorStateMigrationContext {
+  const open = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(openOptions?: {
+    accountId?: string;
+  }) =>
+    createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
+      channelId: "line",
+      ...(openOptions?.accountId === undefined ? {} : { accountId: openOptions.accountId }),
+      stateDir,
+    });
+  const access: PluginDoctorChannelIngressQueueAccess = {
+    channelId: "line",
+    openChannelIngressQueueForInspection: (openOptions) => open(openOptions),
+    listChannelIngressQueueAccountIds: () =>
+      listChannelIngressQueueAccountIdsForTests({ channelId: "line", stateDir }),
+  };
+  if (options?.mutable !== false) {
+    access.openChannelIngressQueue = (openOptions) => open(openOptions);
+  }
   return {
     openPluginStateKeyedStore: () => {
       throw new Error("the LINE spool migration does not use plugin keyed state");
     },
-    channelIngressQueues: [
-      {
-        channelId: "line",
-        openChannelIngressQueue: <
-          TPayload,
-          TMetadata = unknown,
-          TCompletedMetadata = unknown,
-        >(options?: {
-          accountId?: string;
-        }) =>
-          createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-            channelId: "line",
-            ...(options?.accountId === undefined ? {} : { accountId: options.accountId }),
-            stateDir,
-          }),
-        listChannelIngressQueueAccountIds: () =>
-          listChannelIngressQueueAccountIdsForTests({ channelId: "line", stateDir }),
-      },
-    ],
+    channelIngressQueues: [access],
   };
 }
 

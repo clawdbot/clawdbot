@@ -56,6 +56,7 @@ import {
 } from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
+import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
@@ -254,8 +255,6 @@ function withSlackSendOverride(params: {
   deps?: { [channelId: string]: unknown } | null;
   send: SlackSendFn;
   tokenOverride?: string;
-  deliveryQueueId?: string;
-  onPlatformSendDispatch?: () => Promise<void>;
 }) {
   return {
     ...params.deps,
@@ -267,10 +266,6 @@ function withSlackSendOverride(params: {
       await params.send(to, text, {
         ...opts,
         ...(params.tokenOverride ? { token: params.tokenOverride } : {}),
-        ...(params.deliveryQueueId ? { deliveryQueueId: params.deliveryQueueId } : {}),
-        ...(params.onPlatformSendDispatch
-          ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
-          : {}),
       }),
   };
 }
@@ -531,7 +526,6 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,
-      onPlatformSendDispatch: undefined,
       deps: withSlackSendOverride({
         deps: ctx.deps,
         send,
@@ -554,14 +548,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       to,
       replyToId: threadTsValue,
       threadId: null,
-      deliveryQueueId: undefined,
-      onPlatformSendDispatch: undefined,
       deps: withSlackSendOverride({
         deps: ctx.deps,
         send,
         tokenOverride,
-        deliveryQueueId: ctx.deliveryQueueId,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },
@@ -581,12 +571,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
       replyToId: threadTsValue,
       threadId: null,
       deliveryQueueId: undefined,
-      onPlatformSendDispatch: undefined,
       deps: withSlackSendOverride({
         deps: ctx.deps,
         send,
         tokenOverride,
-        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
       }),
     });
   },
@@ -680,6 +668,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         isSlackWorkspaceInstallation(accountId),
     },
     messaging: {
+      resolveConversationRouteOwner: inspectSlackConversationRouteOwner,
       targetPrefixes: ["slack"],
       directTargetStyle: "user-prefixed",
       targetIdComparison: "lowercase",

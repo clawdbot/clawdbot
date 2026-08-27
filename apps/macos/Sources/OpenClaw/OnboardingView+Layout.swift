@@ -155,7 +155,11 @@ extension OnboardingView {
         guard !configuredGatewayProbe.isSuppressedForTemporaryConnectionCheck else { return nil }
         // Persist the latest selection before GatewayEndpointStore resolves the
         // route, so an immediate probe cannot attach to the previous endpoint.
-        guard gatewaySelectionPersister() else { return nil }
+        guard gatewaySelectionPersister() else {
+            self.aiSetup.showConfiguredGatewayProbeUnavailable(
+                summary: "Could not save Gateway settings. Check your connection settings and try again.")
+            return nil
+        }
         let expectedMode = state.connectionMode
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         let expectedPendingState = OnboardingSystemAgentResumeStore.pendingState(
@@ -180,7 +184,6 @@ extension OnboardingView {
             let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                 for: expectedRouteIdentity,
                 defaults: self.systemAgentDefaults)
-            let systemAgentResumePending = pendingState != .none
             self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
@@ -199,26 +202,14 @@ extension OnboardingView {
                     self.waitForPendingInferenceSetup()
                     return
                 case .none:
-                    // A concurrent probe can clear an expired marker while
-                    // the dispatched activation is still returning. Keep the
-                    // setup-owned handoff, and prove inference on this route.
-                    if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingSystemAgent(modelRef: modelRef)
-                        return
-                    }
+                    break
                 }
-                guard Self.shouldOpenConfiguredGatewayDashboard(
-                    onboardingVisible: self.onboardingVisible,
-                    expectedMode: expectedMode,
-                    currentMode: self.state.connectionMode,
-                    systemAgentResumePending: systemAgentResumePending,
-                    setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
-                else { return }
-                self.onboardingVisible = false
-                self.configuredGatewayProbe.invalidate()
-                OnboardingController.markComplete()
-                OnboardingController.shared.close()
-                AppNavigationActions.openDashboard()
+                // agents.list projects an effective model even when it only
+                // comes from an implicit runtime default. A label is not proof
+                // that inference is configured or usable, so first run must
+                // live-verify it before completing onboarding. A definitive
+                // verification failure falls through to normal detection.
+                self.resumePendingSystemAgent(modelRef: modelRef)
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -307,21 +298,6 @@ extension OnboardingView {
         case .activationExpired, .completed, .none:
             break
         }
-    }
-
-    static func shouldOpenConfiguredGatewayDashboard(
-        onboardingVisible: Bool,
-        expectedMode: AppState.ConnectionMode,
-        currentMode: AppState.ConnectionMode,
-        systemAgentResumePending: Bool,
-        setupOwnsInferenceTransition: Bool) -> Bool
-    {
-        self.isCurrentConfiguredGatewayProbe(
-            onboardingVisible: onboardingVisible,
-            expectedMode: expectedMode,
-            currentMode: currentMode) &&
-            !systemAgentResumePending &&
-            !setupOwnsInferenceTransition
     }
 
     static func isCurrentConfiguredGatewayProbe(

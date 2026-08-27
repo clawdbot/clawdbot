@@ -103,4 +103,37 @@ suite.define(() => {
 
     await expect.poll(() => page.locator(".lobster-pet--act-pet").count()).toBe(0);
   });
+
+  it("shows a clickable dismissal menu above the clipped footer ledge", async () => {
+    await mountPet({ mode: "offline", outcome: "ok", seed: 42 });
+    await page.evaluate(() => {
+      const pet = document.querySelector<HTMLElement>("openclaw-lobster-pet");
+      if (pet) {
+        Object.assign(pet.style, { bottom: "0", height: "64px", position: "fixed" });
+      }
+    });
+    const sprite = page.locator(".lobster-pet");
+    await sprite.click({ button: "right" });
+
+    const menu = page.locator("wa-dropdown.lobster-pet-dismiss-menu");
+    await menu.waitFor();
+    expect(await sprite.count()).toBe(1);
+    expect(await page.getByText("Dismiss and don't show again", { exact: true }).count()).toBe(1);
+    const bounds = await menu.evaluate((dropdown) => {
+      const rect = dropdown.shadowRoot?.querySelector('[part="menu"]')?.getBoundingClientRect();
+      return rect
+        ? { bottom: rect.bottom, height: rect.height, left: rect.left, top: rect.top }
+        : null;
+    });
+    expect(bounds).not.toBeNull();
+    expect(bounds?.height).toBeGreaterThan(0);
+    expect(bounds?.left).toBeGreaterThanOrEqual(0);
+    expect(bounds?.top).toBeGreaterThanOrEqual(0);
+    expect(bounds?.bottom).toBeLessThanOrEqual(page.viewportSize()?.height ?? 0);
+
+    await page.getByText("Dismiss", { exact: true }).click();
+    await page.clock.runFor(350);
+    await settlePet();
+    await expect.poll(() => sprite.count()).toBe(0);
+  });
 });

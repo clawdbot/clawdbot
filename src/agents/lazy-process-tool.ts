@@ -6,6 +6,7 @@ import { processSchema } from "./bash-tools.schemas.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 
 type BashToolsModule = typeof import("./bash-tools.js");
+type LoadedProcessTool = ReturnType<BashToolsModule["createProcessTool"]>;
 
 const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
   () => import("./bash-tools.js"),
@@ -13,11 +14,11 @@ const bashToolsModuleLoader = createLazyImportLoader<BashToolsModule>(
 
 /** Build process lazily so tool discovery does not load the shell runtime. */
 export function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
-  let loadedTool: AnyAgentTool | undefined;
+  let loadedTool: LoadedProcessTool | undefined;
   const loadTool = async () => {
     if (!loadedTool) {
       const { createProcessTool } = await bashToolsModuleLoader.load();
-      loadedTool = createProcessTool(defaults) as unknown as AnyAgentTool;
+      loadedTool = createProcessTool(defaults);
     }
     return loadedTool;
   };
@@ -28,7 +29,12 @@ export function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentT
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
-      (await loadTool()).execute(...args),
+    execute: async (toolCallId, params, signal, onUpdate) =>
+      (await loadTool()).execute(
+        toolCallId,
+        params as Parameters<LoadedProcessTool["execute"]>[1],
+        signal,
+        onUpdate,
+      ),
   } as AnyAgentTool;
 }

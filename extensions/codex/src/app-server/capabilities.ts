@@ -9,7 +9,6 @@ export const CODEX_CONTROL_METHODS = {
   installedApps: "app/installed",
   listApps: "app/list",
   readApps: "app/read",
-  compact: "thread/compact/start",
   feedback: "feedback/upload",
   forkThread: "thread/fork",
   listHooks: "hooks/list",

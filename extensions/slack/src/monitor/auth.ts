@@ -1,6 +1,7 @@
 // Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
+  type ChannelIngressContextBinding,
   type ChannelIngressIdentifierKind,
   type ChannelIngressPolicyInput,
   type ChannelIngressStateInput,
@@ -393,6 +394,7 @@ export async function resolveSlackCommandIngress(params: {
   senderName?: string;
   channelType: SlackIngressChannelType;
   channelId: string;
+  threadId?: string;
   ownerAllowFromLower: string[];
   channelUsers?: Array<string | number>;
   allowTextCommands: boolean;
@@ -403,6 +405,7 @@ export async function resolveSlackCommandIngress(params: {
   modeWhenAccessGroupsOff?: NonNullable<
     ChannelIngressPolicyInput["command"]
   >["modeWhenAccessGroupsOff"];
+  contextBinding?: ChannelIngressContextBinding;
 }) {
   const isDirectMessage = params.channelType === "im";
   const isGroupDm = params.channelType === "mpim";
@@ -429,7 +432,9 @@ export async function resolveSlackCommandIngress(params: {
     conversation: {
       kind: slackIngressConversationKind(params.channelType),
       id: params.channelId,
+      threadId: params.threadId,
     },
+    contextBinding: params.contextBinding,
     event: {
       kind: params.eventKind ?? "message",
       authMode: "inbound",

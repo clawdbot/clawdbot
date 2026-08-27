@@ -12,27 +12,18 @@ import {
 } from "../delivery-queue-sqlite-namespace.js";
 import {
   completeDeliveryQueueEntry,
-  commitStagedDeliveryQueueEntry,
   deleteDeliveryQueueEntry,
-  failPendingDeliveryQueueEntry,
+  getDeliveryQueueEntryStatuses,
   loadDeliveryQueueEntries,
   loadDeliveryQueueEntry,
   moveDeliveryQueueEntryToFailed,
   reserveDeliveryQueueEntryAttempt,
+  terminalizePendingDeliveryQueueEntry,
   updateDeliveryQueueEntry,
   upsertDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
-import type {
-  DeliveryQueueFailureRetention,
-  DeliveryQueueTerminalPolicy,
-  DeliveryQueueTerminalReason,
-} from "../delivery-queue-sqlite.types.js";
+import { inferDeliveryQueueFailureRetention } from "../delivery-queue-sqlite.types.js";
 import { generateSecureUuid } from "../secure-random.js";
-import {
-  outboundFailureRetainsMedia,
-  outboundTerminalPolicy,
-  queuedDeliveryPayloads,
-} from "./delivery-queue-failures.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
@@ -54,24 +45,49 @@ import type {
   QueuedDeliveryPayload,
 } from "./delivery-queue-types.js";
 import {
+  acceptedPreparedOutboundEntries,
   createUnmodifiedPreparedOutboundBatch,
   projectPreparedOutboundBatchForStorage,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 
-export {
-  findDeliveryIntentOwner,
-  findDeliveryIntentOwners,
-  OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS,
-} from "./delivery-queue-namespaces.js";
 export type {
   LegacyQueuedDelivery,
   LegacyQueuedDeliveryPreparation,
   QueuedDelivery,
-  QueuedDeliveryPayload,
   QueuedReplyPayloadSendingHook,
   QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-types.js";
+
+const queuedDeliveryPayloads = (entry: QueuedDelivery) =>
+  acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload);
+
+const OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS = [
+  { queueName: OUTBOUND_DELIVERY_QUEUE_NAME, namespace: "prepared", retired: false },
+  { queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME, namespace: "preparing", retired: true },
+  { queueName: OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME, namespace: "migration", retired: true },
+  {
+    queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+    namespace: "legacy-preparing",
+    retired: true,
+  },
+  { queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, namespace: "legacy", retired: true },
+] as const;
+
+export function findDeliveryIntentOwner(id: string, stateDir?: string) {
+  const statuses = getDeliveryQueueEntryStatuses(
+    OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS.map(({ queueName }) => queueName),
+    id,
+    stateDir,
+  );
+  for (const descriptor of OUTBOUND_DELIVERY_NAMESPACE_DESCRIPTORS) {
+    const status = statuses.get(descriptor.queueName);
+    if (status) {
+      return { ...descriptor, status };
+    }
+  }
+  return null;
+}
 
 function preparedBatchFromLowLevelInput(params: QueuedDeliveryPayload): PreparedOutboundBatch {
   if (params.preparedBatch) {
@@ -90,7 +106,7 @@ type QueuedDeliveryAdmissionPayload = QueuedDeliveryPayload & {
 function createQueuedDelivery(
   params: QueuedDeliveryAdmissionPayload,
   id: string,
-  failureRetention: DeliveryQueueFailureRetention,
+  retainOnFailure: boolean,
 ): QueuedDelivery {
   return {
     id,
@@ -105,8 +121,7 @@ function createQueuedDelivery(
     preparedBatch: projectPreparedOutboundBatchForStorage(preparedBatchFromLowLevelInput(params)),
     renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
-    replyToId: params.replyToId,
-    replyToMode: params.replyToMode,
+    reply: params.reply,
     formatting: params.formatting,
     identity: params.identity,
     bestEffort: params.bestEffort,
@@ -119,7 +134,7 @@ function createQueuedDelivery(
     preparedMessageId: params.preparedMessageId,
     deliveryCompletion: params.deliveryCompletion,
     completionRetention: params.completionRetention,
-    failureRetention,
+    ...(retainOnFailure ? { retainOnFailure: true as const } : {}),
     legacyUnknownSendReconciliation: params.legacyUnknownSendReconciliation,
     legacyPreparedContentUnavailable: params.legacyPreparedContentUnavailable,
     maxRetries: params.maxRetries,
@@ -135,17 +150,25 @@ export async function enqueueDelivery(
   mediaStageId?: string,
 ): Promise<string> {
   const id = generateSecureUuid();
-  const entry = createQueuedDelivery(params, id, params.completionRetention ?? "none");
+  const entry = createQueuedDelivery(
+    params,
+    id,
+    params.deliveryCompletion !== undefined || params.completionRetention !== undefined,
+  );
   if (mediaStageId) {
-    const committed = commitStagedDeliveryQueueEntry({
+    const result = commitStagedDeliveryQueueEntryOnceAcrossNamespaces({
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
       entry,
       stagingId: mediaStageId,
       stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+      conflictQueueNames: [],
       stateDir,
     });
-    if (!committed) {
+    if (result === "missing") {
       throw new Error(`Delivery queue media stage expired before enqueue: ${mediaStageId}`);
+    }
+    if (result === "existing") {
+      throw new Error(`Delivery queue entry already exists: ${OUTBOUND_DELIVERY_QUEUE_NAME}/${id}`);
     }
   } else {
     upsertDeliveryQueueEntry({
@@ -168,11 +191,7 @@ export async function enqueueDeliveryOnce(
   if (!normalizedId) {
     throw new Error("Stable delivery queue id is required");
   }
-  const entry = createQueuedDelivery(
-    params,
-    normalizedId,
-    params.completionRetention ?? "permanent",
-  );
+  const entry = createQueuedDelivery(params, normalizedId, true);
   const created = mediaStageId
     ? (() => {
         const result = commitStagedDeliveryQueueEntryOnceAcrossNamespaces({
@@ -219,11 +238,7 @@ export async function enqueuePreparedDeliveryOnce(
   if (!normalizedId || normalizedId !== preparation.id) {
     throw new Error("Stable delivery preparation id is invalid");
   }
-  const entry = createQueuedDelivery(
-    params,
-    normalizedId,
-    params.completionRetention ?? "permanent",
-  );
+  const entry = createQueuedDelivery(params, normalizedId, true);
   const result = movePendingDeliveryQueueEntryNamespace({
     sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
     destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -553,12 +568,8 @@ export async function moveToFailed(
   id: string,
   stateDir?: string,
   expectedPlatformSendAttemptId?: string | null,
-  reason: DeliveryQueueTerminalReason = "retry_exhausted",
-): Promise<void> {
-  // Dead-lettered rows are retained but never replayed: recovery loads the
-  // pending set only, so a failed row's media has no remaining reader.
+): Promise<string[]> {
   let spoolPaths: string[];
-  let terminalPolicy: DeliveryQueueTerminalPolicy | undefined;
   if (expectedPlatformSendAttemptId !== undefined) {
     spoolPaths = [];
     const moved = transitionOwnedDeliveryQueueEntry(
@@ -569,12 +580,11 @@ export async function moveToFailed(
         platformSendAttemptId: expectedPlatformSendAttemptId,
       },
       (entry) => {
-        terminalPolicy = outboundTerminalPolicy(entry as QueuedDelivery, reason);
         spoolPaths = collectEntrySpoolPaths(
           queuedDeliveryPayloads(entry as QueuedDelivery),
           stateDir,
         );
-        moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, terminalPolicy, stateDir);
+        moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
       },
     );
     if (!moved) {
@@ -586,12 +596,9 @@ export async function moveToFailed(
       throw new Error(`No pending outbound delivery queue entry ${id}`);
     }
     spoolPaths = collectEntrySpoolPaths(queuedDeliveryPayloads(entry), stateDir);
-    terminalPolicy = outboundTerminalPolicy(entry, reason);
-    moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, terminalPolicy, stateDir);
+    moveDeliveryQueueEntryToFailed(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
   }
-  if (terminalPolicy && !outboundFailureRetainsMedia(terminalPolicy)) {
-    await releaseSpoolArtifacts(spoolPaths, stateDir);
-  }
+  return spoolPaths;
 }
 
 type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" };
@@ -600,22 +607,20 @@ type FailPendingDeliveryResult = { status: "failed" } | { status: "not_pending" 
 export async function failPendingDelivery(
   params: {
     id: string;
-    expectedStatus: "pending";
-    lastError: string;
     entry: QueuedDelivery;
-    reason?: DeliveryQueueTerminalReason;
+    retainSpoolArtifacts?: boolean;
   },
   stateDir?: string,
 ): Promise<FailPendingDeliveryResult> {
-  let result: FailPendingDeliveryResult = { status: "not_pending" };
-  const terminalReason = params.reason ?? "admission_rejected";
-  const terminalPolicy = outboundTerminalPolicy(params.entry, terminalReason);
-  const failedEntry = { ...params.entry, terminalPolicy };
-  const attemptId =
-    typeof params.entry.completionRetention === "object" ||
-    params.entry.requiresProducerClaim === true
-      ? null
-      : undefined;
+  let terminalized: ReturnType<typeof terminalizePendingDeliveryQueueEntry> = {
+    status: "not_pending",
+  };
+  const retained =
+    inferDeliveryQueueFailureRetention(params.entry, params.id, OUTBOUND_DELIVERY_QUEUE_NAME) !==
+    undefined;
+  const attemptId = retained
+    ? (params.entry.platformSendAttemptId ?? params.entry.producerClaimId ?? null)
+    : undefined;
   if (attemptId !== undefined) {
     transitionOwnedDeliveryQueueEntry(
       {
@@ -625,29 +630,30 @@ export async function failPendingDelivery(
         platformSendAttemptId: attemptId,
       },
       () => {
-        result = failPendingDeliveryQueueEntry({
+        terminalized = terminalizePendingDeliveryQueueEntry({
           queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-          ...params,
-          failedEntry,
+          id: params.id,
+          entry: params.entry,
           stateDir,
         });
       },
     );
   } else {
-    result = failPendingDeliveryQueueEntry({
+    terminalized = terminalizePendingDeliveryQueueEntry({
       queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      ...params,
-      failedEntry,
+      id: params.id,
+      entry: params.entry,
       stateDir,
     });
   }
-  // Only the writer that won the guarded transition owns the media; a
-  // not_pending result means another path holds the row and its artifacts.
-  if (result.status === "failed" && !outboundFailureRetainsMedia(terminalPolicy)) {
-    await releaseSpoolArtifacts(
-      collectEntrySpoolPaths(queuedDeliveryPayloads(params.entry), stateDir),
-      stateDir,
-    );
+  if (terminalized.status === "terminalized") {
+    if (params.retainSpoolArtifacts !== true) {
+      await releaseSpoolArtifacts(
+        collectEntrySpoolPaths(queuedDeliveryPayloads(params.entry), stateDir),
+        stateDir,
+      );
+    }
+    return { status: "failed" };
   }
-  return result;
+  return { status: "not_pending" };
 }

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Provides root logger helpers and themed terminal output.
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
+import { writeRootConsoleLine } from "./logging/console.js";
 import { getLogger } from "./logging/logger.js";
 import { createSubsystemLogger } from "./logging/subsystem.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
@@ -41,7 +42,10 @@ function logWithSubsystem(params: {
     method(parsed.rest);
     return;
   }
-  params.runtime[params.runtimeMethod](params.runtimeFormatter(params.message));
+  const formatted = params.runtimeFormatter(params.message);
+  if (params.runtime !== defaultRuntime || !writeRootConsoleLine(params.runtimeMethod, formatted)) {
+    params.runtime[params.runtimeMethod](formatted);
+  }
   getLogger()[params.loggerMethod](params.message);
 }
 

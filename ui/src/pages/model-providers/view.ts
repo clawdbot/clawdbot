@@ -18,8 +18,9 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
-import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
-import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -43,6 +44,7 @@ type ModelProvidersViewProps = {
   loading: boolean;
   refreshing: boolean;
   error: string | null;
+  providerUsageFailed: boolean;
   updatedAt: number | null;
   costDays: number;
   credentialAgentLabel: string;
@@ -59,6 +61,8 @@ type ModelProvidersViewProps = {
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
+  /** Usage never converged before the retry budget ran out; cards lack usage. */
+  providerUsageStalled: boolean;
   probeAvailable: boolean;
   busy: Record<string, boolean>;
   messages: Record<string, ModelProviderRowMessage>;
@@ -209,15 +213,6 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-// formatTokens tops out at "M"; month-scale totals can cross a billion (e.g. "4132M").
-function formatTokenTotal(tokens: number): string {
-  if (tokens >= 1_000_000_000) {
-    const billions = tokens / 1_000_000_000;
-    return billions < 10 ? `${billions.toFixed(1)}B` : `${Math.round(billions)}B`;
-  }
-  return formatTokens(tokens);
-}
-
 function renderLocalCost(card: ModelProviderCard, costDays: number) {
   const cost = card.localCost;
   if (!cost || (cost.totalTokens === 0 && cost.totalCost === 0)) {
@@ -231,7 +226,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
       </div>
       <div class="model-providers__local-cost-detail">
         ${t("modelProviders.localCostDetail", {
-          tokens: formatTokenTotal(cost.totalTokens),
+          tokens: formatCompactTokenCount(cost.totalTokens),
           sessions: String(cost.sessionCount),
         })}
       </div>
@@ -292,7 +287,7 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
             >`
           : nothing}
       </div>
-      ${result.error ? html`<div>${result.error}</div>` : nothing}
+      ${result.error ? html`<div>${formatUiExternalText(result.error)}</div>` : nothing}
       ${result.results.map(
         (target) => html`
           <div class="model-providers__probe-target">
@@ -302,7 +297,7 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
                 ? ` · ${t("modelProviders.probe.latency", { ms: String(target.latencyMs) })}`
                 : ""}
             </span>
-            ${target.error ? html`<small>${target.error}</small>` : nothing}
+            ${target.error ? html`<small>${formatUiExternalText(target.error)}</small>` : nothing}
           </div>
         `,
       )}
@@ -582,6 +577,16 @@ function renderModelReadiness(props: ModelProvidersViewProps) {
   `;
 }
 
+function renderProviderNoticeRow(text: string) {
+  return html`
+    <div class="settings-row">
+      <div class="settings-row__text">
+        <span class="settings-row__desc provider-usage-error">${text}</span>
+      </div>
+    </div>
+  `;
+}
+
 export function renderModelProviders(props: ModelProvidersViewProps) {
   if (!props.connected) {
     return renderSettingsPage(
@@ -595,14 +600,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     `);
   }
   const providerRows = html`
-    ${props.error
-      ? html`
-          <div class="settings-row">
-            <div class="settings-row__text">
-              <span class="settings-row__desc provider-usage-error">${props.error}</span>
-            </div>
-          </div>
-        `
+    ${props.error ? renderProviderNoticeRow(props.error) : nothing}
+    ${props.providerUsageFailed
+      ? renderProviderNoticeRow(t("usage.providerUsage.unavailable"))
       : nothing}
     ${props.cards.length === 0
       ? renderSettingsEmpty(
@@ -652,6 +652,9 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       providerRows,
     )}
     ${props.quickAddSupported ? renderAddProvider(props) : nothing}
+    ${props.providerUsageStalled
+      ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
+      : nothing}
     ${props.mutationBlockedReason
       ? html`<div class="callout warning">${props.mutationBlockedReason}</div>`
       : nothing}

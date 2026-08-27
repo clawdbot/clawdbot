@@ -225,7 +225,7 @@ openclaw plugins install "$clickclack_plugin_dir" --force >"$CLICKCLACK_PLUGIN_I
 echo "Configuring ClickClack..."
 node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "http://127.0.0.1:$CLICKCLACK_PORT"
 openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_JSON"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-configured clickclack "$STATUS_JSON"
 
 echo "Sending ClickClack outbound message..."
 openclaw message send \
@@ -244,9 +244,10 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-reply "
 echo "Restarting Gateway and checking state survival..."
 stop_gateway
 start_gateway "$GATEWAY_2_LOG"
+node scripts/e2e/lib/release-user-journey/assertions.mjs wait-clickclack-socket "http://127.0.0.1:$CLICKCLACK_PORT" 45 2
 openclaw plugins inspect journey-plugin-b --runtime --json >"$PLUGIN_B_AFTER_RESTART_JSON" 2>&1
 openclaw channels status --json >"$STATUS_AFTER_RESTART_JSON" 2>"$STATUS_AFTER_RESTART_ERR"
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_AFTER_RESTART_JSON"
+node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-running clickclack "$STATUS_AFTER_RESTART_JSON"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains "$PLUGIN_B_AFTER_RESTART_JSON" "journey-plugin-b"
 stop_gateway
 

@@ -18,6 +18,8 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
+import { finalizeAgentTools } from "./agent-tools.finalize.js";
+import { filterToolsByPolicy } from "./agent-tools.policy.js";
 import { normalizeAgentRuntimeTools } from "./runtime-plan/tools.js";
 import { SESSION_TOOL_STDERR_TAIL_BYTES } from "./sessions/tools/limits.js";
 import {
@@ -46,6 +48,8 @@ import {
 } from "./tool-search.js";
 import { testing } from "./tool-search.test-support.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
+import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 
 type TestCatalogContext = {
   sessionId?: string;
@@ -929,6 +933,75 @@ describe("Tool Search", () => {
 
   it.each([
     {
+      scenario: "delegation was never provided",
+      agentId: "openclaw",
+      denyOpenClaw: false,
+      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+    },
+    {
+      scenario: "policy removed delegation",
+      agentId: "main",
+      denyOpenClaw: true,
+      expected: "Read gateway config + schema. Writes/restart unavailable; ask human.",
+    },
+    {
+      scenario: "delegation remains authorized",
+      agentId: "main",
+      denyOpenClaw: false,
+      expected: "Read gateway config + schema. Writes/restart: use openclaw tool.",
+    },
+  ])(
+    "keeps gateway guidance consistent across final and deferred surfaces when $scenario",
+    ({ agentId, denyOpenClaw, expected }) => {
+      const authorizedTools = filterToolsByPolicy(
+        [createGatewayTool(), ...createOpenClawDelegateToolsForRun({ sessionAgentId: agentId })],
+        denyOpenClaw ? { deny: ["openclaw"] } : undefined,
+      );
+      const finalizedTools = finalizeAgentTools({
+        tools: authorizedTools,
+        hookContext: {},
+        wrapBeforeToolCallHook: false,
+      });
+      const gateway = expectDefined(
+        finalizedTools.find((tool) => tool.name === "gateway"),
+        "finalized gateway tool",
+      );
+
+      expect(finalizedTools.some((tool) => tool.name === "openclaw")).toBe(
+        expected.includes("openclaw"),
+      );
+      expect(gateway.description).toBe(expected);
+
+      for (const mode of ["code", "tools", "directory"] as const) {
+        const catalogRef = createToolSearchCatalogRef();
+        const config = { tools: { toolSearch: { enabled: true, mode } } };
+        const tools = [...createToolSearchTools({ config, catalogRef }), ...finalizedTools];
+
+        if (mode === "directory") {
+          applyToolSchemaDirectoryCatalog({ tools, config, catalogRef });
+        } else {
+          applyToolSearchCatalog({ tools, config, catalogRef });
+        }
+
+        const entry = expectDefined(
+          catalogRef.current?.entries.find((candidate) => candidate.name === "gateway"),
+          `${mode} gateway catalog entry`,
+        );
+
+        expect(entry.description).toBe(expected);
+        expect(entry.tool.description).toBe(expected);
+        expect(buildToolSchemaDirectoryPrompt({ config, catalogRef })).toContain(
+          `- gateway (core): ${expected}`,
+        );
+        expect(resolveToolSearchCatalogTool({ config, catalogRef }, "gateway")?.description).toBe(
+          expected,
+        );
+      }
+    },
+  );
+
+  it.each([
+    {
       mode: "code" as const,
       expectedGuidance: "Use tool_search_code with openclaw.tools.search(query)",
     },
@@ -1125,6 +1198,25 @@ describe("Tool Search", () => {
     } finally {
       testing.setToolSearchCodeModeSupportedForTest(undefined);
     }
+  });
+
+  it("falls back to structured controls under Electron without changing Node mode", () => {
+    const electronDescriptor = Object.getOwnPropertyDescriptor(process.versions, "electron");
+    Object.defineProperty(process.versions, "electron", {
+      configurable: true,
+      value: "99.0.0",
+    });
+    try {
+      expect(resolveToolSearchConfig({ tools: { toolSearch: true } } as never).mode).toBe("tools");
+    } finally {
+      if (electronDescriptor) {
+        Object.defineProperty(process.versions, "electron", electronDescriptor);
+      } else {
+        delete (process.versions as NodeJS.ProcessVersions & { electron?: string }).electron;
+      }
+    }
+
+    expect(resolveToolSearchConfig({ tools: { toolSearch: true } } as never).mode).toBe("code");
   });
 
   it("guides structured control tools toward compact catalog calls", () => {
@@ -3656,6 +3748,70 @@ describe("Tool Search", () => {
     }
 
     expect(testing.getReusableCatalogSnapshotCountForTest()).toBe(snapshotsBefore);
+  });
+
+  it("serializes a fresh hook-bound catalog schema only once", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const target = pluginTool("fake_hook_bound_schema", "Hook-bound schema probe");
+    let schemaTraversalCount = 0;
+    target.parameters = new Proxy(
+      { type: "object", properties: { value: { type: "string" } } },
+      {
+        ownKeys: (schema) => {
+          schemaTraversalCount += 1;
+          return Reflect.ownKeys(schema);
+        },
+      },
+    );
+
+    const result = applyToolSearchCatalog({
+      tools: [codeTool, target],
+      config,
+      sessionId: "session-hook-bound-schema",
+      runId: "run-hook-bound-schema",
+      catalogRef,
+      toolHookContext: {
+        agentId: "agent-main",
+        sessionId: "session-hook-bound-schema",
+        sessionKey: "agent:main:main",
+        runId: "run-hook-bound-schema",
+      },
+    });
+
+    expect(result.catalogRegistered).toBe(true);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "fake_hook_bound_schema",
+    ]);
+    expect(schemaTraversalCount).toBe(1);
+  });
+
+  it("preserves last-wins replacement when duplicate catalog ids reorder", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const config = { tools: { toolSearch: true } } as never;
+    const catalogRef = createToolSearchCatalogRef();
+    const first = fakeTool("fake_duplicate_id", "First executable");
+    const second = fakeTool("fake_duplicate_id", "Second executable");
+    const params = {
+      config,
+      sessionId: "session-duplicate-id-order",
+      catalogRef,
+    };
+
+    applyToolSearchCatalog({ ...params, tools: [codeTool, first, second] });
+    expect(catalogRef.current?.entries.map((entry) => entry.description)).toEqual([
+      "Second executable",
+    ]);
+
+    const reordered = applyToolSearchCatalog({
+      ...params,
+      tools: [codeTool, second, first],
+    });
+    expect(reordered.catalogReused).toBe(false);
+    expect(catalogRef.current?.entries.map((entry) => entry.description)).toEqual([
+      "First executable",
+    ]);
   });
 
   it("does not reuse when a same-named tool uses a different executable", () => {

@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
@@ -16,21 +17,67 @@ import {
 import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
-import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
+import type {
+  InstallSecurityScanResult,
+  SkillInstallSpecMetadata,
+} from "./install-security-scan.js";
+import type {
+  InstallPolicyWarningDetails,
+  InstallSafetyOverrides,
+} from "./install-security-scan.types.js";
 
 type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
+const INSTALL_POLICY_BLOCK_REASON_PREFIX = "blocked by install policy: ";
+const INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG = "--acknowledge-install-policy-warning";
+const MAX_INSTALL_POLICY_NOTICE_CHARS = 4_000;
+const INSTALL_POLICY_REVIEW_GUIDANCE = [
+  "This invocation cannot approve install policy warnings.",
+  "To continue:",
+  "  • Run the matching direct `openclaw plugins ...` or `openclaw skills ...` command interactively.",
+  `  • For reviewed direct CLI automation, add ${INSTALL_POLICY_ACKNOWLEDGEMENT_FLAG}.`,
+  "  • If no equivalent direct command exists, change security.installPolicy to allow this reviewed request, then retry.",
+  "  • --force does not approve install policy warnings.",
+];
 
 type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
 
-function formatInstallPolicyWarning(finding: InstallPolicyFinding): string {
+function formatInstallPolicyFinding(finding: InstallPolicyFinding): string {
   const location = finding.file
-    ? ` (${finding.file}${finding.line ? `:${finding.line}` : ""})`
+    ? ` (${sanitizeTerminalText(finding.file)}${finding.line ? `:${finding.line}` : ""})`
     : "";
-  return `Install policy: ${finding.message}${location}`;
+  const evidence = finding.evidence ? ` Evidence: ${sanitizeTerminalText(finding.evidence)}` : "";
+  return `[${finding.severity.toUpperCase()}] ${sanitizeTerminalText(finding.ruleId)}: ${sanitizeTerminalText(finding.message)}${location}${evidence}`;
+}
+
+function formatInstallPolicyNotice(params: {
+  decision: "warn" | "block";
+  findings?: InstallPolicyFinding[];
+  guidance?: string[];
+  reason: string;
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): string {
+  const targetLabel = params.targetType === "skill" ? "Skill" : "Plugin";
+  const lines = [
+    params.decision === "warn" ? "Install requires approval" : "Install blocked by policy",
+    "",
+    `  ${targetLabel}: ${sanitizeTerminalText(params.targetName)}`,
+    `  Reason: ${sanitizeTerminalText(params.reason)}`,
+  ];
+  if (params.findings?.length) {
+    lines.push("  Findings:");
+    for (const finding of params.findings) {
+      lines.push(`    • ${formatInstallPolicyFinding(finding)}`);
+    }
+  }
+  if (params.guidance?.length) {
+    lines.push("", ...params.guidance);
+  }
+  return lines.join("\n");
 }
 
 type PackageManifest = {
@@ -49,28 +96,78 @@ type InstalledPackageScanRoot = {
   realPath: string;
 };
 
-type SkillInstallSpec = {
-  id?: string;
-  kind: "brew" | "node" | "go" | "uv" | "download";
-  label?: string;
-  bins?: string[];
-  os?: string[];
-  formula?: string;
-  package?: string;
-  module?: string;
-  url?: string;
-  archive?: string;
-  extract?: boolean;
-  stripComponents?: number;
-  targetDir?: string;
-};
-
-export type InstallSecurityScanResult = {
-  blocked?: {
-    code?: "security_scan_blocked" | "security_scan_failed";
-    reason: string;
+function failOversizedInstallPolicyWarning(params: {
+  result: Awaited<ReturnType<typeof runInstallPolicy>>;
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): InstallSecurityScanResult | undefined {
+  if (!params.result?.warning) {
+    return undefined;
+  }
+  const notice = formatInstallPolicyNotice({
+    decision: "warn",
+    findings: params.result.findings,
+    guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
+    reason: params.result.warning.reason,
+    targetName: params.targetName,
+    targetType: params.targetType,
+  });
+  if (notice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS) {
+    return undefined;
+  }
+  return {
+    blocked: {
+      code: "security_scan_failed",
+      reason:
+        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+    },
   };
-};
+}
+
+function formatBlockedInstallPolicyResult(params: {
+  blocked: NonNullable<InstallSecurityScanResult["blocked"]>;
+  findings?: InstallPolicyFinding[];
+  targetName: string;
+  targetType: "skill" | "plugin";
+}): InstallSecurityScanResult {
+  if (
+    params.blocked.code !== "security_scan_blocked" ||
+    !params.blocked.reason.startsWith(INSTALL_POLICY_BLOCK_REASON_PREFIX)
+  ) {
+    return { blocked: params.blocked };
+  }
+  const reason = params.blocked.reason.slice(INSTALL_POLICY_BLOCK_REASON_PREFIX.length);
+  const notice = formatInstallPolicyNotice({
+    decision: "block",
+    findings: params.findings,
+    reason,
+    targetName: params.targetName,
+    targetType: params.targetType,
+  });
+  if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+    const compactNotice = `${formatInstallPolicyNotice({
+      decision: "block",
+      reason,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    })}\n  Findings omitted: policy review exceeds the 4,000-character display limit.`;
+    return {
+      blocked: {
+        ...params.blocked,
+        reason:
+          compactNotice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS
+            ? compactNotice
+            : "Install blocked by policy: review exceeds the 4,000-character display limit.",
+      },
+    };
+  }
+  return {
+    blocked: {
+      ...params.blocked,
+      reason: notice,
+    },
+  };
+}
 
 const DEFAULT_PACKAGE_TRAVERSAL_LIMITS: PackageTraversalLimits = {
   maxDepth: 64,
@@ -465,7 +562,7 @@ async function runBeforeInstallHook(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file";
@@ -602,7 +699,9 @@ function shouldBypassOpenClawInstallFriction(params: {
 
 async function runOperatorInstallPolicy(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   origin: InstallPolicyOrigin;
   source?: InstallPolicySource;
   sourcePath: string;
@@ -614,7 +713,7 @@ async function runOperatorInstallPolicy(params: {
   requestedSpecifier?: string;
   skill?: {
     installId: string;
-    installSpec?: SkillInstallSpec;
+    installSpec?: SkillInstallSpecMetadata;
   };
   plugin?: {
     contentType: "bundle" | "package" | "file" | "dependency-tree";
@@ -626,34 +725,170 @@ async function runOperatorInstallPolicy(params: {
   };
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
-  const result = await runInstallPolicy({
-    config: params.config,
-    logger: params.logger,
+  const request = {
+    targetName: params.targetName,
+    targetType: params.targetType,
+    sourcePath: params.sourcePath,
+    sourcePathKind: params.sourcePathKind,
+    ...(params.source ? { source: params.source } : {}),
+    origin: params.origin,
     request: {
+      kind: params.requestKind,
+      mode: params.requestMode,
+      ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
+    },
+    ...(params.skill ? { skill: params.skill } : {}),
+    ...(params.plugin ? { plugin: params.plugin } : {}),
+  };
+  const evaluatePolicy = () =>
+    runInstallPolicy({
+      config: params.config,
+      logger: params.logger,
+      request,
+    });
+  const logPolicyResult = (result: Awaited<ReturnType<typeof evaluatePolicy>>) => {
+    if (result?.warning) {
+      params.logger.warn?.(
+        `${formatInstallPolicyNotice({
+          decision: "warn",
+          findings: result.findings,
+          reason: result.warning.reason,
+          targetName: params.targetName,
+          targetType: params.targetType,
+        })}\n`,
+      );
+      return;
+    }
+    const messages = (result?.findings ?? [])
+      .filter((finding) => finding.severity === "critical" || finding.severity === "warn")
+      .map((finding) => `Install policy: ${formatInstallPolicyFinding(finding)}`);
+    if (
+      messages.reduce((length, message) => length + message.length + 1, 0) <=
+      MAX_INSTALL_POLICY_NOTICE_CHARS
+    ) {
+      for (const message of messages) {
+        params.logger.warn?.(message);
+      }
+      return;
+    }
+    const omittedMessage =
+      "Install policy: additional findings omitted because the 4,000-character log limit was reached.";
+    let remaining = MAX_INSTALL_POLICY_NOTICE_CHARS - omittedMessage.length - 1;
+    for (const message of messages) {
+      if (message.length + 1 > remaining) {
+        continue;
+      }
+      params.logger.warn?.(message);
+      remaining -= message.length + 1;
+    }
+    params.logger.warn?.(omittedMessage);
+  };
+
+  const result = await evaluatePolicy();
+  const presentationFailure = failOversizedInstallPolicyWarning({
+    result,
+    targetName: params.targetName,
+    targetType: params.targetType,
+  });
+  if (presentationFailure) {
+    return presentationFailure;
+  }
+  if (result?.blocked) {
+    return formatBlockedInstallPolicyResult({
+      blocked: result.blocked,
+      findings: result.findings,
       targetName: params.targetName,
       targetType: params.targetType,
-      sourcePath: params.sourcePath,
-      sourcePathKind: params.sourcePathKind,
-      ...(params.source ? { source: params.source } : {}),
-      origin: params.origin,
-      request: {
-        kind: params.requestKind,
-        mode: params.requestMode,
-        ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
+    });
+  }
+  if (!result?.warning) {
+    logPolicyResult(result);
+    return undefined;
+  }
+  const installPolicyWarning: InstallPolicyWarningDetails = {
+    targetName: params.targetName,
+    targetType: params.targetType,
+    requestMode: params.requestMode,
+    reason: result.warning.reason,
+    ...(result.findings?.length ? { findings: result.findings } : {}),
+  };
+  if (!params.onInstallPolicyWarning) {
+    return {
+      blocked: {
+        code: "security_scan_blocked",
+        installPolicyWarning,
+        reason: formatInstallPolicyNotice({
+          decision: "warn",
+          findings: result.findings,
+          guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
+          reason: result.warning.reason,
+          targetName: params.targetName,
+          targetType: params.targetType,
+        }),
       },
-      ...(params.skill ? { skill: params.skill } : {}),
-      ...(params.plugin ? { plugin: params.plugin } : {}),
-    },
+    };
+  }
+  logPolicyResult(result);
+  const acknowledgement = await params.onInstallPolicyWarning({
+    ...installPolicyWarning,
   });
-  if (!result?.blocked) {
-    for (const finding of result?.findings ?? []) {
-      if (finding.severity === "critical" || finding.severity === "warn") {
-        params.logger.warn?.(formatInstallPolicyWarning(finding));
+  if (acknowledgement.status === "approved") {
+    const reevaluated = await evaluatePolicy();
+    const reevaluatedPresentationFailure = failOversizedInstallPolicyWarning({
+      result: reevaluated,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    });
+    if (reevaluatedPresentationFailure) {
+      return reevaluatedPresentationFailure;
+    }
+    if (reevaluated?.blocked) {
+      return formatBlockedInstallPolicyResult({
+        blocked: reevaluated.blocked,
+        findings: reevaluated.findings,
+        targetName: params.targetName,
+        targetType: params.targetType,
+      });
+    }
+    if (reevaluated?.warning) {
+      const warningUnchanged = reevaluated.warning.fingerprint === result.warning.fingerprint;
+      if (!warningUnchanged) {
+        return {
+          blocked: {
+            code: "security_scan_blocked",
+            installPolicyWarning: {
+              targetName: params.targetName,
+              targetType: params.targetType,
+              requestMode: params.requestMode,
+              reason: reevaluated.warning.reason,
+              ...(reevaluated.findings?.length ? { findings: reevaluated.findings } : {}),
+            },
+            reason: formatInstallPolicyNotice({
+              decision: "warn",
+              findings: reevaluated.findings,
+              guidance: [
+                "The policy warning changed after approval.",
+                "Review the current warning and try again.",
+              ],
+              reason: reevaluated.warning.reason,
+              targetName: params.targetName,
+              targetType: params.targetType,
+            }),
+          },
+        };
       }
+    } else {
+      logPolicyResult(reevaluated);
     }
     return undefined;
   }
-  return { blocked: result.blocked };
+  return {
+    blocked: {
+      code: "security_scan_blocked",
+      installPolicyWarning,
+      reason: "Install cancelled: the install policy warning was not approved.",
+    },
+  };
 }
 
 export async function scanBundleInstallSourceRuntime(
@@ -672,7 +907,9 @@ export async function scanBundleInstallSourceRuntime(
   const runPolicy = () =>
     runOperatorInstallPolicy({
       config: params.config,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       origin: { type: "plugin-bundle", ...(params.version ? { version: params.version } : {}) },
       source:
         params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
@@ -743,7 +980,9 @@ export async function scanPackageInstallSourceRuntime(
   const runPolicy = () =>
     runOperatorInstallPolicy({
       config: params.config,
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       logger: params.logger,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       origin: {
         type: "plugin-package",
         ...(params.packageName ? { packageName: params.packageName } : {}),
@@ -814,6 +1053,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   dependencyScanRootDir?: string;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageDir: string;
   pluginId: string;
   requestKind?: PluginInstallRequestKind;
@@ -826,6 +1066,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
     runOperatorInstallPolicy({
       config: params.config,
       logger: params.logger,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       origin: { type: "plugin-dependency-tree" },
       source: params.source ?? resolvePolicySource({ requestKind }),
       sourcePath: params.dependencyScanRootDir ?? params.packageDir,
@@ -872,7 +1113,9 @@ export async function scanFileInstallSourceRuntime(
 ): Promise<InstallSecurityScanResult | undefined> {
   const policyResult = await runOperatorInstallPolicy({
     config: params.config,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     origin: { type: "plugin-file" },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-file" }),
     sourcePath: params.filePath,
@@ -914,8 +1157,10 @@ export async function scanFileInstallSourceRuntime(
 
 export async function preflightPluginNpmInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   packageName: string;
   pluginId?: string;
   requestedSpecifier?: string;
@@ -926,7 +1171,9 @@ export async function preflightPluginNpmInstallPolicyRuntime(params: {
   const pluginId = params.pluginId ?? params.packageName;
   return await runOperatorInstallPolicy({
     config: params.config,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     origin: { type: "plugin-npm", packageName: params.packageName },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-npm" }),
     sourcePath: params.sourcePath,
@@ -946,8 +1193,10 @@ export async function preflightPluginNpmInstallPolicyRuntime(params: {
 
 export async function preflightPluginGitInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
+  dangerouslyForceUnsafeInstall?: boolean;
   logger: InstallScanLogger;
   mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   pluginId: string;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
@@ -955,7 +1204,9 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
 }): Promise<InstallSecurityScanResult | undefined> {
   return await runOperatorInstallPolicy({
     config: params.config,
+    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
     origin: { type: "plugin-git" },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-git" }),
     sourcePath: params.sourcePath,
@@ -975,12 +1226,13 @@ export async function preflightPluginGitInstallPolicyRuntime(params: {
 export async function evaluateSkillInstallPolicyRuntime(params: {
   config?: OpenClawConfig;
   installId: string;
-  installSpec?: SkillInstallSpec;
+  installSpec?: SkillInstallSpecMetadata;
   logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   origin: InstallPolicyOrigin;
   requestedSpecifier?: string;
   source?: InstallPolicySource;
-  mode?: "install" | "update";
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {
@@ -988,6 +1240,7 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
     runOperatorInstallPolicy({
       config: params.config,
       logger: params.logger,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
       origin: params.origin,
       source:
         params.source ??

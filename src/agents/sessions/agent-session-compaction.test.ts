@@ -1,6 +1,13 @@
-import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import type {
+  AssistantMessage,
+  Context,
+  Model,
+  SimpleStreamOptions,
+} from "openclaw/plugin-sdk/llm";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
+import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
+import { agentSessionSetContextReplacementHook } from "./agent-session-compaction.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -31,7 +38,225 @@ function createStaleThinkingContent(): AssistantMessage["content"] {
   ] as unknown as AssistantMessage["content"];
 }
 
+function createResultHandlers(summary: string, firstKeptEntryId?: string) {
+  const handlers = createCompactionHandlers();
+  handlers.set("session_before_compact", [
+    async (event: unknown) => {
+      const preparation = (
+        event as { preparation: { firstKeptEntryId: string; tokensBefore: number } }
+      ).preparation;
+      return {
+        compaction: {
+          summary,
+          firstKeptEntryId: firstKeptEntryId ?? preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+        },
+      };
+    },
+  ]);
+  return handlers;
+}
+
+function collectCompactionEnds(session: Awaited<ReturnType<typeof createTestSession>>["session"]) {
+  const events: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+  session.subscribe((event) => {
+    if (event.type === "compaction_end") {
+      events.push(event);
+    }
+  });
+  return events;
+}
+
 describe("AgentSession compaction", () => {
+  it("preserves the automatic authentication failure as a reasoned skip", async () => {
+    const { session, modelRegistry } = await createTestSession({
+      settingsManager: createAutoCompactionSettings(),
+    });
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
+      vi.spyOn(modelRegistry, "getApiKeyAndHeaders").mockResolvedValue({
+        ok: false,
+        error: `No API key found for ${activeModel.provider}`,
+      });
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      );
+    });
+    const compactionEvents = collectCompactionEnds(session);
+
+    await session.prompt("continue");
+
+    expect(compactionEvents.at(0)).toMatchObject({
+      type: "compaction_end",
+      reason: "threshold",
+      outcome: { status: "skipped", reason: expect.stringContaining("No API key found") },
+    });
+  });
+
+  it("records post-compaction live-message tokens through the subscriber", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    const firstKeptEntryId = sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "retained answer" }]),
+      timestamp: 2,
+    });
+    let requests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        ++requests === 1
+          ? createOverflowAssistant(activeModel)
+          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
+      ),
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager: createAutoCompactionSettings(),
+      resourceLoader: createResourceLoader(
+        createResultHandlers("condensed history", firstKeptEntryId),
+      ),
+    });
+    const subscription = subscribeEmbeddedAgentSession({ session, runId: "run-tokens-after" });
+
+    await session.prompt("long request");
+
+    expect(subscription.getCompactionCount()).toBe(1);
+    expect(subscription.getLastCompactionTokensAfter()).toEqual(expect.any(Number));
+    expect(subscription.getLastCompactionTokensAfter()).toBeGreaterThan(0);
+    subscription.unsubscribe();
+  });
+
+  it("projects a rejected automatic cancellation as aborted without recording compaction", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const handlers = createCompactionHandlers();
+    const syntheticError = new Error("synthetic cancellation rejection");
+    const abortActiveCompaction = () => session.abortCompaction();
+    handlers.set("session_before_compact", [
+      async () => {
+        abortActiveCompaction();
+        throw syntheticError;
+      },
+    ]);
+    streamMocks.streamSimple.mockImplementation(
+      (activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
+        if (options?.signal?.aborted) {
+          throw syntheticError;
+        }
+        return createAssistantResultStream(
+          createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        );
+      },
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      settingsManager: createAutoCompactionSettings(),
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-rejected-cancellation",
+      onAgentEvent,
+    });
+
+    await session.prompt("continue");
+
+    const compactionEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "compaction");
+    expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents.at(-1)).toEqual({
+      stream: "compaction",
+      data: {
+        phase: "end",
+        outcome: "aborted",
+        completed: false,
+        willRetry: false,
+      },
+    });
+    expect(subscription.getCompactionCount()).toBe(0);
+    expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
+    expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    subscription.unsubscribe();
+  });
+
+  it("projects a rejected manual cancellation as aborted without recording compaction", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+      timestamp: 2,
+    });
+    const handlers = createCompactionHandlers();
+    const syntheticError = new Error("synthetic manual cancellation rejection");
+    const abortActiveCompaction = () => session.abortCompaction();
+    handlers.set("session_before_compact", [
+      async () => {
+        abortActiveCompaction();
+        throw syntheticError;
+      },
+    ]);
+    streamMocks.streamSimple.mockImplementation(
+      (_activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
+        if (options?.signal?.aborted) {
+          throw syntheticError;
+        }
+        return createAssistantResultStream(
+          createAssistant(testModel, [{ type: "text", text: "unexpected compaction" }]),
+        );
+      },
+    );
+    const { session } = await createTestSession({
+      sessionManager,
+      resourceLoader: createResourceLoader(handlers),
+    });
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedAgentSession({
+      session,
+      runId: "run-rejected-manual-cancellation",
+      onAgentEvent,
+    });
+
+    await expect(session.compact()).rejects.toBe(syntheticError);
+
+    const compactionEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "compaction");
+    expect(compactionEvents).toHaveLength(2);
+    expect(compactionEvents.at(-1)).toEqual({
+      stream: "compaction",
+      data: {
+        phase: "end",
+        outcome: "aborted",
+        completed: false,
+        willRetry: false,
+      },
+    });
+    expect(subscription.getCompactionCount()).toBe(0);
+    expect(subscription.getLastCompactionTokensAfter()).toBeUndefined();
+    expect(sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    subscription.unsubscribe();
+  });
+
+  it("caps extension summaries before persistence and manual return", async () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
+    sessionManager.appendMessage({
+      ...createAssistant(testModel, [{ type: "text", text: "old answer" }]),
+      timestamp: 2,
+    });
+    const oversizedSummary = "summary detail ".repeat(2_000);
+    const { session } = await createTestSession({
+      sessionManager,
+      resourceLoader: createResourceLoader(createResultHandlers(oversizedSummary)),
+    });
+
+    const result = await session.compact();
+    const persisted = sessionManager.getBranch().findLast((entry) => entry.type === "compaction");
+
+    expect(result.summary.length).toBeLessThanOrEqual(16_000);
+    expect(result.summary).toContain("[Compaction summary truncated to fit budget]");
+    expect(persisted).toMatchObject({ type: "compaction", summary: result.summary });
+  });
+
   it.each(Array.from({ length: MAX_OVERFLOW_COMPACTION_ATTEMPTS }, (_, index) => index + 1))(
     "recovers when the provider accepts overflow compaction attempt %i",
     async (overflowCount) => {
@@ -48,22 +273,55 @@ describe("AgentSession compaction", () => {
         settingsManager: createAutoCompactionSettings(),
         resourceLoader: createResourceLoader(createCompactionHandlers()),
       });
-      const compactionEvents: AgentSessionEvent[] = [];
-      session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          compactionEvents.push(event);
-        }
-      });
+      const compactionEvents = collectCompactionEnds(session);
 
       await session.prompt("long request");
 
       expect(agentRequests).toBe(overflowCount + 1);
       expect(
-        compactionEvents.filter((event) => event.type === "compaction_end" && event.willRetry),
+        compactionEvents.filter(
+          (event) =>
+            event.type === "compaction_end" &&
+            event.outcome.status === "completed" &&
+            event.outcome.willRetry,
+        ),
       ).toHaveLength(overflowCount);
       expect(session.getLastAssistantText()).toBe("complete retry");
     },
   );
+
+  it("invalidates context-bound state before the completed event and overflow retry", async () => {
+    const contextState = new Map([["skill", true]]);
+    const contextSizesAtCompactionEnd: number[] = [];
+    let agentRequests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
+      agentRequests += 1;
+      if (agentRequests === 2) {
+        expect(contextState.size).toBe(0);
+      }
+      return createAssistantResultStream(
+        agentRequests === 1
+          ? createOverflowAssistant(activeModel)
+          : createAssistant(activeModel, [{ type: "text", text: "complete retry" }]),
+      );
+    });
+    const { session } = await createTestSession({
+      settingsManager: createAutoCompactionSettings(),
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session[agentSessionSetContextReplacementHook](() => contextState.clear());
+    session.subscribe((event) => {
+      if (event.type === "compaction_end" && event.outcome.status === "completed") {
+        contextSizesAtCompactionEnd.push(contextState.size);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(agentRequests).toBe(2);
+    expect(contextState.size).toBe(0);
+    expect(contextSizesAtCompactionEnd).toEqual([0]);
+  });
 
   it("surfaces the shared overflow recovery limit after exhausting it", async () => {
     let agentRequests = 0;
@@ -78,12 +336,7 @@ describe("AgentSession compaction", () => {
       settingsManager: createAutoCompactionSettings(),
       resourceLoader: createResourceLoader(createCompactionHandlers()),
     });
-    const compactionEvents: AgentSessionEvent[] = [];
-    session.subscribe((event) => {
-      if (event.type === "compaction_end") {
-        compactionEvents.push(event);
-      }
-    });
+    const compactionEvents = collectCompactionEnds(session);
 
     await session.prompt("long request");
 
@@ -91,8 +344,10 @@ describe("AgentSession compaction", () => {
     expect(compactionEvents.at(-1)).toMatchObject({
       type: "compaction_end",
       reason: "overflow",
-      willRetry: false,
-      errorMessage: `Context overflow recovery failed after ${MAX_OVERFLOW_COMPACTION_ATTEMPTS} compact-and-retry attempts. Try reducing context or switching to a larger-context model.`,
+      outcome: {
+        status: "failed",
+        reason: `Context overflow recovery failed after ${MAX_OVERFLOW_COMPACTION_ATTEMPTS} compact-and-retry attempts. Try reducing context or switching to a larger-context model.`,
+      },
     });
   });
 

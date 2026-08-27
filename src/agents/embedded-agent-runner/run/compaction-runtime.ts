@@ -34,6 +34,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
   runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
   resolvedSessionKey: string;
   sessionAgentId: string;
+  contextEngineAgentId?: string;
   agentDir: string;
   workspaceDir: string;
   provider: string;
@@ -63,6 +64,7 @@ export type EmbeddedRunCompactionRecoveryInput = {
     file: string;
     target?: ContextEngineSessionTarget;
   };
+  prepareCompactedTranscriptRetry: () => Promise<void>;
   armPostCompactionGuard: () => void;
 };
 
@@ -95,9 +97,13 @@ export async function compactEmbeddedRunForRecovery(
       authProfileIdSource: input.authProfileIdSource,
       runtimeAuthPlan: input.runtimeAuthPlan,
       workspaceDir: input.workspaceDir,
+      bootstrapWorkspaceDir: runParams.bootstrapWorkspaceDir,
+      permissionMode: runParams.permissionMode,
+      sessionRoot: runParams.sessionRoot,
       agentDir: input.agentDir,
       config: runParams.config,
       toolOverrides: runParams.toolOverrides,
+      toolsAllow: runParams.toolsAllow,
       skillsSnapshot: runParams.skillsSnapshot,
       senderId: runParams.senderId,
       provider: input.provider,
@@ -107,6 +113,7 @@ export async function compactEmbeddedRunForRecovery(
       modelFallbacksOverride: runParams.modelFallbacksOverride,
       thinkLevel: input.thinkLevel,
       reasoningLevel: runParams.reasoningLevel,
+      execOverrides: runParams.execOverrides,
       bashElevated: runParams.bashElevated,
       extraSystemPrompt: runParams.extraSystemPrompt,
       sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
@@ -122,7 +129,7 @@ export async function compactEmbeddedRunForRecovery(
     ...resolveContextEngineCapabilities({
       config: runParams.config,
       sessionKey: runParams.sessionKey,
-      agentId: input.sessionAgentId,
+      explicitAgentId: input.contextEngineAgentId,
       contextEnginePluginId: input.resolveContextEnginePluginId(),
       purpose:
         recovery.trigger === "overflow"

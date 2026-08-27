@@ -20,7 +20,8 @@ import {
   writeOfficialChannelCatalogSource,
 } from "../scripts/write-official-channel-catalog.mts";
 import { describePluginInstallSource } from "../src/plugins/install-source-info.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "./helpers/temp-dir.js";
+import { writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
 
@@ -147,6 +148,19 @@ afterEach(() => {
 describe("buildOfficialChannelCatalog", () => {
   it("keeps the committed official catalog synchronized with repository manifests", () => {
     expect(checkOfficialChannelCatalogSource({ repoRoot: process.cwd() })).toBe(true);
+    const catalog = buildOfficialChannelCatalog({ repoRoot: process.cwd() });
+    const serialized = fs.readFileSync(OFFICIAL_CHANNEL_CATALOG_SOURCE_RELATIVE_PATH, "utf8");
+    const lines = serialized.split("\n");
+
+    expect(JSON.parse(serialized)).toEqual(catalog);
+    expect(lines).toHaveLength(catalog.entries.length + 5);
+    expect(lines.slice(2, -3)).toEqual(
+      catalog.entries.map(
+        (entry, index) =>
+          `    ${JSON.stringify(entry)}${index === catalog.entries.length - 1 ? "" : ","}`,
+      ),
+    );
+    expect(lines.at(-1)).toBe("");
   });
 
   it("keeps the generated channel docs index and navigation synchronized", () => {
@@ -342,10 +356,10 @@ describe("buildOfficialChannelCatalog", () => {
       },
       providerEndpoints: undefined,
       install: {
-        npmSpec: "openclaw-plugin-yuanbao@2.15.0",
+        npmSpec: "openclaw-plugin-yuanbao@2.18.2",
         defaultChoice: "npm",
         expectedIntegrity:
-          "sha512-3GD+mf3EjTSUTOAREjTHAyp/deXdpgqB+q+xE0b19Qtat4ADhUV1mHDwFkVCRqTCBY5ATFKtKcipoDejqFj/+w==",
+          "sha512-cL85zWLePhi/GWRsXL8ogS4tejNuCE/J0V/OYhDFJzElF2TmndVCUAXaJdssgv/ULJ9sBaic88wAzRllIgZIwA==",
       },
     });
     expect(

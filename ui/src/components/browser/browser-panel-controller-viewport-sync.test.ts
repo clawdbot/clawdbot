@@ -28,6 +28,20 @@ function requestsForPath(request: ReturnType<typeof createBrowserClient>["reques
 }
 
 describe("BrowserPanelController viewport sync", () => {
+  it("waits for a successful view before resizing or recapturing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const { client, request } = createBrowserClient(async () => ({ ok: true }));
+    const host = new TestBrowserPanelHost(client);
+    const controller = new BrowserPanelController(host);
+    controller.activeTargetId = "tab-a";
+
+    controller.handleViewportResize(640, 480);
+    await vi.advanceTimersByTimeAsync(650);
+
+    expect(actionRequests(request, "resize")).toHaveLength(0);
+    expect(requestsForPath(request, "/screenshot")).toHaveLength(0);
+  });
+
   it("debounces resize requests, clamps dimensions, and refreshes the screenshot", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     stubScreenshotMedia();

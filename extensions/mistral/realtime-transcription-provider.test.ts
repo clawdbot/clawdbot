@@ -381,18 +381,20 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
     });
 
     await session.connect();
+    // Wait on the delivered transcripts, not just the socket close: the replacement
+    // connection can close before its `transcription.done` reaches onTranscript.
     await vi.waitFor(
       () => {
         expect(requests).toHaveLength(2);
         expect(session.isConnected()).toBe(false);
+        expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
+          "earlier turn",
+          "replacement final",
+        ]);
       },
       { timeout: 3_000 },
     );
 
-    expect(onTranscript.mock.calls.map(([text]) => text)).toEqual([
-      "earlier turn",
-      "replacement final",
-    ]);
     expect(onPartial.mock.calls.map(([text]) => text)).toEqual(partials);
     expect(onError).not.toHaveBeenCalled();
   });

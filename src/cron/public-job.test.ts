@@ -63,6 +63,16 @@ describe("toPublicCronJob", () => {
     });
   });
 
+  it("strips private creator provenance without mutating the stored job", () => {
+    const job: CronStoredJob = {
+      ...makeCronJob({}),
+      createdActor: { type: "human", id: "profile-ada" },
+    };
+
+    expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
+    expect(job.createdActor).toEqual({ type: "human", id: "profile-ada" });
+  });
+
   it("strips private runtime authority without mutating the stored job", () => {
     const runtimeAuthority = {
       version: 1 as const,

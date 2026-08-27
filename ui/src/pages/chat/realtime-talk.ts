@@ -7,6 +7,7 @@ import {
   VOICE_TRANSCRIPT_QUEUE_POLICY,
 } from "../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import type {
@@ -534,7 +535,7 @@ export class RealtimeTalkSession {
               // The utterance exists only in client memory; after retries and surfacing the error,
               // keeping the record open cannot recover it, while server entryId dedupe preserves order.
               // Deferring close would only shift the identical loss to the 6h stale sweep.
-              const detail = `Voice transcript could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+              const detail = `Voice transcript could not be saved: ${formatUiError(error)}`;
               console.warn(detail, error);
               // Only surface to the user if this transport is still the active one; a
               // retired call's late failure must not error a healthy replacement call.

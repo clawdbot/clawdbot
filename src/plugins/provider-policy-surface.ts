@@ -8,6 +8,7 @@ import type {
   ProviderResolveModelRoutesContext,
 } from "../plugin-sdk/provider-model-types.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -34,8 +35,23 @@ type ProviderProjectConfiguredModelRowContext = {
   model: ProviderRuntimeModel;
 };
 
+type EmbeddingProviderSetupInspection = {
+  provider: string;
+  reason: string;
+  requirement?: string;
+  fixHint?: string;
+};
+
+export type InspectEmbeddingProviderSetup = (params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentId: string;
+  provider: string;
+}) => EmbeddingProviderSetupInspection | null | Promise<EmbeddingProviderSetupInspection | null>;
+
 /** Provider policy hooks supported by bundled and trusted official plugins. */
 export type ProviderPolicySurface = {
+  deprecatedProfileIds?: readonly string[];
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
   applyConfigDefaults?: (
     ctx: ProviderApplyConfigDefaultsContext,
@@ -53,6 +69,7 @@ export type ProviderPolicySurface = {
   isResponseModelEquivalent?: (
     ctx: ProviderResponseModelEquivalenceContext,
   ) => boolean | null | undefined;
+  inspectEmbeddingProviderSetup?: InspectEmbeddingProviderSetup;
 };
 
 /** Provider policy hooks loaded only from bundled plugin public artifacts. */
@@ -68,6 +85,12 @@ const bundledProviderPolicySurfaceByPluginId = new Map<
 >();
 const externalProviderPolicySurfaceByPluginId = new Map<string, ProviderPolicySurface | null>();
 
+// Policy hooks and negative lookups must not outlive plugin replacement or installation.
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  bundledProviderPolicySurfaceByPluginId.clear();
+  externalProviderPolicySurfaceByPluginId.clear();
+});
+
 const PROVIDER_POLICY_HOOK_KEYS = [
   "normalizeConfig",
   "applyConfigDefaults",
@@ -76,10 +99,17 @@ const PROVIDER_POLICY_HOOK_KEYS = [
   "resolveModelRoutes",
   "normalizeModelCatalogId",
   "isResponseModelEquivalent",
+  "inspectEmbeddingProviderSetup",
 ] as const satisfies readonly (keyof ProviderPolicySurface)[];
 
 function extractProviderPolicySurface(mod: Record<string, unknown>): ProviderPolicySurface | null {
   const surface: ProviderPolicySurface = {};
+  if (
+    Array.isArray(mod.deprecatedProfileIds) &&
+    mod.deprecatedProfileIds.every((value) => typeof value === "string")
+  ) {
+    surface.deprecatedProfileIds = mod.deprecatedProfileIds;
+  }
   for (const key of PROVIDER_POLICY_HOOK_KEYS) {
     const hook = mod[key];
     if (typeof hook === "function") {

@@ -75,13 +75,6 @@ describe("invokeNodeSystemRun failure classification", () => {
       }),
     },
     {
-      name: "disconnect after dispatch",
-      error: gatewayNodeInvokeError({
-        code: "DISCONNECTED",
-        nodeCommandDispatched: true,
-      }),
-    },
-    {
       name: "missing dispatch provenance",
       error: gatewayNodeInvokeError({ code: "NOT_CONNECTED" }),
     },
@@ -118,8 +111,6 @@ describe("invokeNodeSystemRun failure classification", () => {
       command: "printf 'one\\ntwo'\necho done",
     });
 
-    expect(text).toContain("Exec outcome unknown (node=node-1 id=approval-1, outcome-unknown)");
-    expect(text).toContain("The command may have executed. Do not rerun it automatically.");
     expect(text).toContain("Command:\nprintf 'one\\ntwo'\necho done");
   });
 });
@@ -151,7 +142,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
   };
 }
 
-describe("direct node run cancellation", () => {
+describe("direct node run", () => {
   beforeEach(() => {
     callGatewayToolMock.mockReset();
     callGatewayToolMock.mockResolvedValue({
@@ -159,25 +150,63 @@ describe("direct node run cancellation", () => {
     });
   });
 
-  it.each([
-    { name: "with its original cancellation signal", withSignal: true },
-    { name: "without a signal argument", withSignal: false },
-  ])("forwards the gateway call $name", async ({ withSignal }) => {
+  it("forwards the original cancellation signal to the gateway", async () => {
     const controller = new AbortController();
-    await invokeNodeSystemRunDirect(
-      createDirectNodeRun(withSignal ? controller.signal : undefined),
-    );
+    await invokeNodeSystemRunDirect(createDirectNodeRun(controller.signal));
 
-    const baseArgs = [
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
       "node.invoke",
       { timeoutMs: 35_000 },
       expect.objectContaining({ command: "system.run" }),
-    ] as const;
-    if (withSignal) {
-      expect(callGatewayToolMock).toHaveBeenCalledWith(...baseArgs, { signal: controller.signal });
-    } else {
-      expect(callGatewayToolMock).toHaveBeenCalledWith(...baseArgs);
-    }
+      { signal: controller.signal },
+    );
+  });
+
+  it("combines stdout, stderr, and the node error", async () => {
+    const stdout = "small stdout";
+    const stderr = "node stderr";
+    const errorText = "node command failed";
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: {
+        success: false,
+        stdout,
+        stderr,
+        error: errorText,
+        exitCode: 1,
+      },
+    });
+
+    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(visibleText).toBe(`${stdout}\n${stderr}\n${errorText}\n(Command exited with code 1)`);
+    expect(result.details).toMatchObject({ aggregated: visibleText });
+  });
+
+  it("renders a nonzero exit code in the model-visible text", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: { success: false, stdout: "done", stderr: "", error: null, exitCode: 3 },
+    });
+
+    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    // Output alone must not read as success when the command failed.
+    expect(visibleText).toContain("done");
+    expect(visibleText).toContain("(Command exited with code 3)");
+    expect(result.details).toMatchObject({ status: "failed", exitCode: 3 });
+  });
+
+  it("renders a timeout marker and records timedOut in details", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      payload: { success: false, stdout: "", stderr: "", error: null, timedOut: true },
+    });
+
+    const result = await invokeNodeSystemRunDirect(createDirectNodeRun());
+    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
+
+    expect(visibleText).toContain("Command timed out.");
+    expect(result.details).toMatchObject({ status: "failed", timedOut: true });
   });
 
   it("never dispatches a direct node run after cancellation", async () => {

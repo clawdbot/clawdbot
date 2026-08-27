@@ -6,7 +6,9 @@ import {
   UpdateAvailableSchema,
   UpdateHoldParamsSchema,
   UpdateHoldResultSchema,
+  UpdateRunParamsSchema,
   UpdateScheduleStateSchema,
+  UpdateStatusParamsSchema,
   UpdateStatusResultSchema,
 } from "./config.js";
 
@@ -55,6 +57,35 @@ describe("ConfigSchemaLookupResultSchema", () => {
 });
 
 describe("update protocol schemas", () => {
+  it("accepts only closed, exact tracked Git targets for update.run", () => {
+    const target = {
+      kind: "git",
+      upstreamRef: "origin/main",
+      upstreamSha: "1234567890abcdef1234567890abcdef12345678",
+    };
+
+    expect(Value.Check(UpdateRunParamsSchema, {})).toBe(true);
+    expect(Value.Check(UpdateRunParamsSchema, { target })).toBe(true);
+
+    for (const invalidTarget of [
+      { ...target, upstreamSha: "1234567" },
+      { ...target, upstreamSha: "g".repeat(40) },
+      { ...target, upstreamRef: "" },
+      { ...target, upstreamRef: "origin/main branch" },
+      { ...target, upstreamRef: "origin/main\u0000" },
+      { ...target, kind: "package" },
+      { ...target, extra: true },
+    ]) {
+      expect(Value.Check(UpdateRunParamsSchema, { target: invalidTarget })).toBe(false);
+    }
+  });
+
+  it("accepts an optional explicit checkout refresh", () => {
+    expect(Value.Check(UpdateStatusParamsSchema, {})).toBe(true);
+    expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: true })).toBe(true);
+    expect(Value.Check(UpdateStatusParamsSchema, { refreshCheckout: "yes" })).toBe(false);
+  });
+
   it("accepts package and git schedule targets", () => {
     expect(
       Value.Check(UpdateScheduleStateSchema, {

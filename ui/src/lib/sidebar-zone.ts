@@ -24,6 +24,7 @@ export function reconcileSidebarZone(
   workboardBoards: readonly SidebarWorkboardBoard[] = [],
   workboardEnabled = false,
   workboardBoardsReady = false,
+  workboardParentVisible = false,
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {
   const pinnedKeys = new Set(pinnedSessions.map((session) => session.key));
   const validRouteSet = new Set(validRoutes);
@@ -42,6 +43,14 @@ export function reconcileSidebarZone(
       continue;
     }
     if (entry.type === "route") {
+      if (entry.route === "workboard") {
+        seen.add(canonicalKey);
+        canonical.push(canonicalKey);
+        if (workboardParentVisible) {
+          entries.push(entry);
+        }
+        continue;
+      }
       if (!validRouteSet.has(entry.route)) {
         continue;
       }

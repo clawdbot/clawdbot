@@ -15,18 +15,23 @@ import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { isOpenClawOrgNpmSpec, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
+import {
+  CLAWHUB_INSTALL_ERROR_CODE,
+  isUnavailableClawHubTarget,
+} from "../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import {
   enableExplicitlySelectedPluginInConfig,
   type PluginEnableResult,
 } from "../plugins/enable.js";
 import {
+  installWithChannelFallback,
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../plugins/install-channel-specs.js";
@@ -37,6 +42,7 @@ import {
   ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV,
 } from "../plugins/install-overrides.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
+import { isUnavailableNpmTarget } from "../plugins/install-types.js";
 import {
   installPluginFromNpmSpec,
   installPluginFromNpmPackArchive,
@@ -72,6 +78,8 @@ export type OnboardingPluginInstallEntry = {
   label: string;
   install: PluginPackageInstall;
   trustedSourceLinkedOfficialInstall?: boolean;
+  /** Keep this official runtime package on the same release cohort as OpenClaw. */
+  versionBoundToOpenClaw?: boolean;
   preferRemoteInstall?: boolean;
 };
 
@@ -175,14 +183,6 @@ function resolveGitDirectoryMarker(dir: string): string | null {
   }
 }
 
-function isWithinBaseDirectory(baseDir: string, targetPath: string): boolean {
-  const relative = path.relative(baseDir, targetPath);
-  return (
-    relative === "" ||
-    (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-  );
-}
-
 function hasTrustedGitWorkspace(root: string): boolean {
   const realRoot = resolveRealDirectory(root);
   if (!realRoot) {
@@ -241,11 +241,8 @@ function formatPortableLocalPath(localPath: string, workspaceDir?: string): stri
     if (!realBase) {
       continue;
     }
-    const relative = path.relative(realBase, localPath);
-    if (
-      relative === "" ||
-      (!path.isAbsolute(relative) && !relative.startsWith(`..${path.sep}`) && relative !== "..")
-    ) {
+    if (isPathInside(realBase, localPath)) {
+      const relative = path.relative(realBase, localPath);
       const portable = relative.split(path.sep).join("/");
       return portable ? `./${portable}` : ".";
     }
@@ -302,7 +299,7 @@ function resolveLocalPath(params: {
       if (
         !bases.some((base) => {
           const realBase = resolveRealDirectory(base);
-          return realBase ? isWithinBaseDirectory(realBase, resolved) : false;
+          return realBase ? isPathInside(realBase, resolved) : false;
         })
       ) {
         continue;
@@ -1155,6 +1152,7 @@ export async function ensureOnboardingPluginInstalled(params: {
           ? parseRegistryNpmSpec(npmSpec)?.name
           : undefined,
         coreVersion: VERSION,
+        versionBoundToCore: entry.versionBoundToOpenClaw,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
@@ -1203,12 +1201,25 @@ export async function ensureOnboardingPluginInstalled(params: {
     let shouldTryNpm = choice === "npm";
     if (choice === "clawhub" && clawhubInstallSpec) {
       await params.beforePersistentEffect?.();
-      const result = await installPluginFromClawHubSpecWithProgress({
-        cfg: next,
-        entry,
-        clawhubSpec: clawhubInstallSpec,
-        prompter,
-        runtime,
+      let usedClawHubSpec = clawhubInstallSpec;
+      const result = await installWithChannelFallback({
+        installSpec: clawhubInstallSpec,
+        // An integrity pin identifies one exact artifact, so it outranks the channel.
+        ...(entry.install.expectedIntegrity ? {} : { fallbackSpec: clawhubSpecs?.fallbackSpec }),
+        install: async (spec) => {
+          usedClawHubSpec = spec;
+          return await installPluginFromClawHubSpecWithProgress({
+            cfg: next,
+            entry,
+            clawhubSpec: spec,
+            prompter,
+            runtime,
+          });
+        },
+        isRetryable: (attempt) => !attempt.ok && isUnavailableClawHubTarget(attempt),
+        onFallback: async (message) => {
+          await prompter.note(message, t("wizard.plugins.installTitle"));
+        },
       });
       if (result.ok) {
         return await finishOnboardingPluginInstall({
@@ -1226,7 +1237,7 @@ export async function ensureOnboardingPluginInstalled(params: {
         });
       }
 
-      await notePluginInstallFailure(prompter, clawhubInstallSpec, result.error);
+      await notePluginInstallFailure(prompter, usedClawHubSpec, result.error);
       const errorDetail = formatInstallErrorDetail(result.error);
 
       if (!npmInstallSpec || !shouldFallbackClawHubToNpm({ result, npmSpec: npmInstallSpec })) {
@@ -1262,12 +1273,25 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
 
     await params.beforePersistentEffect?.();
-    const installOutcome = await installPluginFromNpmSpecWithProgress({
-      cfg: next,
-      entry,
-      npmSpec: npmInstallSpec,
-      prompter,
-      runtime,
+    const installOutcome = await installWithChannelFallback({
+      installSpec: npmInstallSpec,
+      // An integrity pin identifies one exact artifact, so it outranks the channel.
+      ...(entry.install.expectedIntegrity ? {} : { fallbackSpec: npmSpecs?.fallbackSpec }),
+      install: async (spec) =>
+        await installPluginFromNpmSpecWithProgress({
+          cfg: next,
+          entry,
+          npmSpec: spec,
+          prompter,
+          runtime,
+        }),
+      isRetryable: (outcome) =>
+        outcome.status === "completed" &&
+        !outcome.result.ok &&
+        isUnavailableNpmTarget(outcome.result),
+      onFallback: async (message) => {
+        await prompter.note(message, t("wizard.plugins.installTitle"));
+      },
     });
 
     if (installOutcome.status === "timed_out") {

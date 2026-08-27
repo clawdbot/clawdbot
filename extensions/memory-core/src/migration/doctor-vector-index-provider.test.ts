@@ -5,23 +5,22 @@ import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { afterEach, describe, expect, it } from "vitest";
-import { vectorIndexProviderDiagnostic } from "./doctor-vector-index-provider.js";
-import { vectorIndexProviderDiagnosticTesting } from "./doctor-vector-index-provider.test-support.js";
+import { createVectorIndexProviderDiagnostic } from "./doctor-vector-index-provider-diagnostic.js";
+
+const vectorIndexProviderDiagnostic = createVectorIndexProviderDiagnostic(async () => ({
+  provider: "openai",
+  reason: "OpenAI API key missing",
+}));
 
 const roots = new Set<string>();
 
 afterEach(async () => {
-  vectorIndexProviderDiagnosticTesting.reset();
   await Promise.all([...roots].map((root) => fs.rm(root, { recursive: true, force: true })));
   roots.clear();
 });
 
 describe("memory vector index provider doctor diagnostic", () => {
   it("reports a protected semantic index when the configured provider cannot bootstrap", async () => {
-    vectorIndexProviderDiagnosticTesting.setInspectConfiguredProviderForTest(async () => ({
-      provider: "openai",
-      reason: "OpenAI API key missing",
-    }));
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-vector-doctor-"));
     roots.add(stateDir);
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");

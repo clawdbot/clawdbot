@@ -1230,7 +1230,6 @@ describe("config io write", () => {
         }
         if (activeConfigPath !== configPath) {
           throw new ConfigMutationConflictError("config path changed since last load", {
-            currentHash: null,
             retryable: false,
           });
         }
@@ -1671,6 +1670,25 @@ describe("config io write", () => {
     };
     expect(persisted.plugins).toEqual({});
   });
+
+  itWithHome(
+    "rejects non-finite numbers before serializing the normal config writer",
+    async (home) => {
+      const { configPath } = await writeConfigFixture(home, {
+        plugins: { entries: { demo: { enabled: true } } },
+      });
+      const io = createFastConfigIO(home);
+      const originalRaw = await fs.readFile(configPath, "utf-8");
+
+      await expect(
+        io.writeConfigFile({
+          plugins: { entries: { demo: { enabled: true, config: { timeout: Infinity } } } },
+        }),
+      ).rejects.toThrow("Value must be a finite number, got Infinity");
+
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
+    },
+  );
 
   it("preserves escaped root literals before validating unrelated includes", async () => {
     mockLoadPluginManifestRegistry.mockReturnValue({

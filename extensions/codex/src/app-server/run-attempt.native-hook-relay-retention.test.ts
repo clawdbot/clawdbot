@@ -30,6 +30,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
   it.each([
     {
       name: "Codex multi-agent V1",
+      bindBeforeClaim: false,
+      hasDeliveryScope: true,
       childThreadId: "child-v1",
       childClaim: {
         type: "collabAgentToolCall",
@@ -41,6 +43,8 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
     },
     {
       name: "Codex multi-agent V2",
+      bindBeforeClaim: true,
+      hasDeliveryScope: true,
       childThreadId: "child-v2",
       childClaim: {
         type: "subAgentActivity",
@@ -49,9 +53,21 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         agentPath: "/root/child-v2",
       },
     },
+    {
+      name: "Codex multi-agent V2 without delivery scope",
+      bindBeforeClaim: true,
+      hasDeliveryScope: false,
+      childThreadId: "child-v2-no-delivery",
+      childClaim: {
+        type: "subAgentActivity",
+        kind: "started",
+        agentThreadId: "child-v2-no-delivery",
+        agentPath: "/root/child-v2-no-delivery",
+      },
+    },
   ] as const)(
     "retains and fences a live child through sessions_yield ($name)",
-    async ({ childThreadId, childClaim }) => {
+    async ({ bindBeforeClaim, hasDeliveryScope, childThreadId, childClaim }) => {
       const sessionFile = path.join(tempDir, `${childThreadId}-yield-session.jsonl`);
       const workspaceDir = path.join(tempDir, `${childThreadId}-yield-workspace`);
       let resolveTurnStart: ((value: undefined) => void) | undefined;
@@ -71,6 +87,9 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       setCodexTestModelSupportsTools(params, true);
       const fixture = await createAdmittedHostCapabilityTestFixture(params);
       params.hostCapabilities = fixture.hostCapabilities;
+      if (hasDeliveryScope) {
+        params.agentHarnessTaskRuntimeScope = fixture.agentHarnessTaskRuntimeScope;
+      }
 
       const beforeToolCall = vi.fn(async (event: unknown) =>
         (event as { params?: { command?: string } }).params?.command === "deny-child"
@@ -87,6 +106,12 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
       let relayId: string | undefined;
       try {
         await harness.waitForMethod("turn/start");
+        if (bindBeforeClaim) {
+          resolveTurnStart?.(undefined);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+        }
         const startRequest = harness.requests.find((request) => request.method === "thread/start");
         relayId = extractRelayIdFromThreadRequest(startRequest?.params);
         const preDiscoveryPayload = {
@@ -200,10 +225,11 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
             item: childClaim,
           },
         } as unknown as CodexServerNotification);
-        // The app-server can publish the direct-spawn item after starting its
-        // turn but before turn/start responds. Binding must replay this exact
-        // evidence rather than dropping the already-pending child hook.
-        resolveTurnStart?.(undefined);
+        // Cover both exact-turn admission paths: an already-bound owner and
+        // evidence buffered before turn/start responds.
+        if (!bindBeforeClaim) {
+          resolveTurnStart?.(undefined);
+        }
         await expect(Promise.all([firstPending, duplicatePending])).resolves.toEqual([
           { stdout: "", stderr: "", exitCode: 0 },
           { stdout: "", stderr: "", exitCode: 0 },
@@ -232,6 +258,7 @@ describe("runCodexAppServerAttempt native hook relay retention", () => {
         await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
         const result = await run;
         expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, promptError: null });
+        expect(result.runtimeContinuationStarted).toBe(hasDeliveryScope ? true : undefined);
         const terminalLifecycleEvents = (params.onAgentEvent as ReturnType<typeof vi.fn>).mock.calls
           .map(([event]) => event as { stream?: string; data?: Record<string, unknown> })
           .filter(

@@ -1,4 +1,4 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
@@ -10,12 +10,14 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { parsePositiveInteger } from "./transport-utils.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
   baseUrl?: unknown;
   id?: unknown;
   provider?: unknown;
+  contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
 };
@@ -274,20 +276,18 @@ function resolveOpenAIResponsesPayloadCapabilities(
   };
 }
 
-function parsePositiveInteger(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
-  if (typeof value === "string") {
-    return parseStrictPositiveInteger(value);
-  }
-  return undefined;
-}
-
-function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown }): number {
+function resolveOpenAIResponsesCompactThreshold(model: {
+  contextTokens?: unknown;
+  contextWindow?: unknown;
+}): number {
+  const contextTokens = parsePositiveInteger(model.contextTokens);
   const contextWindow = parsePositiveInteger(model.contextWindow);
-  if (contextWindow) {
-    return Math.max(1_000, Math.floor(contextWindow * 0.7));
+  const effectiveBudget =
+    contextTokens && contextWindow
+      ? Math.min(contextTokens, contextWindow)
+      : contextTokens || contextWindow;
+  if (effectiveBudget) {
+    return Math.max(1_000, Math.floor(effectiveBudget * 0.7));
   }
   return 80_000;
 }
@@ -309,6 +309,23 @@ export function resolveOpenAIResponsesServerCompactionPlan(
       ? (parsePositiveInteger(extraParams?.responsesCompactThreshold) ??
         resolveOpenAIResponsesCompactThreshold(model))
       : undefined,
+  };
+}
+
+/** Resolve the manual Responses compact-endpoint gate for one route. */
+export function resolveOpenAIResponsesCompactEndpointPlan(
+  model: OpenAIResponsesPayloadModel,
+  extraParams?: Record<string, unknown>,
+): { enabled: boolean } {
+  const configured = extraParams?.responsesCompactEndpoint;
+  const provider = typeof model.provider === "string" ? normalizeProviderId(model.provider) : "";
+  return {
+    enabled:
+      isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api)) &&
+      (configured === true ||
+        (configured !== false &&
+          (provider === "xai" || provider === "x-ai") &&
+          resolveBundledOpenAIResponsesEndpointClass(model.baseUrl) === "xai-native")),
   };
 }
 

@@ -6,27 +6,109 @@
  */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   readResponseTextPrefix,
   readResponseWithLimit,
   type ReadResponseTextPrefixOptions,
 } from "../infra/http-body.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
 
 const ERROR_BODY_METADATA_LIMIT = 500;
-const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const SHORT_BEARER_TOKEN_PATTERN =
+  /\b(Bearer)\s+[-A-Za-z0-9._~+/=]{1,17}(?![-A-Za-z0-9._~+/=…])/giu;
+
+type ProviderErrorTextRedactionContext = {
+  truncated?: boolean;
+};
+
+function extractHeaderCredential(headers: Headers, headerName: string, prefix = ""): string {
+  const value = headers.get(headerName) ?? "";
+  return prefix && value.startsWith(prefix) ? value.slice(prefix.length) : value;
+}
+
+function extractAuthorizationPayload(headers: Headers): string {
+  const value = headers.get("Authorization") ?? "";
+  const separator = value.search(/\s/u);
+  return separator === -1 ? value : value.slice(separator).trimStart();
+}
+
+/** Builds a redactor for response text that may reflect the request's active credential. */
+export function createProviderErrorTextRedactor(params: {
+  headers: Headers;
+  request?: ModelProviderRequestTransportOverrides;
+  defaultAuthHeader: string;
+  defaultAuthPrefix?: string;
+}): (text: string, context?: ProviderErrorTextRedactionContext) => string {
+  const auth = params.request?.auth;
+  const credentials = [
+    extractHeaderCredential(params.headers, params.defaultAuthHeader, params.defaultAuthPrefix),
+    auth?.mode === "header"
+      ? extractHeaderCredential(params.headers, auth.headerName, auth.prefix ?? "")
+      : auth?.mode === "authorization-bearer"
+        ? extractHeaderCredential(params.headers, "Authorization", "Bearer ")
+        : "",
+    extractAuthorizationPayload(params.headers),
+  ]
+    .filter(Boolean)
+    .toSorted((left, right) => right.length - left.length);
+
+  return (text, context) => {
+    let withoutActiveCredential = credentials.reduce(
+      (redacted, credential) => redacted.split(credential).join("***"),
+      text,
+    );
+    if (context?.truncated) {
+      const partialCredentialLength = credentials.reduce((longest, credential) => {
+        const maxLength = Math.min(credential.length - 1, withoutActiveCredential.length);
+        for (let length = maxLength; length > longest; length -= 1) {
+          if (withoutActiveCredential.endsWith(credential.slice(0, length))) {
+            return length;
+          }
+        }
+        return longest;
+      }, 0);
+      if (partialCredentialLength > 0) {
+        withoutActiveCredential = `${withoutActiveCredential.slice(0, -partialCredentialLength)}***`;
+      }
+    }
+    return redactToolPayloadText(withoutActiveCredential).replace(
+      SHORT_BEARER_TOKEN_PATTERN,
+      "$1 ***",
+    );
+  };
+}
 
 /** Shared timeout and byte-limit options for provider response consumption. */
 type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
   maxBytes?: number;
   onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
 };
+
+function readProviderResponseBytes(
+  response: Response,
+  label: string,
+  kind: string,
+  opts?: ProviderResponseReadOptions,
+  onOverflow?: ProviderResponseReadOptions["onOverflow"],
+): Promise<Uint8Array> {
+  return readResponseWithLimit(response, opts?.maxBytes ?? PROVIDER_RESPONSE_MAX_BYTES, {
+    ...opts,
+    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
+    onIdleTimeout:
+      opts?.onIdleTimeout ??
+      (({ chunkTimeoutMs }) =>
+        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
+    onOverflow:
+      onOverflow ??
+      (({ maxBytes: limit }) => new Error(`${label}: ${kind} response exceeds ${limit} bytes`)),
+  });
+}
 
 /** Options for bounded provider error-body normalization. */
 type ProviderHttpErrorOptions = {
@@ -84,18 +166,7 @@ export async function readProviderTextResponse(
   label: string,
   opts?: ProviderResponseReadOptions,
 ): Promise<string> {
-  const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
-  const bytes = await readResponseWithLimit(response, maxBytes, {
-    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
-    onIdleTimeout:
-      opts?.onIdleTimeout ??
-      (({ chunkTimeoutMs }) =>
-        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
-    timeoutMs: opts?.timeoutMs,
-    onTimeout: opts?.onTimeout,
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
-  });
+  const bytes = await readProviderResponseBytes(response, label, "text", opts);
   return new TextDecoder().decode(bytes);
 }
 
@@ -344,18 +415,7 @@ export async function readProviderJsonResponse<T>(
   label: string,
   opts?: ProviderResponseReadOptions,
 ): Promise<T> {
-  const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
-  const bytes = await readResponseWithLimit(response, maxBytes, {
-    chunkTimeoutMs: opts?.chunkTimeoutMs ?? 30_000,
-    onIdleTimeout:
-      opts?.onIdleTimeout ??
-      (({ chunkTimeoutMs }) =>
-        new Error(`${label}: response body stalled for ${chunkTimeoutMs}ms`)),
-    timeoutMs: opts?.timeoutMs,
-    onTimeout: opts?.onTimeout,
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
-  });
+  const bytes = await readProviderResponseBytes(response, label, "JSON", opts);
   try {
     return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
@@ -431,14 +491,7 @@ export async function readProviderBinaryResponse(
     void response.body?.cancel().catch(() => undefined);
     throw error;
   }
-  const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
-  const bytes = await readResponseWithLimit(response, maxBytes, {
-    ...opts,
-    onOverflow:
-      opts?.onOverflow ??
-      (({ maxBytes: maxBytesLocal }) =>
-        new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`)),
-  });
+  const bytes = await readProviderResponseBytes(response, label, kind, opts, opts?.onOverflow);
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
   }

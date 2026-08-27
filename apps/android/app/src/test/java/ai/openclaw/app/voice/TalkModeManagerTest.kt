@@ -12,10 +12,12 @@ import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
 import android.os.Bundle
+import android.os.Looper
 import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +49,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowTextToSpeech
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -100,18 +104,42 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun stopTtsCancelsTrackedPlaybackJob() {
-    val manager = createManager()
-    val playbackJob = Job()
+  fun stopTtsWithoutOutputIdentityCancelsPlaybackWithoutReplacingCancellationWaiter() =
+    runTest {
+      val manager = createManager(scope = this)
+      val playbackJob = Job()
+      val pendingClear = CompletableDeferred<String?>()
 
-    setPrivateField(manager, "ttsJob", playbackJob)
-    playbackGeneration(manager).set(7L)
+      setPrivateField(manager, "ttsJob", playbackJob)
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setPrivateField(manager, "realtimeOutputTurnId", " ")
+      setPrivateField(manager, "pendingRealtimeOutputClear", pendingClear)
+      playbackGeneration(manager).set(7L)
 
-    manager.stopTts()
+      manager.stopTts()
+      runCurrent()
 
-    assertTrue(playbackJob.isCancelled)
-    assertEquals(8L, playbackGeneration(manager).get())
-  }
+      assertTrue(playbackJob.isCancelled)
+      assertEquals(8L, playbackGeneration(manager).get())
+      assertTrue(readPrivateField(manager, "pendingRealtimeOutputClear") === pendingClear)
+    }
+
+  @Test
+  fun stopTtsCancelsTheOutputOwnedWhenTheActionStarted() =
+    runTest {
+      val manager = createManager(scope = this)
+      val priorClear = CompletableDeferred<String?>()
+      setPrivateField(manager, "realtimeSessionId", "relay-a")
+      setPrivateField(manager, "realtimeOutputTurnId", "turn-a")
+      setPrivateField(manager, "pendingRealtimeOutputClear", priorClear)
+
+      manager.stopTts()
+      setPrivateField(manager, "realtimeSessionId", null)
+      setPrivateField(manager, "realtimeOutputTurnId", "turn-b")
+      runCurrent()
+
+      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
+    }
 
   @Test
   fun disablingPlaybackCancelsTrackedJobOnce() {
@@ -789,7 +817,58 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun realtimeAudioFramesStreamUntilPlaybackStarts() {
+  fun localFallbackKeepsWholeReplyAndBalancesCallbacksOnCompletionOrStop() =
+    runTest {
+      for (stopAfterFirst in listOf(false, true)) {
+        val callbacks = mutableListOf<String>()
+        val synthesizer = FakeTalkSpeechSynthesizer()
+        synthesizer.result.complete(TalkSpeakResult.FallbackToLocal("Gateway TTS unavailable"))
+        val manager =
+          createManager(
+            talkSpeakClient = synthesizer,
+            scope = this,
+            onBeforeSpeak = { callbacks += "before" },
+            onAfterSpeak = { callbacks += "after" },
+          )
+        setPrivateField(manager, "configLoaded", true)
+        ShadowTextToSpeech.addLanguageAvailability(Locale.GERMAN)
+        withMain(cleanup = { manager.stopAllCapture() }) {
+          val reply = "Ein Wort. ".repeat(500).trim()
+          val speech = launch { manager.speakAssistantReply("{\"language\":\"de\",\"speed\":1.25}\n$reply") }
+          runCurrent()
+          val shadow = shadowOf(checkNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance()))
+          shadow.onInitListener.onInit(TextToSpeech.SUCCESS)
+          runCurrent()
+
+          assertEquals(listOf("before"), callbacks)
+          assertTrue(manager.isSpeaking.value)
+          assertEquals(Locale.GERMAN, shadow.currentLanguage)
+          assertEquals(1, shadow.spokenTextList.size)
+          if (stopAfterFirst) manager.stopTts()
+          while (!speech.isCompleted) {
+            val submitted = shadow.spokenTextList.size
+            shadowOf(Looper.getMainLooper()).idle()
+            runCurrent()
+            assertEquals(submitted + if (speech.isCompleted) 0 else 1, shadow.spokenTextList.size)
+          }
+
+          assertEquals(listOf("before", "after"), callbacks)
+          assertFalse(manager.isSpeaking.value)
+          val submittedText = shadow.spokenTextList.joinToString("")
+          if (stopAfterFirst) {
+            assertEquals(1, shadow.spokenTextList.size)
+            assertTrue(reply.startsWith(submittedText) && submittedText.length < reply.length)
+          } else {
+            assertEquals(reply, submittedText)
+          }
+          assertTrue(shadow.spokenTextList.all { it.length <= TextToSpeech.getMaxSpeechInputLength() })
+        }
+        shadowOf(Looper.getMainLooper()).idle()
+      }
+    }
+
+  @Test
+  fun realtimeAudioFramesStreamUntilPlaybackOrCancellationStarts() {
     val manager = createManager()
 
     assertFalse(shouldAppendRealtimeCapturedFrame(manager, 0))
@@ -802,6 +881,10 @@ class TalkModeManagerTest {
 
     setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() - 1)
 
+    assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
+    assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
+    setPrivateField(manager, "pendingRealtimeOutputClear", null)
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
   }
 
@@ -825,7 +908,7 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun unconfirmedOutputCancellationClosesRealtimeRelay() =
+  fun pushToTalkWithoutOutputIdentityClosesRealtimeRelayWithoutWaitingForClear() =
     runTest {
       var stoppedByRelay = false
       val manager =
@@ -839,12 +922,50 @@ class TalkModeManagerTest {
       manager.pauseRealtimeCaptureForPushToTalk("capture-1")
 
       assertNull(readPrivateField(manager, "realtimeSessionId"))
+      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       assertEquals("capture-1", readPrivateField(pause, "pttCaptureId"))
       assertTrue(readPrivateField(pause, "restartRelay") as Boolean)
       assertTrue(manager.isEnabled.value)
       assertFalse(stoppedByRelay)
     }
+
+  @Test
+  fun outputCancellationResultPreservesLegacyAndRecognizedRaceOutcomes() {
+    val accepted =
+      listOf(
+        """{"ok":true}""" to null,
+        """{"ok":true,"status":"applied"}""" to "applied",
+        """{"ok":true,"turnId":"turn-1"}""" to null,
+        """{"ok":true,"status":"applied","turnId":"turn-1"}""" to "applied",
+        """{"ok":true,"status":"stale"}""" to "stale",
+        """{"ok":true,"status":"idle"}""" to "idle",
+      )
+
+    accepted.forEach { (response, status) ->
+      assertEquals(status, requireAcceptedRealtimeOutputCancellation(response, "turn-1").status)
+    }
+    assertEquals(
+      "turn-from-server",
+      requireAcceptedRealtimeOutputCancellation(
+        """{"ok":true,"status":"applied","turnId":"turn-from-server"}""",
+        null,
+      ).turnId,
+    )
+  }
+
+  @Test
+  fun malformedOutputCancellationResultFailsClosed() {
+    listOf(
+      """{"ok":true,"status":"applied","turnId":"turn-2"}""",
+      """{"status":"stale"}""",
+      """{"ok":false}""",
+      """{"ok":true,"status":"unknown"}""",
+      """{"ok":true,"extra":1}""",
+    ).forEach { response ->
+      assertTrue(runCatching { requireAcceptedRealtimeOutputCancellation(response, "turn-1") }.isFailure)
+    }
+  }
 
   @Test
   fun stalePushToTalkCompletionCannotResumeNewerPause() =
@@ -1073,6 +1194,8 @@ class TalkModeManagerTest {
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
     isConnected: () -> Boolean = { true },
+    onBeforeSpeak: suspend () -> Unit = {},
+    onAfterSpeak: suspend () -> Unit = {},
     onStoppedByRelay: () -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
@@ -1093,6 +1216,8 @@ class TalkModeManagerTest {
       scope = scope,
       session = session,
       isConnected = isConnected,
+      onBeforeSpeak = onBeforeSpeak,
+      onAfterSpeak = onAfterSpeak,
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),

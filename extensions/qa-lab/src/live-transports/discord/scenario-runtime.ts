@@ -3,23 +3,27 @@ import {
   discordQaScenarioSupport,
   type DiscordQaScenarioImplementation,
 } from "./discord-live.runtime.js";
+import { runDiscordTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 import type { DiscordQaScenarioEnvironment } from "./scenario-environment.js";
 
 export {
   discordQaCanaryScenario,
   discordQaMentionGatingScenario,
   discordQaNativeHelpCommandRegistrationScenario,
+  discordQaProgressDraftLifecycleScenario,
   discordQaStatusReactionsToolOnlyScenario,
   discordQaThreadReplyFilepathAttachmentScenario,
   discordQaVoiceAutojoinScenario,
 } from "./discord-live.runtime.js";
+export { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
 
 export async function runDiscordScenario(
   environment: DiscordQaScenarioEnvironment,
   implementation: DiscordQaScenarioImplementation,
 ) {
   const scenario = environment.scenario;
-  const { cfg, run, voiceChannel } = await environment.configureScenario(implementation);
+  const { cfg, configureTranscriptVoiceAccess, run, voiceChannel } =
+    await environment.configureScenario(implementation);
   if (run.kind === "application-command-registration") {
     const registered =
       await discordQaScenarioSupport.testing.assertDiscordApplicationCommandsRegistered({
@@ -43,6 +47,14 @@ export async function runDiscordScenario(
     });
     return { details: "SUT bot joined voice channel" };
   }
+  if (run.kind === "transcripts-voice-authorization") {
+    return await runDiscordTranscriptsVoiceAuthorizationScenario(environment, {
+      cfg,
+      run,
+      voiceChannel,
+      configureTranscriptVoiceAccess,
+    });
+  }
   if (run.kind === "thread-reply-filepath-attachment") {
     const result =
       await discordQaScenarioSupport.testing.runDiscordThreadReplyFilePathAttachmentScenario({
@@ -59,6 +71,88 @@ export async function runDiscordScenario(
       throw new Error(result.details);
     }
     return { details: result.details, artifacts: result.artifactPaths };
+  }
+  if (run.kind === "progress-draft-lifecycle") {
+    const deadline = Date.now() + scenario.timeoutMs;
+    const remainingMs = () => Math.max(1, deadline - Date.now());
+    const observeProgressTurn = async (input: string, finalText: string) => {
+      const sent = await discordQaScenarioSupport.testing.sendChannelMessage(
+        environment.runtimeEnv.driverBotToken,
+        environment.runtimeEnv.channelId,
+        input,
+      );
+      const draft = await discordQaScenarioSupport.testing.pollChannelMessages({
+        token: environment.runtimeEnv.driverBotToken,
+        channelId: environment.runtimeEnv.channelId,
+        afterSnowflake: sent.id,
+        timeoutMs: remainingMs(),
+        observedMessages: environment.observedMessages,
+        observationScenarioId: scenario.id,
+        observationScenarioTitle: scenario.title,
+        triggerMessageId: sent.id,
+        triggerTimestamp: sent.timestamp,
+        predicate: (message) => message.senderId === environment.sutIdentity.id,
+      });
+      await discordQaScenarioSupport.testing.waitForDiscordMessageText({
+        token: environment.runtimeEnv.driverBotToken,
+        channelId: environment.runtimeEnv.channelId,
+        messageId: draft.message.messageId,
+        textIncludes: [run.progressLabel, "🛠️ Exec"],
+        timeoutMs: remainingMs(),
+      });
+      const final = await discordQaScenarioSupport.testing.pollChannelMessages({
+        token: environment.runtimeEnv.driverBotToken,
+        channelId: environment.runtimeEnv.channelId,
+        afterSnowflake: draft.message.messageId,
+        timeoutMs: remainingMs(),
+        observedMessages: environment.observedMessages,
+        observationScenarioId: scenario.id,
+        observationScenarioTitle: scenario.title,
+        triggerMessageId: sent.id,
+        triggerTimestamp: sent.timestamp,
+        predicate: (message) =>
+          message.senderId === environment.sutIdentity.id && message.text.includes(finalText),
+      });
+      discordQaScenarioSupport.testing.assertDiscordScenarioReply({
+        expectedTextIncludes: [finalText],
+        message: final.message,
+      });
+      return { draft, final };
+    };
+
+    const success = await observeProgressTurn(run.input, run.finalMarker);
+    const forbiddenReceipt = [
+      /(?:^|\n)-#(?:\s|$)/u,
+      /🛠️\s*\d+\s+tool calls?/iu,
+      /⏱️\s*\d+(?:\.\d+)?s\b/u,
+    ].find((pattern) => pattern.test(success.final.message.text));
+    if (forbiddenReceipt) {
+      throw new Error(
+        `Discord final reply retained synthesized activity receipt ${forbiddenReceipt}`,
+      );
+    }
+    await discordQaScenarioSupport.testing.waitForDiscordMessageDeleted({
+      token: environment.runtimeEnv.driverBotToken,
+      channelId: environment.runtimeEnv.channelId,
+      messageId: success.draft.message.messageId,
+      timeoutMs: remainingMs(),
+    });
+
+    const failed = await observeProgressTurn(run.errorInput, run.errorFinalText);
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1_500);
+    });
+    await discordQaScenarioSupport.testing.waitForDiscordMessageText({
+      token: environment.runtimeEnv.driverBotToken,
+      channelId: environment.runtimeEnv.channelId,
+      messageId: failed.draft.message.messageId,
+      textIncludes: [run.progressLabel, "🛠️ Exec"],
+      timeoutMs: remainingMs(),
+    });
+    return {
+      details:
+        "success draft deleted after receipt-free final; error final landed with draft retained",
+    };
   }
   const sent = await discordQaScenarioSupport.testing.sendChannelMessage(
     environment.runtimeEnv.driverBotToken,

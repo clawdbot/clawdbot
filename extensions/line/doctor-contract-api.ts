@@ -34,7 +34,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       const preview: string[] = [];
       for (const accountId of spool.listChannelIngressQueueAccountIds()) {
         const count = await countLegacySpoolRows(
-          spool.openChannelIngressQueue<LineWebhookSpoolPayload>({ accountId }),
+          spool.openChannelIngressQueueForInspection<LineWebhookSpoolPayload>({ accountId }),
         );
         if (count > 0) {
           preview.push(
@@ -46,11 +46,20 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
     async migrateLegacyState(params) {
       const spool = lineSpoolQueueAccess(params.context);
+      // The mutable lane exists only inside the host's exclusive repair section. A host
+      // that reaches this phase without it must fail visibly rather than report success
+      // over rows it never rewrote.
+      const openForMigration = spool.openChannelIngressQueue;
+      if (!openForMigration) {
+        throw new Error(
+          "LINE pre-drain spool migration requires mutable ingress access from the doctor host's exclusive repair section.",
+        );
+      }
       const changes: string[] = [];
       const warnings: string[] = [];
       for (const accountId of spool.listChannelIngressQueueAccountIds()) {
         const result = await migrateLineLegacySpoolRows(
-          spool.openChannelIngressQueue<LineWebhookSpoolPayload>({ accountId }),
+          openForMigration<LineWebhookSpoolPayload>({ accountId }),
         );
         if (
           result.migrated > 0 ||

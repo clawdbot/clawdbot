@@ -13,7 +13,7 @@ import {
   objectPropertySchema,
   requiredPropertyKeys,
 } from "./config-form.constraints.ts";
-import { coerceConfigFormNumberString } from "./config-form.numeric.ts";
+import { coerceConfigFormNumberString, formatConfigFormNumber } from "./config-form.numeric.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
 describe("config form schema constraints", () => {
@@ -23,6 +23,30 @@ describe("config form schema constraints", () => {
     expect(coerceConfigFormNumberString("-2.5E-3", false)).toBe(-0.0025);
     expect(coerceConfigFormNumberString("1e5", true)).toBe(100_000);
     expect(coerceConfigFormNumberString("", false)).toBeUndefined();
+    expect(coerceConfigFormNumberString("9007199254740991", true)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(coerceConfigFormNumberString("9.007199254740991e15", true)).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(coerceConfigFormNumberString("9007199254740992", true)).toBe(9_007_199_254_740_992);
+    expect(coerceConfigFormNumberString("9007199254740993", true)).toBe("9007199254740993");
+    expect(coerceConfigFormNumberString("-9007199254740993", false)).toBe("-9007199254740993");
+    expect(coerceConfigFormNumberString("9007199254740992.0", true)).toBe(9_007_199_254_740_992);
+    expect(coerceConfigFormNumberString("9007199254740993.0", true)).toBe("9007199254740993.0");
+    expect(coerceConfigFormNumberString("10481133113146081487e0", true)).toBe(
+      "10481133113146081487e0",
+    );
+    expect(coerceConfigFormNumberString("9.007199254740993e15", true)).toBe("9.007199254740993e15");
+    expect(coerceConfigFormNumberString("9.007199254740992e15", true)).toBe(9_007_199_254_740_992);
+    expect(coerceConfigFormNumberString("-9.007199254740993e15", true)).toBe(
+      "-9.007199254740993e15",
+    );
+    expect(coerceConfigFormNumberString("0.10", false)).toBe(0.1);
+    expect(coerceConfigFormNumberString("1.0000000000000002", false)).toBe(1.0000000000000002);
+    expect(coerceConfigFormNumberString("1.0000000000000001", false)).toBe("1.0000000000000001");
+    expect(coerceConfigFormNumberString("9007199254740991.1", false)).toBe("9007199254740991.1");
+    expect(coerceConfigFormNumberString("1e-324", false)).toBe("1e-324");
+    expect(coerceConfigFormNumberString("0e-1025", false)).toBe(0);
+    expect(Object.is(coerceConfigFormNumberString("-0e2000", false), -0)).toBe(true);
 
     for (const spelling of [
       "0x10",
@@ -38,6 +62,24 @@ describe("config form schema constraints", () => {
       expect(coerceConfigFormNumberString(spelling, false)).toBe(spelling);
     }
     expect(coerceConfigFormNumberString("42.5", true)).toBe("42.5");
+  });
+
+  it("compares integer spellings against the exact binary double", () => {
+    const exactLargeInteger = Number("1000000000000000128");
+    expect(coerceConfigFormNumberString("1000000000000000100", true)).toBe("1000000000000000100");
+    expect(coerceConfigFormNumberString("1000000000000000100", false)).toBe("1000000000000000100");
+    expect(coerceConfigFormNumberString("-1000000000000000100", false)).toBe(
+      "-1000000000000000100",
+    );
+    expect(coerceConfigFormNumberString("1000000000000000127", true)).toBe("1000000000000000127");
+    expect(coerceConfigFormNumberString("1000000000000000128", true)).toBe(exactLargeInteger);
+    expect(formatConfigFormNumber(exactLargeInteger)).toBe("1000000000000000128");
+    expect(formatConfigFormNumber(-0)).toBe("0");
+    expect(formatConfigFormNumber(0.1)).toBe("0.1");
+    expect(coerceConfigFormNumberString(formatConfigFormNumber(exactLargeInteger), true)).toBe(
+      exactLargeInteger,
+    );
+    expect(coerceConfigFormNumberString("9007199254740994", true)).toBe(9_007_199_254_740_994);
   });
 
   it("rejects non-finite decimal rationals and schema multiples", () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
+import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import { boundCodeModeResult, toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./code-mode-runtime.js";
 import {
   cancelPendingBridgeStates,
+  createCodeModeBridgeDispatchState,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -84,7 +86,7 @@ function headlessFailure(params: {
 }
 
 function remainingHeadlessMs(deadline: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = Math.ceil(deadline - performance.now());
   if (remaining <= 0) {
     throw new CodeModeHeadlessTimeoutError();
   }
@@ -207,7 +209,7 @@ export async function runCodeModeScriptHeadless(params: {
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
-  const deadline = Date.now() + wallClockMs;
+  const deadline = performance.now() + wallClockMs;
   const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
   const output: unknown[] = [];
   let pending: PendingBridgeState[] = [];
@@ -216,13 +218,16 @@ export async function runCodeModeScriptHeadless(params: {
     // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
     const swarmEnabled = false;
     const codeModeRunId = `cm_headless_${randomUUID()}`;
-    const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
-    const catalog = runtime.all({ includeMcp: false });
+    const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
+      prepareInput: true,
+      validateInput: true,
+    });
+    const bridgeDispatch = createCodeModeBridgeDispatchState();
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const preparedSource = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      deadlineMs: deadline,
+      remainingMs: remainingHeadlessMs(deadline),
       signal: abortScope.signal,
       createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
       createAbortError: headlessAbortError,
@@ -231,6 +236,9 @@ export async function runCodeModeScriptHeadless(params: {
       namespaceRuntime.descriptors,
       params.extraNamespaces ?? [],
     );
+    const catalogProjection = createCodeModeCatalogProjection(runtime.all({ includeMcp: false }), {
+      reservedNames: namespaces.map((descriptor) => descriptor.globalName),
+    });
     const source = `${headlessNamespaceFreezePrelude(namespaces)}${preparedSource}`;
     const parentToolCallId = `headless:${randomUUID()}`;
     let result = normalizeCodeModeWorkerResult(
@@ -238,7 +246,7 @@ export async function runCodeModeScriptHeadless(params: {
         input: {
           kind: "exec",
           source,
-          catalog,
+          catalog: catalogProjection.guestBindings,
           apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
           namespaces,
           swarmEnabled,
@@ -281,7 +289,6 @@ export async function runCodeModeScriptHeadless(params: {
       // excluding list/get would bypass the same headless tool-call budget.
       const requestedToolCalls = newRequests.filter(
         (request) =>
-          request.method === "call" ||
           request.method === "callValue" ||
           request.method === "nodes" ||
           request.method === "namespace",
@@ -301,11 +308,14 @@ export async function runCodeModeScriptHeadless(params: {
           pendingRequests: newRequests,
           config,
           runtime,
+          catalogProjection,
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,
+          remainingMs: remainingHeadlessMs(deadline),
           ctx: params.ctx,
           signal: abortScope.signal,
+          bridgeDispatch,
         }),
       );
       // Preserve the waiting frontier before the lazy deadline callback;
@@ -322,7 +332,7 @@ export async function runCodeModeScriptHeadless(params: {
       }
       await awaitCodeModeDeadline({
         operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
-        deadlineMs: deadline,
+        remainingMs: remainingHeadlessMs(deadline),
         signal: abortScope.signal,
         createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
         createAbortError: headlessAbortError,

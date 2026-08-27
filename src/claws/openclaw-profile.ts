@@ -1,4 +1,5 @@
 // Safe loader for the conventional package-local OpenClaw profile.
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { isScalar, parseDocument, visit } from "yaml";
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
@@ -82,12 +83,6 @@ function parseProfileYaml(
       ],
     };
   }
-}
-
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function isToolProfileId(value: string): value is ToolProfileId {

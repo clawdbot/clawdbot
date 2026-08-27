@@ -482,6 +482,107 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(npmCall.expectedPluginId).toBe("codex");
   });
 
+  it("falls back to the operator selector when no beta release is published", async () => {
+    installPluginFromNpmSpec
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "npm_package_not_found",
+        error: "Package not found on npm: @openclaw/codex@beta.",
+      })
+      .mockResolvedValue({
+        ok: true,
+        pluginId: "codex",
+        targetDir: "/tmp/openclaw/extensions/codex",
+        version: "2026.7.1",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.7.1",
+          resolvedSpec: "@openclaw/codex@2026.7.1",
+        },
+      });
+    const note = vi.fn();
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "beta" } },
+      entry: {
+        pluginId: "codex",
+        label: "Codex",
+        install: { npmSpec: "@openclaw/codex" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        note,
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: { log: vi.fn() } as never,
+    });
+
+    const calls = installPluginFromNpmSpec.mock.calls as [NpmSpecInstallCall][];
+    expect(calls[0]?.[0]?.spec).toBe("@openclaw/codex@beta");
+    expect(calls[1]?.[0]?.spec).toBe("@openclaw/codex");
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No @openclaw/codex@beta release is published"),
+      ),
+    ).toBe(true);
+  });
+
+  it("retries the operator ClawHub selector when no beta release is published", async () => {
+    installPluginFromClawHub
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "version_not_found",
+        error: "Version not found on ClawHub: demo-plugin@beta.",
+      })
+      .mockResolvedValue({
+        ok: true,
+        pluginId: "demo-plugin",
+        targetDir: "/tmp/demo-plugin",
+        version: "2026.5.2",
+        packageName: "demo-plugin",
+        clawhub: {
+          source: "clawhub",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "demo-plugin",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          version: "2026.5.2",
+          integrity: "sha256-clawpack",
+          resolvedAt: "2026-05-02T00:00:00.000Z",
+          clawpackSha256: "a".repeat(64),
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256: "b".repeat(64),
+          clawpackSize: 4096,
+        },
+      });
+    const note = vi.fn();
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "beta" } } as never,
+      entry: {
+        pluginId: "demo-plugin",
+        label: "Demo Provider",
+        install: { clawhubSpec: "clawhub:demo-plugin", defaultChoice: "clawhub" },
+      },
+      prompter: {
+        select: vi.fn(async () => "clawhub"),
+        note,
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+    });
+
+    const calls = installPluginFromClawHub.mock.calls as [{ spec?: string }][];
+    expect(calls[0]?.[0]?.spec).toBe("clawhub:demo-plugin@beta");
+    expect(calls[1]?.[0]?.spec).toBe("clawhub:demo-plugin");
+    expect(
+      note.mock.calls.some(([message]) =>
+        String(message).includes("No clawhub:demo-plugin@beta release is published"),
+      ),
+    ).toBe(true);
+  });
+
   it("installs and records ClawHub provider plugins with source facts", async () => {
     const cfg: OpenClawConfig = {
       security: {
@@ -825,6 +926,47 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(resolveNpmInstallRecordSpec).toHaveBeenCalledWith(
       expect.objectContaining({ pinResolvedRegistrySpec: false }),
     );
+  });
+
+  it("keeps version-bound official runtime plugins aligned with the stable core version", async () => {
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/codex",
+      version: VERSION,
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: VERSION,
+        resolvedSpec: `@openclaw/codex@${VERSION}`,
+      },
+    });
+
+    await ensureOnboardingPluginInstalled({
+      cfg: { update: { channel: "stable" } },
+      entry: {
+        pluginId: "codex",
+        label: "Codex",
+        install: { npmSpec: "@openclaw/codex" },
+        trustedSourceLinkedOfficialInstall: true,
+        versionBoundToOpenClaw: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: {} as never,
+      promptInstall: false,
+    });
+
+    const [npmCall] = readFirstMockCall(installPluginFromNpmSpec, "installPluginFromNpmSpec") as [
+      NpmSpecInstallCall,
+    ];
+    expect(npmCall.spec).toBe(`@openclaw/codex@${VERSION}`);
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate.spec).toBe("@openclaw/codex");
   });
 
   it("logs npm install warnings once while shortening the progress label", async () => {
@@ -1820,72 +1962,6 @@ describe("ensureOnboardingPluginInstalled", () => {
       });
 
       expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
-    });
-  });
-
-  it("rejects local install paths when relative resolution looks cross-drive", async () => {
-    await withTestDir({ prefix: "openclaw-onboarding-install-cross-drive-" }, async (temp) => {
-      const workspaceDir = path.join(temp, "workspace");
-      const pluginDir = path.join(workspaceDir, "plugins", "demo");
-      await fs.mkdir(path.join(workspaceDir, ".git"), { recursive: true });
-      await fs.mkdir(pluginDir, { recursive: true });
-      const realWorkspaceDir = await fs.realpath(workspaceDir);
-
-      const originalRelative = path.relative;
-      const originalIsAbsolute = path.isAbsolute;
-      const relativeSpy = vi.spyOn(path, "relative").mockImplementation((from, to) => {
-        if (
-          typeof from === "string" &&
-          typeof to === "string" &&
-          from === realWorkspaceDir &&
-          to === path.join(realWorkspaceDir, "plugins", "demo")
-        ) {
-          return "D:\\evil";
-        }
-        return originalRelative(from, to);
-      });
-      const isAbsoluteSpy = vi.spyOn(path, "isAbsolute").mockImplementation((value) => {
-        if (value === "D:\\evil") {
-          return true;
-        }
-        return originalIsAbsolute(value);
-      });
-
-      try {
-        let captured:
-          | {
-              options: Array<{
-                value: "clawhub" | "npm" | "local" | "skip";
-                label: string;
-                hint?: string;
-              }>;
-            }
-          | undefined;
-
-        await ensureOnboardingPluginInstalled({
-          cfg: {},
-          entry: {
-            pluginId: "demo-plugin",
-            label: "Demo Plugin",
-            install: {
-              localPath: "plugins/demo",
-            },
-          },
-          prompter: {
-            select: vi.fn(async (input) => {
-              captured = input;
-              return "skip";
-            }),
-          } as never,
-          runtime: {} as never,
-          workspaceDir,
-        });
-
-        expect(captured?.options).toEqual([{ value: "skip", label: "Skip for now" }]);
-      } finally {
-        relativeSpy.mockRestore();
-        isAbsoluteSpy.mockRestore();
-      }
     });
   });
 });

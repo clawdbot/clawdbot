@@ -1,7 +1,14 @@
 // Sessions access tests cover session-tool visibility policy, sandbox clamps,
 // and agent-to-agent allow rules.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { pageExecutionDecisionFactsForContext } from "../../audit/execution-decision-facts.js";
+import { configureExecutionDecisionWorkSink } from "../../audit/execution-decision-work.js";
+import {
+  createExecutionIdentityAdmissionToken,
+  enqueueExecutionIdentityContextAtAdmission,
+} from "../../audit/execution-identity-admission.js";
+import { startAgentLocalAuditWriter } from "../../commands/agent-local-audit.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { GatewayCredentialsRequiredError } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
@@ -14,23 +21,38 @@ import {
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
+import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
-  listAmbientGroupWatchTargets,
-  registerMainSessionGroupWatch,
-  registerSessionStateWatch,
-} from "../../sessions/session-state-events.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveSandboxedSessionToolContext, resolveSessionToolAccess } from "./sessions-access.js";
+  formatSessionToolAccessDenial,
+  resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
+} from "./sessions-access.js";
 
 const loggerMocks = vi.hoisted(() => ({ logWarn: vi.fn() }));
+const gatewayMocks = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../logger.js")>()),
   logWarn: loggerMocks.logWarn,
 }));
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: gatewayMocks.callGateway,
+}));
+
+beforeEach(() => {
+  gatewayMocks.callGateway.mockReset();
+});
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const AUDIT_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
+
+function makeConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+  return overrides;
+}
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
-    expect(resolveSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe("tree");
+    expect(resolveSessionToolsVisibility(makeConfig())).toBe("tree");
     expect(
       resolveSessionToolsVisibility({
         tools: { sessions: { visibility: "invalid" } },
@@ -49,32 +71,32 @@ describe("resolveSessionToolsVisibility", () => {
 
 describe("resolveEffectiveSessionToolsVisibility", () => {
   it("clamps to tree in sandbox when sandbox visibility is spawned", () => {
-    const cfg = {
+    const cfg = makeConfig({
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    } as unknown as OpenClawConfig;
+    });
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("tree");
   });
 
   it("preserves visibility when sandbox clamp is all", () => {
-    const cfg = {
+    const cfg = makeConfig({
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "all" } } },
-    } as unknown as OpenClawConfig;
+    });
     expect(resolveEffectiveSessionToolsVisibility({ cfg, sandboxed: true })).toBe("all");
   });
 });
 
 describe("sandbox session-tools context", () => {
   it("defaults sandbox visibility clamp to spawned", () => {
-    expect(resolveSandboxSessionToolsVisibility({} as unknown as OpenClawConfig)).toBe("spawned");
+    expect(resolveSandboxSessionToolsVisibility(makeConfig())).toBe("spawned");
   });
 
   it("restricts non-subagent sandboxed sessions to spawned visibility", () => {
-    const cfg = {
+    const cfg = makeConfig({
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    } as unknown as OpenClawConfig;
+    });
     const context = resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: "agent:main:main",
@@ -82,15 +104,16 @@ describe("sandbox session-tools context", () => {
     });
 
     expect(context.restrictToSpawned).toBe(true);
+    expect(context.mainSessionKey).toBeUndefined();
     expect(context.requesterInternalKey).toBe("agent:main:main");
     expect(context.effectiveRequesterKey).toBe("agent:main:main");
   });
 
   it("does not restrict subagent sessions in sandboxed mode", () => {
-    const cfg = {
+    const cfg = makeConfig({
       tools: { sessions: { visibility: "all" } },
       agents: { defaults: { sandbox: { sessionToolsVisibility: "spawned" } } },
-    } as unknown as OpenClawConfig;
+    });
     const context = resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: "agent:main:subagent:abc",
@@ -100,25 +123,53 @@ describe("sandbox session-tools context", () => {
     expect(context.restrictToSpawned).toBe(false);
     expect(context.requesterInternalKey).toBe("agent:main:subagent:abc");
   });
+
+  it("resolves a configured canonical main key for unsandboxed callers", () => {
+    const context = resolveSandboxedSessionToolContext({
+      cfg: { session: { mainKey: "work" } },
+      agentSessionKey: "agent:main:work",
+    });
+
+    expect(context.mainSessionKey).toBe("agent:main:work");
+  });
+
+  it("resolves the canonical global main key from its explicit store owner", () => {
+    const context = resolveSandboxedSessionToolContext({
+      cfg: {
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          defaults: { sessionStore: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
+      },
+      agentSessionKey: "global",
+      requesterAgentId: "ops",
+    });
+
+    expect(context.mainSessionKey).toBe("global");
+  });
 });
 
 describe("createAgentToAgentPolicy", () => {
   it("denies cross-agent access when disabled", () => {
-    const policy = createAgentToAgentPolicy({} as unknown as OpenClawConfig);
+    const policy = createAgentToAgentPolicy(makeConfig());
     expect(policy.enabled).toBe(false);
     expect(policy.isAllowed("main", "main")).toBe(true);
     expect(policy.isAllowed("main", "ops")).toBe(false);
   });
 
   it("honors allow patterns when enabled", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["ops-*", "main"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["ops-*", "main"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.isAllowed("ops-a", "ops-b")).toBe(true);
     expect(policy.isAllowed("main", "ops-a")).toBe(true);
@@ -126,14 +177,16 @@ describe("createAgentToAgentPolicy", () => {
   });
 
   it("matches wildcard patterns case-insensitively", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["Ops-*"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["Ops-*"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.matchesAllow("ops-worker")).toBe(true);
     expect(policy.matchesAllow("OPS-WORKER")).toBe(true);
@@ -141,42 +194,48 @@ describe("createAgentToAgentPolicy", () => {
   });
 
   it("keeps exact allow patterns case-sensitive", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["Ops"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["Ops"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.matchesAllow("Ops")).toBe(true);
     expect(policy.matchesAllow("ops")).toBe(false);
   });
 
   it("keeps blank configured allow patterns fail-closed", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: [" "],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: [" "],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.matchesAllow("ops")).toBe(false);
     expect(policy.isAllowed("main", "ops")).toBe(false);
   });
 
   it("handles interior wildcards", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["team-*-prod"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["team-*-prod"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.matchesAllow("team-ops-prod")).toBe(true);
     expect(policy.matchesAllow("team-dev-prod")).toBe(true);
@@ -187,14 +246,16 @@ describe("createAgentToAgentPolicy", () => {
   it("handles multiple wildcards without polynomial backtracking", () => {
     // Allow patterns use segment matching rather than a greedy regex so
     // adversarial agent ids cannot cause slow policy checks.
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["*a*b*c*d*e*"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["*a*b*c*d*e*"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     // Positive match
     expect(policy.matchesAllow("xaxbxcxdxe")).toBe(true);
@@ -210,14 +271,16 @@ describe("createAgentToAgentPolicy", () => {
   });
 
   it("rejects when suffix overlaps prefix", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["abc*xyz"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["abc*xyz"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.matchesAllow("abcxyz")).toBe(true);
     expect(policy.matchesAllow("abc-middle-xyz")).toBe(true);
@@ -225,14 +288,16 @@ describe("createAgentToAgentPolicy", () => {
   });
 
   it("treats regex syntax as literal text in wildcard patterns", () => {
-    const policy = createAgentToAgentPolicy({
-      tools: {
-        agentToAgent: {
-          enabled: true,
-          allow: ["ops.[prod]*"],
+    const policy = createAgentToAgentPolicy(
+      makeConfig({
+        tools: {
+          agentToAgent: {
+            enabled: true,
+            allow: ["ops.[prod]*"],
+          },
         },
-      },
-    } as unknown as OpenClawConfig);
+      }),
+    );
 
     expect(policy.matchesAllow("OPS.[PROD]-worker")).toBe(true);
     expect(policy.matchesAllow("opsXprod-worker")).toBe(false);
@@ -240,86 +305,12 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-  it("allows watched group reads under tree while denying unwatched peers", () => {
-    const stateDir = tempDirs.make("openclaw-session-visibility-");
-    closeOpenClawStateDatabaseForTest();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    try {
-      const requesterSessionKey = "agent:main:main";
-      const watchedSessionKey = "agent:main:telegram:group:watched";
-      expect(
-        registerMainSessionGroupWatch({
-          sessionKey: watchedSessionKey,
-          agentId: "main",
-          entry: { sessionId: "watched", updatedAt: Date.now(), chatType: "group" },
-          dmScope: "main",
-        }),
-      ).toBe(true);
-      const crossAgentSessionKey = "agent:ops:telegram:group:watched";
-      registerSessionStateWatch({
-        watcherSessionKey: requesterSessionKey,
-        targetSessionKey: crossAgentSessionKey,
-      });
-      const explicitDirectSessionKey = "agent:main:coordinator";
-      registerSessionStateWatch({
-        watcherSessionKey: requesterSessionKey,
-        targetSessionKey: explicitDirectSessionKey,
-      });
-      expect(listAmbientGroupWatchTargets(requesterSessionKey)).toEqual(
-        new Set([watchedSessionKey]),
-      );
-      const guard = createSessionVisibilityRowChecker({
-        action: "history",
-        requesterSessionKey,
-        visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
-      });
-
-      expect(guard.check({ key: watchedSessionKey })).toEqual({ allowed: true });
-      expect(guard.check({ key: "agent:main:telegram:group:unwatched" })).toEqual({
-        allowed: false,
-        status: "forbidden",
-        error:
-          "Session history visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
-      });
-      expect(guard.check({ key: explicitDirectSessionKey })).toEqual({
-        allowed: false,
-        status: "forbidden",
-        error:
-          "Session history visibility is restricted to the current session tree and any watched same-agent group sessions (tools.sessions.visibility=tree).",
-      });
-      expect(guard.check({ key: crossAgentSessionKey })).toEqual({
-        allowed: false,
-        status: "forbidden",
-        error:
-          "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
-      });
-      const sendGuard = createSessionVisibilityRowChecker({
-        action: "send",
-        requesterSessionKey,
-        visibility: "tree",
-        a2aPolicy: createAgentToAgentPolicy({} as OpenClawConfig),
-      });
-      expect(sendGuard.check({ key: watchedSessionKey })).toEqual({
-        allowed: false,
-        status: "forbidden",
-        error:
-          "Session send visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
-      });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      vi.unstubAllEnvs();
-    }
-  });
-
   it("allows cross-agent spawned child rows in list results with tree visibility", () => {
     const guard = createSessionVisibilityRowChecker({
       action: "list",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
     });
 
     expect(
@@ -335,9 +326,11 @@ describe("createSessionVisibilityGuard", () => {
       action: "list",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({
-        tools: { agentToAgent: { enabled: false } },
-      } as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({
+          tools: { agentToAgent: { enabled: false } },
+        }),
+      ),
     });
 
     expect(
@@ -353,9 +346,11 @@ describe("createSessionVisibilityGuard", () => {
       action: "list",
       requesterSessionKey: "agent:main:main",
       visibility: "agent",
-      a2aPolicy: createAgentToAgentPolicy({
-        tools: { agentToAgent: { enabled: true, allow: ["main", "codex"] } },
-      } as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(
+        makeConfig({
+          tools: { agentToAgent: { enabled: true, allow: ["main", "codex"] } },
+        }),
+      ),
     });
 
     expect(
@@ -380,7 +375,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "list",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: callGateway as never,
     });
 
@@ -405,7 +400,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: callGateway as never,
     });
 
@@ -417,7 +412,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
     });
 
     expect(guard.check("agent:codex:acp:child-1")).toEqual({
@@ -445,7 +440,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "send",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: callGateway as never,
     });
 
@@ -469,7 +464,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "status",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: callGateway as never,
     });
 
@@ -492,13 +487,168 @@ describe("createSessionVisibilityGuard", () => {
       targetSessionKey: "agent:main:subagent:worker-999",
       requesterOwned: false,
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: gateway as never,
     });
 
     expect(access).toEqual({ allowed: true });
     expect(gateway).toHaveBeenCalledTimes(1);
     expect(gateway).toHaveBeenCalledWith(expect.objectContaining({ method: "sessions.resolve" }));
+  });
+
+  it("returns a private typed denial without presentation text", async () => {
+    const access = await resolveSessionToolAccess({
+      action: "send",
+      requesterAgentId: "main",
+      requesterSessionKey: "agent:main:main",
+      targetAgentId: "ops",
+      targetSessionKey: "agent:ops:main",
+      requesterOwned: false,
+      visibility: "all",
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+    });
+
+    expect(access).toMatchObject({
+      allowed: false,
+      status: "forbidden",
+      reasonCode: expect.any(String),
+      policyRefs: expect.arrayContaining(["tools.agentToAgent.enabled"]),
+    });
+    expect(access).not.toHaveProperty("error");
+  });
+
+  it("persists unknown ownership evidence with an opaque target through the local writer", async () => {
+    const now = Date.now();
+    const stateDir = tempDirs.make("openclaw-session-access-audit-");
+    const database = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const stopWriter = startAgentLocalAuditWriter({ stateDir });
+    if (!stopWriter) {
+      throw new Error("expected an isolated direct-local audit writer");
+    }
+    const token = createExecutionIdentityAdmissionToken("session-access-run", {
+      contextId: "session-access-context",
+      executionId: "session-access-execution",
+      now,
+    });
+    expect(
+      enqueueExecutionIdentityContextAtAdmission(
+        {
+          runId: token.runId,
+          agentId: "main",
+          ingress: { kind: "local-cli", boundary: "agent-command.local" },
+          runtime: { kind: "embedded" },
+        },
+        { enabled: true, token, runtimeInstanceId: "session-access-runtime" },
+      ),
+    ).toMatchObject({ accepted: true });
+
+    const targetSessionKey = "agent:main:dashboard:owner-unknown";
+    gatewayMocks.callGateway.mockRejectedValue(
+      new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "transport timeout",
+        retryable: true,
+      }),
+    );
+    try {
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        async () => {
+          const access = await resolveSessionToolAccess({
+            action: "send",
+            requesterAgentId: "main",
+            requesterSessionKey: "agent:main:main",
+            targetAgentId: "main",
+            targetSessionKey,
+            requesterOwned: false,
+            visibility: "tree",
+            a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+          });
+          expect(access).toMatchObject({
+            allowed: false,
+            reasonCode: "session_ownership_lookup_failed_transient",
+            contextFieldsUsed: ["requesterSessionKey", "targetSessionKey"],
+            missingEvidence: ["session.owner"],
+          });
+        },
+      );
+    } finally {
+      await stopWriter();
+    }
+
+    const page = pageExecutionDecisionFactsForContext({
+      context: token,
+      limit: 10,
+      now: now + 1,
+      database,
+    });
+    expect(page.receipts).toHaveLength(1);
+    expect(page.receipts[0]).toMatchObject({
+      contextId: token.contextId,
+      executionId: token.executionId,
+      runId: token.runId,
+      action: {
+        family: "session",
+        operation: "send",
+        targetRef: expect.stringMatching(AUDIT_REF_RE),
+      },
+      decision: { outcome: "denied", reasonCode: "session_ownership_lookup_failed_transient" },
+      enforcement: {
+        coverageState: "unknown",
+        policyRefs: ["tools.sessions.visibility"],
+        contextFieldsUsed: ["requesterSessionKey", "targetSessionKey"],
+      },
+      missingEvidence: ["session.owner"],
+    });
+    expect(JSON.stringify(page.receipts)).not.toContain(targetSessionKey);
+  });
+
+  it("revalidates the exact receipt authority after awaited ownership lookup", async () => {
+    const decisionWork: unknown[] = [];
+    const clear = configureExecutionDecisionWorkSink((work) => {
+      decisionWork.push(work);
+      return true;
+    });
+    const token = createExecutionIdentityAdmissionToken("session-access-closed-run", {
+      contextId: "session-access-closed-context",
+      executionId: "session-access-closed-execution",
+    });
+    let authorityActive = true;
+    gatewayMocks.callGateway.mockImplementation(async () => {
+      authorityActive = false;
+      return { sessions: [] };
+    });
+    try {
+      const access = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          executionIdentityToken: token,
+          receiptAuthority: () => authorityActive,
+        },
+        async () =>
+          await resolveSessionToolAccess({
+            action: "history",
+            requesterAgentId: "main",
+            requesterSessionKey: "agent:main:main",
+            targetAgentId: "main",
+            targetSessionKey: "agent:main:dashboard:unowned",
+            requesterOwned: false,
+            visibility: "tree",
+            a2aPolicy: createAgentToAgentPolicy(makeConfig()),
+          }),
+      );
+
+      expect(access).toMatchObject({ allowed: false, reasonCode: "tree_visibility_restricted" });
+      expect(decisionWork).toEqual([]);
+    } finally {
+      clear();
+    }
   });
 
   it("falls back to spawned-session listing when the exact resolver is unavailable", async () => {
@@ -520,7 +670,7 @@ describe("createSessionVisibilityGuard", () => {
       targetSessionKey: "agent:main:subagent:worker",
       requesterOwned: false,
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: gateway as never,
     });
 
@@ -548,16 +698,23 @@ describe("createSessionVisibilityGuard", () => {
       targetSessionKey: "agent:ops:main",
       requesterOwned: false,
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: gateway as never,
     });
 
     expect(access).toEqual({
       allowed: false,
       status: "forbidden",
-      error:
-        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      reasonCode: "agent_to_agent_disabled",
+      policyRefs: ["tools.agentToAgent.enabled"],
+      contextFieldsUsed: ["requesterAgentId", "targetAgentId"],
+      missingEvidence: [],
     });
+    if (!access.allowed) {
+      expect(formatSessionToolAccessDenial(access, { action: "send" })).toBe(
+        "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+      );
+    }
     expect(gateway).not.toHaveBeenCalled();
   });
 
@@ -578,7 +735,7 @@ describe("createSessionVisibilityGuard", () => {
         targetSessionKey: "shared",
         requesterOwned: false,
         visibility: "self",
-        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+        a2aPolicy: createAgentToAgentPolicy(makeConfig()),
         callGateway: gateway as never,
       });
 
@@ -605,15 +762,26 @@ describe("createSessionVisibilityGuard", () => {
         targetSessionKey,
         requesterOwned: true,
         visibility: "all",
-        a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+        a2aPolicy: createAgentToAgentPolicy(makeConfig()),
         callGateway: gateway as never,
       });
 
       expect(access).toEqual({
         allowed: false,
         status: "forbidden",
-        error: `Session not visible from session tools: ${targetSessionKey}`,
+        reasonCode: "incognito_session",
+        policyRefs: ["sessions.incognito"],
+        contextFieldsUsed: ["targetSessionKey"],
+        missingEvidence: [],
       });
+      if (!access.allowed) {
+        expect(
+          formatSessionToolAccessDenial(access, {
+            action: "history",
+            targetSessionKey,
+          }),
+        ).toBe(`Session not visible from session tools: ${targetSessionKey}`);
+      }
       expect(gateway).not.toHaveBeenCalled();
     } finally {
       unregister();
@@ -637,16 +805,23 @@ describe("createSessionVisibilityGuard", () => {
       targetSessionKey: "agent:codex:acp:child-1",
       requesterOwned: false,
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: gateway as never,
     });
 
     expect(access).toEqual({
       allowed: false,
       status: "forbidden",
-      error:
-        "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
+      reasonCode: "session_ownership_lookup_failed_transient",
+      policyRefs: ["tools.sessions.visibility"],
+      contextFieldsUsed: ["requesterSessionKey", "targetSessionKey"],
+      missingEvidence: ["session.owner"],
     });
+    if (!access.allowed) {
+      expect(formatSessionToolAccessDenial(access, { action: "history" })).toBe(
+        "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
+      );
+    }
     expect(gateway).toHaveBeenCalledTimes(1);
   });
 
@@ -655,7 +830,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "send",
       requesterSessionKey: "agent:main:main",
       visibility: "all",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => ({ sessions: [] })) as never,
     });
 
@@ -671,8 +846,9 @@ describe("createSessionVisibilityGuard", () => {
     const guard = await createSessionVisibilityGuard({
       action: "history",
       requesterSessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
       visibility: "self",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
     });
 
     expect(guard.check("agent:main:main")).toEqual({ allowed: true });
@@ -688,8 +864,9 @@ describe("createSessionVisibilityGuard", () => {
     const guard = await createSessionVisibilityGuard({
       action: "history",
       requesterSessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => ({ sessions: [] })) as never,
     });
 
@@ -733,7 +910,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility,
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => {
         throw new GatewayClientRequestError({
           code: "UNAVAILABLE",
@@ -756,7 +933,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => {
         throw new GatewayClientRequestError({
           code: "UNAVAILABLE",
@@ -784,7 +961,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => {
         throw new GatewayCredentialsRequiredError({
           method: "sessions.list",
@@ -808,7 +985,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => {
         throw new Error("failed to decode session row");
       }) as never,
@@ -829,7 +1006,7 @@ describe("createSessionVisibilityGuard", () => {
       action: "history",
       requesterSessionKey: "agent:main:main",
       visibility: "tree",
-      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+      a2aPolicy: createAgentToAgentPolicy(makeConfig()),
       callGateway: vi.fn(async () => ({})) as never,
     });
 
@@ -839,62 +1016,5 @@ describe("createSessionVisibilityGuard", () => {
       error:
         "Session history denied because spawned-session ownership lookup failed; ask the operator to inspect OpenClaw logs.",
     });
-  });
-
-  it("keeps watched same-agent group reads allowed when the spawned lookup throws", async () => {
-    loggerMocks.logWarn.mockClear();
-    const stateDir = tempDirs.make("openclaw-session-visibility-");
-    closeOpenClawStateDatabaseForTest();
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    try {
-      const requesterSessionKey = "agent:main:main";
-      const watchedSessionKey = "agent:main:telegram:group:watched";
-      expect(
-        registerMainSessionGroupWatch({
-          sessionKey: watchedSessionKey,
-          agentId: "main",
-          entry: { sessionId: "watched", updatedAt: Date.now(), chatType: "group" },
-          dmScope: "main",
-        }),
-      ).toBe(true);
-      expect(listAmbientGroupWatchTargets(requesterSessionKey)).toEqual(
-        new Set([watchedSessionKey]),
-      );
-
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      try {
-        const guard = await createSessionVisibilityGuard({
-          action: "history",
-          requesterSessionKey,
-          visibility: "tree",
-          a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
-          callGateway: vi.fn(async () => {
-            throw new GatewayClientRequestError({
-              code: "UNAVAILABLE",
-              message: "transport timeout",
-              retryable: true,
-            });
-          }) as never,
-        });
-
-        // Durable watched-group allowance does not depend on spawned ownership lookup.
-        expect(loggerMocks.logWarn).not.toHaveBeenCalled();
-        expect(guard.check(watchedSessionKey)).toEqual({ allowed: true });
-        expect(loggerMocks.logWarn).not.toHaveBeenCalled();
-        // A non-watched, non-spawned same-agent target still fails closed, but
-        // the denial is distinguishable from a genuine policy denial.
-        expect(guard.check("agent:main:telegram:group:unwatched")).toEqual({
-          allowed: false,
-          status: "forbidden",
-          error:
-            "Session history denied because spawned-session ownership lookup failed (transient); retry once, then ask the operator to inspect OpenClaw logs.",
-        });
-      } finally {
-        warnSpy.mockRestore();
-      }
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      vi.unstubAllEnvs();
-    }
   });
 });

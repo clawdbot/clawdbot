@@ -1,6 +1,6 @@
 // Line plugin module converts pre-drain spool rows to the canonical queue contract.
-import type { webhook } from "@line/bot-sdk";
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   errorText,
   eventIdFor,
@@ -15,20 +15,17 @@ import {
 
 /** Pre-drain (#109655) rows stored the event object under `event` instead of the
  *  canonical serialized `rawEvent`; anything else is not a migratable row. */
-function parseLegacySpoolPayload(
-  payload: unknown,
-): { destination: string; event: webhook.Event } | null {
-  if (!payload || typeof payload !== "object" || "rawEvent" in payload) {
+function parseLegacySpoolPayload(payload: unknown): { destination: string; event: unknown } | null {
+  if (!isRecord(payload) || "rawEvent" in payload) {
     return null;
   }
-  const candidate = payload as { destination?: unknown; event?: unknown };
-  if (typeof candidate.destination !== "string") {
+  if (typeof payload.destination !== "string") {
     return null;
   }
-  if (!candidate.event || typeof candidate.event !== "object") {
+  if (!isRecord(payload.event)) {
     return null;
   }
-  return { destination: candidate.destination, event: candidate.event as webhook.Event };
+  return { destination: payload.destination, event: payload.event };
 }
 
 type LineLegacySpoolMigrationResult = {
@@ -56,11 +53,16 @@ function isLegacyDecodeDeadLetter(row: {
   );
 }
 
+/** Detection reads rows without owning them, so it takes the inspection projection
+ *  rather than a queue it could write through. */
+type LineSpoolInspectionQueue = Pick<
+  ChannelIngressQueue<LineWebhookSpoolPayload>,
+  "listPending" | "listClaims" | "listFailed"
+>;
+
 /** Counts pre-drain rows (pending, still claimed, or decoder-dead-lettered)
  *  without mutating anything. */
-export async function countLegacySpoolRows(
-  queue: ChannelIngressQueue<LineWebhookSpoolPayload>,
-): Promise<number> {
+export async function countLegacySpoolRows(queue: LineSpoolInspectionQueue): Promise<number> {
   const pending = await queue.listPending({ limit: "all" });
   const claims = await queue.listClaims();
   const failed = (await queue.listFailed?.({ limit: "all" })) ?? [];

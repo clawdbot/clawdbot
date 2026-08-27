@@ -1,18 +1,31 @@
 // Control UI tests cover the session diff panel (sessions.diff RPC).
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
+  navigateToControlUiSession,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  activateChatHeaderPanelAction,
+  openChatSidePanelType,
+} from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+const artifactDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/diff-highlighting");
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -41,20 +54,20 @@ const APP_PATCH = [
   "--- a/src/app.ts",
   "+++ b/src/app.ts",
   "@@ -30,3 +30,4 @@",
-  " context line",
-  "-removed line",
-  "+replacement line",
-  "+extra line",
-  " trailing context",
+  " // context line",
+  '-const message = "removed line";',
+  '+const message = "replacement line";',
+  '+console.log("extra line");',
+  " // trailing context",
   "",
 ].join("\n");
 
 const APP_FILE_TEXT = [
-  ...Array.from({ length: 29 }, (_, index) => `unchanged line ${index + 1}`),
-  "context line",
-  "replacement line",
-  "extra line",
-  "trailing context",
+  ...Array.from({ length: 29 }, (_, index) => `// unchanged line ${index + 1}`),
+  "// context line",
+  'const message = "replacement line";',
+  'console.log("extra line");',
+  "// trailing context",
   "",
 ].join("\n");
 
@@ -68,6 +81,77 @@ const NOTES_PATCH = [
   "+scratch",
   "",
 ].join("\n");
+
+const SESSION_DIFF_RESPONSE = {
+  sessionKey: "main",
+  root: "/tmp/checkout",
+  branch: "feature/panel",
+  baseRef: "main",
+  files: [
+    {
+      path: "src/app.ts",
+      status: "modified",
+      additions: 2,
+      deletions: 1,
+      patch: APP_PATCH,
+    },
+    {
+      path: "notes.md",
+      status: "added",
+      additions: 2,
+      deletions: 0,
+      untracked: true,
+      patch: NOTES_PATCH,
+    },
+  ],
+  additions: 4,
+  deletions: 1,
+};
+
+async function waitForSessionDiff(page: import("playwright").Page): Promise<void> {
+  await expect.poll(() => page.locator(".session-diff").count()).toBe(1);
+  await expect
+    .poll(() => page.locator(".session-diff__filename").allTextContents())
+    .toEqual(["app.ts", "notes.md"]);
+}
+
+async function seedPersistedReviewLayouts(
+  page: import("playwright").Page,
+  sessionKeys: string[],
+): Promise<void> {
+  await page.addInitScript(
+    ({ key, persistedSessionKeys }) => {
+      const layout = {
+        columns: [
+          {
+            id: "side-panel-column",
+            side: "right",
+            panels: [{ id: "detail", slot: "detail" }],
+            activePanelId: "detail",
+            height: 360,
+            width: 360,
+          },
+        ],
+        open: true,
+        expanded: false,
+      };
+      localStorage.setItem(
+        key,
+        JSON.stringify({
+          sessionKey: persistedSessionKeys[0],
+          lastActiveSessionKey: persistedSessionKeys[0],
+          sidebarSessionLayouts: Object.fromEntries(
+            persistedSessionKeys.map((sessionKey) => [sessionKey, layout]),
+          ),
+        }),
+      );
+    },
+    {
+      key: controlUiBundledSettingsStorageKey(server.baseUrl),
+      persistedSessionKeys: sessionKeys,
+    },
+  );
+}
 
 describeControlUiE2e("session diff panel", () => {
   beforeAll(async () => {
@@ -90,6 +174,277 @@ describeControlUiE2e("session diff panel", () => {
   });
 
   afterEach(closeContexts);
+
+  it("opens a renamed session diff when Review is added from the panel menu", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.files.list": {
+          sessionKey: "main",
+          root: "/tmp/checkout",
+          gitCheckout: true,
+          files: [],
+          browser: { path: "", entries: [] },
+        },
+        "sessions.diff": {
+          ...SESSION_DIFF_RESPONSE,
+          files: [
+            {
+              path: "example.ts",
+              oldPath: "example.html",
+              status: "renamed",
+              additions: 1,
+              deletions: 1,
+              patch:
+                '@@ -1 +1 @@\n-<section data-mode="before">Hello</section>\n+const value = "after";',
+            },
+          ],
+          additions: 1,
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+
+    await openChatSidePanelType(page, "Files");
+    await openChatSidePanelType(page, "Review");
+
+    await expect
+      .poll(() => page.locator(".session-diff__old-path").textContent())
+      .toContain("example.html");
+    await expect
+      .poll(() => page.locator(".chat-diff__row--del .tok-propertyName").textContent())
+      .toBe("data-mode");
+    await expect
+      .poll(() => page.locator(".chat-diff__row--add .tok-keyword").textContent())
+      .toBe("const");
+  });
+
+  it("requests the default session diff once across subsequent pane renders", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.files.list": {
+          sessionKey: "main",
+          root: "/tmp/checkout",
+          gitCheckout: true,
+          files: [],
+          browser: { path: "", entries: [] },
+        },
+        "sessions.diff": SESSION_DIFF_RESPONSE,
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+
+    await openChatSidePanelType(page, "Files");
+    await openChatSidePanelType(page, "Review");
+    await waitForSessionDiff(page);
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(1);
+
+    await openChatSidePanelType(page, "Tasks");
+    await expect
+      .poll(() => page.locator(".tabstrip-tab__label").allTextContents())
+      .toContain("Tasks");
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        }),
+    );
+
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
+  });
+
+  it("loads the session diff into a persisted empty Review panel", async () => {
+    const sessionKey = "agent:main:persisted-review";
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    await seedPersistedReviewLayouts(page, [sessionKey]);
+    await installMockGateway(page, {
+      sessionKey,
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.files.list": {
+          sessionKey,
+          root: "/tmp/checkout",
+          gitCheckout: true,
+          files: [],
+          browser: { path: "", entries: [] },
+        },
+        "sessions.diff": { ...SESSION_DIFF_RESPONSE, sessionKey },
+      },
+    });
+
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
+
+    await waitForSessionDiff(page);
+  });
+
+  it("replaces an automatically seeded diff when the pane session changes", async () => {
+    const firstSessionKey = "agent:main:first-review";
+    const secondSessionKey = "agent:main:second-review";
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    await seedPersistedReviewLayouts(page, [firstSessionKey, secondSessionKey]);
+    const gateway = await installMockGateway(page, {
+      sessionKey: firstSessionKey,
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.list": {
+          count: 2,
+          defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+          path: "",
+          sessions: [
+            { key: firstSessionKey, kind: "direct", updatedAt: 2 },
+            { key: secondSessionKey, kind: "direct", updatedAt: 1 },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.files.list": {
+          cases: [firstSessionKey, secondSessionKey].map((sessionKey) => ({
+            match: { sessionKey },
+            response: {
+              sessionKey,
+              root: "/tmp/checkout",
+              gitCheckout: true,
+              files: [],
+              browser: { path: "", entries: [] },
+            },
+          })),
+        },
+        "sessions.diff": {
+          cases: [
+            {
+              match: { sessionKey: firstSessionKey },
+              response: { ...SESSION_DIFF_RESPONSE, sessionKey: firstSessionKey },
+            },
+            {
+              match: { sessionKey: secondSessionKey },
+              response: {
+                ...SESSION_DIFF_RESPONSE,
+                sessionKey: secondSessionKey,
+                files: [
+                  {
+                    path: "second.md",
+                    status: "added",
+                    additions: 2,
+                    deletions: 0,
+                    untracked: true,
+                    patch: NOTES_PATCH.replaceAll("notes.md", "second.md"),
+                  },
+                ],
+                additions: 2,
+                deletions: 0,
+              },
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(controlUiSessionUrl(server.baseUrl, firstSessionKey));
+    await waitForSessionDiff(page);
+
+    await navigateToControlUiSession(page, secondSessionKey);
+
+    await expect
+      .poll(() => page.locator(".session-diff__filename").allTextContents())
+      .toEqual(["second.md"]);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.diff")).at(-1)?.params)
+      .toMatchObject({ sessionKey: secondSessionKey });
+  });
+
+  it("opens the session diff from the branch change stats", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.diff",
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      ],
+      methodResponses: {
+        [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        "sessions.files.list": {
+          sessionKey: "main",
+          root: "/tmp/checkout",
+          gitCheckout: true,
+          files: [],
+          browser: { path: "", entries: [] },
+        },
+        "sessions.diff": SESSION_DIFF_RESPONSE,
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    let watchedKey = "";
+    await expect
+      .poll(async () => {
+        const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
+        const params = requests.at(-1)?.params as { sessionKeys?: unknown } | undefined;
+        const first = Array.isArray(params?.sessionKeys) ? params.sessionKeys[0] : undefined;
+        watchedKey = typeof first === "string" ? first : "";
+        return watchedKey;
+      })
+      .not.toBe("");
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+      sessions: {
+        [watchedKey]: {
+          pullRequests: [],
+          branch: {
+            owner: "openclaw",
+            repo: "openclaw",
+            branch: "feature/panel",
+            additions: 142,
+            deletions: 198,
+          },
+          rateLimited: false,
+          status: "ready",
+        },
+      },
+    });
+
+    await page
+      .locator('.chat-pr[data-state="branch"]')
+      .getByRole("button", { name: "Show session changes" })
+      .click();
+
+    await waitForSessionDiff(page);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+  });
+
+  it("lets Review report a non-git session without listing workspace files", async () => {
+    const context = await newBrowserContext();
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      methodResponses: {
+        "sessions.diff": {
+          sessionKey: "main",
+          root: "/tmp/plain-workspace",
+          files: [],
+          additions: 0,
+          deletions: 0,
+          unavailableReason: "not_git",
+        },
+      },
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
+
+    await openChatSidePanelType(page, "Review");
+
+    await expect
+      .poll(() => page.locator(".session-diff .session-diff__note").textContent())
+      .toContain("not a git checkout");
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
+  });
 
   it("opens the diff sidebar with per-file patches and gap markers", async () => {
     const context = await newBrowserContext();
@@ -206,10 +561,14 @@ describeControlUiE2e("session diff panel", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
 
-    await page.locator(".chat-session-diff-toggle").first().click();
+    await activateChatHeaderPanelAction(page, "Show session changes");
 
     const panel = page.locator(".session-diff");
     await expect.poll(() => panel.count()).toBe(1);
+    const panelSurface = page.locator(".side-panel").filter({ has: panel });
+    await expect
+      .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
+      .toBe(480);
     await expect
       .poll(() => panel.locator(".session-diff__branch-label").textContent())
       .toBe("main → feature/panel");
@@ -237,6 +596,20 @@ describeControlUiE2e("session diff panel", () => {
     await expect
       .poll(() => modified.locator(".chat-diff__row--add").first().textContent())
       .toContain("replacement line");
+    await expect
+      .poll(() => modified.locator(".chat-diff__row--add .tok-keyword").textContent())
+      .toBe("const");
+    expect(
+      await modified
+        .locator(".chat-diff__row--add .tok-keyword")
+        .evaluate(
+          (token) => getComputedStyle(token).color !== getComputedStyle(token.parentElement!).color,
+        ),
+    ).toBe(true);
+    if (captureProof) {
+      await mkdir(artifactDir, { recursive: true });
+      await panelSurface.screenshot({ path: path.join(artifactDir, "unified-light.png") });
+    }
 
     await modified.getByRole("button", { name: "Show next 20 unmodified lines" }).click();
     await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
@@ -267,6 +640,20 @@ describeControlUiE2e("session diff panel", () => {
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
     await expect.poll(() => modified.locator(".session-diff-split").count()).toBe(1);
+    await expect
+      .poll(() => modified.locator(".session-diff-split__side--right .tok-keyword").textContent())
+      .toBe("const");
+    if (captureProof) {
+      await page.emulateMedia({ colorScheme: "dark" });
+      await page.evaluate(() => {
+        document.documentElement.dataset.themeMode = "dark";
+        document.documentElement.dataset.themeResolved = "dark";
+      });
+      await modified
+        .locator(".session-diff-split__side--right .tok-keyword")
+        .scrollIntoViewIfNeeded();
+      await panelSurface.screenshot({ path: path.join(artifactDir, "split-dark.png") });
+    }
     await panel.getByRole("button", { name: "Change view options" }).click();
     await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
@@ -309,19 +696,12 @@ describeControlUiE2e("session diff panel", () => {
     await expect.poll(() => panel.locator(".session-diff__gap-controls").count()).toBe(0);
   });
 
-  it("hides the diff toggle until the workspace becomes a git checkout", async () => {
+  it("refreshes an open Review after checkout creation without listing workspace files", async () => {
     const context = await newBrowserContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
       methodResponses: {
-        "sessions.files.list": {
-          sessionKey: "main",
-          root: "/tmp/plain-workspace",
-          gitCheckout: false,
-          files: [],
-          browser: { path: "", entries: [] },
-        },
         "sessions.diff": {
           sessionKey: "main",
           files: [],
@@ -332,28 +712,37 @@ describeControlUiE2e("session diff panel", () => {
       },
     });
     await page.goto(`${server.baseUrl}chat`);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
+    await activateChatHeaderPanelAction(page, "Show session changes");
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-      .toBe(1);
+      .poll(() => page.locator(".session-diff .session-diff__note").textContent())
+      .toContain("not a git checkout");
+    expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
 
-    const toggles = page.locator(".chat-session-diff-toggle");
-    await expect.poll(() => toggles.count()).toBe(0);
-    await expect.poll(() => page.locator(".session-diff").count()).toBe(0);
-
-    await gateway.setMethodResponse("sessions.files.list", {
+    await gateway.setMethodResponse("sessions.diff", {
       sessionKey: "main",
-      root: "/tmp/plain-workspace",
-      gitCheckout: true,
-      files: [],
-      browser: { path: "", entries: [] },
+      root: "/tmp/checkout",
+      branch: "feature/panel",
+      baseRef: "main",
+      files: [
+        {
+          path: "notes.md",
+          status: "added",
+          additions: 2,
+          deletions: 0,
+          untracked: true,
+          patch: NOTES_PATCH,
+        },
+      ],
+      additions: 2,
+      deletions: 0,
     });
     await gateway.emitChatFinal({ runId: "git-init-run", text: "Initialized repository." });
+    await expect.poll(async () => (await gateway.getRequests("sessions.diff")).length).toBe(2);
     await expect
-      .poll(async () => (await gateway.getRequests("sessions.files.list")).length)
-      .toBe(2);
-
-    await expect.poll(() => toggles.count()).toBe(1);
-    await expect.poll(() => toggles.first().isEnabled()).toBe(true);
+      .poll(() => page.locator(".session-diff__filename").allTextContents())
+      .toEqual(["notes.md"]);
+    expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
   });
 
   it("keeps the panel fallback for gateways that omit checkout capability", async () => {
@@ -373,7 +762,7 @@ describeControlUiE2e("session diff panel", () => {
     });
     await page.goto(`${server.baseUrl}chat`);
 
-    await page.locator(".chat-session-diff-toggle").first().click();
+    await activateChatHeaderPanelAction(page, "Show session changes");
     await expect
       .poll(() => page.locator(".session-diff .session-diff__note").textContent())
       .toContain("not a git checkout");

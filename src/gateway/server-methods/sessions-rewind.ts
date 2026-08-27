@@ -28,6 +28,7 @@ import {
   readSessionUpstreamLink,
   type SessionUpstreamLink,
 } from "../../sessions/session-upstream-links.js";
+import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { buildDashboardSessionKey } from "../session-create-service.js";
 import {
   resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId,
@@ -177,7 +178,9 @@ async function listBranches(options: GatewayRequestHandlerOptions): Promise<void
     return;
   }
   if (readSessionUpstreamLink(current.canonicalKey, current.target.agentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR));
+    // Upstream-linked sessions truthfully have no local branches; only the
+    // mutating siblings (rewind/switch/fork) must fail closed on them.
+    respond(true, { branches: [] }, undefined);
     return;
   }
   const result = await listSessionBranches({
@@ -229,6 +232,17 @@ async function mutateSessionAtMessage(
       errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${sessionKey}`),
     );
     return;
+  }
+  if (action === "fork") {
+    const creationError = authorizeGatewaySessionCreation({
+      cfg,
+      client,
+      agentId: initial.target.agentId,
+    });
+    if (creationError) {
+      respond(false, undefined, creationError);
+      return;
+    }
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
@@ -330,12 +344,12 @@ async function mutateSessionAtMessage(
         return;
       }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
-      if (upstreamLink && action !== "fork") {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, EXTERNAL_CONVERSATION_ERROR),
-        );
+      const archived = current.entry.archivedAt !== undefined;
+      if ((archived || upstreamLink) && action !== "fork") {
+        const message = archived
+          ? `${action === "switch" ? "Branch switch" : "Rewind"} is unavailable for archived sessions.`
+          : EXTERNAL_CONVERSATION_ERROR;
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
         return;
       }
       const placementError = resolveSessionWorkerPlacementMutationError({
@@ -421,6 +435,7 @@ async function mutateSessionAtMessage(
       }
       let result: MessageCutMutationResult;
       try {
+        const creation = resolveOperatorSessionCreation(client);
         result = await (action === "fork"
           ? forkSessionAtMessage(
               {
@@ -430,7 +445,12 @@ async function mutateSessionAtMessage(
                 sessionStoreKey: current.sessionStoreKey,
                 storePath: current.storePath,
                 targetKey,
-                creation: resolveOperatorSessionCreation(client),
+                creation: {
+                  ...creation,
+                  ...(resolveCreatorSandbox(cfg, creation) === "required"
+                    ? { sandbox: "required" }
+                    : {}),
+                },
               },
               expectedState,
             )

@@ -15,15 +15,13 @@ export {
   resetPluginBlobStoreForTests,
 } from "../plugin-state/plugin-blob-store.js";
 export {
-  createChannelIngressQueue as createChannelIngressQueueForTests,
-  listChannelIngressQueueAccountIds as listChannelIngressQueueAccountIdsForTests,
-} from "../channels/message/ingress-queue.js";
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+  listChannelIngressQueueAccountIdsForTests,
+} from "./channel-ingress-test-runtime.js";
 export { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 export type { DB as OpenClawStateKyselyDatabaseForTests } from "../state/openclaw-state-db.generated.js";
-export {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+export { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 // Test-only ingress reliability helpers: core predicates polling/webhook tests
 // assert directly; excluded from the public SDK surface (private-local subpath).
 export {

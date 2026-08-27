@@ -27,6 +27,9 @@ vi.mock("./credentials-secret-inputs.js", () => ({
 }));
 const { resolveGatewayClientBootstrap } = await import("./client-bootstrap.js");
 
+const LOCAL_TLS_FINGERPRINT = "ab".repeat(32);
+const REMOTE_TLS_FINGERPRINT = "cd".repeat(32);
+
 function expectLastAuthResolutionParams(expected: {
   urlOverride?: string;
   urlOverrideSource?: "cli" | "env";
@@ -119,7 +122,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local",
+      fingerprintSha256: LOCAL_TLS_FINGERPRINT,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -127,7 +130,7 @@ describe("resolveGatewayClientBootstrap", () => {
       env: process.env,
     });
 
-    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
     expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
   });
 
@@ -148,7 +151,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local",
+      fingerprintSha256: LOCAL_TLS_FINGERPRINT,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -189,7 +192,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local",
+      fingerprintSha256: LOCAL_TLS_FINGERPRINT,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -209,7 +212,7 @@ describe("resolveGatewayClientBootstrap", () => {
     });
 
     expect(result.auth.token).toBe("explicit-token");
-    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
     expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
   });
 
@@ -230,7 +233,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local",
+      fingerprintSha256: LOCAL_TLS_FINGERPRINT,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -250,7 +253,7 @@ describe("resolveGatewayClientBootstrap", () => {
     });
 
     expect(result.auth.token).toBe("configured-token");
-    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
     expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
   });
 
@@ -276,14 +279,14 @@ describe("resolveGatewayClientBootstrap", () => {
           mode: "remote",
           remote: {
             url: "wss://gateway.example/ws",
-            tlsFingerprint: "sha256:remote",
+            tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT.toUpperCase()}`,
           },
         },
       } as never,
       env: process.env,
     });
 
-    expect(result.tlsFingerprint).toBe("sha256:remote");
+    expect(result.tlsFingerprint).toBe(REMOTE_TLS_FINGERPRINT);
     expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
   });
 
@@ -301,7 +304,7 @@ describe("resolveGatewayClientBootstrap", () => {
           mode: "remote",
           remote: {
             url: "wss://gateway.example/ws",
-            tlsFingerprint: "sha256:remote",
+            tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT}`,
           },
         },
       } as never,
@@ -327,14 +330,14 @@ describe("resolveGatewayClientBootstrap", () => {
           mode: "remote",
           remote: {
             url,
-            tlsFingerprint: "sha256:remote",
+            tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT}`,
           },
         },
       } as never,
       env: process.env,
     });
 
-    expect(result.tlsFingerprint).toBe("sha256:remote");
+    expect(result.tlsFingerprint).toBe(REMOTE_TLS_FINGERPRINT);
     expect(mockState.loadGatewayTlsRuntime).not.toHaveBeenCalled();
   });
 
@@ -348,7 +351,7 @@ describe("resolveGatewayClientBootstrap", () => {
     mockState.loadGatewayTlsRuntime.mockResolvedValue({
       enabled: true,
       required: true,
-      fingerprintSha256: "sha256:local",
+      fingerprintSha256: LOCAL_TLS_FINGERPRINT,
     });
 
     const result = await resolveGatewayClientBootstrap({
@@ -356,13 +359,30 @@ describe("resolveGatewayClientBootstrap", () => {
         gateway: {
           mode: "remote",
           tls: tlsConfig,
-          remote: { tlsFingerprint: "sha256:remote" },
+          remote: { tlsFingerprint: `sha256:${REMOTE_TLS_FINGERPRINT}` },
         },
       } as never,
       env: process.env,
     });
 
-    expect(result.tlsFingerprint).toBe("sha256:local");
+    expect(result.tlsFingerprint).toBe(LOCAL_TLS_FINGERPRINT);
     expect(mockState.loadGatewayTlsRuntime).toHaveBeenCalledWith(tlsConfig);
+  });
+
+  it("rejects an invalid explicit TLS fingerprint", async () => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "wss://gateway.example/ws",
+      urlSource: "cli --url",
+      message: "Gateway target: wss://gateway.example/ws",
+    });
+
+    await expect(
+      resolveGatewayClientBootstrap({
+        config: {} as never,
+        gatewayUrl: "wss://gateway.example/ws",
+        explicitTlsFingerprint: "sha256:abc123",
+        env: process.env,
+      }),
+    ).rejects.toThrow("Invalid TLS fingerprint");
   });
 });

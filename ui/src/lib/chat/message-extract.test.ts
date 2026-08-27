@@ -1,12 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover message extract behavior.
 import { describe, expect, it } from "vitest";
-import {
-  extractRawText,
-  extractText,
-  extractTextCached,
-  extractThinkingCached,
-} from "./message-extract.ts";
+import { extractText, extractTextCached, extractThinkingCached } from "./message-extract.ts";
 
 describe("extractTextCached", () => {
   it("matches extractText output", () => {
@@ -150,7 +145,7 @@ describe("nullish messages", () => {
     for (const message of [undefined, null]) {
       expect(extractText(message)).toBeNull();
       expect(extractTextCached(message)).toBeNull();
-      expect(extractRawText(message)).toBeNull();
+      expect(extractText(message)).toBeNull();
       expect(extractThinkingCached(message)).toBeNull();
     }
   });

@@ -10,16 +10,17 @@ import type {
   WorkerSessionPlacements,
 } from "../../state/openclaw-state-db.generated.js";
 import {
+  activeTurnClaimForState,
   assertRecordShape,
   localTurnClaimForState,
   nextGeneration,
   normalizeCursor,
   normalizeEpoch,
+  normalizeWorkerPlacementExecutionMode,
   normalizeTimestamp,
   nullableRequired,
   required,
   unclaimedTurnForState,
-  workerTurnClaimForState,
   type EmptyWorkerPlacementMetadata,
   type OwnedWorkerPlacementMetadata,
   type PersistedTurnClaim,
@@ -119,6 +120,7 @@ function ownedWorkerMetadata(
 
 export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
   const state = parseWorkerSessionPlacementState(row.state);
+  const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed: ParsedWorkerMetadata = {
     environmentId:
       row.environment_id === null ? null : required(row.environment_id, "environment id"),
@@ -146,12 +148,13 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
     sessionId: row.session_id,
     agentId: row.agent_id,
     sessionKey: row.session_key,
+    executionMode,
     generation: row.transition_generation,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
     stateChangedAtMs: row.state_changed_at_ms,
   };
-  assertRecordShape({ state, ...parsed, recoveryError, turnClaim });
+  assertRecordShape({ state, executionMode, ...parsed, recoveryError, turnClaim });
   switch (state) {
     case "local": {
       return {
@@ -215,7 +218,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
       return {
         ...base,
         state,
-        turnClaim: workerTurnClaimForState(turnClaim, state),
+        turnClaim: activeTurnClaimForState(turnClaim, state, executionMode),
         ...ownedWorkerMetadata(parsed, state),
       };
     }
@@ -223,7 +226,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
       return {
         ...base,
         state,
-        turnClaim: workerTurnClaimForState(turnClaim, state),
+        turnClaim: activeTurnClaimForState(turnClaim, state, executionMode),
         ...ownedWorkerMetadata(parsed, state),
       };
     }
@@ -312,6 +315,7 @@ function insertLocal(
       session_id: identity.sessionId,
       agent_id: identity.agentId,
       session_key: identity.sessionKey,
+      execution_mode: null,
       state: "local",
       environment_id: null,
       transition_generation: 0,
@@ -382,6 +386,7 @@ export function transitionValues(
     session_id: current.sessionId,
     agent_id: current.agentId,
     session_key: current.sessionKey,
+    execution_mode: current.executionMode,
     state: to,
     environment_id: environmentId,
     transition_generation: generation,
@@ -444,6 +449,7 @@ export function transitionValues(
   };
   assertRecordShape({
     state: to,
+    executionMode: current.executionMode,
     environmentId,
     activeOwnerEpoch,
     workspaceBaseManifestRef: values.workspace_base_manifest_ref,

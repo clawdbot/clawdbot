@@ -99,7 +99,7 @@
     }
   ],
   "contracts": {
-    "speechProviders": ["xiaomi"],
+    "speechProviders": ["xiaomi", "mimo"],
     "usageProviders": ["xiaomi", "xiaomi-token-plan"]
   },
   "providerAuthChoices": [

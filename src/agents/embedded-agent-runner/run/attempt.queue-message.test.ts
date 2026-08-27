@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../../sessions/user-turn-transcript.test-support.js";
+import { runAgentHarnessGatewayQuestion } from "../../harness/gateway-question.js";
 import { registerQueuedUserMessageRetirement } from "../../sessions/queued-user-message-retirement.js";
 import {
   reportSteeringMessagePersistenceFailure,
@@ -45,6 +46,53 @@ function steerWithDeliveryWait(
 }
 
 describe("embedded OpenClaw queued steering cancellation", () => {
+  it("keeps a claimed harness secret out of the session transcript", async () => {
+    const secretValue = "test-secret-value-123";
+    const sessionKey = "agent:main:secret-transcript";
+    const persistedTranscript: string[] = [];
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: secretValue },
+      target: createTestUserTurnTranscriptTarget({ sessionKey }),
+    });
+    const persistApproved = vi.spyOn(recorder, "persistApproved").mockImplementation(async () => {
+      persistedTranscript.push(JSON.stringify(recorder.message?.content));
+      return undefined;
+    });
+    const onBlockReply = vi.fn(async () => undefined);
+    const pendingSecret = runAgentHarnessGatewayQuestion({
+      questions: [
+        {
+          id: "credential",
+          header: "API key",
+          question: "Enter the requested credential",
+          isSecret: true,
+          options: [],
+        },
+      ],
+      sessionKey,
+      timeoutMs: 60_000,
+      gatewayCall: vi.fn(),
+      delivery: { onBlockReply },
+    });
+    const steer = vi.fn(async () => undefined);
+
+    await steerActiveSessionWithOptionalDeliveryWait(
+      { steer, subscribe: () => () => {} },
+      secretValue,
+      { isInboundUserMessage: true, userTurnTranscriptRecorder: recorder },
+      sessionKey,
+    );
+
+    await expect(pendingSecret).resolves.toEqual({
+      status: "answered",
+      answers: { answers: { credential: [secretValue] } },
+    });
+    expect(persistApproved).not.toHaveBeenCalled();
+    expect(recorder.hasPersisted()).toBe(false);
+    expect(persistedTranscript.join("\n")).not.toContain(secretValue);
+    expect(steer).not.toHaveBeenCalled();
+  });
+
   it("forwards prepared transcript context with a queued steering message", async () => {
     const steer = vi.fn(async () => undefined);
     const recorder = createUserTurnTranscriptRecorder({
@@ -127,6 +175,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       settled = true;
     });
 
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
     emit({
       type: "message_start",
       message: queuedMessage,
@@ -173,6 +222,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     const rejection = expect(failedWait).rejects.toThrow("SQLite transcript append failed");
 
     try {
+      await vi.waitFor(() => expect(listeners).toHaveLength(2));
       reportSteeringMessagePersistenceFailure(
         failedMessage,
         new Error("SQLite transcript append failed"),
@@ -283,10 +333,11 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       "active session ended before queued steering message was committed to the transcript",
     );
 
-    emit({ type: "agent_end", messages: [] });
-    await vi.advanceTimersByTimeAsync(0);
-
     try {
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+      emit({ type: "agent_end", messages: [] });
+      await vi.advanceTimersByTimeAsync(0);
+
       await rejection;
       expect(queueMessages).toEqual([keepMessage]);
       expect(retireDisplay).toHaveBeenCalledOnce();
@@ -329,11 +380,12 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       "active session ended before queued steering message was committed to the transcript",
     );
 
-    emit({ type: "agent_end", messages: [] });
-    await vi.advanceTimersByTimeAsync(0);
-    releasePreparation();
-
     try {
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
+      emit({ type: "agent_end", messages: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      releasePreparation();
+
       await rejection;
       await vi.advanceTimersByTimeAsync(0);
       expect(enqueued).toBe(false);
@@ -342,6 +394,49 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("fences an aborted steer before delayed preparation can enqueue it", async () => {
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    let preparationStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      preparationStarted = resolve;
+    });
+    let enqueued = false;
+    const onQueueAccepted = vi.fn();
+    const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
+      steer: async (_text, _images, _recorder, _media, _imageOrder, _identity, canInject) => {
+        preparationStarted();
+        await preparation;
+        if (canInject && !canInject()) {
+          throw new Error("active session is finalizing");
+        }
+        enqueued = true;
+      },
+      subscribe: () => () => {},
+    };
+    const controller = new AbortController();
+    const wait = steerActiveSessionWithOptionalDeliveryWait(activeSession, "delayed steer", {
+      abortSignal: controller.signal,
+      deliveryTimeoutMs: 10_000,
+      onQueueAccepted,
+      waitForTranscriptCommit: true,
+    });
+    const rejection = expect(wait).rejects.toThrow(
+      "queued steering message was cancelled before acceptance",
+    );
+
+    await started;
+    controller.abort();
+    releasePreparation();
+
+    await rejection;
+    expect(enqueued).toBe(false);
+    expect(onQueueAccepted).toHaveBeenCalledOnce();
+    expect(onQueueAccepted).toHaveBeenCalledWith(false);
   });
 
   it("matches identical steering text by stable queue identity", async () => {
@@ -370,6 +465,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       settled = true;
     });
 
+    await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
     emit({ type: "message_end", message: second });
     await Promise.resolve();
     expect(settled).toBe(false);
@@ -518,6 +614,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
         waitForTranscriptCommit: true,
       });
 
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
       emit({ type: "agent_end", messages: [] });
       emit({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 1_000 });
       await vi.advanceTimersByTimeAsync(0);
@@ -560,6 +657,7 @@ describe("embedded OpenClaw queued steering cancellation", () => {
 
       const wait = steerWithDeliveryWait(activeSession, "completion survives compaction");
 
+      await vi.waitFor(() => expect(emit).toBeTypeOf("function"));
       emit({ type: "agent_end", messages: [] });
       emit({ type: "compaction_start", reason: "threshold" });
       await vi.advanceTimersByTimeAsync(0);

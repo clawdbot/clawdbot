@@ -14,9 +14,10 @@ import type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
+import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
   agentId?: string;
@@ -77,10 +78,10 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
   updatedAtMs: number;
 };
 
-export type TranscriptEvent = unknown;
-
 export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous authority check run inside the append transaction. */
+  beforeCommitInTransaction?: () => void;
 };
 
 export type TranscriptEventAppendError =
@@ -119,6 +120,7 @@ export type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaLimits,
   SessionTranscriptVisibleMessageDeltaResult,
+  TranscriptEvent,
 } from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {

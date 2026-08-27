@@ -650,14 +650,6 @@ private func waitForMainActorWork(
 }
 
 @MainActor
-private func mountScreen(_ screen: ScreenController) throws -> ScreenWebViewCoordinator {
-    let coordinator = ScreenWebViewCoordinator(controller: screen)
-    _ = coordinator.makeContainerView()
-    _ = try #require(coordinator.managedWebView)
-    return coordinator
-}
-
-@MainActor
 private final class MockWatchMessagingService: @preconcurrency WatchMessagingServicing, @unchecked Sendable {
     var currentStatus = WatchMessagingStatus(
         supported: true,
@@ -982,19 +974,159 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 }
 
+@MainActor
+private final class BatteryMonitoringDevice: UIDevice {
+    private var monitoringEnabled: Bool
+    private(set) var monitoringStatesDuringBatteryReads: [Bool] = []
+
+    init(monitoringEnabled: Bool) {
+        self.monitoringEnabled = monitoringEnabled
+        super.init()
+    }
+
+    override var isBatteryMonitoringEnabled: Bool {
+        get { self.monitoringEnabled }
+        set { self.monitoringEnabled = newValue }
+    }
+
+    override var batteryLevel: Float {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return 0.5
+    }
+
+    override var batteryState: UIDevice.BatteryState {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return .charging
+    }
+}
+
+@MainActor
+private final class TimingOutDeviceStatusService: DeviceStatusServicing {
+    func status() async throws -> OpenClawDeviceStatusPayload {
+        throw URLError(.timedOut)
+    }
+
+    func info() -> OpenClawDeviceInfoPayload {
+        DeviceStatusService().info()
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
-    @Test @MainActor func `decode params fails without JSON`() {
-        #expect(throws: Error.self) {
-            _ = try NodeAppModel.decodeParams(OpenClawCanvasNavigateParams.self, from: nil)
+    @Test @MainActor func `throttled silent push reports no data while background refresh remains successful`() async {
+        let lastSuccessKey = "gateway.backgroundAlive.lastSuccessAtMs"
+        let previousSuccess = UserDefaults.standard.object(forKey: lastSuccessKey)
+        defer {
+            if let previousSuccess {
+                UserDefaults.standard.set(previousSuccess, forKey: lastSuccessKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: lastSuccessKey)
+            }
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970 * 1000, forKey: lastSuccessKey)
+
+        let appModel = NodeAppModel()
+        appModel.isBackgrounded = true
+        appModel.gatewayConnected = true
+        let delegate = OpenClawAppDelegate()
+        delegate.appModel = appModel
+
+        let result = await withCheckedContinuation { continuation in
+            delegate.application(
+                UIApplication.shared,
+                didReceiveRemoteNotification: ["aps": ["content-available": 1]],
+                fetchCompletionHandler: { continuation.resume(returning: $0) })
+        }
+
+        #expect(result == .noData)
+        #expect(await appModel.handleBackgroundRefreshWake())
+
+        let expiredRefresh = Task { @MainActor in
+            await appModel.handleBackgroundRefreshWake()
+        }
+        expiredRefresh.cancel()
+        #expect(await expiredRefresh.value == false)
+    }
+
+    @Test @MainActor func `expired background refresh settles unsuccessful exactly once`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.expire()
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [false])
+        #expect(wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `completed background refresh ignores later expiration`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [true])
+        #expect(!wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `replaced background refresh settles before its successor`() {
+        let replacedTask = Task { true }
+        let replacementTask = Task { true }
+        var completions: [Bool] = []
+        let replaced = BackgroundWakeRefreshAttempt(wakeTask: replacedTask) {
+            completions.append($0)
+        }
+        let replacement = BackgroundWakeRefreshAttempt(wakeTask: replacementTask) {
+            completions.append($0)
+        }
+
+        replaced.expire()
+        replacement.complete(success: true)
+        replaced.complete(success: true)
+
+        #expect(completions == [false, true])
+        #expect(replacedTask.isCancelled)
+        #expect(!replacementTask.isCancelled)
+    }
+
+    @Test func `network status timeout never invents offline network facts`() async {
+        await #expect(throws: URLError(.timedOut)) {
+            try await NetworkStatusService().currentStatus(timeoutMs: 0)
         }
     }
 
-    @Test @MainActor func `encode payload emits JSON`() throws {
-        struct Payload: Codable, Equatable {
-            var value: String
+    @Test @MainActor func `device status reports unavailable when its network observation times out`() async {
+        let appModel = NodeAppModel(deviceStatusService: TimingOutDeviceStatusService())
+        let request = BridgeInvokeRequest(
+            id: "device-status-network-timeout",
+            command: OpenClawDeviceCommand.status.rawValue,
+            paramsJSON: "{}")
+
+        let response = await appModel.handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+    }
+
+    @Test @MainActor func `device status battery snapshot preserves monitoring ownership`() {
+        for initial in [false, true] {
+            let device = BatteryMonitoringDevice(monitoringEnabled: initial)
+
+            let payload = DeviceStatusService.batteryStatus(device: device)
+
+            #expect(payload.level == 0.5)
+            #expect(payload.state == .charging)
+            #expect(!device.monitoringStatesDuringBatteryReads.isEmpty)
+            #expect(!device.monitoringStatesDuringBatteryReads.contains(false))
+            #expect(device.isBatteryMonitoringEnabled == initial)
         }
-        let json = try NodeAppModel.encodePayload(Payload(value: "ok"))
-        #expect(json.contains("\"value\""))
     }
 
     @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
@@ -3757,6 +3889,37 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel.gatewayStatusText != "Background idle")
     }
 
+    @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
+        let firstURL = try #require(URL(string: "ws://127.0.0.1:1"))
+        let secondURL = try #require(URL(string: "ws://127.0.0.1:2"))
+        let (config, _) = try makeGatewayPair(firstURL: firstURL, secondURL: secondURL)
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer {
+            appModel.disconnectGateway()
+            appModel.setScenePhase(.active)
+        }
+        appModel.activeGatewayConnectConfig = config
+        appModel.gatewayConnected = true
+        appModel.gatewayStatusText = "Connected"
+        appModel.setOperatorConnected(true)
+
+        appModel.setScenePhase(.background)
+        try await Task.sleep(for: .milliseconds(3100))
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<80 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(appModel.gatewayConnected)
+        #expect(appModel.isOperatorGatewayConnected)
+        #expect(appModel.gatewayStatusText == "Connected")
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+        #expect(!appModel._test_hasGatewayLoopTasks().operator)
+    }
+
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
@@ -6445,7 +6608,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel()
         appModel.setScenePhase(.background)
 
-        let req = BridgeInvokeRequest(id: "bg", command: OpenClawCanvasCommand.present.rawValue)
+        let req = BridgeInvokeRequest(id: "bg", command: OpenClawScreenCommand.record.rawValue)
         let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .backgroundUnavailable)
@@ -6657,94 +6820,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.message.contains("screen format must be mp4") == true)
-    }
-
-    @Test @MainActor func `handle invoke canvas commands update screen`() async throws {
-        let appModel = NodeAppModel()
-        let coordinator = try mountScreen(appModel.screen)
-        defer { coordinator.teardown() }
-
-        appModel.screen.navigate(to: "http://example.com")
-
-        let present = BridgeInvokeRequest(id: "present", command: OpenClawCanvasCommand.present.rawValue)
-        let presentRes = await appModel.handleInvoke(present)
-        #expect(presentRes.ok == true)
-        #expect(appModel.screen.urlString.isEmpty)
-
-        // Loopback URLs are rejected (they are not meaningful for a remote gateway).
-        let navigate = try makeInvokeRequest(
-            id: "nav",
-            command: OpenClawCanvasCommand.navigate.rawValue,
-            params: OpenClawCanvasNavigateParams(url: "http://example.com/"))
-        let navRes = await appModel.handleInvoke(navigate)
-        #expect(navRes.ok == true)
-        #expect(appModel.screen.urlString == "http://example.com/")
-
-        let eval = try makeInvokeRequest(
-            id: "eval",
-            command: OpenClawCanvasCommand.evalJS.rawValue,
-            params: OpenClawCanvasEvalParams(javaScript: "1+1"))
-        var evalRes = await appModel.handleInvoke(eval)
-        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
-        while evalRes.ok != true, ContinuousClock().now < deadline {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            evalRes = await appModel.handleInvoke(eval)
-        }
-        #expect(evalRes.ok == true)
-        let payloadData = try #require(evalRes.payloadJSON?.data(using: .utf8))
-        let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
-        #expect(payload?["result"] as? String == "2")
-    }
-
-    @Test @MainActor func `pending foreground actions replay canvas navigate`() async throws {
-        let appModel = NodeAppModel()
-        let navJSON = try String(
-            decoding: JSONEncoder().encode(OpenClawCanvasNavigateParams(url: "http://example.com/")),
-            as: UTF8.self)
-
-        await appModel._test_applyPendingForegroundNodeActions([
-            (
-                id: "pending-nav-1",
-                command: OpenClawCanvasCommand.navigate.rawValue,
-                paramsJSON: navJSON),
-        ])
-
-        #expect(appModel.screen.urlString == "http://example.com/")
-    }
-
-    @Test @MainActor func `pending foreground actions do not apply while backgrounded`() async throws {
-        let appModel = NodeAppModel()
-        appModel.setScenePhase(.background)
-        let navJSON = try String(
-            decoding: JSONEncoder().encode(OpenClawCanvasNavigateParams(url: "http://example.com/")),
-            as: UTF8.self)
-
-        await appModel._test_applyPendingForegroundNodeActions([
-            (
-                id: "pending-nav-bg",
-                command: OpenClawCanvasCommand.navigate.rawValue,
-                paramsJSON: navJSON),
-        ])
-
-        #expect(appModel.screen.urlString.isEmpty)
-    }
-
-    @Test @MainActor func `handle invoke A 2 UI commands fail when local host unavailable`() async throws {
-        let appModel = NodeAppModel()
-
-        let reset = BridgeInvokeRequest(id: "reset", command: OpenClawCanvasA2UICommand.reset.rawValue)
-        let resetRes = await appModel.handleInvoke(reset)
-        #expect(resetRes.ok == false)
-        #expect(resetRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
-
-        let jsonl = "{\"beginRendering\":{}}"
-        let push = try makeInvokeRequest(
-            id: "push",
-            command: OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            params: OpenClawCanvasA2UIPushJSONLParams(jsonl: jsonl))
-        let pushRes = await appModel.handleInvoke(push)
-        #expect(pushRes.ok == false)
-        #expect(pushRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
     }
 
     @Test @MainActor func `handle invoke unknown command returns invalid request`() async {
@@ -7494,19 +7569,19 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 0)
     }
 
-    @Test @MainActor func `handle deep link sets error when not connected`() async throws {
+    @Test @MainActor func `handle deep link records failure when not connected`() async throws {
         let appModel = NodeAppModel()
         let url = try #require(URL(string: "openclaw://agent?message=hello"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.screen.errorText?.contains("Gateway not connected") == true)
+        #expect(appModel.lastShareEventText.contains("gateway not connected"))
     }
 
-    @Test @MainActor func `handle deep link rejects oversized message`() async throws {
+    @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
         let msg = String(repeating: "a", count: 20001)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
+        #expect(appModel.lastShareEventText.contains("message too large"))
     }
 
     @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
@@ -7522,7 +7597,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await appModel.approvePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.screen.errorText == nil)
+        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
     }
 
     @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
@@ -7563,7 +7638,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.screen.errorText?.contains("blocked") == true)
+        #expect(appModel.lastShareEventText.contains("Rejected"))
     }
 
     @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
@@ -7576,7 +7651,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.screen.errorText == nil)
+        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {
@@ -7651,20 +7726,5 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await #expect(throws: Error.self) {
             try await appModel.sendVoiceTranscript(text: "hello", sessionKey: "main")
         }
-    }
-
-    @Test @MainActor func `canvas A 2 UI action dispatches status`() async {
-        let appModel = NodeAppModel()
-        let body: [String: Any] = [
-            "userAction": [
-                "name": "tap",
-                "id": "action-1",
-                "surfaceId": "main",
-                "sourceComponentId": "button-1",
-                "context": ["value": "ok"],
-            ],
-        ]
-        await appModel.handleCanvasA2UIAction(body: body)
-        #expect(appModel.screen.urlString.isEmpty)
     }
 }

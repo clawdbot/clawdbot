@@ -8,6 +8,7 @@ import {
   type ClawHubSkillsShTrustState,
 } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeTrackedSkillSlug, resolveWorkspaceSkillInstallDir } from "./archive-install.js";
 import {
   normalizeDownloadedArtifactLock,
@@ -251,14 +252,6 @@ export function resolveClawHubSkillStatusLinkSync(params: {
   };
 }
 
-function isPathInsideDir(child: string, parent: string): boolean {
-  const relative = path.relative(parent, child);
-  return (
-    relative === "" ||
-    (relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
 function readLocalSkillCardSync(
   skillDir: string,
   includeContent = false,
@@ -277,7 +270,7 @@ function readLocalSkillCardSync(
   try {
     const rootRealPath = fsSync.realpathSync.native(skillDir);
     const cardRealPath = fsSync.realpathSync.native(cardPath);
-    if (!isPathInsideDir(cardRealPath, rootRealPath)) {
+    if (!isPathInside(rootRealPath, cardRealPath)) {
       return undefined;
     }
     fd = fsSync.openSync(cardPath, fsSync.constants.O_RDONLY | (fsSync.constants.O_NOFOLLOW ?? 0));

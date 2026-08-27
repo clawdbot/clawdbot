@@ -23,6 +23,26 @@ export type PluginInstallRequest = PluginsInstallParams;
 export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
 type PluginUninstallResult = PluginsUninstallResult;
 
+export function resolvePluginInstallIdentity(
+  request: PluginInstallRequest,
+  plugins: readonly PluginCatalogItem[],
+  runtimeId?: string,
+): string {
+  if (request.source === "official") {
+    return `plugin:${request.pluginId}`;
+  }
+  const catalogEntry =
+    plugins.find(
+      (plugin) =>
+        plugin.packageName === request.packageName ||
+        (plugin.install?.source === "clawhub" &&
+          plugin.install.packageName === request.packageName),
+    ) ?? (runtimeId ? plugins.find((plugin) => plugin.id === runtimeId) : undefined);
+  return catalogEntry || runtimeId
+    ? `plugin:${catalogEntry?.id ?? runtimeId}`
+    : `clawhub:${request.packageName}`;
+}
+
 export const CLAWHUB_BROWSE_URL = "https://clawhub.ai/plugins";
 
 export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginListResult> {

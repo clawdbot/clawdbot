@@ -2,6 +2,12 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import {
+  FEISHU_SELECTED_SECRET_ENV,
+  FEISHU_SIBLING_SECRET_ENV,
+  createFeishuSecretRefPolicyConfig,
+  feishuSecretRefPolicyCases,
+} from "./bot.test-support.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -59,6 +65,51 @@ describe("feishu directory (config-backed)", () => {
   beforeEach(() => {
     createFeishuClientMock.mockReset();
   });
+
+  it.each(feishuSecretRefPolicyCases)(
+    "permits live directory requests only under configured SecretRef policy: $name",
+    async (testCase) => {
+      vi.stubEnv(FEISHU_SELECTED_SECRET_ENV, "selected-secret");
+      vi.stubEnv(FEISHU_SIBLING_SECRET_ENV, "sibling-secret");
+      const listPeers = vi.fn(async () => ({ code: 0, data: { items: [] } }));
+      const listGroups = vi.fn(async () => ({ code: 0, data: { items: [] } }));
+      createFeishuClientMock.mockReturnValue({
+        contact: { user: { list: listPeers } },
+        im: { chat: { list: listGroups } },
+      });
+      const cfg = createFeishuSecretRefPolicyConfig(testCase);
+
+      try {
+        await expect(listFeishuDirectoryPeersLive({ cfg, accountId: "selected" })).resolves.toEqual(
+          [],
+        );
+        await expect(
+          listFeishuDirectoryGroupsLive({ cfg, accountId: "selected" }),
+        ).resolves.toEqual([]);
+
+        if (!testCase.configured) {
+          expect(createFeishuClientMock).not.toHaveBeenCalled();
+          expect(listPeers).not.toHaveBeenCalled();
+          expect(listGroups).not.toHaveBeenCalled();
+          return;
+        }
+
+        expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
+        expect(createFeishuClientMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            accountId: "selected",
+            appId: "selected-app",
+            appSecret: "selected-secret", // pragma: allowlist secret
+            configured: true,
+          }),
+        );
+        expect(listPeers).toHaveBeenCalledOnce();
+        expect(listGroups).toHaveBeenCalledOnce();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("merges allowFrom + dms into peer entries", async () => {
     const peers = await listFeishuDirectoryPeers({ cfg: makeStaticCfg(), query: "a" });

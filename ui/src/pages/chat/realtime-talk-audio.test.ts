@@ -191,6 +191,15 @@ describe("RealtimeTalkPcmOutputQueue", () => {
     expect(context.sources).toHaveLength(0);
   });
 
+  it("ignores malformed base64 frames instead of throwing", () => {
+    const context = new MockOutputAudioContext();
+    const queue = new RealtimeTalkPcmOutputQueue();
+
+    // Short enough to pass the size gate, invalid enough to fail atob.
+    expect(queue.play("!!!", context as unknown as AudioContext, 100)).toBe("ignored");
+    expect(context.sources).toHaveLength(0);
+  });
+
   it("hard-caps source ownership across ten thousand suspended-context chunks", () => {
     const context = new MockOutputAudioContext();
     const queue = new RealtimeTalkPcmOutputQueue();

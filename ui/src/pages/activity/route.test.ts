@@ -22,12 +22,26 @@ function loadRoute(search: string): ActivityRouteData {
 }
 
 describe("resolveActivityRouteData", () => {
-  it("keeps the default Activity route on the live browser-local view", () => {
-    expect(loadRoute("")).toEqual({ mode: "live", selector: null });
-    expect(loadRoute("?view=other&run=ignored")).toEqual({
-      mode: "live",
+  it("opens the session feed by default and decodes its linkable filters", () => {
+    expect(loadRoute("")).toEqual({
+      mode: "sessions",
+      filters: { personId: null, query: "", time: "7d" },
       selector: null,
     });
+    expect(loadRoute("?view=other&run=ignored")).toEqual({
+      mode: "sessions",
+      filters: { personId: null, query: "", time: "7d" },
+      selector: null,
+    });
+    expect(loadRoute("?person=alice&time=30d&q=release")).toEqual({
+      mode: "sessions",
+      filters: { personId: "alice", query: "release", time: "30d" },
+      selector: null,
+    });
+  });
+
+  it("keeps the browser-local tool feed behind its explicit mode", () => {
+    expect(loadRoute("?view=live")).toEqual({ mode: "live", selector: null });
   });
 
   it("decodes one run-inspector query reference without narrowing it", () => {
@@ -35,6 +49,8 @@ describe("resolveActivityRouteData", () => {
     expect(loadRoute(`?view=run&run=${encodeURIComponent(runId)}`)).toEqual({
       mode: "run",
       selector: { kind: "run", id: runId },
+      selectorId: null,
+      decisionCursor: null,
     });
   });
 
@@ -45,14 +61,40 @@ describe("resolveActivityRouteData", () => {
     ).toEqual({
       mode: "run",
       selector: { kind: "execution", id: executionId },
+      selectorId: null,
+      decisionCursor: null,
+    });
+  });
+
+  it("preserves an encoded receipt deep link only with its selected page", () => {
+    expect(
+      loadRoute("?view=run&run=run-1&receipt=receipt%3Aa%2Fb&decision=cursor%3A10%3A2"),
+    ).toEqual({
+      mode: "run",
+      selector: { kind: "run", id: "run-1" },
+      selectorId: "receipt:a/b",
+      decisionCursor: "cursor:10:2",
+    });
+    expect(loadRoute("?view=run&run=run-1&decision=ignored-without-receipt")).toEqual({
+      mode: "run",
+      selector: { kind: "run", id: "run-1" },
+      selectorId: null,
+      decisionCursor: null,
     });
   });
 
   it("keeps a run view with an empty selection explicit", () => {
-    expect(loadRoute("?view=run")).toEqual({ mode: "run", selector: null });
+    expect(loadRoute("?view=run")).toEqual({
+      mode: "run",
+      selector: null,
+      selectorId: null,
+      decisionCursor: null,
+    });
     expect(loadRoute("?view=run&run=%20%20")).toEqual({
       mode: "run",
       selector: null,
+      selectorId: null,
+      decisionCursor: null,
     });
   });
 });

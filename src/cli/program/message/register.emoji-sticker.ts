@@ -10,9 +10,7 @@ export function registerMessageEmojiCommands(message: Command, helpers: MessageC
   helpers
     .withMessageBase(emoji.command("list").description("List emojis"))
     .option("--guild-id <id>", "Guild id (Discord)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("emoji-list", opts);
-    });
+    .action((opts) => helpers.runMessageAction("emoji-list", opts));
 
   helpers
     .withMessageBase(
@@ -24,9 +22,7 @@ export function registerMessageEmojiCommands(message: Command, helpers: MessageC
     .requiredOption("--emoji-name <name>", "Emoji name")
     .requiredOption("--media <path-or-url>", "Emoji media (path or URL)")
     .option("--role-ids <id>", "Role id (repeat)", collectOption, [] as string[])
-    .action(async (opts) => {
-      await helpers.runMessageAction("emoji-upload", opts);
-    });
+    .action((opts) => helpers.runMessageAction("emoji-upload", opts));
 }
 
 /** Register sticker send/upload commands. */
@@ -39,9 +35,7 @@ export function registerMessageStickerCommands(message: Command, helpers: Messag
     )
     .requiredOption("--sticker-id <id>", "Sticker id (repeat)", collectOption)
     .option("-m, --message <text>", "Optional message body")
-    .action(async (opts) => {
-      await helpers.runMessageAction("sticker", opts);
-    });
+    .action((opts) => helpers.runMessageAction("sticker", opts));
 
   helpers
     .withMessageBase(
@@ -54,7 +48,5 @@ export function registerMessageStickerCommands(message: Command, helpers: Messag
     .requiredOption("--sticker-desc <text>", "Sticker description")
     .requiredOption("--sticker-tags <tags>", "Sticker tags")
     .requiredOption("--media <path-or-url>", "Sticker media (path or URL)")
-    .action(async (opts) => {
-      await helpers.runMessageAction("sticker-upload", opts);
-    });
+    .action((opts) => helpers.runMessageAction("sticker-upload", opts));
 }

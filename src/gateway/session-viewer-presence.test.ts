@@ -41,4 +41,15 @@ describe("session viewer presence declarations", () => {
 
     expect(onReplace).toHaveBeenCalledOnce();
   });
+
+  it("rejects declarations from inactive connections", () => {
+    const onReplace = vi.fn();
+    const declarations = createSessionViewerPresenceDeclarations({
+      onReplace,
+      isConnectionActive: () => false,
+    });
+
+    expect(declarations.replace("conn-closed", ["alpha"])).toEqual([]);
+    expect(onReplace).not.toHaveBeenCalled();
+  });
 });

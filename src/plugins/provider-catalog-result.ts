@@ -19,8 +19,6 @@ const MODEL_PROVIDER_CONFIG_KEYS = [
   "apiKey",
   "auth",
   "api",
-  "contextWindow",
-  "contextTokens",
   "maxTokens",
   "timeoutSeconds",
   "region",

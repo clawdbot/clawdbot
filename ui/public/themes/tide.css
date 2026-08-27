@@ -1,0 +1,155 @@
+/* Tide palette; selected by index.html and app/theme.ts. */
+
+:root[data-theme="tide"] {
+  /*
+   * Accent — steel cyan on deep slate
+   *
+   * The first cool-primary theme in the set; every other palette accents warm.
+   *
+   * WCAG 2.1 AA audit (bg = #10151b, relative luminance ≈ 0.0093):
+   *   --accent #5ab6d8  contrast ≈ 8.0:1  AA text ✓
+   *   --primary-foreground #0b1116 on #5ab6d8 button: 8.2:1 AAA ✓
+   *   --primary-foreground #0b1116 on #7ac8e4 hover: 10.1:1 ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   worst text pairing --muted on --bg-muted: 6.12:1 ✓
+   *   inherited status label on own subtle tint, worst surface: 4.65:1 ✓
+   */
+  --ring: #5ab6d8;
+  --accent: #5ab6d8;
+  --accent-hover: #7ac8e4;
+  --accent-muted: #5ab6d8;
+  --accent-subtle: rgba(90, 182, 216, 0.12);
+  --accent-glow: rgba(90, 182, 216, 0.2);
+  --primary: #5ab6d8;
+  --primary-hover: #7ac8e4;
+  --primary-foreground: #0b1116;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  --focus: rgba(90, 182, 216, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
+
+  /* Surfaces — cold slate, low saturation */
+  --bg: #10151b;
+  --bg-accent: #151b23;
+  --bg-elevated: #1b232c;
+  --bg-hover: #212b36;
+  --bg-muted: #212b36;
+
+  --card: #161d25;
+  --card-foreground: #eef3f8;
+  --card-highlight: rgba(210, 232, 255, 0.04);
+  --popover: #1b232c;
+  --popover-foreground: #eef3f8;
+
+  --panel: #10151b;
+  --panel-strong: #1b232c;
+  --panel-hover: #212b36;
+  --chrome: rgba(16, 21, 27, 0.96);
+  --chrome-strong: rgba(16, 21, 27, 0.98);
+
+  /* 12:1 on slate: the old #dce3ea sat at 14.2:1 and read glary on the cold
+     canvas; --text-strong keeps the bright step for emphasis. */
+  --text: #c9d2da;
+  --text-strong: #f2f6fa;
+  --chat-text: #c9d2da;
+  --muted: #9dabb9;
+  --muted-strong: #aab7c4;
+  --muted-foreground: #9dabb9;
+
+  --border: #222c37;
+  --border-strong: #33414f;
+  --border-hover: #465767;
+  --input: #222c37;
+
+  --secondary: #161d25;
+  --secondary-foreground: #eef3f8;
+  --accent-2: #7f9bb5;
+  --accent-2-muted: rgba(127, 155, 181, 0.7);
+  --accent-2-subtle: rgba(127, 155, 181, 0.12);
+
+  --shadow-sm: 0 1px 2px rgba(2, 6, 12, 0.4);
+  --shadow-md: 0 4px 16px rgba(2, 6, 12, 0.5);
+  --shadow-lg: 0 12px 32px rgba(2, 6, 12, 0.6);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(210, 232, 255, 0.03);
+  /* Typography — IBM Plex Sans (fonts/tide.css): an engineered humanist sans
+     for the steel-cyan identity. Fallbacks keep text painting on failure. */
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+:root[data-theme="tide-light"] {
+  /*
+   * Accent — deep teal-blue on cool paper
+   *
+   * WCAG 2.1 AA audit (bg = #f7f9fb, relative luminance ≈ 0.928):
+   *   --accent #1f6f8f  contrast ≈ 5.3:1  AA text ✓
+   *   --accent-hover #175a75  contrast ≈ 7.6:1  AAA ✓
+   *   --primary-foreground #ffffff on #1f6f8f button: 5.6:1 AA ✓
+   *   worst text pairing --muted on --bg-muted: 4.63:1 ✓
+   */
+  --ring: #1f6f8f;
+  --accent: #1f6f8f;
+  --accent-hover: #175a75;
+  --accent-muted: #1f6f8f;
+  --accent-subtle: rgba(31, 111, 143, 0.1);
+  --accent-glow: rgba(31, 111, 143, 0.14);
+  --primary: #1f6f8f;
+  --primary-foreground: #ffffff;
+
+  --bg: #f7f9fb;
+  --bg-accent: #eef2f7;
+  --bg-elevated: #ffffff;
+  --bg-hover: #e8edf2;
+  --bg-muted: #e8edf2;
+  --bg-content: #eef2f7;
+
+  --card: #ffffff;
+  --card-foreground: #1b232b;
+  --card-highlight: rgba(20, 40, 60, 0.02);
+  --popover: #ffffff;
+  --popover-foreground: #1b232b;
+  --session-hovercard-surface: var(--card);
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f7f9fb;
+  --panel-strong: #eef2f7;
+  --panel-hover: #dfe6ee;
+  --chrome: rgba(247, 249, 251, 0.96);
+  --chrome-strong: rgba(247, 249, 251, 0.98);
+
+  --text: #333c45;
+  --text-strong: #1b232b;
+  --chat-text: #333c45;
+  --muted: #5f6b76;
+  --muted-strong: #4c5761;
+  --muted-foreground: #5f6b76;
+
+  --border: #dfe5ec;
+  --border-strong: #c5cfd9;
+  --border-hover: #a3b0bd;
+  --input: #dfe5ec;
+
+  --secondary: #eef2f7;
+  --secondary-foreground: #333c45;
+  --accent-2: #3d6d88;
+  --accent-2-muted: rgba(61, 109, 136, 0.75);
+  --accent-2-subtle: rgba(61, 109, 136, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(20, 40, 60, 0.05);
+  --shadow-md: 0 4px 12px rgba(20, 40, 60, 0.07);
+  --shadow-lg: 0 12px 28px rgba(20, 40, 60, 0.09);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(20, 40, 60, 0.04);
+  /* Typography — IBM Plex Sans (fonts/tide.css); see the dark block. */
+  --font-body: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}

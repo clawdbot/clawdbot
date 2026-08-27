@@ -95,6 +95,7 @@ export async function loadAuthoredSetupConfig(params: {
 export async function buildOnboardingWelcome(params: {
   engine: SystemAgentChatEngine;
   workspace?: string;
+  agentName?: string;
   /** Only the local terminal can finish the machine-owned Gateway installation. */
   localRecovery?: true;
 }): Promise<OnboardingWelcome> {
@@ -145,7 +146,11 @@ export async function buildOnboardingWelcome(params: {
     pendingSetup?.workspace || requestedWorkspace || authoredWorkspace || DEFAULT_WORKSPACE,
   );
 
-  params.engine.propose({ kind: "setup", workspace });
+  params.engine.propose({
+    kind: "setup",
+    workspace,
+    ...(params.agentName ? { agentName: params.agentName } : {}),
+  });
   const welcome = [
     "## Hi, I'm OpenClaw — let's hatch your agent.",
     "",

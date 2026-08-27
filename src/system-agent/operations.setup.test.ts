@@ -233,7 +233,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).not.toHaveBeenCalled();
 
     const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
+      { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
       runtime,
       {
         approved: true,
@@ -248,6 +248,7 @@ describe("parseSystemAgentOperation", () => {
     expect(applySetup).toHaveBeenCalledWith(
       {
         workspace: "/tmp/work",
+        firstAgent: { name: "robby" },
         expectedInferenceRoute: expect.any(Object),
         surface: "cli",
         runtime,

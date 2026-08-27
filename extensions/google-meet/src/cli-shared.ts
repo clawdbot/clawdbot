@@ -1,19 +1,20 @@
-import { writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { format } from "node:util";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  callGatewayFromCli,
+  isGatewayClientRequestError,
+  isGatewayTransportError,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import {
   clampTimerTimeoutMs,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
-import prettyMilliseconds from "pretty-ms";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { formatDurationCompact } from "openclaw/plugin-sdk/time-runtime";
 import type { GoogleMeetCalendarLookupResult } from "./calendar.js";
-import {
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  type GoogleMeetModeInput,
-  type GoogleMeetTransport,
-} from "./config.js";
+import type { GoogleMeetModeInput, GoogleMeetTransport } from "./config.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
 
 export type JoinOptions = {
@@ -32,13 +33,6 @@ export type OAuthLoginOptions = {
   manual?: boolean;
   json?: boolean;
   timeoutSec?: string;
-};
-
-export const testing = {
-  parsePositiveNumber,
-  resolveGoogleMeetGatewayOperationTimeoutMs,
-  resolveGoogleMeetGatewayTimeoutMs,
-  resolveGoogleMeetOAuthCallbackTimeoutMs,
 };
 
 export type ResolveSpaceOptions = {
@@ -219,15 +213,14 @@ function isGatewayUnavailableForLocalFallback(
   err: unknown,
   method: GoogleMeetGatewayMethod,
 ): boolean {
-  const message = formatErrorMessage(err);
-  return (
-    message.includes("ECONNREFUSED") ||
-    message.includes("ECONNRESET") ||
-    message.includes("EHOSTUNREACH") ||
-    message.includes("ENOTFOUND") ||
-    message.includes("gateway not connected") ||
-    message.includes(`unknown method: ${method}`)
-  );
+  if (isGatewayTransportError(err)) {
+    // Fall back only when nothing serves the gateway URL (connect-time socket
+    // failures: kind "closed" with no WS close code). A coded close (e.g. 1006
+    // during restart) means a live gateway may still own Meet sessions — surface it.
+    return err.kind === "closed" && err.code === undefined;
+  }
+  // Gateway alive but the Meet methods are not registered there: run locally.
+  return isGatewayClientRequestError(err) && err.message.includes(`unknown method: ${method}`);
 }
 
 export function writeStdoutLine(...values: unknown[]): void {
@@ -236,7 +229,18 @@ export function writeStdoutLine(...values: unknown[]): void {
 
 export async function writeCliOutput(options: { output?: string }, text: string): Promise<void> {
   if (options.output?.trim()) {
-    await writeFile(options.output, text.endsWith("\n") ? text : `${text}\n`, "utf8");
+    const dirMode = (await stat(path.dirname(options.output))).mode & 0o7777;
+    await replaceFileAtomic({
+      filePath: options.output,
+      content: text.endsWith("\n") ? text : `${text}\n`,
+      dirMode,
+      mode: 0o666 & ~process.umask(),
+      preserveExistingMode: true,
+      tempPrefix: ".google-meet-output",
+      syncTempFile: true,
+      syncParentDir: true,
+      throwOnCleanupError: true,
+    });
     writeStdoutLine("wrote: %s", options.output);
     return;
   }
@@ -351,9 +355,8 @@ export function formatDuration(value: number | undefined): string {
   if (value === undefined) {
     return "n/a";
   }
-  return prettyMilliseconds(Math.max(0, Math.round(value / 1000) * 1000), {
-    unitCount: 2,
-  });
+  const roundedMs = Math.max(0, Math.round(value / 1000) * 1000);
+  return formatDurationCompact(roundedMs, { showYears: true, spaced: true }) ?? "0ms";
 }
 
 export function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"]>>): void {

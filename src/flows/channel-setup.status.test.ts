@@ -110,6 +110,36 @@ describe("resolveChannelSetupSelectionContributions", () => {
     isChannelConfigured.mockReturnValue(false);
   });
 
+  it("uses the configured system agent workspace for explicit multi-agent setup", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          helper: { workspace: "/tmp/openclaw-helper-workspace" },
+          third: { workspace: "/tmp/openclaw-third-workspace" },
+        },
+      },
+    } as const;
+
+    await collectChannelStatus({
+      cfg,
+      accountOverrides: {},
+      installedPlugins: [],
+    });
+    resolveChannelSelectionNoteLines({ cfg, installedPlugins: [], selection: [] });
+
+    expect(resolveChannelSetupEntries).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-main-workspace" }),
+    );
+    expect(resolveChannelSetupEntries).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-main-workspace" }),
+    );
+  });
+
   it("sorts channels alphabetically by picker label", () => {
     const contributions = resolveChannelSetupSelectionContributions({
       entries: [

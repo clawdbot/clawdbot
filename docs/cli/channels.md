@@ -31,11 +31,16 @@ openclaw channels dead-letters list --channel telegram --account default
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
 
+In an explicit multi-agent setup, workspace-scoped channel plugins come from
+`agents.defaults.systemAgent.agentId`. Without that owner, `channels list`
+returns the shared bundled, managed, and global inventory with a diagnostic;
+it does not guess one agent workspace.
+
 ## Status / capabilities / resolve / logs
 
 - `channels status`: `--channel <name>`, `--probe`, `--timeout <ms>` (default `10000`), `--json`
 - `channels capabilities`: `--channel <name>`, `--account <id>` (requires `--channel`), `--target <dest>` (requires `--channel`), `--timeout <ms>` (default `10000`, capped at `30000`), `--json`
-- `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--kind <auto|user|group>` (default `auto`), `--json`
+- `channels resolve <entries...>`: `--channel <name>`, `--account <id>`, `--agent <id>`, `--kind <auto|user|group|channel>` (default `auto`), `--json`
 - `channels logs`: `--channel <name|all>` (default `all`), `--lines <n>` (default `200`), `--json`
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
@@ -197,11 +202,14 @@ Resolve channel/user names to IDs using the provider directory:
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels resolve --channel discord "My Server/#support" "@someone"
 openclaw channels resolve --channel matrix "Project Room"
+openclaw channels --agent ops resolve --channel slack "#general"
+openclaw channels resolve --agent ops --channel slack "#general"
 ```
 
 Notes:
 
-- Use `--kind user|group|auto` to force the target type.
+- In multi-agent configurations, use `--agent <id>` in either parent or leaf position to select the agent-owned workspace and channel plugin context.
+- Use `--kind user|group|channel|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.
 - `channels resolve` is read-only. If a selected account is configured via SecretRef but that credential is unavailable in the current command path, the command returns degraded unresolved results with notes instead of aborting the entire run.
 - `channels resolve` does not install channel plugins. Use `channels add --channel <name>` before resolving names for an installable catalog channel.

@@ -8,10 +8,13 @@ import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-ses
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import {
+  clearActiveEmbeddedRun,
   formatEmbeddedAgentQueueFailureSummary,
+  preemptAndDrainEmbeddedHeartbeatRun,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
 } from "./runs.js";
 import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
 
@@ -22,6 +25,65 @@ describe("embedded-agent active-run steering", () => {
     resetDiagnosticSessionStateForTest();
     setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
+  });
+
+  it("aborts and drains the exact heartbeat handle through session replacement", async () => {
+    const heartbeatPreempt = vi.fn(() => true);
+    const finalizingHeartbeatPreempt = vi.fn(() => true);
+    const visibleAbort = vi.fn();
+    const heartbeatHandle: EmbeddedAgentQueueHandle = {
+      ...createEmbeddedRunHandle(),
+      preemptByVisibleTurn: heartbeatPreempt,
+    };
+    const replacementHandle: EmbeddedAgentQueueHandle = {
+      ...createEmbeddedRunHandle({ abort: visibleAbort }),
+    };
+    const finalizingHeartbeatHandle: EmbeddedAgentQueueHandle = {
+      ...createEmbeddedRunHandle({ isAbortable: false }),
+      preemptByVisibleTurn: finalizingHeartbeatPreempt,
+    };
+    setActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
+    setActiveEmbeddedRun("visible-session", replacementHandle);
+    setActiveEmbeddedRun("finalizing-heartbeat-session", finalizingHeartbeatHandle);
+
+    const heartbeatPreemption = preemptAndDrainEmbeddedHeartbeatRun("heartbeat-session", 1_000);
+    const finalizingPreemption = preemptAndDrainEmbeddedHeartbeatRun(
+      "finalizing-heartbeat-session",
+      1_000,
+    );
+    await expect(preemptAndDrainEmbeddedHeartbeatRun("visible-session", 1_000)).resolves.toBe(
+      "not-heartbeat",
+    );
+
+    let heartbeatDrained = false;
+    void heartbeatPreemption.then(() => {
+      heartbeatDrained = true;
+    });
+    setActiveEmbeddedRun("heartbeat-session", replacementHandle);
+    await Promise.resolve();
+    expect(heartbeatDrained).toBe(false);
+
+    clearActiveEmbeddedRun("heartbeat-session", heartbeatHandle);
+    clearActiveEmbeddedRun("finalizing-heartbeat-session", finalizingHeartbeatHandle);
+
+    await expect(heartbeatPreemption).resolves.toBe("drained");
+    await expect(finalizingPreemption).resolves.toBe("drained");
+    expect(heartbeatPreempt).toHaveBeenCalledOnce();
+    expect(finalizingHeartbeatPreempt).toHaveBeenCalledOnce();
+    expect(visibleAbort).not.toHaveBeenCalled();
+  });
+
+  it("leaves a heartbeat in another session running", async () => {
+    const preemptIsolatedHeartbeat = vi.fn(() => true);
+    setActiveEmbeddedRun("base-session:heartbeat", {
+      ...createEmbeddedRunHandle(),
+      preemptByVisibleTurn: preemptIsolatedHeartbeat,
+    });
+
+    await expect(preemptAndDrainEmbeddedHeartbeatRun("base-session", 1_000)).resolves.toBe(
+      "not-heartbeat",
+    );
+    expect(preemptIsolatedHeartbeat).not.toHaveBeenCalled();
   });
 
   it("passes steering options to active embedded runs", () => {

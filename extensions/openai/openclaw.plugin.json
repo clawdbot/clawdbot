@@ -217,7 +217,6 @@
       "choiceLabel": "ChatGPT Device Pairing",
       "choiceHint": "Pair your ChatGPT account in browser with a device code",
       "assistantPriority": -10,
-      "assistantVisibility": "manual-only",
       "groupId": "openai",
       "groupLabel": "OpenAI",
       "groupHint": "ChatGPT/Codex sign-in or API key"
@@ -244,7 +243,7 @@
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
-    "memoryEmbeddingProviders": ["openai"],
+    "embeddingProviders": ["openai"],
     "mediaUnderstandingProviders": ["openai"],
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"],

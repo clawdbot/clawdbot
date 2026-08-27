@@ -1,13 +1,14 @@
 // Gateway connection and run registries.
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 
 /** Creates transport-independent connection, subscription, and run state. */
@@ -16,11 +17,19 @@ export function createGatewayConnectionState(params: {
   getRuntimeConfig?: () => import("../config/config.js").OpenClawConfig;
 }) {
   const loadRuntimeConfig = params.getRuntimeConfig ?? (() => params.cfg);
-  const clients = new Set<GatewayWsClient>();
-  const sessionEventSubscribers = createSessionEventSubscriberRegistry();
-  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+  const clients = new GatewayClientRegistry();
+  // Detached RPC dispatch can resume after close cleanup, so connection-owned
+  // producers must validate against the live transport owner before mutation.
+  const isConnectionActive = (connId: string) => {
+    const client = clients.getByConnectionId(connId);
+    return Boolean(client && !client.invalidated);
+  };
+  const sessionEventSubscribers = createSessionEventSubscriberRegistry(isConnectionActive);
+  const sessionMessageSubscribers = createSessionMessageSubscriberRegistry(isConnectionActive);
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
+    preparePresenceProjection: (presence) =>
+      createPresenceRecipientProjection({ cfg: loadRuntimeConfig(), presence }),
     sessionMessageSubscribers,
     canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
       canReceiveSessionEvent({
@@ -44,6 +53,7 @@ export function createGatewayConnectionState(params: {
 
   return {
     clients,
+    isConnectionActive,
     ...gatewayBroadcaster,
     agentRunSeq,
     dedupe,

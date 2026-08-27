@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import "./stream.js";
 
 describe("tool result redaction via AI transport host", () => {
-  it("redacts structured secret fields with the shared tool-payload contract", () => {
+  it("redacts structured secret fields without reparsing source strings", () => {
     const text = extractToolResultText([
       {
         type: "json",
@@ -64,8 +64,8 @@ describe("tool result redaction via AI transport host", () => {
     expect(text).not.toContain("payment-credential-value-1234567890");
     expect(text).not.toContain("4111111111111111");
     expect(text).not.toContain('"cvc":123');
-    expect(text).not.toContain("api-token-in-text-1234567890");
-    expect(text).not.toContain("oauth-code-in-text-1234567890");
+    expect(text).toContain("api-token-in-text-1234567890");
+    expect(text).toContain("oauth-code-in-text-1234567890");
     expect(text).toContain('\\"safe\\":\\"ok\\"');
     expect(text).not.toContain("live-credential-value");
     expect(text).not.toContain("app-secret-value");

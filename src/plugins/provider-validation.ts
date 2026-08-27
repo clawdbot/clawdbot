@@ -3,7 +3,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
-import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
 type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;
@@ -67,12 +66,11 @@ function resolveWizardMethodId(params: {
   if (params.auth.some((method) => method.id === params.methodId)) {
     return params.methodId;
   }
-  pushPluginValidationDiagnostic({
+  params.pushDiagnostic({
     level: "warn",
     pluginId: params.pluginId,
     source: params.source,
     message: `provider "${params.providerId}" ${params.metadataKind} method "${params.methodId}" not found; falling back to available methods`,
-    pushDiagnostic: params.pushDiagnostic,
   });
   return undefined;
 }
@@ -158,12 +156,11 @@ function normalizeProviderWizardSetup(params: {
     return undefined;
   }
   if (!hasAuthMethods) {
-    pushPluginValidationDiagnostic({
+    params.pushDiagnostic({
       level: "warn",
       pluginId: params.pluginId,
       source: params.source,
       message: `provider "${params.providerId}" setup metadata ignored because it has no auth methods`,
-      pushDiagnostic: params.pushDiagnostic,
     });
     return undefined;
   }
@@ -195,22 +192,20 @@ function normalizeProviderAuthMethods(params: {
   for (const method of params.auth) {
     const methodId = normalizeOptionalString(method.id);
     if (!methodId) {
-      pushPluginValidationDiagnostic({
+      params.pushDiagnostic({
         level: "error",
         pluginId: params.pluginId,
         source: params.source,
         message: `provider "${params.providerId}" auth method missing id`,
-        pushDiagnostic: params.pushDiagnostic,
       });
       continue;
     }
     if (seenMethodIds.has(methodId)) {
-      pushPluginValidationDiagnostic({
+      params.pushDiagnostic({
         level: "error",
         pluginId: params.pluginId,
         source: params.source,
         message: `provider "${params.providerId}" auth method duplicated id "${methodId}"`,
-        pushDiagnostic: params.pushDiagnostic,
       });
       continue;
     }
@@ -274,12 +269,11 @@ function normalizeProviderWizard(params: {
       return undefined;
     }
     if (!hasAuthMethods) {
-      pushPluginValidationDiagnostic({
+      params.pushDiagnostic({
         level: "warn",
         pluginId: params.pluginId,
         source: params.source,
         message: `provider "${params.providerId}" model-picker metadata ignored because it has no auth methods`,
-        pushDiagnostic: params.pushDiagnostic,
       });
       return undefined;
     }
@@ -309,7 +303,6 @@ function normalizeProviderWizard(params: {
 }
 
 /** Normalizes provider plugin metadata and emits diagnostics for invalid public fields. */
-/** Returns a normalized provider plugin plus validation diagnostics for registry insertion. */
 export function normalizeRegisteredProvider(params: {
   pluginId: string;
   source: string;
@@ -318,12 +311,11 @@ export function normalizeRegisteredProvider(params: {
 }): ProviderPlugin | null {
   const id = normalizeOptionalString(params.provider.id);
   if (!id) {
-    pushPluginValidationDiagnostic({
+    params.pushDiagnostic({
       level: "error",
       pluginId: params.pluginId,
       source: params.source,
       message: "provider registration missing id",
-      pushDiagnostic: params.pushDiagnostic,
     });
     return null;
   }

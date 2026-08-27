@@ -7,8 +7,9 @@ import {
   extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
+  extractFastDirective,
+  extractStatusDirective,
 } from "./reply/directives.js";
-import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
 import { extractExecDirective } from "./reply/exec/directive.js";
 import { extractQueueDirective } from "./reply/queue/directive.js";
 import { extractReplyToTag } from "./reply/reply-tags.js";
@@ -183,6 +184,17 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("parses identical exec directives deterministically", () => {
+    const input = "/exec host=node security=allowlist ask=always node=worker-1";
+    const first = extractExecDirective(input);
+
+    expect(Array.from({ length: 3 }, () => extractExecDirective(input))).toEqual([
+      first,
+      first,
+      first,
+    ]);
+  });
+
   it("captures invalid exec host values", () => {
     const res = extractExecDirective("/exec host=spaceship");
     expect(res.hasDirective).toBe(true);
@@ -212,7 +224,7 @@ describe("directive parsing", () => {
     expect(model.cleaned).toBe("please sync now");
     expect(model.hasModelDirective).toBe(true);
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(false);
+    expect(model.modelScope).toBeUndefined();
 
     const think = parseInlineSessionDirectives("please sync /think:high now");
     expect(think.cleaned).toBe("please sync now");
@@ -225,7 +237,7 @@ describe("directive parsing", () => {
     expect(model.cleaned).toBe("please sync now");
     expect(model.hasModelDirective).toBe(true);
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(true);
+    expect(model.modelScope).toBe("session");
   });
 
   it("preserves the trailing /model --session scope for native slash commands", () => {
@@ -235,7 +247,7 @@ describe("directive parsing", () => {
 
     expect(model.cleaned).toBe("");
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(true);
+    expect(model.modelScope).toBe("session");
     expect(model.nativeCommand).toEqual({ name: "model" });
   });
 
@@ -249,7 +261,7 @@ describe("directive parsing", () => {
       expect(model.cleaned).toBe("");
       expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
       expect(model.rawModelRuntime).toBe("codex");
-      expect(model.modelSessionOnly).toBe(true);
+      expect(model.modelScope).toBe("session");
       expect(model.nativeCommand).toEqual({ name: "model" });
     },
   );
@@ -262,7 +274,6 @@ describe("directive parsing", () => {
       );
 
       expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-      expect(model.modelSessionOnly).toBe(false);
       expect(model.cleaned).toBe(`please sync ${option} now`);
     },
   );
@@ -286,7 +297,7 @@ describe("directive parsing", () => {
     const model = parseInlineSessionDirectives("please sync /model openai/gpt-4.1-mini -s -s now");
 
     expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
-    expect(model.modelSessionOnly).toBe(true);
+    expect(model.modelScopeConflict).toBe(true);
     expect(model.cleaned).toBe("please sync -s now");
   });
 
@@ -294,7 +305,20 @@ describe("directive parsing", () => {
     const model = parseInlineSessionDirectives("please /model here continue");
     expect(model.cleaned).toBe("please continue");
     expect(model.rawModelDirective).toBe("here");
-    expect(model.modelSessionOnly).toBe(false);
+  });
+
+  it.each([
+    ["-a", "agent"],
+    ["--agent", "agent"],
+    ["-g", "global"],
+    ["--global", "global"],
+  ] as const)("preserves explicit /model %s scope", (option, scope) => {
+    const model = parseInlineSessionDirectives(`/model openai/gpt-4.1-mini ${option}`, {
+      nativeCommand: "model",
+    });
+
+    expect(model.cleaned).toBe("");
+    expect(model.modelScope).toBe(scope);
   });
 
   it("keeps --persist as ordinary text for inline directives", () => {

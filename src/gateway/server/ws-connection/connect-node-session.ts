@@ -9,6 +9,7 @@ import {
 import { getPairedDevice } from "../../../infra/device-pairing.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING } from "../../auth-rate-limit.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE } from "../../method-scopes.js";
+import { resolveEffectiveComputerUseDescriptor } from "../../node-computer-use-descriptor.js";
 import { reconcileNodePairingOnConnect } from "../../node-connect-reconcile.js";
 import { filterLegacyNodeProtocolFeatures } from "../../node-legacy-protocol-filter.js";
 import { withSerializedRateLimitAttempt } from "../../rate-limit-attempt-serialization.js";
@@ -182,12 +183,14 @@ export async function prepareGatewayNodeConnect(
   const nodeConnectParams = connectParams as ConnectParams & {
     declaredCaps?: string[];
     declaredCommands?: string[];
+    declaredComputerUse?: unknown;
     declaredPermissions?: Record<string, boolean>;
     sessionCapsCeiling?: string[];
     sessionCommandsCeiling?: string[];
   };
   nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
   nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
+  nodeConnectParams.declaredComputerUse = reconciliation.declaredComputerUse;
   nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
   const pluginSurfaces = pluginNodeCapabilities.map((surface) => surface.surface);
   if (usesLegacyNodeProtocol) {
@@ -211,6 +214,10 @@ export async function prepareGatewayNodeConnect(
       };
   connectParams.caps = effectiveFeatures.caps;
   connectParams.commands = effectiveFeatures.commands;
+  connectParams.computerUse = resolveEffectiveComputerUseDescriptor({
+    commands: effectiveFeatures.commands,
+    declared: reconciliation.declaredComputerUse,
+  });
   connectParams.permissions = reconciliation.effectivePermissions;
   return true;
 }

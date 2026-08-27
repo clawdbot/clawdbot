@@ -85,6 +85,22 @@ update occurred. Existing synchronous and asynchronous callbacks that return `vo
 backward-compatible and are treated as visible; new acceptance-aware implementations should use
 an explicit boolean.
 
+### Commentary delivery ownership
+
+Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
+Channels that normally render commentary in one evolving progress draft can also provide
+`shouldDeliverCommentaryPayloads`. Core freezes verbose visibility for the turn, registers that
+getter through `onVerboseProgressVisibility`, evaluates the delivery callback once before
+dispatch, and snapshots that result for the whole turn. Session changes apply on the next turn.
+The callback is inert unless `commentaryPayloadsEnabled` is also `true`; without that static
+opt-in, core neither evaluates the callback nor freezes the registered visibility getter.
+
+Return `false` while the draft owns normal progress and `true` when verbose progress makes that
+draft yield to durable commentary. Keep the callback synchronous and read only channel-owned,
+already prepared state. Omitting it preserves durable delivery for existing plugins that use the
+static opt-in. The callback does not control reasoning, partial replies, tool progress, or final
+answers.
+
 Inbound receivers that defer platform acknowledgements should declare
 `message.receive.defaultAckPolicy` and `supportedAckPolicies` instead of hiding
 ack timing in monitor-local state. Cover every declared policy with
@@ -117,6 +133,18 @@ descriptor you pass to the resolver; do not serialize raw match values from
 the resolved state or decision. See
 [Channel ingress API](/plugins/sdk-channel-ingress) for the API design,
 ownership boundary, and test expectations.
+
+Pass the exact resolver result to the host-injected registered context builder
+as `channelIngress`. Results used for execution must include the final
+agent/session/message/event `contextBinding`; decision-only resolver calls may
+omit it. This preserves the native plugin's record-, epoch-, and scope-bound participant evidence through one-shot queued run admission without
+exposing it in message context fields. The standalone public builder is not an
+authoritative substitute. Never reconstruct evidence from sender, route, room,
+account, thread, message, transport, or session values. Legacy adapters can explicitly pass
+`channelIngress: "unsupported"` only when the path is source-proven to lack an
+authoritative Phase 0 integration. Supported paths must pass the exact result;
+omission is invalid production wiring. Missing, fake, stale, reused, or mixed
+supported evidence projects as unknown, never as an allow signal.
 
 ### Durable ingress and replay dedupe
 
@@ -268,6 +296,9 @@ the shared outbound loader. Hosted media capacity defaults to
 `overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when
 issued URLs must remain valid until expiry, and configure both backing keyed
 stores with `"reject-new"` so independent writers cannot evict live rows.
+Use `validateBeforePersist` to inspect the guarded loader's exact bytes and
+metadata when a transport must reject a payload class. Treat its buffer as
+read-only and throw to reject before capability creation or any store write.
 Authenticate bearer requests with `readMetadata(...)` before calling `read(...)`
 so invalid tokens and `HEAD` requests do not hydrate stored media chunks.
 
@@ -319,11 +350,41 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+### Conversation route ownership
+
+Implement `messaging.resolveConversationRouteOwner(...)` when generic route
+matching cannot reproduce the channel's configured and runtime binding rules.
+The resolver receives the current config, account, and recorded conversation
+identity, including a delivery `target` when it differs from the routing peer.
+It must reuse the same precedence and provider identity grammar as inbound
+routing.
+
+Ownership inspection is synchronous and read-only. Do not refresh binding
+liveness, perform network requests, or infer missing provider facts. Return:
+
+- `{ kind: "agent", agentId }` for an agent-owned route.
+- `{ kind: "plugin", pluginId, fallbackAgentId }` for a plugin-owned runtime
+  binding. `fallbackAgentId` is the route used when that plugin has no active
+  inbound claim handler.
+- `{ kind: "unavailable" }` when authoritative owner state is temporarily
+  unavailable and the caller should retry.
+- `null` when the supplied identity is invalid or cannot be authorized.
+- `undefined` to delegate to core's generic owner resolution.
+
+Keep temporary unavailability distinct from `null`: an adapter restart is not
+proof that a previously bound conversation is unowned.
+Use `inspectConversationBinding(...)` from
+`openclaw/plugin-sdk/conversation-binding-inspection-runtime` when the resolver needs this
+available/unavailable distinction.
+
 ### Account-scoped conversation binding support
 
 Set `conversationBindings.supportsCurrentConversationBinding` when the channel
 supports generic current-conversation bindings. `createChatChannelPlugin(...)`
-sets this static capability to `true` by default.
+sets this static capability to `true` by default. Channels whose monitor owns a custom binding
+adapter must also set `bindingStore: "adapter"`; core then fails closed while
+that adapter is unavailable instead of reading or writing generic binding rows.
+Older `createManager`-only plugins retain the same adapter-owned behavior.
 
 If support differs by configured account, also implement
 `conversationBindings.isCurrentConversationBindingSupported({ accountId })`.
@@ -890,6 +951,14 @@ unrelated inbound runtime helpers.
     `principalId` is absent and an undefined result is reported as unverified.
     Diagnostics never invent a peer ID. Keep both callbacks pure and
     import-safe because read-only diagnostics run without channel runtime.
+
+    Channel-specific security diagnostics can use `security.collectWarnings`.
+    Legacy string results are warning severity. Return the structured
+    `SecurityAuditFinding` shape (`checkId`, `severity`, `title`, `detail`, and
+    optional `remediation`) when the producer must declare informational or
+    critical severity; the same finding is used by Doctor and the main security
+    audit. Use `collectAuditFindings` only for diagnostics that should appear in
+    the full security audit but not Doctor.
 
     <Accordion title="What createChatChannelPlugin does for you">
       Instead of implementing low-level adapter interfaces manually, you pass

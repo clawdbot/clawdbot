@@ -42,12 +42,27 @@ export function environmentMenuFacts(
   environment: DraftEnvironment | undefined,
   options: { connected?: boolean; nowMs?: number } = {},
 ): string[] {
+  const updateIssue = environment?.issues?.find((issue) => issue.code === "update-required");
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,
     nowMs: options.nowMs ?? Date.now(),
   });
-  const facts = lifecycle ? [lifecycle] : [];
+  const priorityFact = updateIssue
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: updateIssue.updateCommand,
+        restartCommand: updateIssue.headlessReconnectCommand,
+      })
+    : lifecycle;
+  const facts = priorityFact ? [priorityFact] : [];
+  if (environment?.workerSlots) {
+    facts.push(
+      t("newSession.workerSlots", {
+        available: String(environment.workerSlots.available),
+        total: String(environment.workerSlots.total),
+      }),
+    );
+  }
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));
   }

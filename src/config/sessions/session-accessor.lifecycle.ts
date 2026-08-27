@@ -49,7 +49,7 @@ import {
   resolveProjectionExistingEntry,
   SessionLabelOwnerIndex,
 } from "./session-entry-selection.js";
-import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry, SessionCompactionCheckpoint } from "./types.js";
 
 // Session lifecycle storage is canonical SQLite; direct exports keep reset,
 // rollback, cleanup, and bulk projections on their actual transaction owner.

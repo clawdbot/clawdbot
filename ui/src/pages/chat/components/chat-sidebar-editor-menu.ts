@@ -10,7 +10,10 @@ export function renderChatSidebarEditorMenu(params: {
   onOpenChange: (open: boolean) => void;
   onOpenEditor: (editor: EditorId) => void;
 }) {
-  const label = params.absolutePath ? "Open in editor" : "Workspace root unknown";
+  if (!params.absolutePath) {
+    return nothing;
+  }
+  const label = "Open in editor";
   return html`
     <div class="sidebar-file-view__editor">
       <openclaw-tooltip .content=${label}>
@@ -32,19 +35,16 @@ export function renderChatSidebarEditorMenu(params: {
             class="btn btn--sm sidebar-file-view__action"
             type="button"
             aria-label=${label}
-            ?disabled=${!params.absolutePath}
           >
             ${icons.externalLink}
           </button>
-          ${params.absolutePath
-            ? EDITOR_IDS.map(
-                (editor) => html`
-                  <wa-dropdown-item class="sidebar-file-view__editor-item" value=${editor}>
-                    ${EDITOR_LABELS[editor]}
-                  </wa-dropdown-item>
-                `,
-              )
-            : nothing}
+          ${EDITOR_IDS.map(
+            (editor) => html`
+              <wa-dropdown-item class="sidebar-file-view__editor-item" value=${editor}>
+                ${EDITOR_LABELS[editor]}
+              </wa-dropdown-item>
+            `,
+          )}
         </wa-dropdown>
       </openclaw-tooltip>
     </div>

@@ -4,18 +4,19 @@ import {
   normalizeAccountId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { hasSlackAccountCredentials } from "./account-configured.js";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import {
   mergeSlackAccountConfig,
   resolveDefaultSlackAccountId,
   type SlackTokenSource,
 } from "./accounts.js";
-import type { SlackAccountConfig } from "./runtime-api.js";
 
 export type SlackCredentialStatus = "available" | "configured_unavailable" | "missing";
 
@@ -66,13 +67,15 @@ function inspectSlackToken(value: unknown): {
   };
 }
 
-function selectInspectedSlackToken(
+function resolveInspectedSlackToken(
   configured: ReturnType<typeof inspectSlackToken>,
   envToken: string | undefined,
-): string | undefined {
+): { token?: string; source: SlackTokenSource; status: SlackCredentialStatus } {
   // A configured SecretRef remains authoritative while unavailable; read-only
   // inspection must not make a lower-precedence environment token look active.
-  return configured.status === "missing" ? envToken : configured.token;
+  return configured.status === "missing" && envToken
+    ? { token: envToken, source: "env", status: "available" }
+    : configured;
 }
 
 export function inspectSlackAccount(params: {
@@ -109,41 +112,9 @@ export function inspectSlackAccount(params: {
     ? normalizeSecretInputString(params.envUserToken ?? process.env.SLACK_USER_TOKEN)
     : undefined;
 
-  const botToken = selectInspectedSlackToken(configBot, envBot);
-  const appToken = selectInspectedSlackToken(configApp, envApp);
-  const signingSecret = configSigningSecret.token;
-  const userToken = selectInspectedSlackToken(configUser, envUser);
-  const relayConfigured =
-    isRelayMode &&
-    Boolean(normalizeOptionalString(merged.relay?.url)) &&
-    hasConfiguredSecretInput(merged.relay?.authToken) &&
-    Boolean(normalizeOptionalString(merged.relay?.gatewayId));
-  const botTokenSource: SlackTokenSource = configBot.token
-    ? "config"
-    : configBot.status === "configured_unavailable"
-      ? "config"
-      : envBot
-        ? "env"
-        : "none";
-  const appTokenSource: SlackTokenSource = configApp.token
-    ? "config"
-    : configApp.status === "configured_unavailable"
-      ? "config"
-      : envApp
-        ? "env"
-        : "none";
-  const signingSecretSource: SlackTokenSource = configSigningSecret.token
-    ? "config"
-    : configSigningSecret.status === "configured_unavailable"
-      ? "config"
-      : "none";
-  const userTokenSource: SlackTokenSource = configUser.token
-    ? "config"
-    : configUser.status === "configured_unavailable"
-      ? "config"
-      : envUser
-        ? "env"
-        : "none";
+  const botCredential = resolveInspectedSlackToken(configBot, envBot);
+  const appCredential = resolveInspectedSlackToken(configApp, envApp);
+  const userCredential = resolveInspectedSlackToken(configUser, envUser);
 
   return {
     accountId,
@@ -151,57 +122,24 @@ export function inspectSlackAccount(params: {
     ...(identity === "user" ? { identity } : {}),
     name: normalizeOptionalString(merged.name),
     mode,
-    botToken,
-    appToken,
-    ...(isHttpMode ? { signingSecret } : {}),
-    userToken,
-    botTokenSource,
-    appTokenSource,
-    ...(isHttpMode ? { signingSecretSource } : {}),
-    userTokenSource,
-    botTokenStatus: configBot.token
-      ? "available"
-      : configBot.status === "configured_unavailable"
-        ? "configured_unavailable"
-        : envBot
-          ? "available"
-          : "missing",
-    appTokenStatus: configApp.token
-      ? "available"
-      : configApp.status === "configured_unavailable"
-        ? "configured_unavailable"
-        : envApp
-          ? "available"
-          : "missing",
-    ...(isHttpMode
-      ? {
-          signingSecretStatus: configSigningSecret.token
-            ? "available"
-            : configSigningSecret.status === "configured_unavailable"
-              ? "configured_unavailable"
-              : "missing",
-        }
-      : {}),
-    userTokenStatus: configUser.token
-      ? "available"
-      : configUser.status === "configured_unavailable"
-        ? "configured_unavailable"
-        : envUser
-          ? "available"
-          : "missing",
-    configured: (() => {
-      const identityTokenConfigured =
-        identity === "user"
-          ? configUser.status !== "missing" || Boolean(envUser)
-          : configBot.status !== "missing" || Boolean(envBot);
-      if (isHttpMode) {
-        return identityTokenConfigured && configSigningSecret.status !== "missing";
-      }
-      if (isRelayMode) {
-        return identityTokenConfigured && relayConfigured;
-      }
-      return identityTokenConfigured && (configApp.status !== "missing" || Boolean(envApp));
-    })(),
+    botToken: botCredential.token,
+    appToken: appCredential.token,
+    ...(isHttpMode ? { signingSecret: configSigningSecret.token } : {}),
+    userToken: userCredential.token,
+    botTokenSource: botCredential.source,
+    appTokenSource: appCredential.source,
+    ...(isHttpMode ? { signingSecretSource: configSigningSecret.source } : {}),
+    userTokenSource: userCredential.source,
+    botTokenStatus: botCredential.status,
+    appTokenStatus: appCredential.status,
+    ...(isHttpMode ? { signingSecretStatus: configSigningSecret.status } : {}),
+    userTokenStatus: userCredential.status,
+    configured: hasSlackAccountCredentials({
+      config: merged,
+      identityTokenConfigured:
+        (identity === "user" ? userCredential : botCredential).status !== "missing",
+      appTokenConfigured: appCredential.status !== "missing",
+    }),
     config: merged,
     groupPolicy: merged.groupPolicy,
     textChunkLimit: merged.textChunkLimit,

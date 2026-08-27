@@ -1,10 +1,8 @@
 // Gateway hosted web tests cover Control UI and public plugin routes on one real listener.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
 import adminHttpRpcPlugin from "../../../../extensions/admin-http-rpc/index.js";
 import canvasPlugin from "../../../../extensions/canvas/index.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../../src/config/config.js";
@@ -38,61 +36,6 @@ afterEach(async () => {
   resetPluginRuntimeStateForTest();
 });
 
-function waitForWebSocketOpen(ws: WebSocket): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("canvas websocket open timed out")), 5_000);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-}
-
-function waitForWebSocketMessage(ws: WebSocket, expected: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error(`canvas websocket message timed out: ${expected}`)),
-      5_000,
-    );
-    ws.on("message", (data) => {
-      const message = Array.isArray(data)
-        ? Buffer.concat(data).toString("utf8")
-        : Buffer.isBuffer(data)
-          ? data.toString("utf8")
-          : Buffer.from(data).toString("utf8");
-      if (message !== expected) {
-        return;
-      }
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
-}
-
-async function triggerCanvasReload(ws: WebSocket, indexPath: string): Promise<void> {
-  const reload = waitForWebSocketMessage(ws, "reload");
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    await fs.writeFile(
-      indexPath,
-      `<!doctype html><html><body>Gateway hosted Canvas update ${attempt}</body></html>`,
-      "utf8",
-    );
-    const observed = await Promise.race([reload.then(() => true), delay(250).then(() => false)]);
-    if (observed) {
-      return;
-    }
-  }
-  await reload;
-}
-
 function replaceCapability(scopedUrl: string, capability: string): string {
   const url = new URL(scopedUrl);
   const segments = url.pathname.split("/");
@@ -107,31 +50,22 @@ function replaceCapability(scopedUrl: string, capability: string): string {
 
 describe("Gateway hosted web surfaces", () => {
   it(
-    "serves the Control UI, admin RPC, and capability-scoped Canvas/A2UI routes",
+    "serves the Control UI, admin RPC, and capability-scoped A2UI assets",
     { timeout: 90_000 },
     async () => {
       const root = tempDirs.make("openclaw-qa-hosted-web-");
       const stateDir = path.join(root, "state");
       const controlUiRoot = path.join(root, "control-ui");
-      const canvasRoot = path.join(root, "canvas");
       const configPath = path.join(root, "openclaw.json");
       await Promise.all([
         fs.mkdir(stateDir, { recursive: true }),
         fs.mkdir(controlUiRoot, { recursive: true }),
-        fs.mkdir(canvasRoot, { recursive: true }),
       ]);
-      await Promise.all([
-        fs.writeFile(
-          path.join(controlUiRoot, "index.html"),
-          "<!doctype html><html><body>Gateway hosted Control UI</body></html>",
-          "utf8",
-        ),
-        fs.writeFile(
-          path.join(canvasRoot, "index.html"),
-          "<!doctype html><html><body>Gateway hosted Canvas</body></html>",
-          "utf8",
-        ),
-      ]);
+      await fs.writeFile(
+        path.join(controlUiRoot, "index.html"),
+        "<!doctype html><html><body>Gateway hosted Control UI</body></html>",
+        "utf8",
+      );
 
       const config: OpenClawConfig = {
         gateway: {
@@ -167,6 +101,9 @@ describe("Gateway hosted web surfaces", () => {
             controlUiEnabled: true,
             sidecarStartup: "defer",
           });
+          // Deferred startup replaces the bootstrap registry; register routes only after the
+          // server publishes the settled runtime so requests do not target a retired registry.
+          await server.startupSettled;
           const registry = getActivePluginRegistry();
           if (!registry) {
             throw new Error("gateway did not publish an active plugin registry");
@@ -174,7 +111,6 @@ describe("Gateway hosted web surfaces", () => {
           const routeCleanups: Array<() => void> = [];
           const services: Array<{ stop?: (context: never) => void | Promise<void> }> = [];
           let operator: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-          let canvasWs: WebSocket | undefined;
 
           const registerEntry = (
             pluginId: string,
@@ -218,16 +154,9 @@ describe("Gateway hosted web surfaces", () => {
 
           try {
             registerEntry("admin-http-rpc", adminHttpRpcPlugin);
-            registerEntry("canvas", canvasPlugin, {
-              host: { enabled: true, liveReload: true, root: canvasRoot },
-            });
+            registerEntry("canvas", canvasPlugin, { host: { enabled: true } });
             expect(registry.httpRoutes.map((route) => route.path)).toEqual(
-              expect.arrayContaining([
-                "/api/v1/admin/rpc",
-                "/__openclaw__/a2ui",
-                "/__openclaw__/canvas",
-                "/__openclaw__/ws",
-              ]),
+              expect.arrayContaining(["/api/v1/admin/rpc", "/__openclaw__/a2ui"]),
             );
 
             const origin = `http://127.0.0.1:${port}`;
@@ -289,38 +218,26 @@ describe("Gateway hosted web surfaces", () => {
             const wrongCapabilityUrl = replaceCapability(scopedCanvasUrl, "wrong-capability");
 
             await withEnvAsync({ NODE_ENV: undefined, VITEST: undefined }, async () => {
-              const canvas = await fetch(`${scopedCanvasUrl}/__openclaw__/canvas/`);
-              expect(canvas.status).toBe(200);
-              expect(canvas.headers.get("content-type")).toContain("text/html");
-              expect(await canvas.text()).toContain("Gateway hosted Canvas");
+              for (const fileName of ["a2ui.bundle.js", "a2ui-v0.9.bundle.js"]) {
+                const asset = await fetch(`${scopedCanvasUrl}/__openclaw__/a2ui/${fileName}`);
+                expect(asset.status).toBe(200);
+                expect(asset.headers.get("content-type")).toContain("javascript");
+                expect((await asset.text()).length).toBeGreaterThan(100);
+              }
 
-              const a2ui = await fetch(`${scopedCanvasUrl}/__openclaw__/a2ui/`);
-              expect(a2ui.status).toBe(200);
-              expect(a2ui.headers.get("content-type")).toContain("text/html");
-              expect(await a2ui.text()).toContain("<title>OpenClaw Canvas</title>");
-
-              const a2uiBundle = await fetch(`${scopedCanvasUrl}/__openclaw__/a2ui/a2ui.bundle.js`);
-              expect(a2uiBundle.status).toBe(200);
-              expect(a2uiBundle.headers.get("content-type")).toContain("javascript");
-              expect((await a2uiBundle.text()).length).toBeGreaterThan(100);
-
-              const wrongCapability = await fetch(`${wrongCapabilityUrl}/__openclaw__/canvas/`);
+              const wrongCapability = await fetch(
+                `${wrongCapabilityUrl}/__openclaw__/a2ui/a2ui.bundle.js`,
+              );
               expect(wrongCapability.status).toBe(401);
-
-              const wsUrl = `${scopedCanvasUrl.replace(/^http/u, "ws")}/__openclaw__/ws`;
-              canvasWs = new WebSocket(wsUrl);
-              await waitForWebSocketOpen(canvasWs);
-              await triggerCanvasReload(canvasWs, path.join(canvasRoot, "index.html"));
-              canvasWs.close();
-              canvasWs = undefined;
 
               vi.useFakeTimers({ toFake: ["Date"] });
               vi.setSystemTime(capabilityIssuedAtMs + 24 * 60 * 60_000);
-              const expiredCapability = await fetch(`${scopedCanvasUrl}/__openclaw__/canvas/`);
+              const expiredCapability = await fetch(
+                `${scopedCanvasUrl}/__openclaw__/a2ui/a2ui.bundle.js`,
+              );
               expect(expiredCapability.status).toBe(401);
             });
           } finally {
-            canvasWs?.terminate();
             if (operator) {
               await disconnectGatewayClient(operator).catch(() => undefined);
             }

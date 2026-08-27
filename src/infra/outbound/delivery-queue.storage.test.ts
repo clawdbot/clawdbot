@@ -4,12 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { sweepDeliveryFailureMaintenance } from "../delivery-queue-failure-maintenance.js";
-import { compactFailedDeliveryQueueEntry } from "../delivery-queue-failures.js";
-import {
-  finalizeOutboundFailedDelivery,
-  resubmitOutboundDelivery,
-} from "./delivery-queue-failures.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
@@ -48,10 +42,7 @@ describe("delivery-queue storage", () => {
     return row?.status;
   }
 
-  async function enqueueSpoolDelivery(
-    suffix: string,
-    params: Partial<Parameters<typeof enqueueDelivery>[0]> = {},
-  ) {
+  async function enqueueSpoolDelivery(suffix: string) {
     const artifact = path.join(
       tmpDir(),
       "delivery-queue-media",
@@ -63,7 +54,6 @@ describe("delivery-queue storage", () => {
       channel: "directchat",
       to: "+1",
       payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
-      ...params,
     });
     return { artifact, id };
   }
@@ -115,8 +105,6 @@ describe("delivery-queue storage", () => {
           failPendingDelivery(
             {
               id,
-              expectedStatus: "pending",
-              lastError: "stale preclaim admission",
               entry: unclaimedSnapshot,
             },
             stateDir,
@@ -651,7 +639,7 @@ describe("delivery-queue storage", () => {
   });
 
   describe("failPendingDelivery", () => {
-    it("atomically writes the failed status and immutable reason into row and entry JSON", async () => {
+    it("deletes a rejected random delivery without retaining private detail", async () => {
       const id = await enqueueTextDelivery({
         channel: "slack",
         to: "C123",
@@ -667,8 +655,6 @@ describe("delivery-queue storage", () => {
         failPendingDelivery(
           {
             id,
-            expectedStatus: "pending",
-            lastError: "unsupported_enterprise_slack_delivery",
             entry,
           },
           tmpDir(),
@@ -676,8 +662,80 @@ describe("delivery-queue storage", () => {
       ).resolves.toEqual({ status: "failed" });
 
       expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
-      expect(readStatus(id)).toBe("failed");
-      expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+      expect(readStatus(id)).toBeUndefined();
+    });
+
+    it("deletes a rejected random delivery under its transient live claim", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "private live payload" }],
+      });
+      const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+      if (!claimId) {
+        throw new Error("test invariant: random live delivery must acquire its transient claim");
+      }
+      const claimed = await loadPendingDelivery(id, tmpDir());
+      if (!claimed) {
+        throw new Error("test invariant: claimed random delivery must remain pending");
+      }
+
+      await expect(failPendingDelivery({ id, entry: claimed }, tmpDir())).resolves.toEqual({
+        status: "failed",
+      });
+
+      expect(readStatus(id)).toBeUndefined();
+    });
+
+    it("terminalizes a rejected stable row under its exact crash claim", async () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(1_000);
+        const artifact = path.join(
+          tmpDir(),
+          "delivery-queue-media",
+          "00000000-0000-4000-8000-000000000091.ogg",
+        );
+        await fs.mkdir(path.dirname(artifact), { recursive: true });
+        await fs.writeFile(artifact, "private rejected media");
+        const id = "stable-rejected-after-crash-claim";
+        await enqueueDeliveryOnce(
+          {
+            channel: "directchat",
+            to: "+1555",
+            payloads: [{ mediaUrl: artifact, audioAsVoice: true }],
+            requiresProducerClaim: true,
+          },
+          id,
+          tmpDir(),
+        );
+        const claimId = await claimDeliveryPlatformSendAttempt(id, tmpDir());
+        if (!claimId) {
+          throw new Error("test invariant: stable rejection must own a producer claim");
+        }
+        vi.setSystemTime(60_000);
+        const claimed = await loadPendingDelivery(id, tmpDir());
+        if (!claimed) {
+          throw new Error("test invariant: claimed delivery must remain pending");
+        }
+
+        await expect(failPendingDelivery({ id, entry: claimed }, tmpDir())).resolves.toEqual({
+          status: "failed",
+        });
+
+        expect(readStatus(id)).toBe("failed");
+        expect(readQueuedEntry(tmpDir(), id)).toEqual({
+          id,
+          enqueuedAt: 60_000,
+          failedAt: 60_000,
+          retryCount: 0,
+          completionRetention: "permanent",
+          recoveryState: "completed_permanent",
+        });
+        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("returns a typed no-op when a status race already moved the row", async () => {
@@ -696,19 +754,17 @@ describe("delivery-queue storage", () => {
         failPendingDelivery(
           {
             id,
-            expectedStatus: "pending",
-            lastError: "unsupported_enterprise_slack_delivery",
             entry,
           },
           tmpDir(),
         ),
       ).resolves.toEqual({ status: "not_pending" });
-      expect(readQueuedEntry(tmpDir(), id).lastError).toBeUndefined();
+      expect(readStatus(id)).toBeUndefined();
     });
   });
 
   describe("moveToFailed", () => {
-    it("moves entry to failed/ subdirectory", async () => {
+    it("deletes a failed random delivery", async () => {
       const id = await enqueueTextDelivery(
         {
           channel: "workspace",
@@ -721,16 +777,18 @@ describe("delivery-queue storage", () => {
       await moveToFailed(id, tmpDir());
 
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-      expect(readStatus(id)).toBe("failed");
+      expect(readStatus(id)).toBeUndefined();
     });
 
-    it("does not remove failed entries when a stale ack arrives", async () => {
-      const id = await enqueueTextDelivery(
+    it("retains a minimal stable fence that later producers cannot replace", async () => {
+      const id = "stable-failed-delivery";
+      await enqueueDeliveryOnce(
         {
           channel: "workspace",
           to: "#general",
-          payloads: [{ text: "hi" }],
+          payloads: [{ text: "private stable payload" }],
         },
+        id,
         tmpDir(),
       );
 
@@ -738,131 +796,21 @@ describe("delivery-queue storage", () => {
       await ackDelivery(id, tmpDir());
 
       expect(readStatus(id)).toBe("failed");
-    });
-
-    it("retains stable failed IDs without changing success receipt retention", async () => {
-      const id = "stable-without-success-receipt";
-      await enqueueDeliveryOnce(
-        { channel: "workspace", to: "#general", payloads: [{ text: "stable failure" }] },
+      expect(readQueuedEntry(tmpDir(), id)).toEqual({
         id,
-        tmpDir(),
-      );
-      await moveToFailed(id, tmpDir());
-      expect(readQueuedEntry(tmpDir(), id)).toMatchObject({
-        failureRetention: "permanent",
-        terminalPolicy: { fence: { kind: "permanent" } },
-      });
-      expect(
-        compactFailedDeliveryQueueEntry({
-          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-          id,
-          stateDir: tmpDir(),
-        }),
-      ).toBe(true);
-      await sweepDeliveryFailureMaintenance({
-        stateDir: tmpDir(),
-        now: Date.now() + 31 * 24 * 60 * 60_000,
-      });
-      await expect(
-        enqueueDeliveryOnce(
-          { channel: "workspace", to: "#general", payloads: [{ text: "must not replay" }] },
-          id,
-          tmpDir(),
-        ),
-      ).resolves.toEqual({ id, created: false });
-
-      const { db } = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },
-      });
-      db.prepare(
-        "UPDATE delivery_queue_entries SET queue_name = 'outbound' WHERE queue_name = ? AND id = ?",
-      ).run(OUTBOUND_DELIVERY_QUEUE_NAME, id);
-      await expect(
-        enqueueDeliveryOnce(
-          { channel: "workspace", to: "#general", payloads: [{ text: "retired replay" }] },
-          id,
-          tmpDir(),
-        ),
-      ).resolves.toEqual({ id, created: false });
-
-      const successId = "stable-success-without-receipt";
-      await enqueueDeliveryOnce(
-        { channel: "workspace", to: "#general", payloads: [{ text: "success" }] },
-        successId,
-        tmpDir(),
-      );
-      await ackDelivery(successId, tmpDir());
-      await expect(
-        enqueueDeliveryOnce(
-          { channel: "workspace", to: "#general", payloads: [{ text: "new success" }] },
-          successId,
-          tmpDir(),
-        ),
-      ).resolves.toEqual({ id: successId, created: true });
-    });
-
-    it("expires random diagnostic failures without a failure fence", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "workspace",
-        to: "#general",
-        payloads: [{ text: "random failure" }],
-      });
-      await moveToFailed(id, tmpDir());
-      expect(readQueuedEntry(tmpDir(), id).terminalPolicy).toMatchObject({
-        fence: { kind: "none" },
-      });
-
-      await sweepDeliveryFailureMaintenance({
-        stateDir: tmpDir(),
-        now: Date.now() + 31 * 24 * 60 * 60_000,
-      });
-      expect(readStatus(id)).toBeUndefined();
-    });
-  });
-
-  describe("failed resubmit", () => {
-    it("resubmits a canonical pre-send text failure exactly once", async () => {
-      const id = await enqueueTextDelivery({
-        channel: "workspace",
-        to: "#general",
-        payloads: [{ text: "retry me" }],
-      });
-      await failDeliveryBeforePlatformSend(id, "connection refused", tmpDir());
-      await moveToFailed(id, tmpDir());
-
-      await expect(resubmitOutboundDelivery(id, tmpDir())).resolves.toEqual({ ok: true });
-      await expect(resubmitOutboundDelivery(id, tmpDir())).resolves.toEqual({
-        ok: false,
-        reason: "not_failed",
-      });
-      expect(await loadPendingDelivery(id, tmpDir())).toMatchObject({
-        id,
+        enqueuedAt: expect.any(Number),
+        failedAt: expect.any(Number),
         retryCount: 0,
-        attemptCount: 0,
+        completionRetention: "permanent",
+        recoveryState: "completed_permanent",
       });
-    });
-
-    it("refuses missing media and ambiguous platform evidence", async () => {
-      const media = await enqueueSpoolDelivery("8");
-      await failDeliveryBeforePlatformSend(media.id, "pre-send failure", tmpDir());
-      await moveToFailed(media.id, tmpDir());
-      await fs.unlink(media.artifact);
-      await expect(resubmitOutboundDelivery(media.id, tmpDir())).resolves.toEqual({
-        ok: false,
-        reason: "missing_media",
-      });
-
-      const ambiguous = await enqueueTextDelivery({
-        channel: "workspace",
-        to: "#general",
-        payloads: [{ text: "maybe sent" }],
-      });
-      await markDeliveryPlatformOutcomeUnknown(ambiguous, tmpDir());
-      await moveToFailed(ambiguous, tmpDir());
-      await expect(resubmitOutboundDelivery(ambiguous, tmpDir())).resolves.toEqual({
-        ok: false,
-        reason: "ambiguous",
-      });
+      await expect(
+        enqueueDeliveryOnce(
+          { channel: "workspace", to: "#general", payloads: [{ text: "replacement" }] },
+          id,
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ id, created: false });
     });
   });
 
@@ -876,80 +824,24 @@ describe("delivery-queue storage", () => {
       await expect(fs.stat(acked.artifact)).resolves.toBeDefined();
     });
 
-    it("releases acknowledged media", async () => {
+    it("releases artifacts after ack and guarded failure transitions", async () => {
       const acked = await enqueueSpoolDelivery("1");
       await ackDelivery(acked.id, tmpDir());
       await expect(fs.stat(acked.artifact)).rejects.toThrow();
-    });
 
-    it.each([
-      ["moveToFailed", "2"],
-      ["failPendingDelivery", "3"],
-    ] as const)("retains owner-managed media through %s cleanup", async (transition, suffix) => {
-      const owned = await enqueueSpoolDelivery(suffix, {
-        deliveryCompletion: {
-          kind: "conversation",
-          agentId: "main",
-          operationId: `media-cleanup-${suffix}`,
-        },
-      });
-      if (transition === "moveToFailed") {
-        await moveToFailed(owned.id, tmpDir());
-      } else {
-        const entry = await loadPendingDelivery(owned.id, tmpDir());
-        if (!entry) {
-          throw new Error("expected pending entry");
-        }
-        await failPendingDelivery(
-          {
-            id: owned.id,
-            expectedStatus: "pending",
-            lastError: "terminal failure",
-            entry,
-          },
-          tmpDir(),
-        );
+      const guarded = await enqueueSpoolDelivery("3");
+      const entry = await loadPendingDelivery(guarded.id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
       }
-
-      expect(readQueuedEntry(tmpDir(), owned.id).terminalPolicy).toMatchObject({
-        replay: "owner-managed",
-        cleanup: "pending",
-      });
-      await expect(fs.stat(owned.artifact)).resolves.toBeDefined();
-
-      await expect(finalizeOutboundFailedDelivery(owned.id, tmpDir())).resolves.toBe(true);
-      await expect(fs.stat(owned.artifact)).rejects.toThrow();
-      expect(readQueuedEntry(tmpDir(), owned.id).terminalPolicy).toMatchObject({
-        detail: "compacted",
-        replay: "owner-managed",
-        cleanup: "complete",
-      });
-    });
-
-    it("keeps safe failure media through finalization and resubmit", async () => {
-      const safe = await enqueueSpoolDelivery("4");
-      await moveToFailed(safe.id, tmpDir());
-
-      expect(readQueuedEntry(tmpDir(), safe.id).terminalPolicy).toMatchObject({
-        detail: "full",
-        replay: "safe",
-        cleanup: "complete",
-      });
-      await expect(finalizeOutboundFailedDelivery(safe.id, tmpDir())).resolves.toBe(false);
-      await expect(fs.stat(safe.artifact)).resolves.toBeDefined();
-      await expect(resubmitOutboundDelivery(safe.id, tmpDir())).resolves.toEqual({ ok: true });
-      await expect(fs.stat(safe.artifact)).resolves.toBeDefined();
-    });
-
-    it("releases ambiguous and fenced failure media at the terminal transition", async () => {
-      const ambiguous = await enqueueSpoolDelivery("5");
-      await markDeliveryPlatformOutcomeUnknown(ambiguous.id, tmpDir());
-      await moveToFailed(ambiguous.id, tmpDir());
-      await expect(fs.stat(ambiguous.artifact)).rejects.toThrow();
-
-      const fenced = await enqueueSpoolDelivery("6", { completionRetention: "permanent" });
-      await moveToFailed(fenced.id, tmpDir());
-      await expect(fs.stat(fenced.artifact)).rejects.toThrow();
+      await failPendingDelivery(
+        {
+          id: guarded.id,
+          entry,
+        },
+        tmpDir(),
+      );
+      await expect(fs.stat(guarded.artifact)).rejects.toThrow();
     });
   });
 

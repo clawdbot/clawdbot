@@ -59,6 +59,50 @@ describe("Control UI service-worker reconnect refresh", () => {
     await expect(refresh).resolves.toBe(true);
   });
 
+  it("joins an already-installing replacement without starting a competing update", async () => {
+    let state: ServiceWorkerState = "installing";
+    const listeners = new Set<() => void>();
+    const replacement = {
+      get state() {
+        return state;
+      },
+      addEventListener(_type: "statechange", listener: () => void) {
+        listeners.add(listener);
+      },
+      removeEventListener(_type: "statechange", listener: () => void) {
+        listeners.delete(listener);
+      },
+    } as unknown as ServiceWorker;
+    const update = vi.fn(async () => {
+      throw new Error("must not compete with the active install");
+    });
+    const registration = {
+      active: {} as ServiceWorker,
+      installing: replacement,
+      waiting: null,
+      update,
+    } as unknown as ServiceWorkerRegistration;
+    vi.stubGlobal("navigator", {
+      serviceWorker: {
+        controller: registration.active,
+        getRegistration: vi.fn(async () => registration),
+      },
+    });
+
+    const { refreshControlUiServiceWorker } = await import("./sw-refresh.runtime.ts");
+    const refresh = refreshControlUiServiceWorker();
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    expect(update).not.toHaveBeenCalled();
+
+    state = "activated";
+    for (const listener of listeners) {
+      listener();
+    }
+    await expect(refresh).resolves.toBe(true);
+  });
+
   it("releases the reconnect fence when service workers are unavailable", async () => {
     vi.stubGlobal("navigator", {});
     const { refreshControlUiServiceWorker } = await import("./sw-refresh.runtime.ts");

@@ -12,7 +12,10 @@ const TEST_MODEL_ID = "gpt-5.4";
 const TEST_CONTEXT_WINDOW = 200_000;
 
 function buildModelConfig(
-  route: Pick<ModelDefinitionConfig, "api" | "baseUrl" | "compat">,
+  route: Pick<
+    ModelDefinitionConfig,
+    "api" | "baseUrl" | "compat" | "contextTokens" | "contextWindow"
+  >,
 ): ModelDefinitionConfig {
   return {
     id: TEST_MODEL_ID,
@@ -22,7 +25,8 @@ function buildModelConfig(
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: TEST_CONTEXT_WINDOW,
+    contextTokens: route.contextTokens,
+    contextWindow: route.contextWindow ?? TEST_CONTEXT_WINDOW,
     maxTokens: 8_192,
     compat: route.compat,
   };
@@ -33,6 +37,8 @@ function buildHostConfig(params: {
   api: ModelDefinitionConfig["api"];
   baseUrl?: string;
   compat?: ModelDefinitionConfig["compat"];
+  contextTokens?: number;
+  contextWindow?: number;
   extraParams?: Record<string, unknown>;
 }): OpenClawConfig {
   const modelEntry = {
@@ -44,7 +50,15 @@ function buildHostConfig(params: {
   const providerConfig: ModelProviderConfig = {
     api: params.api,
     baseUrl: params.baseUrl,
-    models: [buildModelConfig({ api: params.api, baseUrl: params.baseUrl, compat: params.compat })],
+    models: [
+      buildModelConfig({
+        api: params.api,
+        baseUrl: params.baseUrl,
+        compat: params.compat,
+        contextTokens: params.contextTokens,
+        contextWindow: params.contextWindow,
+      }),
+    ],
   };
   return {
     models: { providers: { [params.provider]: providerConfig } },
@@ -63,6 +77,17 @@ describe("Responses server compaction host/transport parity", () => {
       resolvedBaseUrl: "https://api.openai.com/v1",
       expectedEnabled: true,
       expectedThreshold: 140_000,
+    },
+    {
+      name: "OpenAI direct Sol route with an active runtime cap",
+      provider: "openai",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+      resolvedBaseUrl: "https://api.openai.com/v1",
+      contextTokens: 272_000,
+      contextWindow: 1_050_000,
+      expectedEnabled: true,
+      expectedThreshold: 190_400,
     },
     {
       name: "OpenAI public route",
@@ -151,6 +176,8 @@ describe("Responses server compaction host/transport parity", () => {
       api: testCase.api,
       baseUrl: testCase.baseUrl,
       compat: testCase.compat,
+      contextTokens: testCase.contextTokens,
+      contextWindow: testCase.contextWindow,
       extraParams: testCase.extraParams,
     });
     const hostThreshold = resolveResponsesServerCompactionThreshold({
@@ -166,7 +193,8 @@ describe("Responses server compaction host/transport parity", () => {
         api: testCase.api,
         baseUrl: testCase.resolvedBaseUrl,
         compat: testCase.compat,
-        contextWindow: TEST_CONTEXT_WINDOW,
+        contextTokens: testCase.contextTokens,
+        contextWindow: testCase.contextWindow ?? TEST_CONTEXT_WINDOW,
       },
       {
         storeMode: "provider-policy",
@@ -178,6 +206,7 @@ describe("Responses server compaction host/transport parity", () => {
     const transportEnabled = payload.context_management !== undefined;
 
     expect(hostThreshold !== undefined).toBe(transportEnabled);
+    expect(policy.compactThreshold).toBe(hostThreshold);
     expect(transportEnabled).toBe(testCase.expectedEnabled);
     expect(hostThreshold).toBe(testCase.expectedThreshold);
   });
@@ -224,8 +253,17 @@ describe("Anthropic server compaction host threshold", () => {
           anthropic: {
             api: "anthropic-messages",
             baseUrl: "https://api.anthropic.com/v1",
-            contextWindow: contextWindowTokens,
-            models: [],
+            models: [
+              {
+                id: modelId,
+                name: modelId,
+                reasoning: true,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: contextWindowTokens,
+                maxTokens: 8_192,
+              },
+            ],
           },
         },
       },

@@ -121,7 +121,6 @@ describe("swarm tools integration", () => {
           return resultTextBySession.get(sessionKey) ?? "";
         }) as never,
         cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => undefined),
-        getGatewayRecoveryRuntime: () => undefined,
         getRuntimeConfig: () => config,
         maybeWakeRequesterAfterAllChildrenSettled: vi.fn(async () => false),
         onAgentEvent: vi.fn(() => () => undefined) as never,

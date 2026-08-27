@@ -2,6 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   reconcileSessionRunTerminal,
@@ -24,9 +25,9 @@ import { resetChatInputHistoryNavigation, type ChatInputHistoryState } from "./i
 // Control UI chat module implements run lifecycle behavior.
 import {
   resetToolStream,
+  resetToolStreamRun,
   type CompactionStatus,
   type FallbackStatus,
-  type PlanStatus,
   type WaitingApprovalStatus,
 } from "./tool-stream.ts";
 
@@ -41,7 +42,7 @@ export type ChatRunUiStatus = {
 
 type TerminalSessionRunStatus = Exclude<SessionRunStatus, "running">;
 
-type LocalTerminalReconcile = {
+export type LocalTerminalReconcile = {
   sessionKey: string;
   runId: string | null;
   phase: ChatRunUiStatus["phase"];
@@ -65,12 +66,11 @@ type RunLifecycleHost = Omit<
   compactionClearTimer?: TimerHandle | number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: TimerHandle | number | null;
-  planStatus?: PlanStatus | null;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">;
+  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
@@ -85,6 +85,7 @@ type ReconcileOptions = {
   clearChatStream?: boolean;
   clearIndicators?: boolean;
   clearToolStream?: boolean;
+  clearToolStreamForRun?: boolean;
   clearRunStatus?: boolean;
   publishRunStatus?: boolean;
   armLocalTerminalReconcile?: boolean;
@@ -142,20 +143,39 @@ export function isChatBusy(host: { chatSending?: boolean; chatRunId?: string | n
   return Boolean(host.chatSending || host.chatRunId);
 }
 
-export function hasAbortableSessionRun(host: {
+export function setChatRunError(
+  state: { chatRunError?: { summary: string } | null },
+  summary: string,
+) {
+  state.chatRunError = { summary: formatUiExternalText(summary) };
+}
+
+type SessionRunHost = {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
-}): boolean {
-  if (host.chatRunId) {
-    return true;
-  }
+};
+
+export function hasDirectSessionRun(host: SessionRunHost): boolean {
   return Boolean(
+    host.chatRunId ||
     host.sessionsResult?.sessions.some(
       (session) =>
-        areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
-        (isSessionRunActive(session) || session.hasActiveSubagentRun === true),
+        areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
     ),
+  );
+}
+
+export function hasAbortableSessionRun(host: SessionRunHost): boolean {
+  return (
+    hasDirectSessionRun(host) ||
+    Boolean(
+      host.sessionsResult?.sessions.some(
+        (session) =>
+          areUiSessionKeysEquivalent(session.key, host.sessionKey) &&
+          session.hasActiveSubagentRun === true,
+      ),
+    )
   );
 }
 
@@ -326,7 +346,7 @@ function scheduleRunStatusClear(host: RunLifecycleHost, status: ChatRunUiStatus)
     host.chatRunStatusClearTimer = null;
     // Terminal status temporarily masks stale active rows from session polling.
     // Reconcile again as the mask expires so the composer cannot revert to Stop.
-    if (!reconcileStaleChatRunAfterSessionStatePublication(host)) {
+    if (!reconcileChatRunAfterSessionStatePublication(host)) {
       host.requestUpdate?.();
     }
   }, CHAT_RUN_STATUS_TOAST_DURATION_MS);
@@ -355,12 +375,6 @@ function clearRunIndicators(host: RunLifecycleHost, runId?: string | null) {
     if (!runId || !waitingApproval.runId || waitingApproval.runId === runId) {
       host.waitingApprovalStatuses?.delete(approvalId);
     }
-  }
-  // Plan checklists are run-owned (unlike the transient compaction/fallback
-  // toasts): a terminal reconcile for another run must not clear them.
-  const planOwner = host.planStatus?.runId;
-  if (host.planStatus && (!runId || !planOwner || planOwner === runId)) {
-    host.planStatus = null;
   }
 }
 
@@ -410,7 +424,7 @@ function reconcileSessionRows(
   if (host.sessionsResult) {
     host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
-  host.sessions?.reconcileRunTerminal(terminal);
+  host.sessions?.reconcileRunTerminal?.(terminal);
 }
 
 function reconcileYieldedSessionRows(
@@ -430,7 +444,7 @@ function reconcileYieldedSessionRows(
   if (host.sessionsResult) {
     host.sessionsResult = reconcileSessionRunTerminal(host.sessionsResult, terminal);
   }
-  host.sessions?.reconcileRunTerminal(terminal);
+  host.sessions?.reconcileRunTerminal?.(terminal);
 }
 
 export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: ReconcileOptions = {}) {
@@ -448,8 +462,12 @@ export function reconcileChatRunLifecycle(host: RunLifecycleHost, options: Recon
   if (options.clearLocalRun) {
     host.chatRunId = null;
   }
-  if (options.clearToolStream && canResetToolStream(host)) {
-    resetToolStream(host);
+  if (canResetToolStream(host)) {
+    if (options.clearToolStream) {
+      resetToolStream(host);
+    } else if (options.clearToolStreamForRun && runId) {
+      resetToolStreamRun(host, runId);
+    }
   }
   if (options.outcome) {
     const status: ChatRunUiStatus = {
@@ -551,7 +569,13 @@ export function reconcileChatRunFromCurrentSessionRow(
   return reconcileChatRunFromSessionRow(host, row, options);
 }
 
-export function reconcileStaleChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
+export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
+  if (host.chatRunId) {
+    const row = currentSessionRow(host);
+    if (row?.lastRunId === host.chatRunId) {
+      return reconcileChatRunFromSessionRow(host, row, { publishRunStatus: false });
+    }
+  }
   // Both session subscriptions and direct event reconciliation can republish
   // canonical rows after the local terminal projection; guard both paths.
   const canReconcile =
@@ -602,6 +626,7 @@ export function reconcileChatRunFromSessionRow(
     sessionKeys: [row.key],
     clearLocalRun: true,
     clearChatStream: true,
+    clearToolStreamForRun: true,
     publishRunStatus: options.publishRunStatus,
   });
   return true;

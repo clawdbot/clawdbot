@@ -58,7 +58,9 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: getMemorySearchManager,
 }));
 
-vi.mock("./doctor.memory-core-runtime.js", () => ({
+import { createDoctorHandlers } from "./doctor.js";
+
+const doctorHandlers = createDoctorHandlers({
   dedupeDreamDiaryEntries,
   loadShortTermPromotionDreamingStats,
   previewGroundedRemMarkdown,
@@ -66,9 +68,7 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
   repairDreamingArtifacts,
-}));
-
-import { doctorHandlers } from "./doctor.js";
+});
 
 const makeRuntimeContext = () => ({ getRuntimeConfig: () => getRuntimeConfig() });
 
@@ -240,6 +240,7 @@ const expectEmbeddingErrorResponse = (respond: ReturnType<typeof vi.fn>, error: 
 
 describe("doctor.memory agent targeting", () => {
   beforeEach(() => {
+    getRuntimeConfig.mockReset().mockReturnValue({});
     listAgentIds.mockClear();
     resolveDefaultAgentId.mockReset().mockReturnValue("main");
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
@@ -262,6 +263,9 @@ describe("doctor.memory agent targeting", () => {
   it.each(DOCTOR_MEMORY_TARGET_METHODS)(
     "%s returns typed selection-required when agentId is omitted",
     async (method) => {
+      getRuntimeConfig.mockReturnValue({
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      });
       resolveDefaultAgentId.mockImplementationOnce(() => {
         throw new AgentSelectionRequiredError(["ops", "research"], {
           surface: "doctor memory",
@@ -327,7 +331,7 @@ describe("doctor.memory agent targeting", () => {
 
 describe("doctor.memory.status", () => {
   beforeEach(() => {
-    getRuntimeConfig.mockClear();
+    getRuntimeConfig.mockReset().mockReturnValue({});
     resolveDefaultAgentId.mockClear();
     resolveAgentWorkspaceDir.mockReset().mockReturnValue("/tmp/openclaw");
     resolveMemorySearchConfig.mockReset().mockReturnValue({ enabled: true });
@@ -701,9 +705,13 @@ describe("doctor.memory.status", () => {
 
       agents: {
         defaults: {
+          systemAgent: { agentId: "main" },
           userTimezone: "America/Los_Angeles",
         },
-        list: [{ id: "alpha", workspace: alphaWorkspaceDir }],
+        list: [
+          { id: "main", workspace: mainWorkspaceDir },
+          { id: "alpha", workspace: alphaWorkspaceDir },
+        ],
       },
       plugins: {
         entries: {
@@ -1116,7 +1124,7 @@ describe("doctor.memory.status", () => {
       },
 
       agents: {
-        defaults: {},
+        defaults: { systemAgent: { agentId: "main" } },
         list: [
           { id: "main", workspace: mainWorkspaceDir },
           { id: "alpha", workspace: alphaWorkspaceDir },

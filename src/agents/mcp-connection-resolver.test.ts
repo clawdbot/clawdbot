@@ -330,6 +330,10 @@ describe("mcp connection resolver helpers", () => {
           } as GatewayReloadProofState["cronState"]["cron"],
           storePath: "/tmp/openclaw-mcp-gateway-reload-proof-cron",
           cronEnabled: false,
+          reconcileExitWatchers: async () => {},
+          reconcileStreamWatchers: async () => {},
+          stopStreamWatchers: async () => {},
+          reconcileHeartbeatJobs: async () => {},
         },
         channelHealthMonitor: null,
       };
@@ -360,6 +364,7 @@ describe("mcp connection resolver helpers", () => {
         },
         async startChannel() {},
         async stopChannel() {},
+        pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
           await beforeReplace(new Set());
           await commitRuntime();

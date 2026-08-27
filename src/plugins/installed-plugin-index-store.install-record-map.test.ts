@@ -41,18 +41,18 @@ function createIndex(installRecords: InstalledPluginIndex["installRecords"]): In
 }
 
 function readInstallRecordRow(stateDir: string): {
-  install_records_json: string;
+  value_json: string;
   updated_at_ms: number | bigint;
 } {
   return runOpenClawStateWriteTransaction(
     ({ db }) =>
       db
         .prepare(
-          `SELECT install_records_json, updated_at_ms
-             FROM installed_plugin_index
-            WHERE index_key = 'installed-plugin-index'`,
+          `SELECT value_json, updated_at_ms
+             FROM config_machine_state
+            WHERE state_key = 'plugins.installedIndex'`,
         )
-        .get() as { install_records_json: string; updated_at_ms: number | bigint },
+        .get() as { value_json: string; updated_at_ms: number | bigint },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
 }
@@ -134,8 +134,11 @@ describe("installed plugin index install-record persistence", () => {
       source: "npm",
       futureMetadata: { retained: true },
     });
-    expect(readInstallRecordRow(stateDir).install_records_json).toBe(
-      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","futureMetadata":{"retained":true}},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}',
+    // The persisted value_json embeds the UTF-8 byte-order serialization as a
+    // JSON object, so JS object semantics hoist integer-like ids numerically
+    // while the remaining ids keep their byte-order position deterministically.
+    expect(readInstallRecordRow(stateDir).value_json).toContain(
+      '"installRecords":{"1":{"source":"archive"},"2":{"source":"npm","futureMetadata":{"retained":true}},"10":{"source":"path"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}',
     );
   });
 });

@@ -27,6 +27,16 @@ beforeEach(() => {
 });
 
 describe("sessionsCompactCommand", () => {
+  it("rejects a blank agent before calling the Gateway", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      sessionsCompactCommand({ key: "agent:main:main", agent: "" }, runtime),
+    ).rejects.toThrow("--agent must not be blank");
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+  });
+
   it("prints the token delta and does not exit on a successful compaction", async () => {
     callGatewayCli.mockResolvedValue({
       ok: true,
@@ -158,23 +168,6 @@ describe("sessionsCompactCommand", () => {
       )[0],
     ).toEqual(payload);
     expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("prints the archive path exactly as returned by the RPC", async () => {
-    const archived = "/state/agents/main/sessions/sess-1.jsonl.bak.2026-07-19T00-00-00.000Z.zst";
-    callGatewayCli.mockResolvedValue({
-      ok: true,
-      key: "agent:main:main",
-      compacted: true,
-      kept: 50,
-      archived,
-    });
-    const runtime = createRuntime();
-
-    await sessionsCompactCommand({ key: "agent:main:main", maxLines: 50 }, runtime);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(joinedArgs(runtime.log)).toContain(`Archived transcript: ${archived}`);
   });
 
   it("forwards agentId and maxLines to the RPC params", async () => {

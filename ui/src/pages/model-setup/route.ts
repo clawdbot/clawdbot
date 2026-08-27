@@ -5,6 +5,7 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { consumeCachedModelSetupDetection } from "./detect-cache.ts";
 import type { ModelSetupRouteData } from "./model-setup-page.ts";
@@ -38,11 +39,10 @@ async function loadModelSetupRouteData(
       result: await detectModelSetup(client, agentId ?? undefined),
     };
   } catch (error) {
-    const message =
-      error instanceof Error && error.message.trim()
-        ? error.message
-        : t("modelSetup.errors.requestFailed");
-    state = { phase: "detect-error", message };
+    state = {
+      phase: "detect-error",
+      message: formatUiError(error, t("modelSetup.errors.requestFailed")),
+    };
   }
 
   const current = context.gateway.snapshot;

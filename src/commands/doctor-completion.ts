@@ -6,6 +6,7 @@ import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  findCompletionProfileWriteError,
   formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
@@ -17,7 +18,6 @@ import {
   type CompletionShell,
 } from "../cli/completion-runtime.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
-import { isErrno } from "../infra/errors.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -31,15 +31,6 @@ type ShellCompletionStatusOptions = {
 export type CompletionCacheGenerationOptions = ShellCompletionStatusOptions & {
   generationMode: "core-only" | "full";
 };
-
-const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
-
-function findProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
-  if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
-    return err;
-  }
-  return err instanceof Error ? findProfileWriteError(err.cause) : undefined;
-}
 
 async function installCompletionForDoctor(
   shell: CompletionShell,
@@ -55,7 +46,7 @@ async function installCompletionForDoctor(
     );
   } catch (err) {
     // Completion is optional, but only profile permission failures are safe to downgrade.
-    const writeError = findProfileWriteError(err);
+    const writeError = findCompletionProfileWriteError(err);
     if (!writeError) {
       throw err;
     }

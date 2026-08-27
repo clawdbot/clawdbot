@@ -2693,7 +2693,7 @@ struct GatewayNodeSessionTests {
         #expect(auth["bootstrapToken"] == nil)
         #expect(auth["deviceToken"] == nil)
         #expect(task.latestConnectDevice() != nil)
-        #expect(await gateway.currentIssuedDeviceAuthRoles() == [])
+        #expect(await gateway.currentDeviceAuthRoles().persisted == [])
 
         await gateway.disconnect()
     }
@@ -2907,13 +2907,15 @@ struct GatewayNodeSessionTests {
             "operator.talk.secrets",
             "operator.write",
         ])
-        #expect(await gateway.currentIssuedDeviceAuthRoles() == ["node", "operator"])
+        let authRoles = await gateway.currentDeviceAuthRoles()
+        #expect(authRoles.received == ["node", "operator"])
+        #expect(authRoles.persisted == ["node", "operator"])
 
         await gateway.disconnect()
     }
 
     @Test(.stateDirectoryIsolated)
-    func `failed device token write is not reported as an issued role`() async throws {
+    func `failed device token write retains issuance without claiming persistence`() async throws {
         let stateDir = try #require(ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"])
         let blocker = URL(fileURLWithPath: stateDir, isDirectory: true)
             .appendingPathComponent("identity", isDirectory: false)
@@ -2936,7 +2938,9 @@ struct GatewayNodeSessionTests {
             options: options,
             session: session)
 
-        #expect(await gateway.currentIssuedDeviceAuthRoles().isEmpty)
+        let authRoles = await gateway.currentDeviceAuthRoles()
+        #expect(authRoles.received == ["node"])
+        #expect(authRoles.persisted.isEmpty)
         await gateway.disconnect()
     }
 

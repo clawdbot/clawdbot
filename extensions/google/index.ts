@@ -11,7 +11,10 @@ import type {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createRealtimeVoiceAudioQueue } from "openclaw/plugin-sdk/realtime-voice-audio-queue";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
@@ -160,21 +163,9 @@ function resolveGoogleRealtimeProviderConfig(
   rawConfig: RealtimeVoiceProviderConfig,
   cfg?: { models?: { providers?: { google?: { apiKey?: unknown } } } },
 ): RealtimeVoiceProviderConfig {
-  const providers =
-    typeof rawConfig.providers === "object" &&
-    rawConfig.providers !== null &&
-    !Array.isArray(rawConfig.providers)
-      ? (rawConfig.providers as Record<string, unknown>)
-      : undefined;
-  const nested = providers?.google;
+  const providers = asOptionalRecord(rawConfig.providers);
   const raw =
-    typeof nested === "object" && nested !== null && !Array.isArray(nested)
-      ? (nested as Record<string, unknown>)
-      : typeof rawConfig.google === "object" &&
-          rawConfig.google !== null &&
-          !Array.isArray(rawConfig.google)
-        ? (rawConfig.google as Record<string, unknown>)
-        : rawConfig;
+    asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google) ?? rawConfig;
   return {
     ...raw,
     ...(raw.apiKey === undefined
@@ -210,38 +201,85 @@ function createLazyGoogleRealtimeVoiceBridge(
 ): RealtimeVoiceBridge {
   let bridge: RealtimeVoiceBridge | undefined;
   let bridgePromise: Promise<RealtimeVoiceBridge> | undefined;
+  let bridgePromiseGeneration = 0;
   let bridgeReady = false;
-  let bridgeClosed = false;
-  let closed = false;
   // Provider close is terminal for input admission. Only an explicit connect()
   // call may reopen it; late callbacks and microphone frames stay ignored.
-  let providerTerminated = false;
+  let terminated = false;
+  let generation = 0;
   let latestMediaTimestamp: number | undefined;
   let pendingGreeting: string | undefined;
   // Lazy startup keeps the newest microphone tail when loading stalls.
   const pendingAudio = createRealtimeVoiceAudioQueue("drop-oldest");
   const pendingUserMessages: string[] = [];
   let pendingUserMessageBytes = 0;
+  const closedBridges = new WeakSet<RealtimeVoiceBridge>();
+  const clearPendingInput = () => {
+    pendingAudio.clear();
+    pendingUserMessages.length = 0;
+    pendingUserMessageBytes = 0;
+    pendingGreeting = undefined;
+    latestMediaTimestamp = undefined;
+  };
+  const isCurrentNonterminalGeneration = (candidate: number) =>
+    candidate === generation && !terminated;
   // Loading and connecting finish on separate async boundaries. Keep close ownership
   // here so either late completion closes the provider bridge exactly once.
   const closeBridge = (loadedBridge = bridge) => {
-    if (!loadedBridge || bridgeClosed) {
+    if (!loadedBridge || closedBridges.has(loadedBridge)) {
       return;
     }
-    bridgeClosed = true;
+    closedBridges.add(loadedBridge);
     loadedBridge.close();
+  };
+  const emitTerminal = (terminalGeneration: number, reason: "completed" | "error") => {
+    if (!isCurrentNonterminalGeneration(terminalGeneration)) {
+      return;
+    }
+    bridgeReady = false;
+    terminated = true;
+    clearPendingInput();
+    req.onClose?.(reason);
+  };
+  const throwTerminalBridgeError = (
+    terminalGeneration: number,
+    loadedBridge: RealtimeVoiceBridge,
+    primaryError: unknown,
+  ): never => {
+    if (isCurrentNonterminalGeneration(terminalGeneration)) {
+      try {
+        req.onError?.(
+          primaryError instanceof Error ? primaryError : new Error(String(primaryError)),
+        );
+      } catch {
+        // Consumer callback failures cannot prevent terminal cleanup or replace the provider failure.
+      }
+      try {
+        emitTerminal(terminalGeneration, "error");
+      } catch {
+        // Consumer callback failures cannot prevent cleanup or replace the provider failure.
+      }
+    }
+    try {
+      closeBridge(loadedBridge);
+    } catch {
+      // Cleanup failures cannot replace the provider failure.
+    }
+    throw primaryError;
   };
   const loadBridge = async () => {
     if (!bridgePromise) {
+      const loadGeneration = generation;
+      bridgePromiseGeneration = loadGeneration;
       bridgePromise = loadGoogleRealtimeVoiceProvider().then((provider) =>
         provider.createBridge({
           ...req,
           onReady: () => {
-            if (closed || providerTerminated) {
+            if (loadGeneration !== generation || terminated) {
               return;
             }
             req.onReady?.();
-            if (closed || providerTerminated || !bridge) {
+            if (loadGeneration !== generation || terminated || !bridge) {
               return;
             }
             bridgeReady = true;
@@ -250,19 +288,22 @@ function createLazyGoogleRealtimeVoiceBridge(
             flushPending(bridge);
           },
           onClose: (reason) => {
-            bridgeReady = false;
-            providerTerminated = true;
-            pendingAudio.clear();
-            req.onClose?.(reason);
+            emitTerminal(loadGeneration, reason);
           },
         }),
       );
     }
-    bridge = await bridgePromise;
-    if (closed) {
-      closeBridge(bridge);
+    const loading = bridgePromise;
+    const loadGeneration = bridgePromiseGeneration;
+    const loadedBridge = await loading;
+    // Explicit reconnect can replace the lazy load before it settles. Only the
+    // matching generation may publish a bridge; stale instances must close.
+    if (loading !== bridgePromise || loadGeneration !== generation || terminated) {
+      closeBridge(loadedBridge);
+      return loadedBridge;
     }
-    return bridge;
+    bridge = loadedBridge;
+    return loadedBridge;
   };
   const requireBridge = () => {
     if (!bridge) {
@@ -271,7 +312,7 @@ function createLazyGoogleRealtimeVoiceBridge(
     return bridge;
   };
   const flushPending = (loadedBridge: RealtimeVoiceBridge) => {
-    if (closed || providerTerminated) {
+    if (terminated) {
       return;
     }
     if (typeof latestMediaTimestamp === "number") {
@@ -297,26 +338,30 @@ function createLazyGoogleRealtimeVoiceBridge(
     },
     supportsToolResultSuppression: false,
     connect: async () => {
+      if (terminated) {
+        generation += 1;
+        bridge = undefined;
+        bridgePromise = undefined;
+        bridgeReady = false;
+        terminated = false;
+      }
+      const connectGeneration = generation;
       const loadedBridge = await loadBridge();
-      if (closed) {
+      if (connectGeneration !== generation || terminated) {
         closeBridge(loadedBridge);
         return;
       }
-      providerTerminated = false;
       try {
         await loadedBridge.connect();
       } catch (error) {
-        bridgeReady = false;
-        providerTerminated = true;
-        pendingAudio.clear();
-        throw error;
+        throwTerminalBridgeError(connectGeneration, loadedBridge, error);
       }
-      if (closed) {
+      if (connectGeneration !== generation || terminated) {
         closeBridge(loadedBridge);
       }
     },
     sendAudio: (audio) => {
-      if (closed || providerTerminated) {
+      if (terminated) {
         return;
       }
       if (bridgeReady && bridge) {
@@ -326,14 +371,14 @@ function createLazyGoogleRealtimeVoiceBridge(
       pendingAudio.enqueue(audio);
     },
     setMediaTimestamp: (ts) => {
-      if (closed) {
+      if (terminated) {
         return;
       }
       latestMediaTimestamp = ts;
       bridge?.setMediaTimestamp(ts);
     },
     sendUserMessage: (text) => {
-      if (closed) {
+      if (terminated) {
         return;
       }
       if (bridgeReady && bridge) {
@@ -354,7 +399,7 @@ function createLazyGoogleRealtimeVoiceBridge(
       pendingUserMessageBytes += messageBytes;
     },
     triggerGreeting: (instructions) => {
-      if (closed) {
+      if (terminated) {
         return;
       }
       if (bridgeReady && bridge) {
@@ -368,16 +413,18 @@ function createLazyGoogleRealtimeVoiceBridge(
       requireBridge().submitToolResult(callId, result, options),
     acknowledgeMark: () => requireBridge().acknowledgeMark(),
     close: () => {
-      closed = true;
+      if (terminated) {
+        return;
+      }
+      terminated = true;
       bridgeReady = false;
-      providerTerminated = true;
-      pendingAudio.clear();
-      pendingUserMessages.length = 0;
-      pendingUserMessageBytes = 0;
-      pendingGreeting = undefined;
+      clearPendingInput();
       closeBridge();
+      // A bridge closed before its first connect has no provider-owned
+      // connection to report the terminal outcome.
+      req.onClose?.("completed");
     },
-    isConnected: () => bridge?.isConnected() ?? false,
+    isConnected: () => !terminated && (bridge?.isConnected() ?? false),
   };
 }
 
@@ -420,7 +467,7 @@ export default definePluginEntry({
     api.registerCliBackend(buildGoogleGeminiCliBackend());
     registerGoogleGeminiCliProvider(api);
     registerGoogleProvider(api);
-    api.registerMemoryEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(geminiMemoryEmbeddingProviderAdapter);
     api.registerImageGenerationProvider(createLazyGoogleImageGenerationProvider());
     api.registerMediaUnderstandingProvider(createLazyGoogleMediaUnderstandingProvider());
     api.registerMusicGenerationProvider(createLazyGoogleMusicGenerationProvider());

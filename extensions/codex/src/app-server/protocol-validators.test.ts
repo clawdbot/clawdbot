@@ -13,6 +13,7 @@ function makeMinimalThread(overrides: Record<string, unknown> = {}) {
   return {
     id: "thread-1",
     sessionId: "session-1",
+    projectId: null,
     cliVersion: CODEX_APP_SERVER_VERSION,
     createdAt: 1715299200,
     updatedAt: 1715299200,
@@ -154,6 +155,20 @@ describe("assertCodexModelListResponse", () => {
 });
 
 describe("readCodexTurn", () => {
+  it("normalizes omitted agent-message delivery to the synchronous default", () => {
+    const turn = readCodexTurn({
+      id: "turn-1",
+      status: "completed",
+      items: [{ id: "message-1", type: "agentMessage", text: "done" }],
+    });
+
+    expect(turn?.items[0]).toMatchObject({
+      id: "message-1",
+      type: "agentMessage",
+      delivery: null,
+    });
+  });
+
   it("does not merge defaults from unrelated thread item union branches", () => {
     const turn = readCodexTurn({
       id: "turn-1",

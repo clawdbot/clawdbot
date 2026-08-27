@@ -15,7 +15,10 @@ type MigrationResult = {
   retainedLegacyDefaultAgentId?: string;
 };
 
-export function migratePersistedImplicitMainRoster(raw: unknown): MigrationResult {
+export function migratePersistedImplicitMainRoster(
+  raw: unknown,
+  options: { materializeWorkspace?: boolean } = {},
+): MigrationResult {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return { config: raw, changed: false, diagnostics: [] };
   }
@@ -124,6 +127,7 @@ export function migratePersistedImplicitMainRoster(raw: unknown): MigrationResul
     const materialized = materializeLegacyDefaultAgentRoles(
       nextRoot as OpenClawConfig,
       legacyDefaultAgentId,
+      options,
     );
     nextRoot = materialized.config as Record<string, unknown>;
     insertedPaths = materialized.insertedPaths;

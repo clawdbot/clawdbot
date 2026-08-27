@@ -57,7 +57,7 @@ describe("minimal npm extended-stable workflow", () => {
     const gitFetchLines = source
       .split("\n")
       .filter((line) => /\bgit(?: -C "[^"]+")? fetch\b/u.test(line));
-    expect(gitFetchLines).toHaveLength(9);
+    expect(gitFetchLines).toHaveLength(8);
     expect(
       gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
     ).toBe(true);
@@ -119,6 +119,10 @@ describe("minimal npm extended-stable workflow", () => {
       parsed.jobs?.preflight_openclaw_npm,
       "Checkout trusted Plugin SDK API tooling",
     );
+    const publishProvenanceRun = publishProvenance.run;
+    if (!publishProvenanceRun) {
+      throw new Error("Verify prepared tarball provenance is missing its run script");
+    }
 
     expect(input).toEqual({
       default: "",
@@ -141,17 +145,28 @@ describe("minimal npm extended-stable workflow", () => {
     expect(preflightDiff.run).toContain('git -C "$tooling_dir" status --porcelain');
     expect(preflightDiff.run).not.toContain('pkg.scripts?.["plugin-sdk:api:diff"]');
     expect(preflightDiff.run).toContain('pnpm --dir "$tooling_dir" run plugin-sdk:api:diff');
-    expect(publishProvenance.run).toContain("plugin-sdk-api-release-evidence.mjs");
-    expect(publishProvenance.run).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
-    expect(publishProvenance.run).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
-    expect(publishProvenance.run).toContain('--current-selector-ref "$current_selector_ref"');
-    expect(publishProvenance.run).toContain('--current-selector-sha "$current_selector_sha"');
-    expect(publishProvenance.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
+    expect(publishProvenanceRun).toContain("plugin-sdk-api-release-evidence.mjs");
+    expect(publishProvenanceRun).toContain('--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"');
+    expect(publishProvenanceRun).toContain('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version');
+    expect(publishProvenanceRun).toContain(
+      'git -C trusted-workflow rev-parse --verify "refs/tags/${current_selector_ref}^{commit}"',
+    );
+    expect(publishProvenanceRun).not.toContain("git fetch");
+    expect(publishProvenanceRun).toContain('--current-selector-ref "$current_selector_ref"');
+    expect(publishProvenanceRun).toContain('--current-selector-sha "$current_selector_sha"');
+    expect(publishProvenanceRun).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
     expect(downloadPreflight.run).toContain(
       '"plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}"',
     );
-    expect(publishProvenance.run).toContain(
+    expect(publishProvenanceRun).toContain(
       "Prepared Plugin SDK API evidence does not match its immutable artifact",
+    );
+    expect(
+      publishProvenanceRun.indexOf(
+        "Prepared Plugin SDK API evidence does not match its immutable artifact",
+      ),
+    ).toBeLessThan(
+      publishProvenanceRun.indexOf('npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version'),
     );
     expect(verifyPreflightRun.run).toContain(
       '"$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH"',
@@ -258,8 +273,11 @@ describe("minimal npm extended-stable workflow", () => {
     const parsed = workflow();
     const preflight = parsed.jobs?.preflight_openclaw_npm;
     const metadata = step(preflight, "Validate release metadata");
+    const pack = step(preflight, "Pack prepared npm tarball");
     expect(metadata.run).toContain('RELEASE_BRANCH_REF="${RELEASE_SHA}"');
     expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
+    expect(pack.run).toContain('if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]');
+    expect(pack.run).toContain("export OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG=1");
 
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
     expect(step(preflight, "Verify release contents").env).toMatchObject({
@@ -310,11 +328,18 @@ describe("minimal npm extended-stable workflow", () => {
     expect(buildControlUi.if).toBe("steps.dist_build_cache.outputs.cache-hit != 'true'");
     expect(buildControlUi.env?.OPENCLAW_CONTROL_UI_RELEASE_BUILD).toBe("1");
     expect(step(preflight, "Check").if).toBeUndefined();
-    expect(step(preflight, "Verify release contents").if).toBeUndefined();
+    const verifyReleaseContents = step(preflight, "Verify release contents");
+    expect(verifyReleaseContents.if).toBeUndefined();
+    expect(verifyReleaseContents.run).toBe(
+      "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
+    );
     expect(step(preflight, "Verify prepared npm tarball install").if).toBeUndefined();
 
     const save = step(preflight, "Save preflight build outputs");
+    const setup = step(preflight, "Setup Node environment");
+    expect(setup.with?.["cache-mode"]).toBe("read-write");
     expect(save.uses).toContain("actions/cache/save@");
+    expect(save.if).toContain("steps.setup-node-env.outputs.cache-mode == 'read-write'");
     expect(save.with?.key).toBe("${{ steps.dist_build_cache.outputs.cache-primary-key }}");
   });
 

@@ -16,6 +16,7 @@ import { markClawPackageIndependentlyOwned } from "../state/claw-package-adoptio
 import { withClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
 import { shortenHomePath } from "../utils.js";
 import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
+import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import {
   confirmNonClawHubInstall,
   type NonClawHubInstallSourceClass,
@@ -79,7 +80,6 @@ async function runPluginInstallCommandUnlocked(
   if (opts.dangerouslyForceUnsafeInstall) {
     runtime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING));
   }
-
   const snapshot = await loadConfigForInstall(request).catch((error: unknown) => {
     runtime.error(formatErrorMessage(error));
     return null;
@@ -87,7 +87,15 @@ async function runPluginInstallCommandUnlocked(
   if (!snapshot) {
     return runtime.exit(1);
   }
-  const safetyOverrides = resolveInstallSafetyOverrides({ ...opts, config: snapshot.config });
+  const safetyOverrides = resolveInstallSafetyOverrides({
+    ...opts,
+    config: snapshot.config,
+    ...resolveInstallPolicyWarningAcknowledgementCliOptions({
+      acknowledgeInstallPolicyWarning: opts.acknowledgeInstallPolicyWarning,
+      allowPrompt: params.allowInstallPolicyWarningPrompt,
+      dangerouslyForceUnsafeInstall: opts.dangerouslyForceUnsafeInstall,
+    }),
+  });
   const acknowledgeNonClawHubSource = async (
     sourceClass: NonClawHubInstallSourceClass,
     spec: string,
@@ -353,7 +361,7 @@ async function runPluginInstallCommandUnlocked(
           }
           return await installFromClawHub(
             leasedSnapshot,
-            resolveInstallSafetyOverrides({ ...opts, config: leasedSnapshot.config }),
+            resolveInstallSafetyOverrides({ ...safetyOverrides, config: leasedSnapshot.config }),
           );
         },
       );

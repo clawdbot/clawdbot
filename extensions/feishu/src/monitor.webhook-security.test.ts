@@ -60,6 +60,7 @@ async function waitForSlowBodyTimeoutResponse(
     const target = new URL(url);
     const startedAt = Date.now();
     let response = "";
+    let settled = false;
     const socket = createConnection(
       {
         host: target.hostname,
@@ -76,17 +77,27 @@ async function waitForSlowBodyTimeoutResponse(
     );
 
     socket.setEncoding("utf8");
-    socket.on("error", () => {});
     socket.on("data", (chunk) => {
       response += chunk.toString();
-      if (response.includes("Request body timeout")) {
+    });
+    socket.on("close", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(failTimer);
+      resolve({ body: response, elapsedMs: Date.now() - startedAt });
+    });
+    socket.on("error", (error) => {
+      if (!settled) {
+        settled = true;
         clearTimeout(failTimer);
-        socket.destroy();
-        resolve({ body: response, elapsedMs: Date.now() - startedAt });
+        reject(error);
       }
     });
 
     const failTimer = setTimeout(() => {
+      settled = true;
       socket.destroy();
       reject(new Error(`timeout response did not arrive within ${timeoutMs}ms`));
     }, timeoutMs);
@@ -120,32 +131,26 @@ async function waitForOversizedBodyResponse(url: string): Promise<string> {
       }
       settled = true;
       clearTimeout(failTimer);
-      socket.destroy();
       resolve(result);
     };
 
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
       response += chunk.toString();
-      if (response.includes("Payload too large")) {
-        finish(response);
-      }
     });
     socket.on("close", () => {
-      if (response.includes("Payload too large")) {
-        finish(response);
-      }
+      finish(response);
     });
     socket.on("error", (error: NodeJS.ErrnoException) => {
-      if (response.includes("Payload too large")) {
-        finish(response);
-        return;
+      if (!settled) {
+        if (response.includes("Payload too large")) {
+          finish(response);
+          return;
+        }
+        settled = true;
+        clearTimeout(failTimer);
+        reject(new Error(`${error.message}; partial response: ${JSON.stringify(response)}`));
       }
-      if (error.code === "ECONNRESET") {
-        finish("ECONNRESET");
-        return;
-      }
-      reject(error);
     });
 
     const failTimer = setTimeout(() => {
@@ -267,12 +272,9 @@ describe("Feishu webhook security hardening", () => {
       async (url) => {
         const response = await waitForOversizedBodyResponse(url);
 
-        if (response === "ECONNRESET") {
-          expect(response).toBe("ECONNRESET");
-        } else {
-          expect(response).toContain("413 Payload Too Large");
-          expect(response).toContain("Payload too large");
-        }
+        expect(response).toContain("413 Payload Too Large");
+        expect(response).toContain("Payload too large");
+        expect(response).toMatch(/connection: close/i);
       },
     );
   });
@@ -291,6 +293,7 @@ describe("Feishu webhook security hardening", () => {
         const result = await waitForSlowBodyTimeoutResponse(url, 1_000);
         expect(result.body).toContain("408 Request Timeout");
         expect(result.body).toContain("Request body timeout");
+        expect(result.body).toMatch(/connection: close/i);
         expect(result.elapsedMs).toBeLessThan(500);
       },
     );

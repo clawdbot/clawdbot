@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { renderModelPicker, type ModelPickerOption } from "../../components/model-picker.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
+import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 
@@ -21,6 +22,9 @@ type DefaultModelsViewProps = {
 };
 
 const AUTOMATIC_UTILITY_VALUE = "__openclaw_automatic_utility__";
+const UTILITY_MODEL_PICKER_ID = "model-providers-utility-model";
+const UTILITY_MODEL_HELP_ID = "model-providers-utility-help";
+const UTILITY_MODEL_HELP_POPOVER_ID = "model-providers-utility-help-popover";
 
 function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
   const seen = new Set<string>();
@@ -38,6 +42,21 @@ function modelOptions(models: ModelPickerEntry[]): ModelPickerOption[] {
     });
   }
   return options.toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+function claimUtilityHelpEscape(event: KeyboardEvent): void {
+  const popover = event.currentTarget as HTMLElement & { open: boolean };
+  if (event.key !== "Escape" || !popover.open) {
+    return;
+  }
+  // The settings shortcut runs before Web Awesome's document listener. Claim
+  // Escape here, then restore focus after its dialog finishes closing.
+  event.preventDefault();
+  popover.addEventListener(
+    "wa-after-hide",
+    () => document.getElementById(UTILITY_MODEL_HELP_ID)?.focus({ preventScroll: true }),
+    { once: true },
+  );
 }
 
 export function renderDefaultModels(props: DefaultModelsViewProps) {
@@ -68,9 +87,36 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             onChange: props.onPrimaryChange,
           })}
         </label>
-        <label class="field">
-          <span>${t("modelProviders.defaults.utility")}</span>
+        <div class="field">
+          <span class="model-providers__utility-label">
+            <label for=${UTILITY_MODEL_PICKER_ID}>${t("modelProviders.defaults.utility")}</label>
+            <span class="settings-section__docs">
+              <button
+                id=${UTILITY_MODEL_HELP_ID}
+                type="button"
+                class="settings-section__help-button"
+                aria-label=${t("modelProviders.defaults.utilityHelpLabel")}
+                aria-controls=${UTILITY_MODEL_HELP_POPOVER_ID}
+                aria-haspopup="dialog"
+              >
+                <span aria-hidden="true">i</span>
+              </button>
+              <wa-popover
+                id=${UTILITY_MODEL_HELP_POPOVER_ID}
+                class="settings-section__help-popover model-providers__utility-help-popover"
+                for=${UTILITY_MODEL_HELP_ID}
+                placement="top"
+                @keydown=${claimUtilityHelpEscape}
+              >
+                <div class="settings-section__help-panel">
+                  <p>${t("modelProviders.defaults.utilityHelpPurpose")}</p>
+                  <p>${t("modelProviders.defaults.utilityHelpAutomatic")}</p>
+                </div>
+              </wa-popover>
+            </span>
+          </span>
           ${renderModelPicker({
+            id: UTILITY_MODEL_PICKER_ID,
             label: t("modelProviders.defaults.utility"),
             value: props.selection.utilityModel ?? AUTOMATIC_UTILITY_VALUE,
             options: [
@@ -86,7 +132,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             onChange: (value) =>
               props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value),
           })}
-        </label>
+        </div>
       </div>
       <div class="model-providers__fallbacks">
         <div class="model-providers__fallback-heading">

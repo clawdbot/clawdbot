@@ -619,6 +619,7 @@ describe("programmatic scroll guard", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("handleChatScroll suppresses own scroll event when scrollTop is at the programmatic target", () => {
@@ -728,6 +729,32 @@ describe("programmatic scroll guard", () => {
 
     expect(host.chatLastScrollTop).toBe(900);
     expect(host.chatNewMessagesBelow).toBe(false);
+  });
+
+  it("uses auto under reduced motion without extending the scroll guard", async () => {
+    const frames = installAnimationFrameQueue();
+    const { host, container } = createScrollHost({
+      scrollHeight: 2000,
+      scrollTop: 500,
+      clientHeight: 400,
+    });
+    const scrollTo = vi.fn();
+    (container as unknown as HTMLElement).scrollTo = scrollTo;
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+    host.chatHasAutoScrolled = true;
+    host.chatUserNearBottom = false;
+
+    scheduleChatScroll(host, true, true, { source: "manual" });
+    await host.updateComplete;
+    frames.runNext();
+
+    expect(scrollTo).toHaveBeenCalledWith({ top: 2000, behavior: "auto" });
+    expect(host.chatIsProgrammaticScroll).toBe(true);
+    expect(frames.callbacks).toHaveLength(1);
+
+    frames.runNext(16);
+    expect(host.chatIsProgrammaticScroll).toBe(false);
+    expect(frames.callbacks).toHaveLength(0);
   });
 
   it("stops a smooth manual scroll after the user scrolls up", async () => {

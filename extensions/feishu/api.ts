@@ -9,7 +9,6 @@ export { registerFeishuBitableTools } from "./src/bitable.js";
 export {
   handleFeishuSubagentDeliveryTarget,
   handleFeishuSubagentEnded,
-  handleFeishuSubagentSpawning,
 } from "./src/subagent-hooks.js";
 export {
   buildFeishuConversationId,

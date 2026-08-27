@@ -10,6 +10,7 @@ import {
 import { hasDirectProviderApiKeyAuthForTool } from "./model-config.helpers.test-support.js";
 
 vi.mock("../auth-profiles/external-cli-sync.js", () => ({
+  listExternalCliSyncProviderIds: () => [],
   resolveExternalCliAuthProfiles: () => [],
 }));
 

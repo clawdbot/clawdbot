@@ -14,12 +14,9 @@ import {
 } from "../../scripts/lib/changed-extensions.mts";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-  MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
-  TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
   listExtensionTestFilesForRoots,
-  listTrackedTestFilesForRoots,
   resolveExtensionBatchPlan,
   resolveExtensionTestConfig,
   resolveExtensionTestPlan,
@@ -39,7 +36,7 @@ import { extensionCatchAllExcludedTestRoots } from "../vitest/vitest.extensions.
 
 const scriptPath = path.join(process.cwd(), "scripts", "test-extension.mts");
 const posixIt = process.platform === "win32" ? it.skip : it;
-const MATRIX_TEST_PROCESS_FILE_LIMIT = MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT;
+const MATRIX_TEST_PROCESS_FILE_LIMIT = 40;
 
 type RunGroupParams = VitestBatchRunParams;
 
@@ -96,7 +93,7 @@ function findExtensionWithoutTests() {
 }
 
 function listExtensionTestFiles(extensionId: string): string[] {
-  return listTrackedTestFilesForRoots([bundledPluginRoot(extensionId)]);
+  return listExtensionTestFilesForRoots([bundledPluginRoot(extensionId)]);
 }
 
 function expectedMatrixTestProcessCount() {
@@ -177,13 +174,13 @@ describe("scripts/test-extension.mts", () => {
       name: "Matrix",
       config: "test/vitest/vitest.extension-matrix.config.ts",
       root: "matrix",
-      limit: MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+      limit: 40,
     },
     {
       name: "Telegram",
       config: "test/vitest/vitest.extension-telegram.config.ts",
       root: "telegram",
-      limit: TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT,
+      limit: 1,
     },
   ])("bounds $name test files across balanced process lifetimes", ({ config, root, limit }) => {
     const roots = [bundledPluginRoot(root)];

@@ -276,6 +276,29 @@ describe("xai x_search tool", () => {
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
+  it("does not cache an X search result completed after caller cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("operator cancelled X search after response");
+    const mockFetch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        return jsonResponse({ output_text: "Cancelled X answer", citations: [] });
+      })
+      .mockResolvedValueOnce(jsonResponse({ output_text: "Recovered X answer", citations: [] }));
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createConfiguredXSearchTool();
+    const query = "unique standalone x_search late-cancel cache regression";
+
+    await expect(tool.execute("xai-late-cancel", { query }, controller.signal)).rejects.toBe(
+      reason,
+    );
+    const recovered = await tool.execute("xai-late-cancel-retry", { query });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect((recovered.details as { content?: string }).content).toContain("Recovered X answer");
+  });
+
   it("uses the xAI Responses x_search tool with structured filters", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createConfiguredXSearchTool({ xSearch: { maxTurns: 2 } });
@@ -292,6 +315,7 @@ describe("xai x_search tool", () => {
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
     expect(body.model).toBe("grok-4.3");
+    expect(body.input).toEqual([{ role: "user", content: "dinner recipes" }]);
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "none" });
     expect(body.max_turns).toBe(2);

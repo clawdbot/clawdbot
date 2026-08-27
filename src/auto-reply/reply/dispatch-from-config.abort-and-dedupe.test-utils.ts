@@ -1,4 +1,4 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -37,7 +37,15 @@ import {
   globalBeforeAll0,
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-harness.js";
+import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
+
+const FAST_ABORT_SESSION_MODEL = Object.freeze({
+  providerOverride: "anthropic",
+  modelOverride: "claude-opus-4-6-20260205",
+  modelOverrideRouteResolution: "resolved" as const,
+  thinkingLevel: "high" as const,
+});
 
 function setupResolvedAcpSessionNotice(params: { bound: boolean; messageThreadId?: string }) {
   const runtime = createAcpRuntime([{ type: "text_delta", text: "hello" }, { type: "done" }]);
@@ -428,6 +436,13 @@ describe("dispatchReplyFromConfig", () => {
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) as ReplyPayload);
+    sessionStoreMocks.currentEntry = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-6-20260205",
+      modelOverrideRouteResolution: "resolved",
+      thinkingLevel: "high",
+    };
+    const onModelSelected = vi.fn();
     const ctx = buildTestCtx({
       Provider: "imessage",
       Surface: "imessage",
@@ -446,7 +461,13 @@ describe("dispatchReplyFromConfig", () => {
       SessionKey: "agent:main:imessage:direct:peer",
     });
 
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onModelSelected },
+    });
 
     expect(mocks.tryFastApproveFromMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -457,6 +478,11 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "✅ Approval allow-once submitted.",
+    });
+    expect(onModelSelected).toHaveBeenCalledWith({
+      provider: "anthropic",
+      model: "claude-opus-4-6-20260205",
+      thinkLevel: "high",
     });
   });
 
@@ -511,11 +537,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("seeds direct fast-abort prefixes from the session-selected model", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = { ...FAST_ABORT_SESSION_MODEL };
     const onModelSelected = vi.fn();
 
     await dispatchReplyFromConfig({
@@ -527,6 +549,8 @@ describe("dispatchReplyFromConfig", () => {
       }),
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
+      fastAbortResolver: mocks.tryFastAbortFromMessage,
+      formatAbortReplyTextResolver: () => "⚙️ Agent was aborted.",
       replyOptions: { onModelSelected },
     });
 
@@ -539,11 +563,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("carries session prefix context through the actual routed fast-abort delivery", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({ handled: true, aborted: true });
-    sessionStoreMocks.currentEntry = {
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6-20260205",
-      thinkingLevel: "high",
-    };
+    sessionStoreMocks.currentEntry = { ...FAST_ABORT_SESSION_MODEL };
 
     await dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -1336,6 +1356,145 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases inbound dedupe when durable ingress aborts before adoption", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "before_dispatch") as () => boolean,
+    );
+    let markHookStarted!: () => void;
+    const hookStarted = new Promise<void>((resolve) => {
+      markHookStarted = resolve;
+    });
+    let releaseHook!: () => void;
+    const hookRelease = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    hookMocks.runner.runBeforeDispatch
+      .mockImplementationOnce(async () => {
+        markHookStarted();
+        await hookRelease;
+        return undefined;
+      })
+      .mockResolvedValue(undefined);
+
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "user:1",
+      SessionKey: "agent:main:telegram:direct:1",
+      MessageSid: "pre-adoption-retry",
+      BodyForAgent: "retry me",
+    });
+    const abortController = new AbortController();
+    const replyResolver = vi.fn(async () => ({ text: "retried" }) satisfies ReplyPayload);
+    const turnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+
+    const firstDispatch = dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: {
+        abortSignal: abortController.signal,
+        turnAdoptionLifecycle,
+      },
+      replyResolver,
+    });
+    await hookStarted;
+    abortController.abort(new Error("handler-timeout"));
+    releaseHook();
+    await expect(firstDispatch).resolves.toMatchObject({ queuedFinal: false });
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { turnAdoptionLifecycle },
+      replyResolver,
+    });
+    expect(replyResolver).toHaveBeenCalledOnce();
+  });
+
+  it("retains inbound dedupe when durable ingress aborts after adoption", async () => {
+    setNoAbort();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "user:1",
+      SessionKey: "agent:main:telegram:direct:1",
+      MessageSid: "post-adoption-abort",
+      BodyForAgent: "run once",
+    });
+    const turnAdoptionLifecycle = {
+      onAdopted: vi.fn(async () => {}),
+      onDeferred: vi.fn(),
+      onSettled: vi.fn(),
+    };
+    const firstReplyResolver = vi.fn(
+      async (_ctx: MsgContext, opts?: GetReplyOptions): Promise<ReplyPayload | undefined> => {
+        await opts?.turnAdoptionLifecycle?.onAdopted();
+        const operation = (
+          opts as { replyOperation?: { abortForRestart: () => boolean } } | undefined
+        )?.replyOperation;
+        expect(operation?.abortForRestart()).toBe(true);
+        return await new Promise<never>(() => {});
+      },
+    );
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { turnAdoptionLifecycle },
+      replyResolver: firstReplyResolver,
+    });
+    expect(turnAdoptionLifecycle.onAdopted).toHaveBeenCalledOnce();
+
+    const duplicateReplyResolver = vi.fn(
+      async () => ({ text: "duplicate" }) satisfies ReplyPayload,
+    );
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyOptions: { turnAdoptionLifecycle },
+      replyResolver: duplicateReplyResolver,
+    });
+    expect(duplicateReplyResolver).not.toHaveBeenCalled();
+  });
+
+  it("attributes the processed outcome on completed and duplicate returns", async () => {
+    setNoAbort();
+    const cfg = emptyConfig;
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
+      MessageSid: "msg-duplicate-attributed",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    const first = await withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({ ctx, cfg, replyResolver, dispatcher: createDispatcher() }),
+    );
+    const duplicate = await withDispatchProcessedOutcomeSink(() =>
+      dispatchReplyFromConfig({ ctx, cfg, replyResolver, dispatcher: createDispatcher() }),
+    );
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(first.processedOutcome).toEqual({ outcome: "completed" });
+    // The duplicate skip queues nothing; the sink must name the branch so the
+    // kernel's zero-count warning is attributable to a benign dedupe hit.
+    expect(duplicate.processedOutcome).toEqual({ outcome: "skipped", reason: "duplicate" });
   });
 
   it("keeps message-tool-only delivery mode on duplicate inbound returns", async () => {

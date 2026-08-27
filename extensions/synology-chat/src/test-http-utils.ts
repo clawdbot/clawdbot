@@ -45,28 +45,43 @@ export function makeStalledReq(
   return makeBaseReq(method, opts);
 }
 
-export function makeRes(): ServerResponse & {
+export function makeRes(options: { finishOnEnd?: boolean } = {}): ServerResponse & {
   status: number;
-  body: string;
+  body: string | Buffer;
   headers: Record<string, string>;
+  destroyed: boolean;
+  emit: (eventName: string) => boolean;
 } {
-  const res = {
+  let headersSent = false;
+  const res = Object.assign(new EventEmitter(), {
     status: 0,
-    body: "",
+    body: "" as string | Buffer,
     headers: {} as Record<string, string>,
+    destroyed: false,
     setHeader(name: string, value: string) {
       res.headers[name.toLowerCase()] = value;
     },
     writeHead(statusCode: number, _headers?: Record<string, string>) {
       res.status = statusCode;
     },
-    end(body?: string) {
+    end(body?: string | Buffer) {
       res.body = body ?? "";
+      headersSent = true;
+      if (options.finishOnEnd !== false) {
+        queueMicrotask(() => res.emit("finish"));
+      }
     },
-  } as unknown as ServerResponse & {
+    destroy() {
+      res.destroyed = true;
+      res.emit("close");
+      return res;
+    },
+  }) as unknown as ServerResponse & {
     status: number;
-    body: string;
+    body: string | Buffer;
     headers: Record<string, string>;
+    destroyed: boolean;
+    emit: (eventName: string) => boolean;
   };
   Object.defineProperty(res, "statusCode", {
     configurable: true,
@@ -77,6 +92,11 @@ export function makeRes(): ServerResponse & {
     set(value: number) {
       res.status = value;
     },
+  });
+  Object.defineProperty(res, "headersSent", {
+    configurable: true,
+    enumerable: true,
+    get: () => headersSent,
   });
   return res;
 }

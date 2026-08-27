@@ -1,21 +1,14 @@
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  SHORT_TERM_LOCK_MAX_ENTRIES,
-  SHORT_TERM_LOCK_NAMESPACE,
   SHORT_TERM_META_NAMESPACE,
   SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   SHORT_TERM_RECALL_NAMESPACE,
   memoryCoreStateReference,
-  memoryCoreWorkspaceStateKey,
-  openMemoryCoreStateStore,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
 import type {
-  ShortTermLockEntry,
   ShortTermPhaseSignalEntry,
   ShortTermPhaseSignalStore,
   ShortTermRecallEntry,
@@ -29,99 +22,12 @@ import {
   toFiniteNonNegativeInt,
 } from "./short-term-promotion-utils.js";
 
-const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
-export const SHORT_TERM_LOCK_STALE_MS = 60_000;
-const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
-const inProcessShortTermLocks = new KeyedAsyncQueue();
-
 export function resolveStorePath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_RECALL_NAMESPACE, workspaceDir);
 }
 
 export function resolvePhaseSignalPath(workspaceDir: string): string {
   return memoryCoreStateReference(SHORT_TERM_PHASE_SIGNAL_NAMESPACE, workspaceDir);
-}
-
-export function resolveLockPath(workspaceDir: string): string {
-  return memoryCoreStateReference(SHORT_TERM_LOCK_NAMESPACE, workspaceDir);
-}
-
-export function parseLockOwnerPid(raw: string): number | null {
-  const match = raw.trim().match(/^(\d+):/);
-  if (!match) {
-    return null;
-  }
-  const pid = Number.parseInt(match[1] ?? "", 10);
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return null;
-  }
-  return pid;
-}
-
-export function isProcessLikelyAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "ESRCH") {
-      return false;
-    }
-    // EPERM and unknown errors are treated as alive to avoid stealing active locks.
-    return true;
-  }
-}
-
-async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
-  return await inProcessShortTermLocks.enqueue(lockPath, task);
-}
-
-export async function withShortTermLock<T>(
-  workspaceDir: string,
-  task: () => Promise<T>,
-): Promise<T> {
-  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-  const lockRef = resolveLockPath(workspaceDir);
-  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
-    namespace: SHORT_TERM_LOCK_NAMESPACE,
-    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
-  });
-  return withInProcessShortTermLock(lockKey, async () => {
-    const startedAt = Date.now();
-
-    while (true) {
-      const owner = `${process.pid}:${Date.now()}`;
-      const acquired = await lockStore.registerIfAbsent(lockKey, {
-        owner,
-        acquiredAt: Date.now(),
-      });
-      if (acquired) {
-        try {
-          return await task();
-        } finally {
-          const current = await lockStore.lookup(lockKey).catch(() => undefined);
-          if (current?.owner === owner) {
-            await lockStore.delete(lockKey).catch(() => false);
-          }
-        }
-      }
-
-      const existing = await lockStore.lookup(lockKey);
-      if (existing && Date.now() - existing.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
-        const ownerPid = parseLockOwnerPid(existing.owner);
-        if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-          await lockStore.delete(lockKey);
-          continue;
-        }
-      }
-
-      if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
-        throw new Error(`Timed out waiting for short-term promotion lock at ${lockRef}`);
-      }
-
-      await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
-    }
-  });
 }
 
 export async function readStore(

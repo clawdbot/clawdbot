@@ -2,9 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import v8 from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
-import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -31,12 +29,6 @@ const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
-const MAX_ACTIVE_RESOURCE_TYPES = 25;
-const MAX_SESSION_FILE_RESULTS = 20;
-const MAX_SESSION_SCAN_AGENTS = 100;
-const MAX_SESSION_SCAN_FILES = 5000;
-const CGROUP_V2_MEMORY_FILES = ["current", "max", "high", "peak", "swap.current", "swap.max"];
-const CGROUP_V2_MEMORY_EVENTS = ["events", "events.local"];
 
 type DiagnosticHeapSpaceSummary = {
   spaceName: string;
@@ -156,14 +148,6 @@ type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
   WriteDiagnosticStabilityBundleOptions,
   "error" | "includeEmpty" | "reason"
 >;
-
-type WriteDiagnosticMemoryPressureBundleOptions = Omit<
-  WriteDiagnosticStabilityBundleOptions,
-  "reason" | "error" | "evidence" | "includeEmpty"
-> & {
-  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type" | "trace">;
-  sessionStorePaths?: string[];
-};
 
 let fatalHookUnsubscribe: (() => void) | null = null;
 
@@ -898,136 +882,6 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   };
 }
 
-function readPositiveMemoryFile(file: string): number | "max" | undefined {
-  try {
-    const raw = fs.readFileSync(file, "utf8").trim();
-    if (raw === "max") {
-      return "max";
-    }
-    return parseStrictNonNegativeInteger(raw);
-  } catch {
-    return undefined;
-  }
-}
-
-function readCgroupEventFile(file: string): Record<string, number> {
-  try {
-    const events: Record<string, number> = {};
-    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/u)) {
-      const [key, raw] = line.trim().split(/\s+/u);
-      if (!key || !SAFE_REASON_CODE.test(key)) {
-        continue;
-      }
-      const value = parseStrictNonNegativeInteger(raw ?? "");
-      if (value !== undefined) {
-        events[key] = value;
-      }
-    }
-    return events;
-  } catch {
-    return {};
-  }
-}
-
-function resolveCgroupV2MemoryDir(): string | undefined {
-  if (process.platform !== "linux") {
-    return undefined;
-  }
-  try {
-    const line = fs
-      .readFileSync("/proc/self/cgroup", "utf8")
-      .split(/\r?\n/u)
-      .find((entry) => entry.startsWith("0::"));
-    if (!line) {
-      return undefined;
-    }
-    const rawPath = line.slice("0::".length).trim();
-    const relative = rawPath.replace(/^\/+/u, "");
-    return path.join("/sys/fs/cgroup", relative);
-  } catch {
-    return undefined;
-  }
-}
-
-function collectCgroupMemorySummary(): DiagnosticCgroupMemorySummary | undefined {
-  const dir = resolveCgroupV2MemoryDir();
-  if (!dir) {
-    return undefined;
-  }
-  const values: Record<string, number | "max"> = {};
-  for (const name of CGROUP_V2_MEMORY_FILES) {
-    const value = readPositiveMemoryFile(path.join(dir, `memory.${name}`));
-    if (value !== undefined) {
-      values[name] = value;
-    }
-  }
-  const events: Record<string, number> = {};
-  for (const name of CGROUP_V2_MEMORY_EVENTS) {
-    const parsed = readCgroupEventFile(path.join(dir, `memory.${name}`));
-    for (const [key, value] of Object.entries(parsed)) {
-      events[name === "events" ? key : `${name}.${key}`] = value;
-    }
-  }
-  return Object.keys(values).length > 0 || Object.keys(events).length > 0
-    ? { version: "v2", values, events }
-    : undefined;
-}
-
-function collectHeapStatistics(): DiagnosticHeapStatisticsSummary | undefined {
-  try {
-    const stats = v8.getHeapStatistics();
-    return {
-      totalHeapSizeBytes: stats.total_heap_size,
-      totalHeapSizeExecutableBytes: stats.total_heap_size_executable,
-      totalPhysicalSizeBytes: stats.total_physical_size,
-      totalAvailableSizeBytes: stats.total_available_size,
-      usedHeapSizeBytes: stats.used_heap_size,
-      heapSizeLimitBytes: stats.heap_size_limit,
-      mallocedMemoryBytes: stats.malloced_memory,
-      externalMemoryBytes: stats.external_memory,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function collectHeapSpaces(): DiagnosticHeapSpaceSummary[] | undefined {
-  try {
-    const spaces = v8.getHeapSpaceStatistics().map((space) => ({
-      spaceName: space.space_name,
-      spaceSizeBytes: space.space_size,
-      spaceUsedBytes: space.space_used_size,
-      spaceAvailableBytes: space.space_available_size,
-      physicalSpaceSizeBytes: space.physical_space_size,
-    }));
-    return spaces.length > 0 ? spaces : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function collectActiveResources(): DiagnosticActiveResourceSummary | undefined {
-  try {
-    if (typeof process.getActiveResourcesInfo !== "function") {
-      return undefined;
-    }
-    const names = process.getActiveResourcesInfo();
-    const byType: Record<string, number> = {};
-    for (const name of names) {
-      if (!SAFE_REASON_CODE.test(name)) {
-        continue;
-      }
-      byType[name] = (byType[name] ?? 0) + 1;
-    }
-    const sorted = Object.entries(byType)
-      .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .slice(0, MAX_ACTIVE_RESOURCE_TYPES);
-    return { total: names.length, byType: Object.fromEntries(sorted) };
-  } catch {
-    return undefined;
-  }
-}
-
 function sanitizeSessionEvidencePath(relativePath: string): string {
   const parts = relativePath.split("/");
   if (parts.length === 4 && parts[0] === "agents" && parts[2] === "sessions") {
@@ -1050,170 +904,6 @@ function sanitizeSessionEvidenceFileName(fileName: string): string {
     return "<session>.json";
   }
   return "<session>";
-}
-
-function visitDirentsBounded(
-  dir: string,
-  maxEntries: number,
-  visitor: (entry: fs.Dirent) => boolean | void,
-): void {
-  if (maxEntries <= 0) {
-    return;
-  }
-  let handle: fs.Dir | undefined;
-  try {
-    handle = fs.opendirSync(dir);
-    for (let count = 0; count < maxEntries; count += 1) {
-      const entry = handle.readSync();
-      if (!entry || visitor(entry) === false) {
-        return;
-      }
-    }
-  } catch {
-    // Best-effort diagnostic evidence only.
-  } finally {
-    try {
-      handle?.closeSync();
-    } catch {
-      // Best-effort diagnostic evidence only.
-    }
-  }
-}
-
-function pushSessionFileSummary(
-  results: DiagnosticSessionFileSummary[],
-  stateDir: string,
-  file: string,
-  relativePathOverride?: string,
-): void {
-  try {
-    const stat = fs.statSync(file);
-    if (!stat.isFile()) {
-      return;
-    }
-    const relativePath = (relativePathOverride ?? path.relative(stateDir, file)).replace(
-      /\\/gu,
-      "/",
-    );
-    if (relativePath.startsWith("../") || path.isAbsolute(relativePath)) {
-      return;
-    }
-    results.push({
-      relativePath: sanitizeSessionEvidencePath(relativePath),
-      sizeBytes: stat.size,
-      mtimeMs: stat.mtimeMs,
-    });
-  } catch {
-    // Best-effort diagnostic evidence only.
-  }
-}
-
-function scanSessionDirectory(params: {
-  results: DiagnosticSessionFileSummary[];
-  stateDir: string;
-  sessionsDir: string;
-  relativePrefix: string;
-  seenDirs: Set<string>;
-  scannedSessionEntries: { count: number };
-}): void {
-  const sessionsDir = path.resolve(params.sessionsDir);
-  if (params.seenDirs.has(sessionsDir)) {
-    return;
-  }
-  params.seenDirs.add(sessionsDir);
-  visitDirentsBounded(
-    sessionsDir,
-    MAX_SESSION_SCAN_FILES - params.scannedSessionEntries.count,
-    (sessionEntry) => {
-      params.scannedSessionEntries.count += 1;
-      if (!sessionEntry.isFile() || !/\.(?:jsonl|json)$/u.test(sessionEntry.name)) {
-        return params.scannedSessionEntries.count < MAX_SESSION_SCAN_FILES;
-      }
-      pushSessionFileSummary(
-        params.results,
-        params.stateDir,
-        path.join(sessionsDir, sessionEntry.name),
-        path.posix.join(params.relativePrefix, sessionEntry.name),
-      );
-      return params.scannedSessionEntries.count < MAX_SESSION_SCAN_FILES;
-    },
-  );
-}
-
-function collectTopSessionFiles(
-  stateDir: string,
-  sessionStorePaths: string[] = [],
-): DiagnosticSessionFileSummary[] | undefined {
-  const results: DiagnosticSessionFileSummary[] = [];
-  const seenDirs = new Set<string>();
-  const scannedSessionEntries = { count: 0 };
-  try {
-    pushSessionFileSummary(results, stateDir, path.join(stateDir, "sessions.json"));
-    const agentsDir = path.join(stateDir, "agents");
-    visitDirentsBounded(agentsDir, MAX_SESSION_SCAN_AGENTS, (agentEntry) => {
-      if (!agentEntry.isDirectory() || scannedSessionEntries.count >= MAX_SESSION_SCAN_FILES) {
-        return;
-      }
-      scanSessionDirectory({
-        results,
-        stateDir,
-        sessionsDir: path.join(agentsDir, agentEntry.name, "sessions"),
-        relativePrefix: path.posix.join("agents", agentEntry.name, "sessions"),
-        seenDirs,
-        scannedSessionEntries,
-      });
-    });
-    for (const storePath of sessionStorePaths) {
-      if (scannedSessionEntries.count >= MAX_SESSION_SCAN_FILES) {
-        break;
-      }
-      const sessionsDir = path.dirname(path.resolve(storePath));
-      scanSessionDirectory({
-        results,
-        stateDir,
-        sessionsDir,
-        relativePrefix: "sessions",
-        seenDirs,
-        scannedSessionEntries,
-      });
-    }
-  } catch {
-    // Best-effort diagnostic evidence only.
-  }
-  const top = results
-    .toSorted((a, b) => b.sizeBytes - a.sizeBytes || a.relativePath.localeCompare(b.relativePath))
-    .slice(0, MAX_SESSION_FILE_RESULTS);
-  return top.length > 0 ? top : undefined;
-}
-
-function buildMemoryPressureEvidence(
-  options: WriteDiagnosticMemoryPressureBundleOptions,
-): DiagnosticStabilityBundleEvidence {
-  const stateDir = options.stateDir ?? resolveStateDir(options.env ?? process.env);
-  const heapStatistics = collectHeapStatistics();
-  const heapSpaces = collectHeapSpaces();
-  const cgroup = collectCgroupMemorySummary();
-  const activeResources = collectActiveResources();
-  const topSessionFiles = collectTopSessionFiles(stateDir, options.sessionStorePaths);
-  return {
-    memoryPressure: {
-      level: options.pressure.level,
-      reason: options.pressure.reason,
-      memory: options.pressure.memory,
-      ...(options.pressure.thresholdBytes !== undefined
-        ? { thresholdBytes: options.pressure.thresholdBytes }
-        : {}),
-      ...(options.pressure.rssGrowthBytes !== undefined
-        ? { rssGrowthBytes: options.pressure.rssGrowthBytes }
-        : {}),
-      ...(options.pressure.windowMs !== undefined ? { windowMs: options.pressure.windowMs } : {}),
-      ...(heapStatistics ? { heapStatistics } : {}),
-      ...(heapSpaces ? { heapSpaces } : {}),
-      ...(cgroup ? { cgroup } : {}),
-      ...(activeResources ? { activeResources } : {}),
-      ...(topSessionFiles ? { topSessionFiles } : {}),
-    },
-  };
 }
 
 function isMemoryPressureReason(reason: string): reason is DiagnosticMemoryPressureEvent["reason"] {
@@ -1363,17 +1053,6 @@ export function writeDiagnosticStabilityBundleSync(
   } catch (error) {
     return { status: "failed", error };
   }
-}
-
-export function writeDiagnosticMemoryPressureBundleSync(
-  options: WriteDiagnosticMemoryPressureBundleOptions,
-): WriteDiagnosticStabilityBundleResult {
-  return writeDiagnosticStabilityBundleSync({
-    ...options,
-    reason: "diagnostic.memory.pressure.critical",
-    includeEmpty: true,
-    evidence: buildMemoryPressureEvidence(options),
-  });
 }
 
 export function writeDiagnosticStabilityBundleForFailureSync(

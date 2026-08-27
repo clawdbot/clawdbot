@@ -458,7 +458,6 @@ describe("openai-responses reasoning replay", () => {
     });
 
     const messages = extractInputMessages(input);
-    expect(messages).toHaveLength(2);
     const ids = messages.map((item) => item.id);
     expect(ids.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
     expect(new Set(ids).size).toBe(2);

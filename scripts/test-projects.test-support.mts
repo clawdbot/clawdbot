@@ -31,7 +31,10 @@ import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.
 import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
-import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-paths.mjs";
+import {
+  codexExtensionTestRoots,
+  isCodexExtensionRoot,
+} from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
@@ -62,7 +65,7 @@ import {
   pluginSdkLightTestFiles,
   resolvePluginSdkLightIncludePattern,
 } from "../test/vitest/vitest.plugin-sdk-paths.mjs";
-import { fullSuiteVitestShards } from "../test/vitest/vitest.test-shards.mjs";
+import { fullSuiteVitestShards, tuiPtyTestFiles } from "../test/vitest/vitest.test-shards.mjs";
 import {
   isToolingIsolatedTestFile,
   toolingIsolatedTestFiles,
@@ -215,7 +218,6 @@ const EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG =
   "test/vitest/vitest.extension-codex-app-server-tools.config.ts";
 const EXTENSION_CODEX_SURFACE_VITEST_CONFIG =
   "test/vitest/vitest.extension-codex-surface.config.ts";
-const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
 const EXTENSION_FEISHU_VITEST_CONFIG = "test/vitest/vitest.extension-feishu.config.ts";
@@ -262,6 +264,7 @@ const UNIT_SECURITY_VITEST_CONFIG = "test/vitest/vitest.unit-security.config.ts"
 const UNIT_SRC_VITEST_CONFIG = "test/vitest/vitest.unit-src.config.ts";
 const UNIT_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.unit-support.config.ts";
 const EXTENSION_TEST_PROCESS_ROOTS = new Map([
+  [EXTENSION_CODEX_VITEST_CONFIG, codexExtensionTestRoots],
   [EXTENSION_MATRIX_VITEST_CONFIG, matrixExtensionTestRoots],
   [EXTENSION_TELEGRAM_VITEST_CONFIG, telegramExtensionTestRoots],
 ]);
@@ -505,7 +508,6 @@ const VITEST_CONFIG_BY_KIND: Record<string, string> = {
   extensionIrc: EXTENSION_IRC_VITEST_CONFIG,
   extensionLine: EXTENSION_LINE_VITEST_CONFIG,
   extensionMattermost: EXTENSION_MATTERMOST_VITEST_CONFIG,
-  extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
   extensionTelegram: EXTENSION_TELEGRAM_VITEST_CONFIG,
   extensionVoiceCall: EXTENSION_VOICE_CALL_VITEST_CONFIG,
   extensionWhatsApp: EXTENSION_WHATSAPP_VITEST_CONFIG,
@@ -559,6 +561,25 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
       "extensions/slack/src/monitor/provider.auth-test-token.test.ts",
     ],
   ],
+  [
+    "extensions/slack/src/channel-actions.ts",
+    [
+      "extensions/slack/src/actions.reactions-limit.test.ts",
+      "extensions/slack/src/channel-actions-setup-status.contract.test.ts",
+      "extensions/slack/src/message-tools.test.ts",
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/worker-turn-launcher.ts",
+    [
+      "src/gateway/worker-environments/worker-turn-launcher.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-claim-admission.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-failure-recovery.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-reclaimed-placement.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-remote-handoff.test.ts",
+      "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
+    ],
+  ],
 ]);
 const DOCS_CONFIG_EXAMPLES_TEST_TARGET = "src/config/docs-config-examples.test.ts";
 const RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS = ["src/plugins/bundled-plugin-metadata.test.ts"];
@@ -572,6 +593,8 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GROUP_VISIBLE_REPLY_TEST_TARGETS = [
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/dispatch-from-config.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
   "src/auto-reply/reply/followup-runner.test.ts",
   "src/auto-reply/reply/groups.test.ts",
   "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -756,10 +779,7 @@ const SOURCE_TEST_TARGETS = new Map([
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   [
     "src/auto-reply/reply/effective-reply-route.ts",
-    [
-      "src/auto-reply/reply/effective-reply-route.test.ts",
-      "src/auto-reply/reply/dispatch-from-config.test.ts",
-    ],
+    ["src/auto-reply/reply/effective-reply-route.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ],
   ["src/auto-reply/reply/get-reply-run.ts", ["src/auto-reply/reply/followup-runner.test.ts"]],
   ["src/auto-reply/reply/groups.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
@@ -1618,6 +1638,7 @@ function findDirectImportersWithGitGrep(
 ) {
   const tooling = options.tooling === true;
   const cacheKey = `${cwd}\0${tooling ? "tooling" : "source"}\0${importedFile}`;
+  const isTestHelper = importedFile.startsWith("test/helpers/");
   if (cachedDirectImporters.has(cacheKey)) {
     return cachedDirectImporters.get(cacheKey) ?? null;
   }
@@ -1637,7 +1658,8 @@ function findDirectImportersWithGitGrep(
       cachedDirectImporters.set(cacheKey, null);
       return null;
     }
-    if (candidates.length > 800) {
+    // Central test helpers intentionally fan out broadly; incomplete scans silently drop owning tests.
+    if (candidates.length > 800 && !isTestHelper) {
       skippedBroadTerm = true;
       continue;
     }
@@ -1664,14 +1686,11 @@ function findDirectImportersWithGitGrep(
         }
       }
     }
-    if (importedFile.startsWith("test/helpers/") && importers.length > 0 && term.includes("/")) {
+    if (isTestHelper && importers.length > 0 && term.includes("/")) {
       break;
     }
   }
-  const result =
-    skippedBroadTerm && importers.length === 0 && !importedFile.startsWith("test/helpers/")
-      ? null
-      : importers;
+  const result = skippedBroadTerm && importers.length === 0 && !isTestHelper ? null : importers;
   cachedDirectImporters.set(cacheKey, result);
   return result;
 }
@@ -1933,6 +1952,9 @@ function resolveToolingChangedTestTargets(changedPaths: string[], cwd = process.
       return null;
     }
     targets.push(...testTargets);
+    if (CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS.has(changedPath)) {
+      targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+    }
   }
   return [...new Set(targets)];
 }
@@ -2101,10 +2123,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [".github/actions/setup-pnpm-store-cache/action.yml", [packageAcceptance, workflowGuards]],
   [".github/actions/setup-pnpm-store-cache/ensure-node.sh", ["setup-pnpm-store-cache-ensure-node"]],
   ["test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts", [dockerE2e, pluginPrerelease]],
-  [
-    "scripts/e2e/lib/mcp-code-mode-probe-server.ts",
-    ["docker-e2e-seeds", "mcp-code-mode-gateway-client"],
-  ],
+  ["scripts/e2e/lib/mcp-code-mode-probe-server.ts", ["mcp-code-mode-gateway-client"]],
   ["scripts/e2e/cron-cli-docker.sh", [dockerBuild, "docker-e2e-observability"]],
   ["scripts/ios-release-upload.sh", ["ios-release-wrapper-args", "ios-release-fastlane-gates"]],
   ["scripts/release-verify-beta.ts", ["release-wrapper-scripts"]],
@@ -2268,7 +2287,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
     [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
   ],
-  [/^\.github\/workflows\/docker-release\.yml$/u, ["src/dockerfile.test.ts"]],
+  [
+    /^\.github\/workflows\/docker-release\.yml$/u,
+    ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
+  ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
   [/^\.github\/workflows\/openclaw-performance\.yml$/u, ["openclaw-performance-workflow"]],
   [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
@@ -2278,8 +2300,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [crossOsReleaseChecks, "openclaw-cross-os-release-workflow", packageAcceptance],
   ],
   [
-    /^\.github\/workflows\/(?:openclaw-release-publish|package-acceptance)\.yml$/u,
-    [packageAcceptance],
+    /^\.github\/workflows\/openclaw-release-publish\.yml$/u,
+    [packageAcceptance, "vercel-container-registry-publish"],
+  ],
+  [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
+  [
+    /^\.github\/workflows\/vercel-container-registry-publish\.yml$/u,
+    ["docker-channel-promote", "release-plan-producer", "vercel-container-registry-publish"],
   ],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,
@@ -2510,6 +2537,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   ],
   [/^scripts\/lib\/plistbuddy\.sh$/u, ["create-dmg", "package-mac-app", "package-mac-dist"]],
   [/^scripts\/lib\/swift-toolchain\.sh$/u, ["package-mac-app", "package-mac-dist"]],
+  [/^scripts\/stage-cua-driver-macos\.sh$/u, ["package-mac-app"]],
   [
     /^scripts\/lib\/npm-publish-plan\.mjs$/u,
     [
@@ -2770,10 +2798,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ["mcp-code-mode-gateway-client", "session-log-mentions"],
   ],
   [
-    /^(?:scripts\/e2e\/(?:mcp-channels|mcp-code-mode-gateway|cron-mcp-cleanup)-seed\.ts)$/u,
-    ["docker-e2e-seeds"],
-  ],
-  [
     /^scripts\/e2e\/(?:mcp-channels|cron-cli|cron-mcp-cleanup)-docker\.sh$/u,
     ["docker-e2e-observability"],
   ],
@@ -2787,10 +2811,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/cron/active-jobs-manual-run.test.ts",
     ],
   ],
-  [
-    /^scripts\/e2e\/cron-mcp-cleanup-docker\.sh$/u,
-    ["cron-mcp-cleanup-docker-client", "docker-e2e-seeds"],
-  ],
+  [/^scripts\/e2e\/cron-mcp-cleanup-docker\.sh$/u, ["cron-mcp-cleanup-docker-client"]],
   [
     /^test\/e2e\/qa-lab\/runtime\/mcp-channels\.fixture\.ts$/u,
     ["test/e2e/qa-lab/runtime/mcp-gateway-transport.e2e.test.ts", "cron-mcp-cleanup-docker-client"],
@@ -3043,10 +3064,23 @@ function shouldRouteChangedTargetWithoutImportGraph(changedPath: string) {
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath: string) {
-  if (!/^test\/fixtures\/agents\/prompt-snapshots\/.+\.(?:json|md)$/u.test(changedPath)) {
+  if (
+    !/^test\/fixtures\/agents\/prompt-snapshots\/.+\.(?:json|md(?:\.diff)?)$/u.test(changedPath)
+  ) {
     return null;
   }
   return ["test/scripts/prompt-snapshots.test.ts"];
+}
+
+function resolvePackageFixtureTargets(changedPath: string, cwd: string) {
+  const match = /^packages\/([^/]+)\/test\/fixtures\/([^/]+)\/.+$/u.exec(changedPath);
+  const packageName = match?.[1];
+  const fixtureFamily = match?.[2];
+  if (!packageName || !fixtureFamily) {
+    return null;
+  }
+  const owner = `packages/${packageName}/src/${fixtureFamily}.test.ts`;
+  return fs.existsSync(path.join(cwd, owner)) ? [owner] : null;
 }
 
 function resolveAppcastTargets(changedPath: string) {
@@ -3065,7 +3099,8 @@ function resolvePreciseChangedTestTargets(
       : null) ??
     resolveToolingTestTargets(changedPath, cwd) ??
     resolveAppcastTargets(changedPath) ??
-    resolvePromptSnapshotFixtureTargets(changedPath);
+    resolvePromptSnapshotFixtureTargets(changedPath) ??
+    resolvePackageFixtureTargets(changedPath, cwd);
   if (mappedTargets) {
     return mappedTargets;
   }
@@ -3236,10 +3271,10 @@ function classifyTarget(arg: string, cwd: string) {
   if (isUiIsolatedTestFile(relative)) {
     return "uiIsolated";
   }
-  if (isPathAtOrUnder(relative, "ui/src")) {
+  if (isPathAtOrUnder(relative, "ui")) {
     return "ui";
   }
-  if (relative.startsWith("src/tui/tui-pty-")) {
+  if (relative.startsWith("src/tui/tui-pty-") || tuiPtyTestFiles.includes(relative)) {
     return "tuiPty";
   }
   if (relative.endsWith(".e2e.test.ts")) {
@@ -3292,9 +3327,6 @@ function classifyTarget(arg: string, cwd: string) {
     }
     if (isQaExtensionRoot(extensionRoot)) {
       return "extensionQa";
-    }
-    if (isChannelSurfaceTestFile(relative)) {
-      return "extensionChannel";
     }
     if (isAcpxExtensionRoot(extensionRoot)) {
       return "extensionAcpx";
@@ -4149,7 +4181,7 @@ export function withRetryNoOutputTimeout<T extends { env?: NodeJS.ProcessEnv }>(
 
 export function createVitestRunSpecs(
   args: string[],
-  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string; tempDir?: string } = {},
+  params: { baseEnv?: NodeJS.ProcessEnv; cwd?: string } = {},
 ) {
   const cwd = params.cwd ?? process.cwd();
   const baseEnv = params.baseEnv ?? process.env;
@@ -4159,10 +4191,7 @@ export function createVitestRunSpecs(
   );
   return plans.map((plan, index) => {
     const includeFilePath = plan.includePatterns
-      ? path.join(
-          params.tempDir ?? os.tmpdir(),
-          `openclaw-vitest-include-${randomUUID()}-${index}.json`,
-        )
+      ? path.join(os.tmpdir(), `openclaw-vitest-include-${randomUUID()}-${index}.json`)
       : null;
     return {
       config: plan.config,
@@ -4213,31 +4242,6 @@ function filterPlansForContractIncludeFile(plans: VitestRunPlan[], env: NodeJS.P
       includePatternMatchesConfig(candidate, configPatterns),
     );
   });
-}
-
-export function shouldAcquireLocalHeavyCheckLock(
-  runSpecs: Array<Pick<VitestRunSpec, "config" | "includePatterns" | "watchMode">>,
-  env = process.env,
-) {
-  if (env.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD === "1") {
-    return false;
-  }
-
-  if (env.OPENCLAW_TEST_PROJECTS_FORCE_LOCK === "1") {
-    return true;
-  }
-
-  const runSpec = runSpecs.length === 1 ? runSpecs[0] : undefined;
-  if (!runSpec) {
-    return true;
-  }
-  return !(
-    (runSpec.config === TOOLING_VITEST_CONFIG ||
-      runSpec.config === TOOLING_ISOLATED_VITEST_CONFIG) &&
-    !runSpec.watchMode &&
-    Array.isArray(runSpec.includePatterns) &&
-    runSpec.includePatterns.length > 0
-  );
 }
 
 function expandVitestIncludePatterns(includePatterns: string[], cwd: string) {
@@ -4310,21 +4314,17 @@ function formatFailedShardStatus(failure: FailedVitestShard) {
   return details.length > 0 ? ` (${details.join(", ")})` : "";
 }
 
-export function formatFailedShardDigest(
-  failures: FailedVitestShard[],
-  options: { limit?: number } = {},
-) {
+export function formatFailedShardDigest(failures: FailedVitestShard[]) {
   if (failures.length === 0) {
     return [];
   }
 
-  const limit = options.limit ?? FAILED_SHARD_DIGEST_LIMIT;
   const orderedFailures = failures.toSorted((left, right) => {
     const leftOrder = typeof left.order === "number" ? left.order : Number.MAX_SAFE_INTEGER;
     const rightOrder = typeof right.order === "number" ? right.order : Number.MAX_SAFE_INTEGER;
     return leftOrder - rightOrder || left.config.localeCompare(right.config);
   });
-  const shown = orderedFailures.slice(0, limit);
+  const shown = orderedFailures.slice(0, FAILED_SHARD_DIGEST_LIMIT);
   const lines = [`[test] failed shard digest (${failures.length}):`];
   for (const failure of shown) {
     const includePatterns = failure.includePatterns ?? [];
@@ -4337,16 +4337,4 @@ export function formatFailedShardDigest(
     lines.push(`[test] - ... ${failures.length - shown.length} more failed shard(s) omitted`);
   }
   return lines;
-}
-
-export function buildVitestArgs(args: string[], cwd = process.cwd()) {
-  const [plan] = buildVitestRunPlans(args, cwd);
-  if (!plan) {
-    return createVitestArgs({
-      config: DEFAULT_VITEST_CONFIG,
-      forwardedArgs: [],
-      watchMode: false,
-    });
-  }
-  return createVitestArgs(plan);
 }

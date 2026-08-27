@@ -1,5 +1,8 @@
 // Line plugin module owns the durable webhook spool row contract.
-import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeNullableString as nonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const LINE_WEBHOOK_SPOOL_VERSION = 1;
 
@@ -30,21 +33,17 @@ export class LineWebhookPayloadError extends Error {
 
 /** Message ids preserve the shipped replay-guard keyspace; other events use LINE's delivery id. */
 export function eventIdFor(event: unknown): string {
-  if (!event || typeof event !== "object") {
+  if (!isRecord(event)) {
     throw new LineWebhookPayloadError("LINE webhook event must be an object.");
   }
-  const candidate = event as {
-    type?: unknown;
-    message?: { id?: unknown };
-    webhookEventId?: unknown;
-  };
-  if (candidate.type === "message") {
-    const messageId = nonEmptyString(candidate.message?.id);
+  if (event.type === "message") {
+    const message = isRecord(event.message) ? event.message : undefined;
+    const messageId = nonEmptyString(message?.id);
     if (messageId) {
       return `message:${messageId}`;
     }
   }
-  const webhookEventId = nonEmptyString(candidate.webhookEventId);
+  const webhookEventId = nonEmptyString(event.webhookEventId);
   if (webhookEventId) {
     return `event:${webhookEventId}`;
   }
@@ -55,17 +54,17 @@ export function eventIdFor(event: unknown): string {
  *  message:/event: keyspace. The upgrade migration uses this prior derivation as its
  *  identity fence so a genuinely changed event still dead-letters. */
 export function legacyEventIdFor(event: unknown): string | null {
-  if (!event || typeof event !== "object") {
+  if (!isRecord(event)) {
     return null;
   }
-  return nonEmptyString((event as { webhookEventId?: unknown }).webhookEventId);
+  return nonEmptyString(event.webhookEventId);
 }
 
 export function laneKeyFor(event: unknown, eventId: string): string {
-  if (!event || typeof event !== "object") {
+  if (!isRecord(event)) {
     return eventId;
   }
-  const source = (event as { source?: Record<string, unknown> }).source;
+  const source = isRecord(event.source) ? event.source : undefined;
   if (source?.type === "group") {
     const groupId = nonEmptyString(source.groupId);
     if (groupId) {

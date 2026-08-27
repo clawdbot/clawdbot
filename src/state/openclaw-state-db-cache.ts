@@ -43,11 +43,12 @@ type OpenClawStateDatabaseCloseResult = {
 /** Close both physical-handle owners while retaining every cleanup failure. */
 function closeOpenClawStateDatabaseHandle(
   database: OpenClawStateDatabase,
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
 ): OpenClawStateDatabaseCloseResult {
   let caught = false;
   const errors: unknown[] = [];
   try {
-    database.walMaintenance.close();
+    database.walMaintenance.close(options);
   } catch (error) {
     caught = true;
     errors.push(error);
@@ -72,8 +73,9 @@ function evictCachedOpenClawStateDatabase(database: OpenClawStateDatabase): bool
   // but it must never remain discoverable as the process-wide shared handle.
   cachedDatabases.delete(database.path);
   notifyOpenClawStateDatabaseLifecycle({ kind: "closed", path: database.path });
-  // Eviction is best-effort; the triggering database error remains authoritative.
-  closeOpenClawStateDatabaseHandle(database);
+  // A poisoned cache owner is not the database lifecycle owner. PASSIVE avoids
+  // waiting on readers or resetting recovery frames another connection needs.
+  closeOpenClawStateDatabaseHandle(database, { checkpointMode: "PASSIVE" });
   return true;
 }
 
@@ -197,9 +199,11 @@ function closeOpenClawStateDatabaseByPath(pathname: string): boolean {
 }
 
 /** Close all cached shared state database handles. */
-function closeOpenClawStateDatabase(): void {
+function closeOpenClawStateDatabase(
+  options?: Parameters<OpenClawStateDatabase["walMaintenance"]["close"]>[0],
+): void {
   for (const database of cachedDatabases.values()) {
-    database.walMaintenance.close();
+    database.walMaintenance.close(options);
     if (database.db.isOpen) {
       database.db.close();
     }

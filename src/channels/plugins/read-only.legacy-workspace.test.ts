@@ -87,6 +87,7 @@ describe("read-only channel plugin legacy workspace discovery", () => {
     });
 
     expect(resolution.plugins.map((plugin) => plugin.id)).toContain("research-chat");
+    expect(resolution.manifestRecords.map((plugin) => plugin.id)).toContain("research-chat-plugin");
     expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: path.resolve("/srv/ops") }),
     );

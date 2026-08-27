@@ -50,7 +50,7 @@ import type {
   AuthProfileState,
   AuthProfileStore,
 } from "../agents/auth-profiles/types.js";
-import { resolveLegacyInheritedAuthDir } from "../agents/legacy-inherited-auth-dir.js";
+import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
@@ -450,7 +450,7 @@ function isDefaultAgentCandidate(
 ): boolean {
   return (
     candidate.agentDir === undefined ||
-    path.resolve(candidate.agentDir) === path.resolve(resolveLegacyInheritedAuthDir(cfg, env))
+    path.resolve(candidate.agentDir) === path.resolve(resolveLegacyInheritedAuthAgentDir(cfg, env))
   );
 }
 
@@ -905,9 +905,8 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
   let resumeWarning: string | undefined;
   try {
     resumedChanges = resumePendingAuthProfileMigrationArchives(env);
-  } catch {
-    resumeWarning =
-      "Could not finalize an interrupted auth profile archive; legacy sources were left for recovery.";
+  } catch (err) {
+    resumeWarning = `Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: ${String(err)}`;
   }
   const candidates = listAuthProfileSqliteMigrationCandidates(params.cfg, env);
   const configStore = coerceLegacyConfigAuthProfileStore(params.cfg);
@@ -989,6 +988,13 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
       const sharedStateTarget =
         candidate.agentDir === undefined &&
         resolveSharedAuthStoreOwnership(env).location === "state-db";
+      // A shared candidate on a legacy root names the main agent dir explicitly: it resolves to the
+      // same database, but an undefined agent dir would enter the shared-write bootstrap and could
+      // record state-db ownership midway through this import. Doctor stays the only owner of that flip.
+      const transactionAgentDir =
+        sharedStateTarget || candidate.agentDir !== undefined
+          ? candidate.agentDir
+          : resolveSharedMainAuthAgentDir(env);
       let sourceReceipts = candidateSourcePaths.filter(fs.existsSync).map((pathname) =>
         prepareAuthProfileSourceReceipt({
           pathname,
@@ -1160,7 +1166,7 @@ export async function maybeMigrateAuthProfileJsonStoresToSqlite(params: {
         try {
           assertAuthProfileMigrationSourcesUnchanged(candidate, sourceReceipts);
           verifiedStore = runAuthProfileWriteTransaction(
-            candidate.agentDir,
+            transactionAgentDir,
             (database) => {
               const authoritative = loadAuthProfileMigrationTargetStore(
                 candidate.agentDir,

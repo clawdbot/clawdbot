@@ -297,12 +297,6 @@ export async function defaultPersistDigest(params: {
   return missingEntry ? null : false;
 }
 
-export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
-  return (
-    event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
-  );
-}
-
 export async function synthesizeSessionObserverTerminalDigest(params: {
   source: { event?: AgentEventPayload; state?: SessionObserverState };
   dormant?: DormantSessionObserverRun;

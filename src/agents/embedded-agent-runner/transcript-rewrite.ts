@@ -126,6 +126,8 @@ function appendBranchEntry(params: {
 export function rewriteTranscriptEntriesInSessionManager(params: {
   sessionManager: SessionManagerLike;
   replacements: TranscriptRewriteReplacement[];
+  /** Preserve a checkpoint freshly captured on an explicit replacement. */
+  preserveReplacementCompactionReplay?: boolean;
 }): TranscriptRewriteResult {
   const replacementsById = new Map(
     params.replacements
@@ -197,7 +199,9 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
             appendMessage,
           })
         : appendMessage(
-            stripStalePrefixReplay(replacement) as Parameters<
+            (params.preserveReplacementCompactionReplay
+              ? replacement
+              : stripStalePrefixReplay(replacement)) as Parameters<
               typeof params.sessionManager.appendMessage
             >[0],
           );

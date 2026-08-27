@@ -2,9 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Extension shared helpers expose cross-plugin runtime utilities that remain SDK-safe.
 import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.internal.js";
@@ -214,23 +212,6 @@ export function mapPluginConfigIssues(
     path: normalizePluginConfigIssuePath(issue.path),
     message: formatPluginConfigIssue(issue, options),
   }));
-}
-
-/** Checks whether a read-only plugin path may resolve a secret through an env provider. */
-export function canResolveEnvSecretRefInReadOnlyPath(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  id: string;
-}): boolean {
-  const providerConfig = params.cfg?.secrets?.providers?.[params.provider];
-  if (!providerConfig) {
-    return params.provider === resolveDefaultSecretProviderAlias(params.cfg ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.id);
 }
 
 /** Reads plugin package versions across source, bundled, and test layouts with a fallback. */

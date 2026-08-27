@@ -1,4 +1,4 @@
-import { OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL } from "./openclaw-agent-board-schema.js";
+import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "./openclaw-agent-progress-card-schema.js";
 
 const SHARING_SCHEMA_START = "CREATE TABLE IF NOT EXISTS session_members (";
 const SHARING_SCHEMA_END = "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (";
@@ -16,7 +16,7 @@ function splitSessionSharingSchema(sql: string): { sharing: string; withoutShari
   };
 }
 
-const sessionSharingSchema = splitSessionSharingSchema(OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL);
+const sessionSharingSchema = splitSessionSharingSchema(AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL);
 const sessionSuggestionsStart = sessionSharingSchema.sharing.indexOf(SUGGESTIONS_SCHEMA_START);
 if (sessionSuggestionsStart === -1) {
   throw new Error("OpenClaw agent session-suggestions schema marker is missing.");

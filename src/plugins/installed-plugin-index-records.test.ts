@@ -10,8 +10,10 @@ import {
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
@@ -79,14 +81,19 @@ function updatePersistedInstallRecordsWithoutClearingCache(
 ) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const now = Date.now();
       db.prepare(
         `
-          UPDATE installed_plugin_index
-             SET install_records_json = ?,
+          UPDATE config_machine_state
+             SET value_json = json_set(
+                   value_json,
+                   '$.index.installRecords', json(?),
+                   '$.revision', ?
+                 ),
                  updated_at_ms = ?
-           WHERE index_key = 'installed-plugin-index'
+           WHERE state_key = 'plugins.installedIndex'
         `,
-      ).run(JSON.stringify(records), Date.now());
+      ).run(JSON.stringify(records), now, now);
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
@@ -204,6 +211,34 @@ describe("plugin index install records store", () => {
         spec: "persisted@1.0.0",
       },
     });
+  });
+
+  it("preserves newer shared-state schema errors while loading install records", async () => {
+    const stateDir = tempDirs.make("openclaw-plugin-index-records-");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        persisted: {
+          source: "npm",
+          spec: "persisted@1.0.0",
+        },
+      },
+      { stateDir, candidates: [] },
+    );
+    closeOpenClawStateDatabaseForTest();
+    const databasePath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+    database.close();
+
+    expect(() => loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toThrow(
+      expect.objectContaining({
+        name: "SqliteSchemaVersionError",
+        message: expect.stringContaining(
+          `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+        ),
+      }),
+    );
   });
 
   it("returns prototype-safe map copies without cloning cached records", async () => {

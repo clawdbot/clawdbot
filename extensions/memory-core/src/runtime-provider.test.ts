@@ -51,6 +51,24 @@ describe("memoryRuntime", () => {
     });
   });
 
+  it("forwards optional diagnostic source inspection", async () => {
+    const cfg = {} as OpenClawConfig;
+
+    await memoryRuntime.getMemorySearchManager({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+
+    expect(getMemorySearchManagerMock).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
+  });
+
   it("keeps local-service acquisition scoped to each runtime instance", async () => {
     const cfg = {} as OpenClawConfig;
     const firstAcquire = vi.fn(async () => undefined);
