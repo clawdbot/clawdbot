@@ -1,6 +1,7 @@
 // Imported CLI history merge helpers.
 // Deduplicates external history messages against local OpenClaw transcripts.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -172,29 +173,20 @@ function hasRoleTextCandidate(index: RoleTextIndex, entry: ComparableHistoryMess
 // while the external JSONL persists, so redundancy is proven per-merge by a
 // media-bearing local row inside the dedupe timestamp window, never assumed.
 function isCliImageMentionOnlyImport(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const meta = (message as { __openclaw?: unknown })["__openclaw"];
-  if (!meta || typeof meta !== "object") {
-    return false;
-  }
-  return (meta as { cliImageMentionOnly?: unknown }).cliImageMentionOnly === true;
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  return meta?.cliImageMentionOnly === true;
 }
 
 function hasLocalImageMediaFacts(entry: ComparableHistoryMessage): boolean {
-  const message = entry.message;
-  if (entry.role !== "user" || !message || typeof message !== "object") {
+  if (entry.role !== "user") {
     return false;
   }
-  const meta = (message as { __openclaw?: unknown })["__openclaw"];
-  if (!meta || typeof meta !== "object") {
-    return false;
-  }
-  const media = (meta as { media?: unknown }).media;
+  const meta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
+  const media = meta?.media;
   if (!Array.isArray(media)) {
     return false;
   }
+  // SAFETY: normalizeMediaFacts accepts loose MediaFactInput shapes and drops invalid entries.
   return normalizeMediaFacts(media as readonly MediaFactInput[]).some(isImageMediaFact);
 }
 

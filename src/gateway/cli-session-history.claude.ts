@@ -7,6 +7,7 @@ import {
   asFiniteNumber,
   parseDateStringTimestampMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
@@ -359,17 +360,14 @@ function stripCliImageMentionsFromUserContent(
   let changed = false;
   const next: unknown[] = [];
   for (const block of content) {
-    if (
-      block &&
-      typeof block === "object" &&
-      (block as { type?: unknown }).type === "text" &&
-      typeof (block as { text?: unknown }).text === "string"
-    ) {
-      const stripped = stripTrailingCliImageMentions((block as { text: string }).text);
-      if (stripped !== (block as { text: string }).text) {
+    const record = asOptionalRecord(block);
+    const text = record?.type === "text" && typeof record.text === "string" ? record.text : null;
+    if (record && text !== null) {
+      const stripped = stripTrailingCliImageMentions(text);
+      if (stripped !== text) {
         changed = true;
         if (stripped) {
-          next.push({ ...(block as Record<string, unknown>), text: stripped });
+          next.push({ ...record, text: stripped });
         }
         continue;
       }
