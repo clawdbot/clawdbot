@@ -676,9 +676,10 @@ agent request can wait up to 15 seconds for admission; the model runtime may sti
 be preparing when the response arrives.
 
 In `openclaw logs --follow`, search for `hook agent run completed` and the exact HTTP
-`runId`. Runs without execution or explicit delivery errors log at info level;
-non-ok execution, thrown errors, and explicit delivery errors log at warn level. For this `deliver: false`
-test, expect `status=ok` with no successful announcement. A warning with
+`runId`. Runs with `status=ok` and no explicit delivery error log at info level;
+all non-ok statuses (including skipped runs), thrown errors, and explicit delivery
+errors log at warn level. For this `deliver: false` test, expect `status=ok` with
+no successful announcement. A warning with
 `status=ok` and `deliveryError` means execution succeeded but delivery failed.
 It does not trigger another announcement attempt.
 
