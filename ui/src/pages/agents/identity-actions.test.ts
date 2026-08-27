@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -52,20 +53,113 @@ describe("agent identity actions", () => {
   });
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {
-    let resolveAvatar!: (value: string | null) => void;
-    fileToAvatarDataUrlMock.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveAvatar = resolve;
-      }),
-    );
+    const avatar = createDeferred<string | null>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(avatar.promise);
     const state = host();
 
     selectIdentityAvatar(state, {} as File);
     resetIdentityDraft(state);
-    resolveAvatar("data:image/png;base64,stale");
+    avatar.resolve("data:image/png;base64,stale");
     await Promise.resolve();
 
     expect(state.identityDraft.avatar).toBeNull();
+  });
+
+  it("keeps the latest avatar selection when an older decode settles first", async () => {
+    const first = createDeferred<string | null>();
+    const second = createDeferred<string | null>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const state = host();
+
+    selectIdentityAvatar(state, {} as File);
+    selectIdentityAvatar(state, {} as File);
+    first.resolve("data:image/png;base64,old");
+    await first.promise;
+    expect(state.identityDraft.avatar).toBeNull();
+
+    second.resolve("data:image/png;base64,new");
+    await second.promise;
+    expect(state.identityDraft.avatar).toBe("data:image/png;base64,new");
+  });
+
+  it.each([
+    { outcome: "decoded", avatar: "data:image/png;base64,new" },
+    { outcome: "unusable", avatar: null },
+    { outcome: "agent reset", avatar: "data:image/png;base64,stale" },
+  ])("waits for the picked avatar before saving: $outcome", async ({ outcome, avatar }) => {
+    const conversion = createDeferred<string | null>();
+    const update = createDeferred<object>();
+    fileToAvatarDataUrlMock.mockReturnValueOnce(conversion.promise);
+    const request = vi.fn(async (method: string) => {
+      if (method === "agents.update") {
+        return update.promise;
+      }
+      if (method === "config.get") {
+        return { config: {}, raw: "{}", hash: "saved", valid: true, issues: [] };
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const runtimeConfig = createRuntimeConfigCapability({
+      snapshot: {
+        client,
+        phase: "connected",
+        sessionKey: "main",
+        hello: gatewayHelloForMethods(["config.set"]),
+      },
+      subscribe: () => () => undefined,
+    });
+    const state = host();
+    state.identityDraft.name = "Agent Smith";
+    let current = true;
+    selectIdentityAvatar(state, {} as File);
+    const saving = saveIdentityDraft({
+      host: state,
+      expectedClient: client,
+      agentId: "main",
+      agents: {
+        refreshList: vi.fn(async () => undefined),
+      } as unknown as ApplicationContext["agents"],
+      agentIdentity: {
+        invalidate: vi.fn(),
+        ensure: vi.fn(async () => undefined),
+      } as unknown as ApplicationContext["agentIdentity"],
+      runtimeConfig,
+      canDispatch: () => true,
+      isCurrent: () => current,
+      onSaved: vi.fn(),
+    });
+    const savingDuringDecode = state.identitySaving;
+    const requestsDuringDecode = request.mock.calls.length;
+    if (outcome === "agent reset") {
+      current = false;
+      resetIdentityDraft(state);
+    }
+    conversion.resolve(avatar);
+    await conversion.promise;
+    update.resolve({});
+    await saving;
+    runtimeConfig.dispose();
+
+    expect(savingDuringDecode).toBe(true);
+    expect(requestsDuringDecode).toBe(0);
+    expect(state.identitySaving).toBe(false);
+    if (outcome === "decoded") {
+      expect(request).toHaveBeenCalledWith("agents.update", {
+        agentId: "main",
+        name: "Agent Smith",
+        avatar,
+      });
+      expect(state.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+      expect(state.identityError).toBeNull();
+    } else {
+      expect(request).not.toHaveBeenCalled();
+      expect(state.identityDraft.name).toBe(outcome === "agent reset" ? null : "Agent Smith");
+      expect(state.identityDraft.avatar).toBeNull();
+      if (outcome === "unusable") {
+        expect(state.identityError).toBeTruthy();
+      }
+    }
   });
 
   it("flushes a pending config draft before agents.update and refreshes afterward", async () => {

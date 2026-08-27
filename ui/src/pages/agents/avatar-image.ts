@@ -29,23 +29,26 @@ export async function fileToAvatarDataUrl(file: File): Promise<string | null> {
   }
   try {
     const bitmap = await createImageBitmap(file);
-    const scale = Math.min(1, AVATAR_TARGET_SIZE / Math.max(bitmap.width, bitmap.height));
-    const width = Math.max(1, Math.round(bitmap.width * scale));
-    const height = Math.max(1, Math.round(bitmap.height * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) {
-      return readFileAsDataUrl(file);
+    try {
+      const scale = Math.min(1, AVATAR_TARGET_SIZE / Math.max(bitmap.width, bitmap.height));
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) {
+        return readFileAsDataUrl(file);
+      }
+      context.drawImage(bitmap, 0, 0, width, height);
+      // toDataURL silently falls back to PNG when WebP is unsupported.
+      const encoded = canvas.toDataURL("image/webp", 0.8);
+      return boundAvatarDataUrl(
+        encoded.startsWith("data:image/webp") ? encoded : canvas.toDataURL("image/png"),
+      );
+    } finally {
+      bitmap.close();
     }
-    context.drawImage(bitmap, 0, 0, width, height);
-    bitmap.close();
-    // toDataURL silently falls back to PNG when WebP is unsupported.
-    const encoded = canvas.toDataURL("image/webp", 0.8);
-    return boundAvatarDataUrl(
-      encoded.startsWith("data:image/webp") ? encoded : canvas.toDataURL("image/png"),
-    );
   } catch {
     // Non-rasterizable images (e.g. SVG without intrinsic size) pass through
     // unscaled; the size gate above still bounds the persisted payload.

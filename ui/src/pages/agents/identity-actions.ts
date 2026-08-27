@@ -13,16 +13,10 @@ type AgentIdentityEditorHost = {
   identityError: string | null;
 };
 
-const avatarSelectionEpochs = new WeakMap<AgentIdentityEditorHost, number>();
-
-function advanceAvatarSelectionEpoch(host: AgentIdentityEditorHost): number {
-  const epoch = (avatarSelectionEpochs.get(host) ?? 0) + 1;
-  avatarSelectionEpochs.set(host, epoch);
-  return epoch;
-}
+const avatarSelections = new WeakMap<AgentIdentityEditorHost, Promise<string | null>>();
 
 export function resetIdentityDraft(host: AgentIdentityEditorHost) {
-  advanceAvatarSelectionEpoch(host);
+  avatarSelections.delete(host);
   host.identityDraft = { name: null, emoji: null, avatar: null };
   host.identitySaving = false;
   host.identityError = null;
@@ -38,18 +32,20 @@ export function setIdentityDraftField(
 }
 
 export function selectIdentityAvatar(host: AgentIdentityEditorHost, file: File) {
-  const epoch = advanceAvatarSelectionEpoch(host);
-  void fileToAvatarDataUrl(file).then((dataUrl) => {
-    if (avatarSelectionEpochs.get(host) !== epoch) {
-      return;
+  const selection = fileToAvatarDataUrl(file).then((dataUrl) => {
+    if (avatarSelections.get(host) !== selection) {
+      return null;
     }
+    avatarSelections.delete(host);
     if (dataUrl) {
       host.identityDraft = { ...host.identityDraft, avatar: dataUrl };
       host.identityError = null;
     } else {
       host.identityError = t("agents.identity.imageUnusable");
     }
+    return dataUrl;
   });
+  avatarSelections.set(host, selection);
 }
 
 /** Persist the draft via agents.update, then refresh the roster and the
@@ -66,22 +62,31 @@ export async function saveIdentityDraft(params: {
   onSaved: () => void;
 }) {
   const { host, expectedClient, agentId, agents, agentIdentity, runtimeConfig } = params;
-  const draft = host.identityDraft;
-  // Set/replace only: agents.update has no explicit clear operation. Keep a
-  // blank edit visible and unsaved instead of pretending it removed a field.
-  const name = draft.name?.trim();
-  const emoji = draft.emoji?.trim();
-  const avatar = draft.avatar ?? undefined;
-  if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
-    return;
-  }
-  if (!name && !emoji && !avatar) {
-    resetIdentityDraft(host);
-    return;
-  }
   host.identitySaving = true;
   host.identityError = null;
   try {
+    // A picked image is part of this save even before decoding publishes its
+    // draft. Failed or retired conversions must not become partial saves.
+    const selection = avatarSelections.get(host);
+    if (selection && !(await selection)) {
+      return;
+    }
+    if (!params.isCurrent()) {
+      return;
+    }
+    const draft = host.identityDraft;
+    // Set/replace only: agents.update has no explicit clear operation. Keep a
+    // blank edit visible and unsaved instead of pretending it removed a field.
+    const name = draft.name?.trim();
+    const emoji = draft.emoji?.trim();
+    const avatar = draft.avatar ?? undefined;
+    if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
+      return;
+    }
+    if (!name && !emoji && !avatar) {
+      resetIdentityDraft(host);
+      return;
+    }
     const mutation = await runtimeConfig.runExternalMutation(
       (client) => {
         if (client !== expectedClient) {

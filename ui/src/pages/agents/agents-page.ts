@@ -372,6 +372,7 @@ class AgentsPage
     this.agentFilesLoading = false;
     this.agentFileSaving = false;
     this.agentIdentityLoading = false;
+    this.identitySaving = false;
     this.agentSkillsLoading = false;
     this.toolsCatalogLoading = false;
     this.toolsCatalogLoadingAgentId = null;
