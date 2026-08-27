@@ -84,6 +84,10 @@ Keep the token out of repository config and shell arguments.
 
 ### Daytona
 
+<Warning>
+Direct Daytona cloud-worker dispatch is currently incompatible with this integration: OpenClaw requires `settings.class` and forwards it as `--class`, but Crabbox's direct Daytona backend rejects that flag because the snapshot controls sizing. The example below passes OpenClaw's profile validation but cannot provision a direct Daytona worker. Use another supported backend until this incompatibility is resolved.
+</Warning>
+
 The bundled Crabbox provider can also lease [Daytona](https://www.daytona.io) sandboxes as cloud workers (`settings.provider: "daytona"`). Unlike AWS, Daytona needs no separate `crabbox login` step: export `DAYTONA_API_KEY` (from the [Daytona dashboard](https://app.daytona.io/dashboard/keys)) in the Gateway process's environment before Crabbox allocates a lease. Verify it without provisioning anything:
 
 ```bash
@@ -111,7 +115,7 @@ A `daytona-fallback auth=ready control_plane=ready inventory=ready` finding conf
 }
 ```
 
-`class` defaults to `beast` (Crabbox's own default for this provider) when omitted; `crabbox providers describe daytona --json` lists the full flag set. Provide `DAYTONA_API_KEY` as an environment variable on the Gateway process (for example through a systemd `EnvironmentFile`), the same way other credential-bearing provider secrets are supplied — never in `openclaw.json` itself.
+The `settings.class: "beast"` value above is explicit, not a default. OpenClaw rejects an omitted or empty class before calling Crabbox; this validation requirement does not make `beast` a supported Daytona sizing option. `crabbox providers describe daytona --json` lists the provider's flags and limitations. Provide `DAYTONA_API_KEY` as an environment variable on the Gateway process (for example through a systemd `EnvironmentFile`), the same way other credential-bearing provider secrets are supplied — never in `openclaw.json` itself.
 
 ## Configuration
 
