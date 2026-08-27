@@ -139,6 +139,76 @@ async function capture(page: Page, name: string): Promise<void> {
 }
 
 suite.define(() => {
+  it("preserves a refreshed external edit after reverting a retained Raw draft", async () => {
+    await suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        recordVideo: captureUiProofEnabled
+          ? { dir: uiProofArtifactDir, size: { height: 1000, width: 1440 } }
+          : undefined,
+        serviceWorkers: "block",
+        viewport: { height: 1000, width: 1440 },
+      },
+      async ({ page }) => {
+        const initialConfig = {
+          laboratory: { endpoint: "original-api", retryBudget: 2 },
+          tools: {},
+        };
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "config.get": configResponse(initialConfig, "revision-original"),
+            "config.schema": configSchemaResponse(),
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/advanced?section=laboratory`);
+        const endpoint = page.getByRole("textbox", { name: "Endpoint", exact: true });
+        await expect.poll(() => endpoint.inputValue()).toBe("original-api");
+        await page.getByRole("button", { name: "Raw", exact: true }).click();
+        const raw = page.locator(".config-raw-field textarea");
+        const originalRaw = await raw.inputValue();
+        await raw.fill(originalRaw.replace("original-api", "unsaved-api"));
+
+        const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
+        await gateway.setMethodResponse(
+          "config.get",
+          configResponse(
+            { ...initialConfig, laboratory: { endpoint: "external-api", retryBudget: 2 } },
+            "revision-external",
+          ),
+        );
+        await gateway.setOnline(false);
+        await gateway.setOnline(true);
+        await expect
+          .poll(async () => (await gateway.getRequests("config.get")).length)
+          .toBe(getsBeforeReconnect + 1);
+        await expect.poll(() => raw.isEnabled()).toBe(true);
+        await raw.fill(originalRaw);
+        await page.getByRole("button", { name: "Form", exact: true }).click();
+        await endpoint.waitFor();
+        await capture(page, "12-reconnect-raw-revert.png");
+        expect.soft(await endpoint.inputValue()).toBe("external-api");
+
+        await gateway.deferNext("config.set");
+        await page.getByRole("spinbutton", { name: "Retry budget", exact: true }).fill("3");
+        const save = mutationParams(await gateway.waitForRequest("config.set"));
+        expect(save.baseHash).toBe("revision-external");
+        expect.soft(JSON.parse(String(save.raw))).toEqual({
+          ...initialConfig,
+          laboratory: { endpoint: "external-api", retryBudget: 3 },
+        });
+        await gateway.resolveDeferred("config.set");
+        await expect
+          .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+          .toContain("Saved");
+        await page.reload();
+        await endpoint.waitFor();
+        await capture(page, "13-reconnect-save-reload.png");
+        expect(await endpoint.inputValue()).toBe("external-api");
+      },
+    );
+  });
+
   it("restores form values when a failed edit is reverted in Raw mode", async () => {
     await suite.withPage(
       {
