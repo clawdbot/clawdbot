@@ -4,7 +4,7 @@ import type { OpenClawPluginNodeHostCommandIo } from "../plugins/types.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import type { NodeHostClient } from "./client.js";
 import { listRegisteredNodeHostCapsAndCommands } from "./plugin-node-host.js";
-import { prepareNodeHostRuntime } from "./runtime.js";
+import { prepareNodeHostRuntime, SkillBinsCache } from "./runtime.js";
 
 const mocks = vi.hoisted(() => {
   const closeMcp = vi.fn(async () => undefined);
@@ -672,5 +672,64 @@ describe("installed application command advertisement", () => {
     expect(disabled.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
     expect(enabled.manifest.commands).toContain(NODE_DEVICE_APPS_COMMAND);
     expect(nonDarwin.manifest.commands).not.toContain(NODE_DEVICE_APPS_COMMAND);
+  });
+});
+
+describe("SkillBinsCache", () => {
+  it("deduplicates concurrent cold refresh requests into a single in-flight request", async () => {
+    let resolveRequest: ((value: { bins: string[] }) => void) | undefined;
+    const request = vi.fn(
+      () =>
+        new Promise<{ bins: string[] }>((resolve) => {
+          resolveRequest = resolve;
+        }),
+    );
+    const client = { request } as unknown as NodeHostClient;
+    const cache = new SkillBinsCache(client, "/bin:/usr/bin");
+
+    const [firstPromise, secondPromise, thirdPromise] = [
+      cache.current(),
+      cache.current(),
+      cache.current(),
+    ];
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("skills.bins", {});
+
+    resolveRequest?.({ bins: ["echo"] });
+    const [first, second, third] = await Promise.all([firstPromise, secondPromise, thirdPromise]);
+
+    expect(first).toEqual([{ name: "echo", resolvedPath: "/bin/echo" }]);
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+
+    const warm = await cache.current();
+    expect(warm).toBe(first);
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears in-flight tracking and preserves prior bins when a refresh fails", async () => {
+    let callCount = 0;
+    const request = vi.fn(async () => {
+      callCount += 1;
+      if (callCount === 1) {
+        return { bins: ["echo"] };
+      }
+      throw new Error("gateway network error");
+    });
+    const client = { request } as unknown as NodeHostClient;
+    const cache = new SkillBinsCache(client, "/bin:/usr/bin");
+
+    const initial = await cache.current();
+    expect(initial).toEqual([{ name: "echo", resolvedPath: "/bin/echo" }]);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    const forcedFailure = await cache.current(true);
+    expect(forcedFailure).toEqual([{ name: "echo", resolvedPath: "/bin/echo" }]);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    // Can immediately retry again after failure
+    await cache.current(true);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 });

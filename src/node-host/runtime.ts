@@ -183,9 +183,10 @@ function resolveSkillBinTrustEntries(bins: string[], pathEnv: string): SkillBinT
   );
 }
 
-class SkillBinsCache implements SkillBinsProvider {
+export class SkillBinsCache implements SkillBinsProvider {
   private bins: SkillBinTrustEntry[] = [];
   private lastRefresh = 0;
+  private inFlight: Promise<SkillBinTrustEntry[]> | null = null;
   private readonly ttlMs = 90_000;
 
   constructor(
@@ -194,13 +195,24 @@ class SkillBinsCache implements SkillBinsProvider {
   ) {}
 
   async current(force = false): Promise<SkillBinTrustEntry[]> {
-    if (force || Date.now() - this.lastRefresh > this.ttlMs) {
-      await this.refresh();
+    if (!force && Date.now() - this.lastRefresh <= this.ttlMs) {
+      return this.bins;
     }
-    return this.bins;
+    if (this.inFlight) {
+      return this.inFlight;
+    }
+    const refreshPromise = this.refresh();
+    this.inFlight = refreshPromise;
+    try {
+      return await refreshPromise;
+    } finally {
+      if (this.inFlight === refreshPromise) {
+        this.inFlight = null;
+      }
+    }
   }
 
-  private async refresh() {
+  private async refresh(): Promise<SkillBinTrustEntry[]> {
     try {
       const res = await this.client.request<{ bins: Array<unknown> }>("skills.bins", {});
       const bins = Array.isArray(res?.bins) ? res.bins.map((bin) => String(bin)) : [];
@@ -211,6 +223,7 @@ class SkillBinsCache implements SkillBinsProvider {
         this.bins = [];
       }
     }
+    return this.bins;
   }
 }
 
