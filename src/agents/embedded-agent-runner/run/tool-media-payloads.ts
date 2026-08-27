@@ -15,8 +15,8 @@ type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number
 
 /**
  * Merges media emitted by tools into the channel payloads produced by the
- * assistant turn. The first non-reasoning reply owns the media so text and
- * attachments stay together; metadata is preserved for delivery bookkeeping.
+ * assistant turn. The first successful, non-reasoning reply owns the media so
+ * text and attachments stay together; metadata is preserved for delivery bookkeeping.
  */
 export function mergeAttemptToolMediaPayloads(params: {
   payloads?: EmbeddedRunPayload[];

@@ -107,6 +107,11 @@ describe("provider timeout final delivery", () => {
         payload: expect.objectContaining({
           text: GENERIC_TIMEOUT,
           isError: true,
+        }),
+        info: expect.objectContaining({ kind: "final" }),
+      };
+      const mediaSend = {
+        payload: expect.objectContaining({
           mediaUrl: TOOL_MEDIA_URL,
           mediaUrls: [TOOL_MEDIA_URL],
         }),
@@ -119,7 +124,7 @@ describe("provider timeout final delivery", () => {
 
       expect(physicalSends).toEqual(
         preserveIndependentErrorAndMedia
-          ? [independentSend, authoritativeSend]
+          ? [independentSend, mediaSend, authoritativeSend]
           : [authoritativeSend],
       );
       expect(dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
