@@ -44,9 +44,9 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             document.querySelector("main")!.append(input);
             const slash = document.createElement("button");
             slash.textContent = "/";
-            slash.onclick = () => {
+            slash.addEventListener("click", () => {
               document.querySelector("output")!.textContent = "/";
-            };
+            });
             document.querySelector("main")!.append(slash);
             document.querySelector("iframe")!.srcdoc =
               "<button onclick=\"this.textContent='Frame clicked'\">Frame: action</button>";
