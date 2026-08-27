@@ -601,7 +601,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     const admittedAgentRun = getAgentRunTerminalOutcome() === "completed";
     if (
       params.replyOptions?.isHeartbeat === true ||
-      !admittedAgentRun ||
+      (!admittedAgentRun && !didDeliverVisiblePartialReply) ||
       isDispatchOperationAborted()
     ) {
       throw error;
