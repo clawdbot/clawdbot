@@ -59,6 +59,8 @@ The server can listen on IPv4 or IPv6 loopback (`127.0.0.1` or `::1`), both on t
 
 The proxy rewrites `Host` to the local target, so typical development servers such as Vite and Next.js need no additional configuration. WebSockets and hot module replacement are proxied through the same portal.
 
+Streaming HTTP responses, including server-sent events, forward response headers without waiting for the first body chunk.
+
 ## Availability and configuration
 
 Portals add no dedicated configuration key. The `portal` tool follows ordinary tool policy, described in [Tools configuration](/gateway/config-tools).
