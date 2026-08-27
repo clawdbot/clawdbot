@@ -46,9 +46,9 @@ describe("docker build cache layout", () => {
     await Promise.all(dockerfilePaths.map((path) => readRepoFile(path)));
   });
 
-  it("keeps the root dependency layer independent from scripts changes", async () => {
+  it("keeps both dependency installs independent from the full source copy", async () => {
     const dockerfile = await readRepoFile("Dockerfile");
-    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const installIndex = dockerfile.lastIndexOf("pnpm install --frozen-lockfile");
     const copyAllIndex = dockerfile.indexOf("COPY . .");
     const scriptsCopyIndex = dockerfile.indexOf("COPY scripts ./scripts");
 
