@@ -298,15 +298,18 @@ An already-paired device does not get broader access silently: a reconnect
 that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
-A connected limited Control UI can file that same pending request through its
-**Request admin** banner without attempting a broader reconnect. The banner can
-collapse into a persistent **Limited access** chip that reopens the action. The request is
-bound to the signed device identity on the live connection. Approval still
+A connected limited Control UI can file that same pending request through
+**Inbox > System > Limited access > Request admin** without attempting a broader
+reconnect. The request is bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,
 the Gateway returns the new token only to that device's live waiter; the browser
 stores it before reconnecting. Canceling the wait or disconnecting before
 approval falls back to the ordinary pairing repair flow on the next connection.
+
+Requests outside the authenticated person's assigned role ceiling are denied,
+not queued for device approval. The Control UI shows the denial and administrator
+guidance without **Retry**; an administrator must change the role first.
 
 The explicit exception is the administrator-capable Control UI owner profile
 issued directly on the Gateway host by `openclaw dashboard` or graphical
