@@ -33,6 +33,7 @@ type SessionSqliteStartupFailureReportWriter = (
 type SessionSqliteDatabaseExists = (params: {
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  path?: string;
 }) => boolean;
 
 type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"] & {

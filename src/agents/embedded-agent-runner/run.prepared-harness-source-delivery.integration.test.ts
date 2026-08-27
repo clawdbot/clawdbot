@@ -30,6 +30,7 @@ import { buildTestCtx } from "../../auto-reply/reply/test-ctx.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../../auto-reply/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import type { FailoverReason } from "../failover/signal.js";
 import { registerAgentHarness } from "../harness/registry.js";
 import { withPreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
@@ -47,6 +48,23 @@ import type { RunEmbeddedAgentInternalParams } from "./run/internal-params.js";
 import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 
 const runnerState = setupAgentRunnerExecutionTestState();
+
+type TestRouteStage = { stage: "initial" } | { stage: "fallback"; fallbackReason: FailoverReason };
+
+function runAdmittedAttempt(
+  params: FallbackRunnerParams,
+  provider: string,
+  model: string,
+  route: TestRouteStage,
+) {
+  return params.run(provider, model, {
+    modelRoutingProvenance: {
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+      ...route,
+    },
+  });
+}
 
 beforeAll(globalBeforeAll0);
 
@@ -204,27 +222,43 @@ describe("prepared harness source delivery", () => {
     runnerState.runWithModelFallbackMock.mockImplementationOnce(
       async (params: FallbackRunnerParams) => {
         if (testCase.candidatePath === "cli-failure-embedded") {
-          await params.run("anthropic", "cli-primary").catch(() => undefined);
+          await runAdmittedAttempt(params, "anthropic", "cli-primary", {
+            stage: "initial",
+          }).catch(() => undefined);
         }
         if (testCase.candidatePath === "cli") {
           return {
-            result: await params.run("anthropic", "cli-primary"),
+            result: await runAdmittedAttempt(params, "anthropic", "cli-primary", {
+              stage: "initial",
+            }),
             provider: "anthropic",
             model: "cli-primary",
             attempts: [],
           };
         }
         if (testCase.candidatePath === "embedded-failure-cli") {
-          await params.run("custom", "api-primary").catch(() => undefined);
+          await runAdmittedAttempt(params, "custom", "api-primary", {
+            stage: "initial",
+          }).catch(() => undefined);
           return {
-            result: await params.run("anthropic", "cli-fallback"),
+            result: await runAdmittedAttempt(params, "anthropic", "cli-fallback", {
+              stage: "fallback",
+              fallbackReason: "unknown",
+            }),
             provider: "anthropic",
             model: "cli-fallback",
             attempts: [],
           };
         }
         return {
-          result: await params.run("custom", "plugin-fallback"),
+          result: await runAdmittedAttempt(
+            params,
+            "custom",
+            "plugin-fallback",
+            testCase.candidatePath === "cli-failure-embedded"
+              ? { stage: "fallback", fallbackReason: "unknown" }
+              : { stage: "initial" },
+          ),
           provider: "custom",
           model: "plugin-fallback",
           attempts: [],

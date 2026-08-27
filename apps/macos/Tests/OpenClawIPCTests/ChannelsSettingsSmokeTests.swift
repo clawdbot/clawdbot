@@ -38,9 +38,111 @@ private func makeChannelsStore(
     return store
 }
 
+@MainActor
+private func makeChannelsSettings(snapshot: String) throws -> ChannelsSettings {
+    let store = ChannelsStore(isPreview: true)
+    store.snapshot = try JSONDecoder().decode(
+        ChannelsStatusSnapshot.self,
+        from: Data(snapshot.utf8))
+    return ChannelsSettings(store: store)
+}
+
 @Suite(.serialized)
 @MainActor
 struct ChannelsSettingsSmokeTests {
+    @Test func `generic channel account errors replace misleading active status`() throws {
+        let settings = try makeChannelsSettings(snapshot: """
+        {
+          "ts": 1,
+          "channelOrder": ["matrix", "mattermost", "disabled"],
+          "channelLabels": {"matrix": "Matrix", "mattermost": "Mattermost", "disabled": "Disabled"},
+          "channels": {
+            "matrix": {"configured": true},
+            "mattermost": {"configured": true, "lastError": "Channel summary failed"},
+            "disabled": {"configured": false}
+          },
+          "channelAccounts": {
+            "matrix": [
+              {"accountId": "healthy", "configured": true},
+              {"accountId": "failed", "configured": true, "lastError": "First account probe failed"},
+              {"accountId": "later", "configured": true, "lastError": "Later account failed"}
+            ],
+            "mattermost": [
+              {"accountId": "default", "configured": true, "lastError": "Account failure"}
+            ],
+            "disabled": []
+          },
+          "channelDefaultAccountId": {
+            "matrix": "healthy",
+            "mattermost": "default",
+            "disabled": "default"
+          }
+        }
+        """)
+        let channels = Dictionary(uniqueKeysWithValues: settings.orderedChannels.map { ($0.id, $0) })
+        let matrix = try #require(channels["matrix"])
+        let mattermost = try #require(channels["mattermost"])
+        let disabled = try #require(channels["disabled"])
+
+        #expect(settings.channelEnabled(matrix))
+        #expect(settings.channelHasError(matrix))
+        #expect(settings.channelSummary(matrix) == "Error")
+        #expect(settings.channelDetails(matrix) == "Error: First account probe failed")
+
+        #expect(settings.channelHasError(mattermost))
+        #expect(settings.channelDetails(mattermost) == "Error: Channel summary failed")
+
+        #expect(!settings.channelEnabled(disabled))
+        #expect(!settings.channelHasError(disabled))
+        #expect(settings.channelSummary(disabled) == "Not configured")
+        #expect(settings.channelDetails(disabled) == nil)
+    }
+
+    @Test func `failed channel probes remain visible across generic and bundled channels`() throws {
+        let settings = try makeChannelsSettings(snapshot: """
+        {
+          "ts": 1,
+          "channelOrder": ["matrix", "telegram"],
+          "channelLabels": {"matrix": "Matrix", "telegram": "Telegram"},
+          "channels": {
+            "matrix": {"configured": true, "probe": {"ok": false}},
+            "telegram": {"configured": true, "running": true, "probe": {"ok": false}}
+          },
+          "channelAccounts": {"matrix": [], "telegram": []},
+          "channelDefaultAccountId": {"matrix": "default", "telegram": "default"}
+        }
+        """)
+
+        for channel in settings.orderedChannels {
+            #expect(settings.channelHasError(channel), "\(channel.id) should surface its failed probe")
+        }
+    }
+
+    @Test func `whatsapp logout remains a channel error without a message`() throws {
+        let settings = try makeChannelsSettings(snapshot: """
+        {
+          "ts": 1,
+          "channelOrder": ["whatsapp"],
+          "channelLabels": {"whatsapp": "WhatsApp"},
+          "channels": {
+            "whatsapp": {
+              "configured": true,
+              "linked": true,
+              "running": false,
+              "connected": false,
+              "reconnectAttempts": 0,
+              "lastDisconnect": {"at": 1, "loggedOut": true}
+            }
+          },
+          "channelAccounts": {"whatsapp": []},
+          "channelDefaultAccountId": {"whatsapp": "default"}
+        }
+        """)
+        let channel = try #require(settings.orderedChannels.first)
+
+        #expect(settings.channelHasError(channel))
+    }
+
     @Test func `whatsapp login wait result keeps latest qr until connected`() {
         let store = makeChannelsStore(channels: [:])
         store.whatsappLoginQrDataUrl = "data:image/png;base64,initial"
@@ -100,7 +202,7 @@ struct ChannelsSettingsSmokeTests {
                 now: Date(timeInterval: 1.5, since: startedAt)) == nil)
     }
 
-    @Test func `cached config loads return without clearing dirty draft`() async {
+    @Test func `cached config loads return without clearing dirty draft`() {
         let store = makeChannelsStore(channels: [:])
         store.configSchema = ConfigSchemaNode(raw: ["type": "object"])
         store.configSchemaSourceKey = "source-a"
@@ -194,14 +296,21 @@ struct ChannelsSettingsSmokeTests {
         store.configLoadingSourceKey = "source-a"
 
         #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false) == true)
-        #expect(store.configForceReloadPending == false)
+        #expect(store.configReloadPending == .none)
+
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false, refresh: true) == true)
+        #expect(store.configReloadPending == .refresh)
 
         #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: true) == true)
-        #expect(store.configForceReloadPending == true)
+        #expect(store.configReloadPending == .force)
 
-        store.configForceReloadPending = false
+        // Force is sticky: a queued refresh must not downgrade a pending force reload.
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false, refresh: true) == true)
+        #expect(store.configReloadPending == .force)
+
+        store.configReloadPending = .none
         #expect(store.queueConfigReloadIfLoading(sourceKey: "source-b", force: false) == true)
-        #expect(store.configForceReloadPending == true)
+        #expect(store.configReloadPending == .force)
     }
 
     @Test func `schema reload queues behind background load after source changes`() {

@@ -274,6 +274,7 @@ describe("node host MCP live lifecycle", () => {
     let maxActiveLists = 0;
     let listCount = 0;
     const pending: Array<(value: { tools: Tool[] }) => void> = [];
+    const refreshStarted = [createDeferred(), createDeferred()] as const;
     const client = createClient({
       list: async () => {
         listCount += 1;
@@ -285,6 +286,7 @@ describe("node host MCP live lifecycle", () => {
         try {
           return await new Promise<{ tools: Tool[] }>((resolve) => {
             pending.push(resolve);
+            refreshStarted[listCount - 2]?.resolve();
           });
         } finally {
           activeLists -= 1;
@@ -304,13 +306,15 @@ describe("node host MCP live lifecycle", () => {
     );
 
     notifyToolsChanged?.();
-    await vi.waitFor(() => expect(activeLists).toBe(1));
+    await refreshStarted[0].promise;
+    expect(activeLists).toBe(1);
     for (let index = 0; index < 20; index += 1) {
       notifyToolsChanged?.();
     }
     expect(client.request).toHaveBeenCalledTimes(2);
     pending.shift()?.({ tools: [tool("middle")] });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(3));
+    await refreshStarted[1].promise;
+    expect(client.request).toHaveBeenCalledTimes(3);
     expect(maxActiveLists).toBe(1);
     pending.shift()?.({ tools: [tool("final")] });
     await vi.waitFor(() =>

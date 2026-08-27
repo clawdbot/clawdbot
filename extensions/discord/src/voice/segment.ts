@@ -15,12 +15,7 @@ import {
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
-import {
-  logVoiceVerbose,
-  PLAYBACK_READY_TIMEOUT_MS,
-  SPEAKING_READY_TIMEOUT_MS,
-  type VoiceSessionEntry,
-} from "./session.js";
+import { logVoiceVerbose, PLAYBACK_READY_TIMEOUT_MS, type VoiceSessionEntry } from "./session.js";
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
@@ -191,11 +186,17 @@ export async function processDiscordVoiceSegment(params: {
   }
   params.enqueuePlayback(entry, async () => {
     const voiceSdk = loadDiscordVoiceSdk();
+    const playbackLifecycle = new AbortController();
+    let playbackStarted = false;
+    const cancelStoppedPlayback = () =>
+      (!playbackStarted || entry.sessionLifecycle.status === "stopped") &&
+      playbackLifecycle.abort();
     try {
       // Queued playback can outlive its session; a stopped player is reusable by the SDK.
       if (entry.sessionLifecycle.status === "stopped") {
         return;
       }
+      entry.player.on(voiceSdk.AudioPlayerStatus.Idle, cancelStoppedPlayback);
       const input =
         voiceReplyAudio.mode === "stream"
           ? Readable.fromWeb(
@@ -209,14 +210,25 @@ export async function processDiscordVoiceSegment(params: {
         inputType: voiceSdk.StreamType.Opus,
       });
       entry.player.play(resource);
-      await voiceSdk
-        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Playing, PLAYBACK_READY_TIMEOUT_MS)
-        .catch(() => undefined);
-      await voiceSdk
-        .entersState(entry.player, voiceSdk.AudioPlayerStatus.Idle, SPEAKING_READY_TIMEOUT_MS)
-        .catch(() => undefined);
+      await voiceSdk.entersState(
+        entry.player,
+        voiceSdk.AudioPlayerStatus.Playing,
+        AbortSignal.any([AbortSignal.timeout(PLAYBACK_READY_TIMEOUT_MS), playbackLifecycle.signal]),
+      );
+      playbackStarted = true;
+      // Playback has no duration cap; terminal stop emits Idle and cancels either lifecycle wait.
+      await voiceSdk.entersState(
+        entry.player,
+        voiceSdk.AudioPlayerStatus.Idle,
+        playbackLifecycle.signal,
+      );
       logVoiceVerbose(`playback done: guild ${entry.guildId} channel ${entry.channelId}`);
+    } catch (error) {
+      if (entry.sessionLifecycle.status !== "stopped") {
+        throw error;
+      }
     } finally {
+      entry.player.off(voiceSdk.AudioPlayerStatus.Idle, cancelStoppedPlayback);
       await releaseAudio?.();
     }
   });

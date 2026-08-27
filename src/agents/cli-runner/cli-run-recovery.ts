@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isCliSessionInvalidatingFailoverReason } from "../cli-session.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { type FailoverError, isFailoverError } from "../failover-error.js";
 import { createCliFailoverError } from "./exit-error.js";
@@ -21,8 +22,17 @@ export function resolveCliSessionId(reusableCliSession: CliReusableSession): str
 function shouldRetryFreshCliSessionAfterFailover(params: {
   error: FailoverError;
   hasHistoryPrompt: boolean;
+  recoveryPolicy?: "replace-binding" | "invalidated-only";
 }): boolean {
   if (!params.hasHistoryPrompt) {
+    return false;
+  }
+  // Some CLIs can safely replace a resumable conversation after transport or
+  // format failures. Backends that cannot must positively prove invalidation.
+  if (
+    params.recoveryPolicy === "invalidated-only" &&
+    !isCliSessionInvalidatingFailoverReason(params.error.reason)
+  ) {
     return false;
   }
   switch (params.error.reason) {
@@ -163,6 +173,7 @@ export async function runCliRecovery<TAttempt>(params: {
         shouldRetryFreshCliSessionAfterFailover({
           error: recoveryError,
           hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          recoveryPolicy: context.preparedBackend.backend.freshSessionRecovery,
         }) &&
         retryableSessionId &&
         runParams.sessionKey

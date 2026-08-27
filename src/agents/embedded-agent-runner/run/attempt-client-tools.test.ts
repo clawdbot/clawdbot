@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tools.js";
 import { setChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
+import { markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
@@ -120,6 +121,27 @@ describe("prepareEmbeddedAttemptClientTools", () => {
           }).coreReadAuthorized,
       ),
     ).toEqual([true, false, false]);
+  });
+
+  it("collects only the marked Code Mode exec as a code-mode exec tool name", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const markedExec = markCodeModeControlTool(createStubTool("exec"));
+    const plainExec = createStubTool("exec");
+
+    expect(
+      [markedExec, plainExec].map((tool) =>
+        Array.from(
+          prepare({
+            codeModeControlsEnabledForRun: true,
+            attemptConfig: CATALOGS_DISABLED_CONFIG,
+            toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+            catalogRef,
+            effectiveTools: [tool],
+            uncompactedEffectiveTools: [],
+          }).codeModeExecToolNames,
+        ),
+      ),
+    ).toEqual([["exec"], []]);
   });
 
   it("hides client tools behind the code-mode catalog when code mode is engaged", () => {

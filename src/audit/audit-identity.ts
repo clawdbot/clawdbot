@@ -35,7 +35,14 @@ type AuditIdentityKey = {
 };
 
 type AuditIdentityKind = "account" | "actor" | "conversation" | "message" | "target";
-type ExecutionIdentityRefKind = "domain" | "evidence" | "grant" | "principal" | "runtime";
+type ExecutionIdentityRefKind =
+  | "credential"
+  | "domain"
+  | "evidence"
+  | "grant"
+  | "principal"
+  | "runtime"
+  | "target";
 
 function registerAuditIdentityKeyForRedaction(key: Uint8Array): void {
   const bytes = Buffer.from(key);

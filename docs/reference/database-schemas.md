@@ -3,6 +3,7 @@ summary: "OpenClaw SQLite database locations, schema versions, integrity checks,
 read_when:
   - Diagnosing a newer database schema error
   - Checking database compatibility before an update or downgrade
+  - Proposing a SQLite or persistent-store change
   - Recovering a database for an older OpenClaw release
 title: "Database schemas"
 ---
@@ -44,7 +45,31 @@ for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
 
+User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
+column in state schema 9. Operator-role assignment lazily ensures the column on
+first use. Older readers ignore the column and can reopen the same database
+safely.
+
 Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
+
+## Review checkpoint for material changes
+
+Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
+
+Treat a change as material when it introduces or materially changes any of these:
+
+- a table, dedicated database, durable projection, cache, index, or other persisted representation
+- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
+- user-visible persistence semantics, including a second interpretation of existing durable data
+- migration, backfill, repair, downgrade, rollback, retention, compaction, or corruption recovery
+- transaction boundaries, writer ownership, concurrency, locking, publication fencing, or reader consistency
+- read, write, disk, startup, or maintenance cost enough to affect the store's operating model
+
+The discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link the accepted decision.
+
+The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
+
+For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
 
 ## Preflight a target release
 
@@ -101,6 +126,13 @@ Version 3 was an unshipped development step folded into version 4.
 | 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                      | Unreleased          |
 | 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                | Unreleased          |
 | 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                     | Unreleased          |
+| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                     | Unreleased          |
+| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                       | Unreleased          |
+| 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                          | Unreleased          |
+
+### State schema 11
+
+Schema 11 removes the `skill_lifecycle` and `skill_workshop_proposal_origin_runs` tables. Archived-skill lifecycle state is discarded during the upgrade: previously archived Workshop skills return to the active collection, where weekly collection review judges them by content. The origin-run rows were a never-read projection; canonical proposal provenance stays in `skill_workshop_proposals.record_json`. Recorded skill usage and collection-review state are preserved.
 
 ### State schema 9
 
@@ -157,6 +189,315 @@ The general procedure is:
 3. Set `PRAGMA user_version` and `schema_meta.schema_version` to the target version.
 4. Run the target release's full database verification before starting the Gateway.
 
+### Example: state schema 12 to 11
+
+Schema 12 folded durable state snapshots into `config_machine_state` and retired rebuildable caches plus the write-only cron store epoch table. A schema 11 build still expects the thirteen former tables, so a manual downgrade must recreate their exact schemas and indexes before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE IF NOT EXISTS skill_curator_state (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  last_attempt_at_ms INTEGER NOT NULL,
+  last_success_at_ms INTEGER,
+  last_error TEXT,
+  last_result_json TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS onboarding_recommendations (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  inventory_hash TEXT NOT NULL,
+  matches_json TEXT NOT NULL,
+  offered_at_ms INTEGER NOT NULL,
+  accepted_at_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS voicewake_triggers (
+  config_key TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  trigger TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (config_key, position)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_voicewake_triggers_trigger
+  ON voicewake_triggers(config_key, trigger);
+
+CREATE TABLE IF NOT EXISTS voicewake_routing_config (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  default_target_mode TEXT NOT NULL,
+  default_target_agent_id TEXT,
+  default_target_session_key TEXT,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS voicewake_routing_routes (
+  config_key TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  trigger TEXT NOT NULL,
+  target_mode TEXT NOT NULL,
+  target_agent_id TEXT,
+  target_session_key TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (config_key, position),
+  FOREIGN KEY (config_key) REFERENCES voicewake_routing_config(config_key) ON DELETE CASCADE
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_voicewake_routing_routes_trigger
+  ON voicewake_routing_routes(config_key, trigger);
+
+CREATE TABLE IF NOT EXISTS update_check_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  last_checked_at TEXT,
+  last_notified_version TEXT,
+  last_notified_tag TEXT,
+  last_available_version TEXT,
+  last_available_tag TEXT,
+  auto_install_id TEXT,
+  auto_first_seen_version TEXT,
+  auto_first_seen_tag TEXT,
+  auto_first_seen_at TEXT,
+  auto_last_attempt_version TEXT,
+  auto_last_attempt_at TEXT,
+  auto_last_success_version TEXT,
+  auto_last_success_at TEXT,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  etag TEXT,
+  payload_json TEXT,
+  feed_sequence INTEGER,
+  last_checked_at_ms INTEGER,
+  notified_slugs_json TEXT NOT NULL DEFAULT '[]',
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS cron_store_epochs (
+  store_key TEXT PRIMARY KEY,
+  store_epoch INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS model_catalog_remote (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bundle_json TEXT NOT NULL,
+  generated_at INTEGER NOT NULL,
+  min_version TEXT,
+  source_url TEXT NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checked_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS tui_last_sessions (
+  scope_key TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_tui_last_sessions_session_key
+  ON tui_last_sessions(session_key, updated_at DESC, scope_key);
+
+CREATE TABLE IF NOT EXISTS sidebar_sections (
+  section_id TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS node_host_config (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  node_id TEXT NOT NULL,
+  token TEXT,
+  display_name TEXT,
+  gateway_host TEXT,
+  gateway_port INTEGER,
+  gateway_tls INTEGER,
+  gateway_tls_fingerprint TEXT,
+  gateway_context_path TEXT,
+  gateway_cloudflare_access_json TEXT,
+  installed_apps_sharing INTEGER NOT NULL DEFAULT 0,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS web_push_vapid_keys (
+  key_id TEXT NOT NULL PRIMARY KEY,
+  public_key TEXT NOT NULL,
+  private_key TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+PRAGMA user_version = 11;
+UPDATE schema_meta
+SET schema_version = 11,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+The recreated tables start empty. Migrated voice wake settings, onboarding recommendations, update-check state, sidebar layout, node-host identity, and Web Push signing keys remain readable in `config_machine_state` under `voicewake.triggers`, `voicewake.routing`, `onboarding.recommendations.<workspaceKey>`, `update.checkState`, `sidebar.sectionOrder`, `nodeHost.config`, and `webPush.vapidKeys`; manually repopulate their former tables if the older build must retain those settings. Node-host identity and Web Push signing keys are sensitive: avoid copying their values into shell history or logs. Skill-curator, promotions-feed, remote-catalog, and TUI last-session caches can be rebuilt. A botched downgrade means restore from the verified backup.
+
+### Example: state schema 11 to 10
+
+Schema 11 removed the retired skill lifecycle table and the never-read proposal
+origin-run projection. A schema 10 build still requires both canonical tables, so
+a manual downgrade must recreate their exact empty schemas and lifecycle indexes
+before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact
+schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE skill_lifecycle (
+  skill_file TEXT NOT NULL PRIMARY KEY,
+  skill_key TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'stale', 'archived')),
+  pinned INTEGER NOT NULL DEFAULT 0,
+  state_changed_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  archived_reason TEXT
+) STRICT;
+
+CREATE INDEX idx_skill_lifecycle_key
+  ON skill_lifecycle(skill_key, skill_file);
+
+CREATE INDEX idx_skill_lifecycle_state
+  ON skill_lifecycle(state, skill_file);
+
+CREATE TABLE skill_workshop_proposal_origin_runs (
+  proposal_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  mutation_count INTEGER NOT NULL CHECK (mutation_count > 0),
+  PRIMARY KEY (proposal_id, run_id),
+  FOREIGN KEY (proposal_id) REFERENCES skill_workshop_proposals(proposal_id) ON DELETE CASCADE
+) STRICT;
+
+PRAGMA user_version = 10;
+UPDATE schema_meta
+SET schema_version = 10,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+Both recreated tables start empty. The upgrade discarded archived-skill
+lifecycle state, so those skills returned to the active collection and a manual
+downgrade cannot recover their previous archived state. Proposal origin-run
+rows were never read; authoritative provenance remains in each proposal's
+`record_json`. A botched downgrade means restore from the verified backup.
+
+### Example: state schema 10 to 9
+
+Schema 10 removed six dead shared-state tables. A schema 9 build still requires those canonical tables and indexes, so a manual downgrade must recreate their exact empty schemas before lowering the version.
+
+Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
+
+```sql
+BEGIN IMMEDIATE;
+
+CREATE TABLE IF NOT EXISTS agent_model_catalogs (
+  catalog_key TEXT NOT NULL PRIMARY KEY,
+  agent_dir TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
+  ON agent_model_catalogs(agent_dir, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
+  package_name TEXT NOT NULL PRIMARY KEY,
+  sort_order INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
+  ON android_notification_recent_packages(sort_order, package_name);
+
+CREATE TABLE IF NOT EXISTS command_log_entries (
+  id TEXT NOT NULL PRIMARY KEY,
+  timestamp_ms INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  entry_json TEXT NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_command_log_entries_timestamp
+  ON command_log_entries(timestamp_ms DESC, id);
+
+CREATE INDEX IF NOT EXISTS idx_command_log_entries_session
+  ON command_log_entries(session_key, timestamp_ms DESC, id);
+
+CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
+  bundle_key TEXT NOT NULL PRIMARY KEY,
+  reason TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  bundle_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
+  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
+
+CREATE TABLE IF NOT EXISTS media_blobs (
+  subdir TEXT NOT NULL,
+  id TEXT NOT NULL,
+  content_type TEXT,
+  size_bytes INTEGER NOT NULL,
+  blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (subdir, id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_media_blobs_created
+  ON media_blobs(created_at);
+
+CREATE TABLE IF NOT EXISTS model_capability_cache (
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  input_text INTEGER NOT NULL,
+  input_image INTEGER NOT NULL,
+  reasoning INTEGER NOT NULL,
+  supports_tools INTEGER,
+  context_window INTEGER NOT NULL,
+  max_tokens INTEGER NOT NULL,
+  cost_input REAL NOT NULL,
+  cost_output REAL NOT NULL,
+  cost_cache_read REAL NOT NULL,
+  cost_cache_write REAL NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, model_id)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
+  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
+
+PRAGMA user_version = 9;
+UPDATE schema_meta
+SET schema_version = 9,
+    updated_at = unixepoch('now') * 1000
+WHERE meta_key = 'primary';
+
+COMMIT;
+```
+
+The recreated tables start empty because schema 10 discarded only dead or rebuildable cache rows. A botched downgrade means restore from the verified backup.
+
 ### Example: state schema 9 to 8
 
 Schema 8 expects every `agent_databases.path` value to be absolute. Before lowering `user_version`, inspect each registry row on the same platform that wrote it. Leave absolute external paths unchanged; replace every relative path with its platform-native absolute form by resolving it against the state directory that owns `state/openclaw.sqlite`. Then set both `PRAGMA user_version` and `schema_meta.schema_version` to 8 in the same transaction.
@@ -165,7 +506,7 @@ Do not lower the version while relative registry rows remain. A schema 8 build i
 
 ### Example: state schema 7 to 6
 
-Schema 7 removed the retired shared commitments table. A schema 6 build still requires that canonical table, so a manual downgrade must recreate its exact empty schema before lowering the version.
+Schema 7 irreversibly discarded every row in the retired shared commitments table, then removed the table and its indexes. A schema 6 build still requires that canonical table, so a manual downgrade can recreate only its exact empty schema before lowering the version. Restore a verified pre-upgrade backup if the discarded rows are required.
 
 Run equivalent SQL against the global state database after inspecting the exact schema that wrote it:
 
@@ -229,7 +570,7 @@ WHERE meta_key = 'primary';
 COMMIT;
 ```
 
-The recreated table starts empty because schema 7 discarded the retired rows. A botched downgrade means restore from the verified backup.
+The recreated table starts empty. The downgrade cannot recover discarded commitment rows.
 
 ### Example: agent schema 17 to 16
 

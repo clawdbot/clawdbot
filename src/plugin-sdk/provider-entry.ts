@@ -1,5 +1,6 @@
 // Provider entry contracts define provider plugin hooks, model catalogs, and runtime adapters.
 import type { UnifiedModelCatalogEntry } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeStringEntries,
   uniqueStrings,
@@ -428,6 +429,11 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             run: catalogRun!,
           };
         } else {
+          const catalogProviderIds = new Set(
+            [providerId, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].map(
+              normalizeProviderId,
+            ),
+          );
           const buildProvider =
             provider.catalog.buildProvider ??
             (() =>
@@ -437,11 +443,18 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
               }));
           catalog = {
             order: "simple",
-            run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> =>
-              provider.catalog.liveModelDiscovery
+            run: (ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> => {
+              if (
+                ctx.providerIds !== undefined &&
+                !ctx.providerIds.some((id) => catalogProviderIds.has(id))
+              ) {
+                return Promise.resolve(null);
+              }
+              return provider.catalog.liveModelDiscovery
                 ? buildOpenAICompatibleProviderCatalog({
                     ctx,
                     providerId,
+                    providerAliases: [...(provider.aliases ?? []), ...(provider.hookAliases ?? [])],
                     buildProvider,
                     ...(provider.catalog.allowExplicitBaseUrl
                       ? { allowExplicitBaseUrl: true }
@@ -457,7 +470,8 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                     ...(provider.catalog.allowExplicitBaseUrl
                       ? { allowExplicitBaseUrl: true }
                       : {}),
-                  }),
+                  });
+            },
           };
         }
         const manifestStaticProvider =

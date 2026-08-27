@@ -1,7 +1,7 @@
 // Control UI tests cover session pull request chips above the chat composer.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
@@ -25,6 +25,12 @@ const publicationProofDir = path.join(
   "control-ui-e2e",
   "github-publication",
 );
+const stackingProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "pr-chip-stacking",
+);
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -45,6 +51,45 @@ async function newBrowserContext(): Promise<BrowserContext> {
 async function closeContexts(): Promise<void> {
   await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
   openContexts.clear();
+}
+
+async function expectPullRequestChipOnTop(page: Page): Promise<void> {
+  const chip = page.locator(".chat-pr").first();
+  await chip.waitFor();
+  const uncovered = await chip.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const sampleY = Math.min(bounds.bottom - 1, bounds.top + 10);
+    return [0.2, 0.5, 0.8].every((ratio) => {
+      const sampleX = bounds.left + bounds.width * ratio;
+      return document.elementFromPoint(sampleX, sampleY)?.closest(".chat-pr") === element;
+    });
+  });
+  expect(uncovered).toBe(true);
+}
+
+async function overlapLastTranscriptRowWithPullRequestChip(page: Page): Promise<void> {
+  const row = page.locator(".chat-virtual-row").last();
+  const chip = page.locator(".chat-pr").first();
+  await row.waitFor();
+  await chip.waitFor();
+  await page.evaluate(() => {
+    const rows = document.querySelectorAll<HTMLElement>(".chat-virtual-row");
+    const rowElement = rows.item(rows.length - 1);
+    const chipElement = document.querySelector<HTMLElement>(".chat-pr");
+    if (!rowElement || !chipElement) {
+      throw new Error("Expected a virtual transcript row and pull request chip");
+    }
+    const paintedRow = rowElement.querySelector<HTMLElement>(".chat-bubble") ?? rowElement;
+    const paintedBounds = paintedRow.getBoundingClientRect();
+    const chipBounds = chipElement.getBoundingClientRect();
+    rowElement.style.top = `${chipBounds.top + 24 - paintedBounds.bottom}px`;
+  });
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      }),
+  );
 }
 
 async function waitForWatchedSessionKey(
@@ -221,6 +266,65 @@ describeControlUiE2e("session pull request chips", () => {
       .poll(() => chips.first().locator(".chat-pr__number").textContent())
       .toBe("#103469");
   });
+
+  it.each([
+    { label: "desktop", viewport: { width: 1180, height: 800 } },
+    { label: "mobile", viewport: { width: 393, height: 852 } },
+  ])(
+    "keeps the PR chip above an underlapping transcript on $label",
+    async ({ label, viewport }) => {
+      const context = await browser.newContext({
+        colorScheme: "light",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport,
+      });
+      openContexts.add(context);
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+        historyMessages: Array.from({ length: 25 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `Transcript row ${index + 1}: paint-order regression fixture.`,
+          timestamp: index + 1,
+        })),
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+        },
+      });
+      await page.goto(`${server.baseUrl}chat`);
+      const watchedKey = await waitForWatchedSessionKey(gateway);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [watchedKey]: {
+            pullRequests: [
+              {
+                number: 123456,
+                owner: "openclaw",
+                repo: "openclaw",
+                branch: "fix/pr-chip-stacking",
+                title: "Keep the PR chip above the transcript",
+                url: "https://github.com/openclaw/openclaw/pull/123456",
+                state: "open",
+              },
+            ],
+            rateLimited: false,
+            status: "ok",
+          },
+        },
+      });
+
+      await overlapLastTranscriptRowWithPullRequestChip(page);
+      if (captureUiProof) {
+        await mkdir(stackingProofDir, { recursive: true });
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(stackingProofDir, `${label}.png`),
+        });
+      }
+      await expectPullRequestChipOnTop(page);
+    },
+  );
 
   it("offers a Publish PR row with the stale warning while rate limited pre-PR", async () => {
     const context = await newBrowserContext();

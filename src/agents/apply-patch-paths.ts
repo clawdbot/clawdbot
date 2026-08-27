@@ -5,6 +5,7 @@
  */
 import path from "node:path";
 import { extractApplyPatchTargets } from "./apply-patch-targets.js";
+import { preserveAtPrefixedRelativePath } from "./path-policy.js";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -52,14 +53,17 @@ function normalizePatchPath(
   }
   const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
   try {
+    const filePath = preserveAtPrefixedRelativePath(raw, cwd);
     const resolved = options.sandbox
       ? options.sandbox.bridge.resolvePath({
-          filePath: raw,
+          filePath,
           cwd,
         })
       : undefined;
     const normalized = path.normalize(
-      resolved ? (resolved.hostPath ?? resolved.containerPath) : resolveSandboxInputPath(raw, cwd),
+      resolved
+        ? (resolved.hostPath ?? resolved.containerPath)
+        : resolveSandboxInputPath(filePath, cwd),
     );
     return normalized && normalized !== "." ? normalized : undefined;
   } catch {

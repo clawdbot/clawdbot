@@ -43,6 +43,29 @@ defineDiscordVoiceTests(
       expect(joinVoiceChannelMock).not.toHaveBeenCalled();
     });
 
+    it.each(["agent-proxy", "bidi"] as const)(
+      "keeps %s playback alive through brief provider stalls",
+      async (mode) => {
+        const manager = createManager({
+          voice: { enabled: true, mode, realtime: { provider: "openai" } },
+        });
+
+        await manager.join({ guildId: "g1", channelId: "1001" });
+
+        expect(createAudioPlayerMock).toHaveBeenCalledWith({
+          behaviors: { maxMissedFrames: 100 },
+        });
+      },
+    );
+
+    it("preserves default audio-player behavior for STT/TTS playback", async () => {
+      const manager = createManager();
+
+      await manager.join({ guildId: "g1", channelId: "1001" });
+
+      expect(createAudioPlayerMock).toHaveBeenCalledWith();
+    });
+
     it("keeps the new session when an old disconnected handler fires", async () => {
       const oldConnection = createConnectionMock();
       const newConnection = createConnectionMock();
@@ -160,6 +183,9 @@ defineDiscordVoiceTests(
         },
       );
       expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
+      expect(createAudioPlayerMock).toHaveBeenCalledWith({
+        behaviors: { maxMissedFrames: 100 },
+      });
 
       const entry = getSessionEntry(manager);
       let resolveRealtimeReady!: () => void;
@@ -516,6 +542,17 @@ defineDiscordVoiceTests(
       expectOffEventWithFunction(connection.off, "disconnected");
       expectOffEventWithFunction(connection.off, "destroyed");
       expectOffEventWithFunction(player.off, "error");
+    });
+
+    it("force-stops buffering playback when leaving a voice session", async () => {
+      const manager = createManager();
+      await manager.join({ guildId: "g1", channelId: "1001" });
+      const player = getLastAudioPlayer();
+      player.state.status = "buffering";
+
+      await manager.leave({ guildId: "g1" });
+
+      expect(player.stop).toHaveBeenCalledWith(true);
     });
 
     it("ignores new capture while playback is running", async () => {

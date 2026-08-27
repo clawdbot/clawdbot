@@ -263,6 +263,17 @@ configured default model is never replaced.
     transport based on the model ref.
   </Accordion>
 
+  <Accordion title="Thinking levels">
+    Use `/think xhigh` or `/think max` when the selected model exposes that
+    level. Copilot's live catalog determines the supported efforts for your
+    account, and OpenClaw preserves those efforts in Responses requests.
+    When a Responses model starts its native effort range at `low`, `minimal`
+    maps to `low` instead of sending an unsupported value.
+    Explicit live limits take precedence over the bundled catalog. Gemini's
+    Chat Completions transport does not expose `max`.
+    See [Thinking levels](/tools/thinking) for session and per-message controls.
+  </Accordion>
+
   <Accordion title="Request compatibility">
     OpenClaw sends Copilot-compatible request headers with a Copilot CLI request
     identity, marks tool-result follow-up turns as agent-initiated, and sets the
@@ -323,13 +334,16 @@ the Copilot API and picks the best one automatically.
 
 1. OpenClaw resolves your GitHub token (from env vars or auth profile).
 2. Validates Copilot access and resolves the account-specific API endpoint.
-3. Queries the Copilot `/models` endpoint to discover available embedding models.
+3. Queries the Copilot `/models` endpoint to discover available embedding models,
+   with a 10-second deadline that includes reading the response body.
 4. Picks the best model (preference order: `text-embedding-3-small`,
    `text-embedding-3-large`, `text-embedding-ada-002`).
 5. Sends embedding requests to the Copilot `/embeddings` endpoint.
 
-Model availability depends on your GitHub plan. If no embedding models are
-available, OpenClaw skips Copilot and tries the next provider.
+Model availability depends on your GitHub plan. If discovery fails or no
+embedding models are available, OpenClaw uses `memory.search.fallback` only
+when you explicitly configure another provider. Otherwise, setup reports the
+error instead of silently selecting a different provider.
 
 ## Related
 

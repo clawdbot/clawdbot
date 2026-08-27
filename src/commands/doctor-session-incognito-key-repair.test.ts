@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -109,11 +110,8 @@ describe("doctor reserved incognito session key repair", () => {
           "INSERT INTO session_watch_cursors (watcher_session_key, target_session_key, updated_at) VALUES (?, ?, 1)",
         )
         .run(oldKey, oldKey);
-      stateDatabase.db
-        .prepare(
-          "INSERT INTO tui_last_sessions (scope_key, session_key, updated_at) VALUES ('main', ?, 1)",
-        )
-        .run(oldKey);
+      writeConfigMachineState("tui.lastSession.main", oldKey, { env });
+      writeConfigMachineState("unrelated.sessionReference", oldKey, { env });
       database.db
         .prepare(
           "INSERT INTO heartbeat_outcomes (session_key, run_session_key, outcome, summary, occurred_at, updated_at) VALUES (?, ?, 'done', 'done', 1, 1)",
@@ -192,9 +190,8 @@ describe("doctor reserved incognito session key repair", () => {
           .prepare("SELECT watcher_session_key, target_session_key FROM session_watch_cursors")
           .get(),
       ).toEqual({ watcher_session_key: newKey, target_session_key: newKey });
-      expect(stateDatabase.db.prepare("SELECT session_key FROM tui_last_sessions").get()).toEqual({
-        session_key: newKey,
-      });
+      expect(readConfigMachineState<string>("tui.lastSession.main", { env })).toBe(newKey);
+      expect(readConfigMachineState<string>("unrelated.sessionReference", { env })).toBe(oldKey);
       expect(
         stateDatabase.db
           .prepare("SELECT source_session_key, audience_session_keys_json FROM operator_approvals")

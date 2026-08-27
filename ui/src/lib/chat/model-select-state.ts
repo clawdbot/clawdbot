@@ -36,6 +36,7 @@ type ChatModelSelectState = {
   currentOverride: string;
   defaultModel: string;
   defaultLabel: string;
+  modelOverrideSource: GatewaySessionRow["modelOverrideSource"];
   options: ChatModelSelectOption[];
 };
 
@@ -76,6 +77,15 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) =>
     areUiSessionKeysEquivalent(row.key, state.sessionKey),
   );
+}
+
+function resolveModelOverrideSource(state: ChatModelSelectStateInput) {
+  // A local selection is newer than the row that still reports the previous
+  // provenance, so it owns the answer until the refreshed row lands.
+  if (Object.hasOwn(state.modelOverrides, state.sessionKey)) {
+    return state.modelOverrides[state.sessionKey] == null ? null : "user";
+  }
+  return resolveActiveSessionRow(state)?.modelOverrideSource;
 }
 
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
@@ -216,6 +226,7 @@ export function resolveChatModelSelectState(
     currentOverride,
     defaultModel,
     defaultLabel: defaultModel ? `Default (${defaultLabel})` : "Default model",
+    modelOverrideSource: resolveModelOverrideSource(state),
     options,
   };
 }

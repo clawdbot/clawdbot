@@ -2,6 +2,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { isDiscordThreadChannelType } from "../channel-type.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
@@ -17,14 +18,6 @@ function formatUsername(user: { username: string; discriminator?: string | null 
     return `${user.username}#${user.discriminator}`;
   }
   return user.username;
-}
-
-function isThreadChannelType(channelType: number | undefined): boolean {
-  return (
-    channelType === ChannelType.PublicThread ||
-    channelType === ChannelType.PrivateThread ||
-    channelType === ChannelType.AnnouncementThread
-  );
 }
 
 export function resolveAgentComponentRoute(params: {
@@ -86,7 +79,7 @@ export function resolveDiscordChannelContext(
   const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
   const displayChannelSlug = channelName ? normalizeDiscordDisplaySlug(channelName) : "";
   const channelType = channelInfo.type;
-  const isThread = isThreadChannelType(channelType);
+  const isThread = isDiscordThreadChannelType(channelType);
 
   let parentId: string | undefined;
   let parentName: string | undefined;

@@ -51,6 +51,7 @@ const CURSOR_CASES: readonly CursorCase[] = [
   { expected: "wait", selector: ".sidebar-update-card__hold:disabled" },
   { expected: "default", selector: ".session-tokens" },
   { expected: "default", selector: ".agent-tools-runtime-chip--more" },
+  { expected: "default", selector: ".chat-assistant-attachment-card[data-openable]" },
 ];
 
 function readUiCss(): string {
@@ -90,6 +91,7 @@ function fixtureDocument(): string {
       <button class="sidebar-update-card__hold" type="button" disabled>Hold</button>
       <button class="chat-pane__session-title-button" type="button">Session title</button>
       <button class="chat-message-image-button" type="button">Image</button>
+      <div class="chat-assistant-attachment-card" data-openable>Attachment</div>
       <div class="sidebar-session-group-drag-handle"></div>
       <div class="session-tokens"><span class="session-tokens__value">12k</span></div>
       <span class="agent-tools-runtime-chip--more">+3</span>

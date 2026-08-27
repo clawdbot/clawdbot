@@ -449,7 +449,8 @@ private class ChatMathWebViewBackend(
 
   // JavaScript is required only for the bundled KaTeX shell. The client blocks network loads,
   // rejects every URL outside the asset root, and receives LaTeX as a JSON value rather than HTML.
-  @SuppressLint("SetJavaScriptEnabled")
+  // WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
+  @SuppressLint("SetJavaScriptEnabled", "MissingOnRenderProcessGone")
   @Suppress("DEPRECATION")
   private fun createWebView(context: Context): WebView {
     val view =

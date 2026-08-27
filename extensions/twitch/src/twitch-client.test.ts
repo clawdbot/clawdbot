@@ -10,6 +10,7 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
@@ -295,6 +296,94 @@ describe("TwitchClientManager", () => {
 
       await expect(connection).rejects.toThrow("Twitch connection cancelled");
       expect(mockQuit).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["account", "all"] as const)(
+      "does not create a client when %s disconnect completes during authentication setup",
+      async (scope) => {
+        const authentication = createDeferred<string>();
+        mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
+        const account = {
+          ...testAccount,
+          clientSecret: "test-client-secret",
+          refreshToken: "test-refresh-token",
+        };
+        manager.onMessage(account, vi.fn());
+        const connection = manager.getClient(account);
+
+        expect(mockAddUserForToken).toHaveBeenCalledOnce();
+        if (scope === "account") {
+          await manager.disconnect(account);
+        } else {
+          await manager.disconnectAll();
+        }
+        authentication.resolve("123456");
+
+        await expect(connection).rejects.toThrow("Twitch connection cancelled");
+        expect(mockConnect).not.toHaveBeenCalled();
+        expect(managerState(manager).clients.size).toBe(0);
+        expect(managerState(manager).messageHandlers.has(manager.getAccountKey(account))).toBe(
+          false,
+        );
+      },
+    );
+
+    it("keeps a restarted account connection when stale authentication resolves afterward", async () => {
+      const authentication = createDeferred<string>();
+      mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
+      const account = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+      };
+      const staleConnection = manager.getClient(account);
+      const staleOutcome = staleConnection.then(
+        () => "connected" as const,
+        () => "cancelled" as const,
+      );
+
+      await manager.disconnect(account);
+      const currentConnection = manager.getClient(account);
+
+      try {
+        expect(mockAddUserForToken).toHaveBeenCalledTimes(2);
+        const activeClient = await currentConnection;
+        authentication.resolve("123456");
+
+        expect(await staleOutcome).toBe("cancelled");
+        expect(managerState(manager).clients.get(manager.getAccountKey(account))).toBe(
+          activeClient,
+        );
+        expect(mockConnect).toHaveBeenCalledOnce();
+      } finally {
+        authentication.resolve("123456");
+        await Promise.allSettled([staleConnection, currentConnection]);
+      }
+    });
+
+    it("keeps another account connected when cancelling an authentication-pending account", async () => {
+      const authentication = createDeferred<string>();
+      mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
+      const account = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+      };
+      const staleConnection = manager.getClient(account);
+      const staleOutcome = staleConnection.then(
+        () => "connected" as const,
+        () => "cancelled" as const,
+      );
+      const activeClient = await manager.getClient(testAccount2);
+
+      await manager.disconnect(account);
+      authentication.resolve("123456");
+
+      expect(await staleOutcome).toBe("cancelled");
+      expect(managerState(manager).clients.get(manager.getAccountKey(testAccount2))).toBe(
+        activeClient,
+      );
+      expect(mockConnect).toHaveBeenCalledOnce();
     });
 
     it("should create separate clients for different accounts", async () => {

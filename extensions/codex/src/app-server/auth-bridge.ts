@@ -21,7 +21,10 @@ import {
   type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import {
+  hasUsableOAuthCredential,
+  resolveOpenAICodexAuthIdentity,
+} from "openclaw/plugin-sdk/provider-auth";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import {
   resolveCodexAppServerHomeDir,
@@ -30,12 +33,25 @@ import {
 } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
-import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
+import {
+  ensureCodexManagedBundledMarketplace,
+  resolveCodexManagedBundledMarketplaceSource,
+} from "./computer-use-marketplace.js";
+import { ensureOwnedCodexHome } from "./computer-use-service-path.js";
+import {
+  ensureCodexComputerUseServiceApp,
+  resolveCodexComputerUseServiceAppSourcePath,
+} from "./computer-use-service.js";
 import {
   resolveCodexComputerUseConfig,
   type CodexAppServerHomeScope,
   type CodexAppServerStartOptions,
 } from "./config.js";
+import {
+  resolveMacOSDesktopCodexAppPathCandidates,
+  type MacOSDesktopCodexAppPathCandidate,
+} from "./desktop-app-paths.js";
+import type { CodexDesktopGeneration } from "./desktop-generation-owner.js";
 import {
   isJsonObject,
   type CodexChatgptAuthTokensRefreshResponse,
@@ -62,6 +78,11 @@ const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
 const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 const CODEX_AUTH_JSON_FILENAME = "auth.json";
 const CODEX_HOME_DIRNAME = ".codex";
+const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
+const activeComputerUseArtifactReconciliations = new Map<
+  string,
+  { latestEpoch?: number; appliedCacheBinding?: string; active: number; tail: Promise<void> }
+>();
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 export type CodexAppServerAuthRequirement = "api-key" | "subscription";
 const scopedOAuthRefreshQueues = new WeakMap<
@@ -84,11 +105,7 @@ export async function bridgeCodexAppServerStartOptions(params: {
     return params.startOptions;
   }
   const scopeStartOptions = () =>
-    withCodexHomeEnvironment(
-      withEphemeralCodexAuthStore(params),
-      params.agentDir,
-      params.pluginConfig,
-    );
+    withCodexHomeEnvironment(withEphemeralCodexAuthStore(params), params.agentDir);
 
   if (params.preparedAuth) {
     const scopedStartOptions = await scopeStartOptions();
@@ -306,7 +323,8 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
           (credential.type === "token" || !stableChatgptAccountId)
         ? `${accountId}:${fingerprintTokenAuthProfileCacheKey(loginParams.accessToken)}`
         : accountId;
-  const chatgptAccountId = resolveExplicitChatgptAccountId(credential);
+  const chatgptAccountId =
+    loginParams.type === "chatgptAuthTokens" ? loginParams.chatgptAccountId : undefined;
   return {
     loginParams,
     secretFreeCacheKey,
@@ -515,34 +533,12 @@ export { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 async function withCodexHomeEnvironment(
   startOptions: CodexAppServerStartOptions,
   agentDir: string,
-  pluginConfig?: unknown,
 ): Promise<CodexAppServerStartOptions> {
   const codexHome = resolveCodexAppServerLocalHomeDir(startOptions, agentDir);
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
   await fs.mkdir(codexHome, { recursive: true });
-  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
-  await ensureCodexComputerUseSharedPluginCache({
-    codexHome,
-    config: computerUseConfig,
-  });
-  const ownsIsolatedCodexHome =
-    startOptions.homeScope !== "user" && !startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim();
-  if (computerUseConfig.enabled && computerUseConfig.autoInstall && ownsIsolatedCodexHome) {
-    try {
-      await ensureCodexComputerUseServiceApp({
-        codexHome,
-        ownershipRoot: agentDir,
-        appServerCommand: startOptions.command,
-      });
-    } catch (error) {
-      throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
-        cause: error,
-        scope: "harness",
-      });
-    }
-  }
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }
@@ -561,6 +557,231 @@ async function withCodexHomeEnvironment(
     delete nextStartOptions.clearEnv;
   }
   return nextStartOptions;
+}
+
+/** Reconciles Computer Use artifacts for the exact managed command about to start. */
+export async function reconcileCodexComputerUseStartArtifacts(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+  pluginConfig?: unknown;
+  ownsIsolatedCodexHome?: boolean;
+  desktopGeneration?: CodexDesktopGeneration;
+  assertCurrent?: () => void;
+  forceCacheRefresh?: boolean;
+}): Promise<void> {
+  if (params.startOptions.transport !== "stdio") {
+    return;
+  }
+  const codexHome = resolveCodexAppServerLocalHomeDir(params.startOptions, params.agentDir);
+  const key = path.resolve(codexHome);
+  let owner = activeComputerUseArtifactReconciliations.get(key);
+  if (!owner) {
+    owner = { active: 0, tail: Promise.resolve() };
+    activeComputerUseArtifactReconciliations.set(key, owner);
+  } else {
+    activeComputerUseArtifactReconciliations.delete(key);
+    activeComputerUseArtifactReconciliations.set(key, owner);
+  }
+  owner.active += 1;
+  const epoch = params.desktopGeneration?.epoch;
+  if (epoch !== undefined && (owner.latestEpoch === undefined || epoch > owner.latestEpoch)) {
+    owner.latestEpoch = epoch;
+  }
+  const assertCurrent = () => {
+    params.assertCurrent?.();
+    if (epoch !== undefined && owner.latestEpoch !== epoch) {
+      throw new Error("Codex Computer Use artifact reconciliation was superseded.");
+    }
+  };
+  const operation = owner.tail
+    .catch(() => undefined)
+    .then(async () => {
+      assertCurrent();
+      const appliedCacheBinding = await reconcileCodexComputerUseStartArtifactsOnce({
+        ...params,
+        codexHome,
+        assertCurrent,
+        previousCacheBinding: owner.appliedCacheBinding,
+      });
+      assertCurrent();
+      owner.appliedCacheBinding = appliedCacheBinding;
+    });
+  const settled = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  owner.tail = settled;
+  try {
+    await operation;
+  } finally {
+    owner.active = Math.max(0, owner.active - 1);
+    if (
+      owner.active === 0 &&
+      owner.latestEpoch === undefined &&
+      activeComputerUseArtifactReconciliations.get(key) === owner &&
+      owner.tail === settled
+    ) {
+      activeComputerUseArtifactReconciliations.delete(key);
+    }
+    pruneComputerUseArtifactOwners();
+  }
+}
+
+async function reconcileCodexComputerUseStartArtifactsOnce(params: {
+  startOptions: CodexAppServerStartOptions;
+  agentDir: string;
+  pluginConfig?: unknown;
+  ownsIsolatedCodexHome?: boolean;
+  codexHome: string;
+  assertCurrent: () => void;
+  desktopGeneration?: CodexDesktopGeneration;
+  forceCacheRefresh?: boolean;
+  previousCacheBinding?: string;
+}): Promise<string | undefined> {
+  const codexHome = params.codexHome;
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig: params.pluginConfig });
+  const ownsIsolatedCodexHome =
+    params.ownsIsolatedCodexHome ??
+    (params.startOptions.homeScope !== "user" &&
+      !params.startOptions.env?.[CODEX_HOME_ENV_VAR]?.trim());
+  const shouldProvisionComputerUse =
+    computerUseConfig.enabled && computerUseConfig.autoInstall && ownsIsolatedCodexHome;
+  if (shouldProvisionComputerUse) {
+    await ensureOwnedCodexHome(codexHome, params.agentDir);
+  } else {
+    await fs.mkdir(codexHome, { recursive: true });
+  }
+  const desktopCandidates = resolveMacOSDesktopCodexAppPathCandidates();
+  const exactDesktopCandidate = desktopCandidates.find(
+    (candidate) =>
+      path.resolve(candidate.appServerCommandPath) === path.resolve(params.startOptions.command),
+  );
+  const usesManagedBundledMarketplace =
+    !computerUseConfig.marketplaceSource &&
+    !computerUseConfig.marketplacePath &&
+    !computerUseConfig.marketplaceName;
+  const needsBundledMarketplace =
+    usesManagedBundledMarketplace ||
+    (computerUseConfig.pluginCacheMode === "shared" &&
+      !computerUseConfig.marketplaceName &&
+      !computerUseConfig.marketplacePath);
+  const artifactCandidate = shouldProvisionComputerUse
+    ? await resolveCompleteComputerUseArtifactCandidate({
+        candidates: exactDesktopCandidate ? [exactDesktopCandidate] : desktopCandidates,
+        needsBundledMarketplace,
+      })
+    : exactDesktopCandidate;
+  params.assertCurrent();
+  if (shouldProvisionComputerUse) {
+    if (desktopCandidates.length > 0 && !artifactCandidate) {
+      throw new CodexComputerUseCandidateArtifactsUnavailableError();
+    }
+    try {
+      const marketplacePath = usesManagedBundledMarketplace
+        ? await ensureCodexManagedBundledMarketplace({
+            codexHome,
+            ownershipRoot: params.agentDir,
+            ...(artifactCandidate
+              ? {
+                  appServerCommand: artifactCandidate.appServerCommandPath,
+                  candidates: [artifactCandidate],
+                  ownershipCandidates: desktopCandidates,
+                }
+              : {}),
+            assertCurrent: params.assertCurrent,
+          })
+        : undefined;
+      params.assertCurrent();
+      if (usesManagedBundledMarketplace && desktopCandidates.length > 0 && !marketplacePath) {
+        throw new CodexComputerUseCandidateArtifactsUnavailableError();
+      }
+      const service = await ensureCodexComputerUseServiceApp({
+        codexHome,
+        ownershipRoot: params.agentDir,
+        ...(artifactCandidate
+          ? {
+              appServerCommand: artifactCandidate.appServerCommandPath,
+              sourceAppCandidates: artifactCandidate.computerUseServiceAppPaths,
+            }
+          : {}),
+        assertCurrent: params.assertCurrent,
+      });
+      params.assertCurrent();
+      if (desktopCandidates.length > 0 && service.status === "source_missing") {
+        throw new CodexComputerUseCandidateArtifactsUnavailableError();
+      }
+    } catch (error) {
+      params.assertCurrent();
+      if (error instanceof CodexComputerUseCandidateArtifactsUnavailableError) {
+        throw error;
+      }
+      throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
+        cause: error,
+        scope: "harness",
+      });
+    }
+  }
+  params.assertCurrent();
+  const cacheBinding = [
+    params.desktopGeneration?.epoch ?? "manual",
+    artifactCandidate?.bundledMarketplacePath ?? "default",
+    computerUseConfig.pluginName,
+  ].join("\0");
+  const cache = await ensureCodexComputerUseSharedPluginCache({
+    codexHome,
+    config: computerUseConfig,
+    ...(ownsIsolatedCodexHome ? { ownershipRoot: params.agentDir } : {}),
+    ...(artifactCandidate
+      ? { bundledMarketplacePath: artifactCandidate.bundledMarketplacePath }
+      : {}),
+    assertCurrent: params.assertCurrent,
+    forceRefresh: params.forceCacheRefresh === true || params.previousCacheBinding !== cacheBinding,
+  });
+  params.assertCurrent();
+  return cache.status === "shared" ? cacheBinding : undefined;
+}
+
+async function resolveCompleteComputerUseArtifactCandidate(params: {
+  candidates: readonly MacOSDesktopCodexAppPathCandidate[];
+  needsBundledMarketplace: boolean;
+}): Promise<MacOSDesktopCodexAppPathCandidate | undefined> {
+  for (const candidate of params.candidates) {
+    if (
+      params.needsBundledMarketplace &&
+      !(await resolveCodexManagedBundledMarketplaceSource({ candidates: [candidate] }))
+    ) {
+      continue;
+    }
+    if (
+      await resolveCodexComputerUseServiceAppSourcePath({
+        sourceAppCandidates: candidate.computerUseServiceAppPaths,
+      })
+    ) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function pruneComputerUseArtifactOwners(): void {
+  while (activeComputerUseArtifactReconciliations.size > MAX_COMPUTER_USE_ARTIFACT_OWNERS) {
+    const inactive = [...activeComputerUseArtifactReconciliations].find(
+      ([, owner]) => owner.active === 0,
+    );
+    if (!inactive) {
+      return;
+    }
+    activeComputerUseArtifactReconciliations.delete(inactive[0]);
+  }
+}
+
+class CodexComputerUseCandidateArtifactsUnavailableError extends Error {
+  readonly code = "CODEX_COMPUTER_USE_CANDIDATE_ARTIFACTS_UNAVAILABLE";
+
+  constructor() {
+    super("The selected Codex desktop app does not contain complete Computer Use artifacts.");
+    this.name = "CodexComputerUseCandidateArtifactsUnavailableError";
+  }
 }
 
 function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | undefined {
@@ -720,14 +941,37 @@ export async function refreshCodexAppServerAuthTokens(params: {
   agentDir: string;
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
+  previousAccountId?: string | null;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexChatgptAuthTokensRefreshResponse> {
+  const previousAccountId = params.previousAccountId?.trim();
+  if (previousAccountId) {
+    const store = resolveCodexAppServerAuthProfileStore(params);
+    const profileId = resolveCodexAppServerAuthProfileId({
+      authProfileId: params.authProfileId,
+      store,
+      config: params.config,
+    });
+    const credential = profileId ? store.profiles[profileId] : undefined;
+    const selectedAccountId = credential
+      ? (resolveExplicitChatgptAccountId(credential) ??
+        (credential.type === "oauth"
+          ? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId
+          : undefined))
+      : undefined;
+    if (selectedAccountId && selectedAccountId !== previousAccountId) {
+      throw new Error("ChatGPT workspace changed before Codex token refresh.");
+    }
+  }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     ...params,
     forceOAuthRefresh: true,
   });
   if (!loginParams || loginParams.type !== "chatgptAuthTokens") {
     throw new Error("Codex app-server ChatGPT token refresh requires an OAuth auth profile.");
+  }
+  if (previousAccountId && loginParams.chatgptAccountId !== previousAccountId) {
+    throw new Error("ChatGPT workspace changed during Codex token refresh.");
   }
   return {
     accessToken: loginParams.accessToken,
@@ -1145,10 +1389,23 @@ function buildChatgptAuthTokensParams(
   credential: AuthProfileCredential,
   accessToken: string,
 ): CodexLoginAccountParams {
+  const storedAccountId = resolveExplicitChatgptAccountId(credential);
+  const tokenAccountId = resolveOpenAICodexAuthIdentity({ access: accessToken }).accountId;
+  if (storedAccountId && tokenAccountId && storedAccountId !== tokenAccountId) {
+    throw new CodexAppServerAuthProfileUnavailableError(
+      `Codex app-server auth profile "${profileId}" has a different ChatGPT account ID than its access token. Sign in again before retrying.`,
+    );
+  }
+  const chatgptAccountId = storedAccountId ?? tokenAccountId;
+  if (!chatgptAccountId) {
+    throw new CodexAppServerAuthProfileUnavailableError(
+      `Codex app-server auth profile "${profileId}" is missing its ChatGPT account ID. Sign in again before retrying.`,
+    );
+  }
   return {
     type: "chatgptAuthTokens",
     accessToken,
-    chatgptAccountId: resolveChatgptAccountId(profileId, credential),
+    chatgptAccountId,
     chatgptPlanType: resolveChatgptPlanType(credential),
   };
 }

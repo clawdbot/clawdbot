@@ -114,7 +114,6 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "nvidia",
   "oc-path",
   "ollama",
-  "open-prose",
   "openai",
   "opencode",
   "opencode-go",

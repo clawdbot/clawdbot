@@ -15,6 +15,7 @@ import {
   projectDevicePlacements,
   type DevicePlacementRequirement,
 } from "../new-session/device-placement.ts";
+import { draftCloudProfileSupportsExecutionMode } from "../new-session/discovery.ts";
 
 async function loadPlacementMoveCatalog(
   client: GatewayBrowserClient,
@@ -86,8 +87,7 @@ export async function moveChatPanePlacement(params: {
           return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
         }
         return runtime?.cloudPlacementExecutionMode &&
-          profile.executionMode &&
-          profile.executionMode !== runtime.cloudPlacementExecutionMode
+          !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
           ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
           : undefined;
       },

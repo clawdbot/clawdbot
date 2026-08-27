@@ -103,7 +103,7 @@ describe("manifest model id normalization", () => {
     tempDirs.cleanup();
   });
 
-  it("reflects manifest edits and state directory changes without a prepared snapshot", () => {
+  it("keeps process metadata stable until the lifecycle owner reloads it", () => {
     const stateDirA = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
@@ -117,6 +117,9 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+
+    clearPluginMetadataLifecycleCaches();
     expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
 
     const stateDirB = tempDirs.make("openclaw-model-id-normalization-");

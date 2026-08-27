@@ -4,6 +4,7 @@
  * model catalogs without discarding existing credentials.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
@@ -42,24 +43,6 @@ export type ExistingProviderConfig = ProviderConfig & {
   baseUrl?: string;
   api?: string;
 };
-
-function isPositiveFiniteTokenLimit(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function resolvePreferredTokenLimit(params: {
-  explicitPresent: boolean;
-  explicitValue: unknown;
-  implicitValue: unknown;
-}): number | undefined {
-  if (params.explicitPresent && isPositiveFiniteTokenLimit(params.explicitValue)) {
-    return params.explicitValue;
-  }
-  if (isPositiveFiniteTokenLimit(params.implicitValue)) {
-    return params.implicitValue;
-  }
-  return isPositiveFiniteTokenLimit(params.explicitValue) ? params.explicitValue : undefined;
-}
 
 function getProviderModelId(model: unknown): string {
   if (!model || typeof model !== "object") {
@@ -117,21 +100,15 @@ export function mergeProviderModels(
       return explicitModel;
     }
 
-    const contextWindow = resolvePreferredTokenLimit({
-      explicitPresent: "contextWindow" in explicitModel,
-      explicitValue: explicitModel.contextWindow,
-      implicitValue: implicitModel.contextWindow,
-    });
-    const contextTokens = resolvePreferredTokenLimit({
-      explicitPresent: "contextTokens" in explicitModel,
-      explicitValue: explicitModel.contextTokens,
-      implicitValue: implicitModel.contextTokens,
-    });
-    const maxTokens = resolvePreferredTokenLimit({
-      explicitPresent: "maxTokens" in explicitModel,
-      explicitValue: explicitModel.maxTokens,
-      implicitValue: implicitModel.maxTokens,
-    });
+    const contextWindow =
+      asPositiveFiniteNumber(explicitModel.contextWindow) ??
+      asPositiveFiniteNumber(implicitModel.contextWindow);
+    const contextTokens =
+      asPositiveFiniteNumber(explicitModel.contextTokens) ??
+      asPositiveFiniteNumber(implicitModel.contextTokens);
+    const maxTokens =
+      asPositiveFiniteNumber(explicitModel.maxTokens) ??
+      asPositiveFiniteNumber(implicitModel.maxTokens);
     const compat = resolveCatalogOwnedModelCompat({
       catalogRoute: {
         api: implicitModel.api ?? implicit.api,

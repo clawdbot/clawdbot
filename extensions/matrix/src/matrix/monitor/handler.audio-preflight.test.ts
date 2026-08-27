@@ -170,6 +170,51 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
     });
   });
 
+  it("transcribes encrypted room audio when a blank top-level URL masks its file URL", async () => {
+    downloadMatrixMediaMock.mockResolvedValue({
+      path: "/tmp/inbound/encrypted-voice.ogg",
+      contentType: "audio/ogg",
+      placeholder: "[matrix audio attachment]",
+    });
+    transcribeFirstAudioMock.mockResolvedValue("bot can you hear this encrypted voice note");
+    const { handler, recordInboundSession } = createAudioPreflightHarness({
+      isDirectMessage: false,
+      historyLimit: 5,
+      mentionRegexes: [/\bbot\b/i],
+      roomsConfig: {
+        "!room:example.org": { requireMention: true } as never,
+      },
+    });
+    const file = {
+      url: "mxc://example/encrypted-voice",
+      key: { kty: "oct", key_ops: ["encrypt"], alg: "A256CTR", k: "secret", ext: true },
+      iv: "iv",
+      hashes: { sha256: "hash" },
+      v: "v2",
+    };
+
+    await handler(
+      "!room:example.org",
+      createAudioEvent({
+        msgtype: "m.audio",
+        body: " \t ",
+        url: " ",
+        file,
+        info: { mimetype: "audio/ogg", size: 12345 },
+      }),
+    );
+
+    expect(downloadMatrixMediaMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ mxcUrl: "mxc://example/encrypted-voice", file }),
+    );
+    expect(transcribeFirstAudioMock).toHaveBeenCalledOnce();
+    expect(expectLatestInboundContext(recordInboundSession)).toMatchObject({
+      BodyForAgent: expect.stringContaining("bot can you hear this encrypted voice note"),
+      MediaPath: "/tmp/inbound/encrypted-voice.ogg",
+      WasMentioned: true,
+    });
+  });
+
   it("keeps non-filename audio fallback text while still surfacing the transcript", async () => {
     downloadMatrixMediaMock.mockResolvedValue({
       path: "/tmp/inbound/voice.ogg",

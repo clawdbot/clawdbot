@@ -300,9 +300,8 @@ export type ModelCatalog = {
 };
 
 /** Normalized model catalog row used by runtime lookup and UI surfaces. */
-export type NormalizedModelCatalogRow = {
+export type NormalizedModelCatalogRow = Omit<ModelCatalogModel, "upstreamModel"> & {
   provider: string;
-  id: string;
   ref: string;
   mergeKey: string;
   name: string;
@@ -310,20 +309,4 @@ export type NormalizedModelCatalogRow = {
   input: ModelCatalogInput[];
   reasoning: boolean;
   status: ModelCatalogStatus;
-  api?: ModelCatalogApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  contextWindow?: number;
-  contextWindows?: ModelCatalogContextWindowOption[];
-  contextWindowDefault?: string;
-  contextTokens?: number;
-  maxTokens?: number;
-  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
-  cost?: ModelCatalogCost;
-  compat?: ModelCatalogCompatConfig;
-  mediaInput?: ModelCatalogMediaInputConfig;
-  statusReason?: string;
-  replaces?: string[];
-  replacedBy?: string;
-  tags?: string[];
 };
