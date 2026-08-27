@@ -229,6 +229,8 @@ type OpenClawCodingToolsOptions = {
    */
   spawnWorkspaceDir?: string;
   config?: OpenClawConfig;
+  /** Explicitly distinguishes live Gateway session policy from a pinned run override. */
+  sessionConfigSource?: "runtime" | "pinned";
   abortSignal?: AbortSignal;
   /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
   emitBeforeToolCallDiagnostics?: boolean;
@@ -523,6 +525,8 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       options?.senderIsOwner === false || options?.isTurnTainted?.() === true
         ? "untrusted"
         : "agent",
+    sessionId: options?.sessionId,
+    sessionKey: options?.runSessionKey ?? options?.sessionKey,
   });
   const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
@@ -577,6 +581,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     skillInstructionPaths: options?.skillUsagePaths?.map((entry) => entry.readPath),
     modelContextWindowTokens: options?.modelContextWindowTokens,
     imageSanitization,
+    modelHasVision: options?.modelHasVision,
     memoryWriteProvenance,
     ...(includeBaseCodingTools
       ? { baseToolNames: createCodingTools(codingRoot).map((tool) => tool.name) }
@@ -771,6 +776,20 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            sessionPermissionPolicy,
+            execSession: sessionPermissionPolicy
+              ? { permissionMode: sessionPermissionPolicy.mode }
+              : undefined,
+            execOverrides: {
+              host: options?.exec?.host ?? execConfig.host,
+              mode: effectiveExecPolicy.mode,
+              security: effectiveExecPolicy.security,
+              ask: effectiveExecPolicy.ask,
+              node: options?.exec?.node ?? execConfig.node,
+            },
+            approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
+              ? [options.approvalReviewerDeviceId]
+              : undefined,
             runSessionKey: options?.runSessionKey,
             agentChannel: resolveGatewayMessageChannel(
               options?.messageChannel ?? options?.messageProvider,
@@ -803,6 +822,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               : runtimeRoot,
             sandboxed: Boolean(sandbox),
             config: options?.config,
+            sessionConfigSource: options?.sessionConfigSource,
             webFetchHostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
             webSearchEnabled: options?.webSearchEnabled,
             clientCaps: options?.clientCaps,

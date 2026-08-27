@@ -14,6 +14,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { applicationContext } from "../../app/context.ts";
+import { observeNativeGateway } from "../../app/native-editor-locality.runtime.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
@@ -166,7 +167,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     face: BoardFace,
   ) => void;
   @property({ attribute: false }) onFocusPane?: (paneId: string) => void;
-  @property({ attribute: false }) onPaneSessionChange?: (
+  onPaneSessionChange?: (
     paneId: string,
     nextSessionKey: string,
     options?: PaneSessionChangeOptions,
@@ -286,7 +287,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (renderedLayout.columns[0]?.panels.some((panel) => panel.slot === "companion")) {
       this.setSessionObserverVisibility(open);
     }
-    state.updateSidebarLayout(setSidebarOpen(renderedLayout, open));
+    this.commitSidebarLayout(setSidebarOpen(renderedLayout, open));
   }
 
   protected requestSessionRail(intent: "open" | "toggle"): void {
@@ -296,11 +297,11 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
     const visible = this.selectedSessionRailMode(state.sessionKey) === "expanded";
     if (intent === "toggle" && visible) {
-      state.updateSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
+      this.commitSidebarLayout(closeSlot(state.sidebarLayout, "companion"));
       this.setSessionObserverVisibility(false);
       return;
     }
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
+    this.commitSidebarLayout(openSlot(state.sidebarLayout, "companion"));
     this.setSessionObserverVisibility(true);
   }
 
@@ -379,6 +380,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     }
   >();
   protected headerRenameInitialLabel: string | null = null;
+  protected headerRenameInitialValue = "";
   protected headerRenameSessionKey = "";
   protected headerCopiedTimer: number | null = null;
   protected composerPrefillAttentionTimer: number | null = null;
@@ -450,6 +452,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
 
   constructor() {
     super();
+    observeNativeGateway(this);
     void new SubscriptionsController(this)
       .watch(
         () => this.context?.overlays,
@@ -484,6 +487,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   }
 
   protected abstract refreshSessionPullRequests(options?: { refresh?: boolean }): Promise<void>;
+  protected abstract commitSidebarLayout(layout: SidebarLayout): void;
   protected abstract refreshSwarmRoster(): void;
   protected abstract resolveBoardProvider(): BoardProvider;
   protected abstract handleBoardCommand(event: BoardCommandEvent): void;

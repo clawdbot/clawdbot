@@ -132,7 +132,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.16.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_CI_OPENAI_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
@@ -168,6 +168,8 @@ jobs:
       qa_live_discord_enabled: ${{ steps.inputs.outputs.qa_live_discord_enabled }}
       qa_live_whatsapp_enabled: ${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}
       qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
+      package_mode: ${{ steps.inputs.outputs.package_mode }}
+      candidate_artifact_json: ${{ steps.inputs.outputs.candidate_artifact_json }}
       release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
       codex_plugin_spec: ${{ steps.inputs.outputs.codex_plugin_spec }}
@@ -283,7 +285,7 @@ jobs:
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -304,7 +306,7 @@ jobs:
 
       - name: Checkout selected ref for reachability fallback
         if: steps.fast_ref.outputs.fallback == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -432,11 +434,26 @@ jobs:
           RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh
         run: |
           set -euo pipefail
-          if [[ -n "${CANDIDATE_ARTIFACT_JSON_INPUT// }" ]] &&
-            { [[ -n "${RELEASE_PACKAGE_SPEC_INPUT// }" ]] ||
-              [[ -n "${RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT// }" ]]; }; then
+          candidate_artifact_json=""
+          release_package_spec=""
+          package_acceptance_package_spec=""
+          [[ "$CANDIDATE_ARTIFACT_JSON_INPUT" =~ [^[:space:]] ]] &&
+            candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON_INPUT"
+          [[ "$RELEASE_PACKAGE_SPEC_INPUT" =~ [^[:space:]] ]] &&
+            release_package_spec="$RELEASE_PACKAGE_SPEC_INPUT"
+          [[ "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT" =~ [^[:space:]] ]] &&
+            package_acceptance_package_spec="$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
+          if [[ -n "$candidate_artifact_json" ]] &&
+            { [[ -n "$release_package_spec" ]] ||
+              [[ -n "$package_acceptance_package_spec" ]]; }; then
             echo "candidate_artifact_json cannot be combined with release package specs." >&2
             exit 1
+          fi
+          package_mode=source
+          if [[ -n "$candidate_artifact_json" ]]; then
+            package_mode=artifact
+          elif [[ -n "$release_package_spec" ]]; then
+            package_mode=published
           fi
           qa_live_matrix_enabled=true
           qa_live_buzz_enabled=true
@@ -515,7 +532,7 @@ jobs:
             exit 1
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
-          if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
+          if [[ -z "${codex_plugin_spec// }" && "$release_package_spec" =~ ^openclaw@(.+)$ ]]; then
             codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
           source "$RELEASE_FILTER_VALIDATOR"
@@ -686,8 +703,10 @@ jobs:
             printf 'qa_live_discord_enabled=%s\n' "$qa_live_discord_enabled"
             printf 'qa_live_whatsapp_enabled=%s\n' "$qa_live_whatsapp_enabled"
             printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
-            printf 'release_package_spec=%s\n' "$RELEASE_PACKAGE_SPEC_INPUT"
-            printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
+            printf 'package_mode=%s\n' "$package_mode"
+            printf 'candidate_artifact_json=%s\n' "$candidate_artifact_json"
+            printf 'release_package_spec=%s\n' "$release_package_spec"
+            printf 'package_acceptance_package_spec=%s\n' "$package_acceptance_package_spec"
             printf 'codex_plugin_spec=%s\n' "$codex_plugin_spec"
             printf 'cross_os_scheduled=%s\n' "$cross_os_scheduled"
             printf 'live_e2e_scheduled=%s\n' "$live_e2e_scheduled"
@@ -715,8 +734,8 @@ jobs:
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
-          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
-          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          RELEASE_PACKAGE_SPEC: ${{ steps.inputs.outputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ steps.inputs.outputs.codex_plugin_spec }}
         run: |
           {
@@ -745,12 +764,12 @@ jobs:
               echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
             echo "- QA-live lane eligibility: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Buzz \`${{ steps.inputs.outputs.qa_live_buzz_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Discord \`${{ steps.inputs.outputs.qa_live_discord_enabled }}\`, WhatsApp \`${{ steps.inputs.outputs.qa_live_whatsapp_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
-            if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+            if [[ -n "$RELEASE_PACKAGE_SPEC" ]]; then
               echo "- Release package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             fi
-            if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
+            if [[ -n "$PACKAGE_ACCEPTANCE_PACKAGE_SPEC" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
-            elif [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+            elif [[ -n "$RELEASE_PACKAGE_SPEC" ]]; then
               echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: prepared release artifact"
@@ -778,28 +797,41 @@ jobs:
       contents: read
       packages: read
     outputs:
-      artifact_digest: ${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactDigest }}
-      artifact_id: ${{ steps.release_package_upload.outputs.artifact-id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId }}
-      artifact_name: ${{ steps.artifact.outputs.name || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactName }}
-      artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}
-      artifact_run_id: ${{ steps.artifact.outputs.run_id || fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactRunId }}
-      package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(inputs.candidate_artifact_json || '{}').packageFileName }}
-      package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(inputs.candidate_artifact_json || '{}').packageSha256 }}
-      package_version: ${{ steps.package.outputs.package_version || fromJSON(inputs.candidate_artifact_json || '{}').packageVersion }}
+      artifact_digest: ${{ steps.release_package_upload.outputs.artifact-digest || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactDigest }}
+      artifact_id: ${{ steps.release_package_upload.outputs.artifact-id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactId }}
+      artifact_name: ${{ steps.artifact.outputs.name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactName }}
+      artifact_run_attempt: ${{ steps.artifact.outputs.run_attempt || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunAttempt }}
+      artifact_run_id: ${{ steps.artifact.outputs.run_id || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageArtifactRunId }}
+      package_file_name: ${{ steps.artifact.outputs.file_name || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageFileName }}
+      package_sha256: ${{ steps.package.outputs.sha256 || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSha256 }}
+      package_version: ${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}
       prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
-      source_sha: ${{ steps.package.outputs.source_sha || fromJSON(inputs.candidate_artifact_json || '{}').packageSourceSha }}
+      source_sha: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 0
           filter: blob:none
 
+      - name: Validate release package source metadata
+        if: needs.resolve_target.outputs.package_mode == 'source'
+        env:
+          ALLOW_UNRELEASED_CHANGELOG: ${{ needs.resolve_target.outputs.allow_unreleased_changelog }}
+          PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
+        run: |
+          set -euo pipefail
+          args=(--ref "$PACKAGE_REF")
+          if [[ "$ALLOW_UNRELEASED_CHANGELOG" == "true" ]]; then
+            args+=(--allow-unreleased-changelog)
+          fi
+          node scripts/package-source-preflight.mjs "${args[@]}"
+
       - name: Set artifact metadata
         id: artifact
-        if: inputs.candidate_artifact_json == ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact'
         run: |
           {
             echo "file_name=openclaw-current.tgz"
@@ -809,7 +841,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Setup Node environment
-        if: inputs.candidate_artifact_json == ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact'
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
@@ -819,20 +851,21 @@ jobs:
 
       - name: Resolve release package artifact
         id: package
-        if: inputs.candidate_artifact_json == ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact'
         shell: bash
         env:
           CROSS_OS_SCHEDULED: ${{ needs.resolve_target.outputs.cross_os_scheduled }}
           DOCKER_REQUIRED: ${{ needs.resolve_target.outputs.docker_required }}
           PACKAGE_REF: ${{ needs.resolve_target.outputs.revision }}
           PROVIDER: ${{ needs.resolve_target.outputs.provider }}
+          PACKAGE_MODE: ${{ needs.resolve_target.outputs.package_mode }}
           RELEASE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.release_package_spec }}
           RELEASE_PROFILE: ${{ needs.resolve_target.outputs.release_profile }}
         run: |
           set -euo pipefail
           source_args=(--source ref --package-ref "$PACKAGE_REF")
           package_label="ref:${PACKAGE_REF}"
-          if [[ -n "${RELEASE_PACKAGE_SPEC// }" ]]; then
+          if [[ "$PACKAGE_MODE" == "published" ]]; then
             source_args=(--source npm --package-spec "$RELEASE_PACKAGE_SPEC" --package-ref "$PACKAGE_REF")
             package_label="$RELEASE_PACKAGE_SPEC"
           fi
@@ -846,7 +879,7 @@ jobs:
             )"
           fi
           docker_packages='[]'
-          if [[ "$DOCKER_REQUIRED" == "true" && -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
+          if [[ "$DOCKER_REQUIRED" == "true" && "$PACKAGE_MODE" == "source" ]]; then
             export OPENCLAW_DOCKER_ALL_PROFILE=release-path
             export OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL=1
             export OPENCLAW_DOCKER_ALL_INCLUDE_OPENWEBUI="${{ needs.resolve_target.outputs.release_profile != 'beta' }}"
@@ -898,7 +931,7 @@ jobs:
 
       - name: Upload release package artifact
         id: release_package_upload
-        if: inputs.candidate_artifact_json == ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ steps.artifact.outputs.name }}
@@ -910,7 +943,7 @@ jobs:
 
       - name: Upload shared prerelease plugin registry artifact
         id: prepublish_plugin_registry_upload
-        if: inputs.candidate_artifact_json == '' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
@@ -919,7 +952,7 @@ jobs:
           if-no-files-found: error
 
       - name: Validate release package artifact binding
-        if: inputs.candidate_artifact_json == ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact'
         env:
           ARTIFACT_DIGEST: ${{ steps.release_package_upload.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.release_package_upload.outputs.artifact-id }}
@@ -949,7 +982,7 @@ jobs:
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Validate shared prerelease plugin registry binding
-        if: inputs.candidate_artifact_json == '' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
+        if: needs.resolve_target.outputs.package_mode != 'artifact' && steps.package.outputs.plugin_registry_manifest_sha256 != ''
         env:
           ARTIFACT_DIGEST: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-digest }}
           ARTIFACT_ID: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id }}
@@ -970,9 +1003,9 @@ jobs:
             "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Validate shared release candidate identity
-        if: inputs.candidate_artifact_json != ''
+        if: needs.resolve_target.outputs.package_mode == 'artifact'
         env:
-          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.resolve_target.outputs.candidate_artifact_json }}
           GH_TOKEN: ${{ github.token }}
           SELECTED_SHA: ${{ needs.resolve_target.outputs.revision }}
         run: |
@@ -1042,7 +1075,7 @@ jobs:
       - name: Prepare prerelease plugin registry identity
         id: registry_identity
         env:
-          CANDIDATE_ARTIFACT_JSON: ${{ inputs.candidate_artifact_json }}
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.resolve_target.outputs.candidate_artifact_json }}
           GENERATED_ARTIFACT_DIGEST: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-digest }}
           GENERATED_ARTIFACT_ID: ${{ steps.prepublish_plugin_registry_upload.outputs.artifact-id }}
           GENERATED_MANIFEST_SHA256: ${{ steps.package.outputs.plugin_registry_manifest_sha256 }}
@@ -1231,7 +1264,7 @@ jobs:
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
-      enable_prepublish_plugin_registry: ${{ needs.resolve_target.outputs.release_package_spec == '' }}
+      enable_prepublish_plugin_registry: ${{ needs.resolve_target.outputs.package_mode != 'published' }}
       prepublish_plugin_registry_artifact_name: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '' }}
       prepublish_plugin_registry_artifact_id: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
       prepublish_plugin_registry_artifact_digest: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
@@ -1240,12 +1273,12 @@ jobs:
       prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
       shared_image_artifact_namespace: release-docker
-      shared_image_artifact_name: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
-      shared_image_artifact_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
-      shared_image_artifact_digest: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
-      shared_image_artifact_run_id: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
-      shared_image_artifact_run_attempt: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
-      shared_image_archive_sha256: ${{ fromJSON(inputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
+      shared_image_artifact_name: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactName || '' }}
+      shared_image_artifact_id: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactId || '' }}
+      shared_image_artifact_digest: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactDigest || '' }}
+      shared_image_artifact_run_id: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactRunId || '' }}
+      shared_image_artifact_run_attempt: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArtifactRunAttempt || '' }}
+      shared_image_archive_sha256: ${{ fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').imageArchiveSha256 || '' }}
       shared_image_policy: no-push-artifact
     secrets: *live_e2e_release_secrets
 
@@ -1263,7 +1296,7 @@ jobs:
       advisory: false
       allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}
       workflow_ref: ${{ github.sha }}
-      source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
+      source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.package_mode == 'published') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
       artifact_digest: ${{ needs.prepare_release_package.outputs.artifact_digest }}
       artifact_id: ${{ needs.prepare_release_package.outputs.artifact_id }}
@@ -1271,7 +1304,7 @@ jobs:
       artifact_run_attempt: ${{ needs.prepare_release_package.outputs.artifact_run_attempt }}
       artifact_run_id: ${{ needs.prepare_release_package.outputs.artifact_run_id }}
       package_file_name: ${{ needs.prepare_release_package.outputs.package_file_name }}
-      package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}
+      package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.package_mode != 'published') && needs.prepare_release_package.outputs.package_sha256 || '' }}
       package_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       package_version: ${{ needs.prepare_release_package.outputs.package_version }}
       suite_profile: custom
@@ -1281,7 +1314,7 @@ jobs:
       telegram_mode: ${{ needs.resolve_target.outputs.skip_package_telegram_e2e == 'true' && 'none' || 'mock-openai' }}
       telegram_advisory: ${{ needs.resolve_target.outputs.release_profile == 'beta' }}
       shared_image_artifact_namespace: release-package
-      candidate_artifact_json: ${{ inputs.candidate_artifact_json }}
+      candidate_artifact_json: ${{ needs.resolve_target.outputs.candidate_artifact_json }}
       shared_image_policy: no-push-artifact
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1379,7 +1412,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1387,7 +1420,7 @@ jobs:
 
       - name: Checkout trusted QA Anthropic mock tooling
         if: needs.resolve_target.outputs.trusted_qa_tooling_eligible == 'true'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.workflow_sha }}
           path: .release-qa-tooling-trusted
@@ -1533,14 +1566,14 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1671,7 +1704,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1725,7 +1758,7 @@ jobs:
 
       - name: Checkout trusted validator after candidate suite
         if: always()
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1795,7 +1828,7 @@ jobs:
 
       - name: Checkout trusted validator after candidate report
         if: always()
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1873,7 +1906,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -1992,14 +2025,14 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
           fetch-depth: 1
 
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -2098,6 +2131,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: matrix
       run_matrix: true
       fail_fast: ${{ fromJSON(needs.resolve_target.outputs.fail_fast) }}
     secrets:
@@ -2116,6 +2150,7 @@ jobs:
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      lock_scope: buzz
       run_buzz: true
       buzz_scenario: channel-canary,channel-mention-gating
     secrets:
@@ -2257,7 +2292,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2376,7 +2411,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2473,7 +2508,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -2583,7 +2618,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout trusted release artifact resolver
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}

@@ -130,7 +130,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     normalizedModel: "sonnet-4.6",
     systemPrompt: "You are a helpful assistant.",
     systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    bootstrapPromptWarningLines: [],
+    claudeSkillsPluginArgs: [],
     authEpochVersion: 2,
   };
 }

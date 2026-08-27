@@ -273,11 +273,11 @@ function normalizeBase64Payload(params: { base64?: string; contentType?: string 
   if (!params.base64) {
     return { base64: params.base64, contentType: params.contentType };
   }
-  const match = /^data:([^;]+);base64,(.*)$/i.exec(params.base64.trim());
+  const match = /^data:([^;,\s]+)(;(?!base64)[^,;\s]+)*;base64,(.*)$/is.exec(params.base64.trim());
   if (!match) {
     return { base64: params.base64, contentType: params.contentType };
   }
-  const [, mime, payload] = match;
+  const [, mime, , payload] = match;
   return {
     base64: payload,
     contentType: params.contentType ?? mime,
@@ -397,6 +397,7 @@ type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
       sandboxRoot: string;
+      containerWorkdir?: string;
     }
   | {
       mode: "host";
@@ -408,6 +409,7 @@ type AttachmentMediaPolicy =
 /** Chooses sandbox or host media loading policy for attachment hydration. */
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
@@ -417,6 +419,9 @@ export function resolveAttachmentMediaPolicy(params: {
     return {
       mode: "sandbox",
       sandboxRoot,
+      ...(params.sandboxContainerWorkdir
+        ? { containerWorkdir: params.sandboxContainerWorkdir }
+        : {}),
     };
   }
   const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
@@ -545,18 +550,23 @@ export async function normalizeSandboxMediaParams(params: {
   extraParamKeys?: readonly string[];
   structuredAttachments?: StructuredAttachmentMode;
 }): Promise<void> {
-  const sandboxRoot =
-    params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
+  const sandbox =
+    params.mediaPolicy.mode === "sandbox"
+      ? {
+          sandboxRoot: params.mediaPolicy.sandboxRoot.trim(),
+          containerWorkdir: params.mediaPolicy.containerWorkdir,
+        }
+      : undefined;
   for (const key of buildActionMediaSourceParamKeys(params.extraParamKeys)) {
     const entry = resolveMediaParamEntry(params.args, key);
     if (!entry) {
       continue;
     }
     assertMediaNotDataUrl(entry.value);
-    if (!sandboxRoot) {
+    if (!sandbox?.sandboxRoot) {
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: entry.value, sandboxRoot });
+    const normalized = await resolveSandboxedMediaSource({ media: entry.value, ...sandbox });
     if (normalized !== entry.value) {
       params.args[entry.key] = normalized;
     }
@@ -572,12 +582,12 @@ export async function normalizeSandboxMediaParams(params: {
   }
   for (const attachmentSource of attachmentSources) {
     assertMediaNotDataUrl(attachmentSource.value);
-    if (!sandboxRoot) {
+    if (!sandbox?.sandboxRoot) {
       continue;
     }
     const normalized = await resolveSandboxedMediaSource({
       media: attachmentSource.value,
-      sandboxRoot,
+      ...sandbox,
     });
     if (normalized !== attachmentSource.value) {
       attachmentSource.attachment[attachmentSource.key] = normalized;
@@ -589,6 +599,7 @@ export async function normalizeSandboxMediaParams(params: {
 export async function normalizeSandboxMediaList(params: {
   values: string[];
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
 }): Promise<string[]> {
   const sandboxRoot = params.sandboxRoot?.trim();
   const normalized: string[] = [];
@@ -600,7 +611,11 @@ export async function normalizeSandboxMediaList(params: {
     }
     assertMediaNotDataUrl(raw);
     const resolved = sandboxRoot
-      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
+      ? await resolveSandboxedMediaSource({
+          media: raw,
+          sandboxRoot,
+          containerWorkdir: params.sandboxContainerWorkdir,
+        })
       : raw;
     if (seen.has(resolved)) {
       continue;
@@ -734,18 +749,5 @@ export function parseJsonMessageParam(params: Record<string, unknown>, key: stri
 
 /** Parses the interactive message action param as JSON when provided as a string. */
 export function parseInteractiveParam(params: Record<string, unknown>): void {
-  const raw = params.interactive;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.interactive;
-    return;
-  }
-  try {
-    params.interactive = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--interactive must be valid JSON");
-  }
+  parseJsonMessageParam(params, "interactive");
 }

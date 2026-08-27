@@ -53,7 +53,9 @@ export function registerModelsCli(program: Command) {
     );
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || models.opts<{ json?: boolean }>().json);
-  setCommandJsonMode(models, "output", ({ argv }) => isModelsStatusJsonOutput(argv));
+  setCommandJsonMode(models, "output", ({ argv, command }) =>
+    isModelsStatusJsonOutput(argv, command),
+  );
 
   models
     .command("list")
@@ -142,7 +144,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string, _opts: unknown, command: Command) => {
       const runtime = await loadModelsRuntime();
-      runtime.rejectAgentScopedModelWrite(command, "set");
+      runtime.rejectAgentScopedModelCommand(command, "set");
       await runtime.runModelsCommand(async () => {
         const { modelsSetCommand } = await import("../commands/models/set.js");
         await modelsSetCommand(model, runtime.defaultRuntime);
@@ -155,7 +157,7 @@ export function registerModelsCli(program: Command) {
     .argument("<model>", "Model id or alias")
     .action(async (model: string, _opts: unknown, command: Command) => {
       const runtime = await loadModelsRuntime();
-      runtime.rejectAgentScopedModelWrite(command, "set-image");
+      runtime.rejectAgentScopedModelCommand(command, "set-image");
       await runtime.runModelsCommand(async () => {
         const { modelsSetImageCommand } = await import("../commands/models/set-image.js");
         await modelsSetImageCommand(model, runtime.defaultRuntime);
@@ -169,10 +171,15 @@ export function registerModelsCli(program: Command) {
     .description("List model aliases")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (opts, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedModelCommand(command, "aliases list");
+      await runtime.runModelsCommand(async () => {
         const { modelsAliasesListCommand } = await loadModelsAliasesCommands();
-        await modelsAliasesListCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
+        await modelsAliasesListCommand(
+          { ...opts, json: hasJsonOutput(opts) },
+          runtime.defaultRuntime,
+        );
       });
     });
 
@@ -181,10 +188,12 @@ export function registerModelsCli(program: Command) {
     .description("Add or update a model alias")
     .argument("<alias>", "Alias name")
     .argument("<model>", "Model id or alias")
-    .action(async (alias: string, model: string) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (alias: string, model: string, _opts: unknown, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedModelCommand(command, "aliases add");
+      await runtime.runModelsCommand(async () => {
         const { modelsAliasesAddCommand } = await loadModelsAliasesCommands();
-        await modelsAliasesAddCommand(alias, model, defaultRuntime);
+        await modelsAliasesAddCommand(alias, model, runtime.defaultRuntime);
       });
     });
 
@@ -192,10 +201,12 @@ export function registerModelsCli(program: Command) {
     .command("remove")
     .description("Remove a model alias")
     .argument("<alias>", "Alias name")
-    .action(async (alias: string) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (alias: string, _opts: unknown, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedModelCommand(command, "aliases remove");
+      await runtime.runModelsCommand(async () => {
         const { modelsAliasesRemoveCommand } = await loadModelsAliasesCommands();
-        await modelsAliasesRemoveCommand(alias, defaultRuntime);
+        await modelsAliasesRemoveCommand(alias, runtime.defaultRuntime);
       });
     });
 
@@ -286,10 +297,12 @@ export function registerModelsCli(program: Command) {
     .option("--set-default", "Set agents.defaults.model to the first selection", false)
     .option("--set-image", "Set agents.defaults.imageModel to the first image selection", false)
     .option("--json", "Output JSON", false)
-    .action(async (opts) => {
-      await withModelsRuntime(async ({ defaultRuntime }) => {
+    .action(async (opts, command: Command) => {
+      const runtime = await loadModelsRuntime();
+      runtime.rejectAgentScopedModelCommand(command, "scan");
+      await runtime.runModelsCommand(async () => {
         const { modelsScanCommand } = await import("../commands/models/scan.js");
-        await modelsScanCommand({ ...opts, json: hasJsonOutput(opts) }, defaultRuntime);
+        await modelsScanCommand({ ...opts, json: hasJsonOutput(opts) }, runtime.defaultRuntime);
       });
     });
 

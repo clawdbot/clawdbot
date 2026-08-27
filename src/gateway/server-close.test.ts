@@ -164,12 +164,16 @@ function createGatewayCloseTestDeps(
     stopTaskRegistryMaintenance: null,
     nodePresenceTimers: new Map(),
     broadcast: vi.fn(),
-    tickInterval: setInterval(() => undefined, 60_000),
-    healthInterval: setInterval(() => undefined, 60_000),
-    dedupeCleanup: setInterval(() => undefined, 60_000),
+    maintenance: {
+      tickInterval: setInterval(() => undefined, 60_000),
+      healthInterval: setInterval(() => undefined, 60_000),
+      dedupeCleanup: setInterval(() => undefined, 60_000),
+      startMediaCleanup: vi.fn(),
+      stopMediaCleanup: vi.fn(async () => "drained" as const),
+      worktreeCleanup: setInterval(() => undefined, 60_000),
+      skillUsageCleanup: vi.fn(),
+    },
     stopMediaCleanup: vi.fn(async () => "drained" as const),
-    worktreeCleanup: null,
-    skillCuratorCleanup: vi.fn(),
     agentUnsub: null,
     taskUnsub: null,
     heartbeatUnsub: null,
@@ -2036,10 +2040,9 @@ describe("createGatewayCloseHandler", () => {
 
     await close({ reason: "  upgrade  ", restartExpectedMs: Number.NaN });
 
-    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", {
-      reason: "upgrade",
-      restartExpectedMs: null,
-    });
+    // Non-restart shutdowns omit restartExpectedMs entirely: the schema declares
+    // an optional integer and clients key the restart presentation on presence.
+    expect(deps.broadcast).toHaveBeenCalledWith("shutdown", { reason: "upgrade" });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

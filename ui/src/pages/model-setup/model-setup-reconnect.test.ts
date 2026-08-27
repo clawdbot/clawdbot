@@ -54,6 +54,7 @@ function createFixture() {
       bootstrapToken: "",
       password: "",
     },
+    connectionRevision: 0,
     eventLog: [],
     connect: vi.fn(),
     setSessionKey: vi.fn(),

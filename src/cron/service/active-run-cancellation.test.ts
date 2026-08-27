@@ -59,6 +59,85 @@ describe("cron task cancellation tracking", () => {
   });
 
   it.each([
+    { direction: "backward", clockShiftMs: -86_400_000 },
+    { direction: "forward", clockShiftMs: 86_400_000 },
+  ])(
+    "keeps shutdown drain deadlines stable when the wall clock jumps $direction",
+    async ({ clockShiftMs }) => {
+      vi.useFakeTimers();
+      resetActiveCronTaskRunsForTests();
+      const initialWallTimeMs = Date.parse("2026-08-23T12:00:00.000Z");
+      vi.setSystemTime(initialWallTimeMs);
+      trackActiveCronTaskRunSettlement(new Promise<never>(() => {}));
+      const observedDrain = vi.fn();
+      const drain = waitForActiveCronTaskRuns(1_000).then(observedDrain);
+
+      try {
+        vi.setSystemTime(initialWallTimeMs + clockShiftMs);
+        await vi.advanceTimersByTimeAsync(999);
+        expect(observedDrain).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1);
+        expect(observedDrain).toHaveBeenCalledExactlyOnceWith({ drained: false, active: 1 });
+      } finally {
+        resetActiveCronTaskRunsForTests();
+        await vi.advanceTimersByTimeAsync(25);
+        await drain;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { lifecycle: "registered cancellation handle", settleCore: false },
+    { lifecycle: "tracked executing core", settleCore: true },
+  ])(
+    "releases concurrent shutdown drains as soon as the final $lifecycle settles",
+    async ({ settleCore }) => {
+      vi.useFakeTimers();
+      resetActiveCronTaskRunsForTests();
+      let settle = () => {};
+      const core = new Promise<void>((resolve) => {
+        settle = resolve;
+      });
+      const release = settleCore
+        ? undefined
+        : registerActiveCronTaskRun({
+            runId: "draining-handle",
+            controller: new AbortController(),
+          });
+      if (settleCore) {
+        trackActiveCronTaskRunSettlement(core);
+      }
+      const firstObservedDrain = vi.fn();
+      const secondObservedDrain = vi.fn();
+      const drains = Promise.all([
+        waitForActiveCronTaskRuns(1_000).then(firstObservedDrain),
+        waitForActiveCronTaskRuns(2_000).then(secondObservedDrain),
+      ]);
+
+      try {
+        if (settleCore) {
+          settle();
+        } else {
+          release?.();
+        }
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(firstObservedDrain).toHaveBeenCalledExactlyOnceWith({ drained: true, active: 0 });
+        expect(secondObservedDrain).toHaveBeenCalledExactlyOnceWith({ drained: true, active: 0 });
+      } finally {
+        settle();
+        release?.();
+        resetActiveCronTaskRunsForTests();
+        await vi.advanceTimersByTimeAsync(25);
+        await drains;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
     { timing: "after tracking", abortBeforeTracking: false },
     { timing: "before tracking", abortBeforeTracking: true },
   ])(

@@ -536,7 +536,7 @@ describe("openai plugin", () => {
     ).toEqual({
       stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
-        interaction_style: `${OPENAI_FRIENDLY_PROMPT_OVERLAY}\n\n${OPENAI_HEARTBEAT_PROMPT_OVERLAY}`,
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
     expect(

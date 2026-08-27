@@ -7,6 +7,10 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
+import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
@@ -28,7 +32,6 @@ import type { CronJob } from "../types.js";
 import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
-import { stopTimer } from "./timer.js";
 
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
@@ -549,7 +552,7 @@ describe("cron durable run ownership", () => {
     }
   });
 
-  it("keeps monitoring when the marker hands off to another foreign run", async () => {
+  it("settles existing foreign receipts while suspension keeps unrelated cron work fenced", async () => {
     vi.useRealTimers();
     const { storePath } = await makeStorePath();
     const now = Date.now();
@@ -564,12 +567,19 @@ describe("cron durable run ownership", () => {
     });
     await waitForLine(first, "started");
 
-    const replacement = makeParentService(storePath);
+    const replacementRunner = vi.fn(async () => ({ status: "ok" as const }));
+    const replacement = makeParentService(storePath, replacementRunner);
+    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
     let second: ChildProcess | undefined;
     try {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       await replacement.start();
       const replacementState = (replacement as unknown as { state: CronServiceState }).state;
+      suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.drain()).toBe(true);
       replacement.pauseScheduling();
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+      expect(replacementState.timer).toBeNull();
       first.kill("SIGKILL");
       await waitForExit(first);
       second = spawnRunner({
@@ -582,10 +592,6 @@ describe("cron durable run ownership", () => {
       await waitForLine(second, "started");
       const secondReceiptId = receipts(storePath, job.id)[0]?.receiptId;
       expect(secondReceiptId).toBeDefined();
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      replacement.resumeScheduling();
-      // Isolate the lifecycle-owned foreign receipt monitor from the ordinary job timer.
-      stopTimer(replacementState);
       await vi.advanceTimersByTimeAsync(2_000);
       await waitForImmediate(
         () => listForeignReceipts(replacementState)[0]?.receiptId === secondReceiptId,
@@ -602,7 +608,12 @@ describe("cron durable run ownership", () => {
         },
         { timeout: 1_000, interval: 10 },
       );
+      expect(replacementState.schedulingPaused).toBe(true);
+      expect(replacementState.timer).toBeNull();
+      expect(replacementRunner).not.toHaveBeenCalled();
+      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
     } finally {
+      suspension?.release();
       replacement.stop();
       vi.useRealTimers();
       for (const child of [first, second]) {

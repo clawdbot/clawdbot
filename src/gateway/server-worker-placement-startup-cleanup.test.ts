@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
@@ -121,6 +122,10 @@ describe("worker placement startup cleanup ownership", () => {
         activeOwnerEpoch: claimLocalTurn ? null : 1,
         turnClaim: claimLocalTurn ? expect.objectContaining({ owner: "local" }) : null,
       });
+      const failedSessionKey = failed?.sessionKey;
+      if (!failedSessionKey) {
+        throw new Error("failed placement fixture is missing its session key");
+      }
       runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
       runtimeFactoryMocks.createDiskSpace.mockReturnValue({
         read: vi.fn(),
@@ -141,6 +146,7 @@ describe("worker placement startup cleanup ownership", () => {
       });
       try {
         expect(sidecar).not.toBeNull();
+        expect(collectSessionMaintenancePreserveKeys()?.has(failedSessionKey)).toBe(true);
         await environments.reconcileOnce();
         expect(provision).not.toHaveBeenCalled();
         expect(inspect).not.toHaveBeenCalled();
@@ -150,9 +156,16 @@ describe("worker placement startup cleanup ownership", () => {
           leaseId: null,
           destroyRequestedAtMs: expect.any(Number),
         });
+        workerEnvironmentSupport.testState.store.transition({
+          environmentId,
+          from: "provisioning",
+          to: "failed",
+        });
+        expect(collectSessionMaintenancePreserveKeys()?.has(failedSessionKey)).not.toBe(true);
       } finally {
         await sidecar?.stop();
       }
+      expect(collectSessionMaintenancePreserveKeys()?.has(failedSessionKey)).not.toBe(true);
     },
   );
 

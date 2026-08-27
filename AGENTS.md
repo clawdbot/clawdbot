@@ -111,7 +111,7 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Core runtime consumes only current canonical shapes/config/data. Legacy or retired shapes normalize only in doctor/migration code before runtime; no runtime shims, aliases, or fallback readers.
 - State/storage migrations are database-first. Runtime reads/writes the canonical store only. Old file stores, sidecars, aliases, and fallback readers belong in `openclaw doctor --fix` migration code only, never steady-state runtime.
 - Storage default: SQLite only. Do not add JSON/JSONL/TXT/sidecar files for OpenClaw-owned runtime state, caches, queues, registries, indexes, cursors, checkpoints, or plugin scratch data. File storage is only for named product artifacts: import/export, user attachment, log, backup, or external tool contract. Doctrine: `docs/refactor/database-first.md`.
-- Any SQLite change requiring a schema-version bump needs explicit user discussion and acceptance before implementation. Agents must not advance SQLite schema versions autonomously.
+- Material SQLite or persistent-store changes need explicit user or maintainer discussion and acceptance before implementation. This includes schema-version bumps and same-version changes to tables, projections, indexing, retention, concurrency, recovery, or user-visible persistence semantics. Agents must not advance SQLite schema versions or implement a material store design autonomously. Follow `docs/reference/database-schemas.md#review-checkpoint-for-material-changes`.
 - Additive SQLite surface may stay at the same schema version only when downgraded readers stay safe — exact criteria (new tables; bare nullable `STRICT`-datatype existing-table columns, zero constraints): `docs/reference/database-schemas.md`. Declare it in the canonical schema plus a one-time idempotent lazy ensure on first feature use; fold it into the migration path at the next natural bump.
 - SQLite runtime access uses Kysely helpers, not raw SQL statement strings, except schema DDL, migrations, low-level DB bootstrap, or narrowly justified SQLite primitives.
 - SQLite write transactions are synchronous commit sections only. Finish async planning, filesystem access, plugin hooks, and predicates before `BEGIN`; then reread and validate authoritative rows before writing. Never return a Promise or execute `await` from a transaction callback.
@@ -205,6 +205,7 @@ Review invariants; full doctrine: `docs/gateway/audit.md`.
 
 ## GitHub / PRs
 
+- Team-session commits and PRs visibly credit only consented, verified profile-backed humans in authoritative contribution order; preserve exact co-author trailers and end PRs with the canonical team-session backlink when available.
 - Fresh GitHub items: read `CONTRIBUTING.md`, the issue chooser/form, PR template, and `.github/CODEOWNERS`; blank issues are disabled; preserve templates and evidence requirements.
 - Issue first for bugs, user-facing features, architecture/product decisions, or work needing durable discussion. Bounded maintainer-requested refactor may go direct; agent decides whether an issue adds value. PRs use the template, link context, and keep durable problem/impact/evidence sections.
 - Route support to Discord and security through `SECURITY.md`. Use listed maintainer areas/`CODEOWNERS`; never guess mentions.
@@ -334,7 +335,7 @@ Mechanics only; policy lives above.
 ## Security / Release
 
 - Never commit real phone numbers, videos, credentials, live config.
-- Secrets: channel/provider creds in `~/.openclaw/credentials/`; model auth profiles in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`).
+- Secrets: channel/provider creds in `~/.openclaw/credentials/`; shared model auth profiles in `~/.openclaw/state/openclaw.sqlite`, with agent-local profiles overriding the shared read-through base; see `docs/auth-credential-semantics.md`.
 - SecretRef failures isolate to the smallest known owning surface; unknown ownership fails closed. Gateway starts degraded (exact owner marked configured-unavailable, typed redacted diagnostic, no implicit credential fallback) rather than refusing startup, except for its own ingress protection or structurally invalid config. Doctor and status list every degraded owner. Full doctrine: `docs/gateway/secrets.md`.
 - Dependency patches/overrides/vendor changes need explicit approval. `pnpm-workspace.yaml` patched dependencies use exact versions only.
 - Release/package guards: no hard-coded retired-package denylists; use generic artifact/dependency checks or fix build source.

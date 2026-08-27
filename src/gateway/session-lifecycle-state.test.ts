@@ -9,6 +9,12 @@ const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   updateSessionEntry: vi.fn(),
 }));
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+}));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   updateSessionEntry: persistenceMocks.updateSessionEntry,
@@ -16,6 +22,10 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: persistenceMocks.loadSessionEntry,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
 }));
 
 import {
@@ -388,6 +398,9 @@ describe("session lifecycle state", () => {
   });
 
   it("keeps an explicitly yielded parent pending until continuation starts", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    loggerMocks.info.mockClear();
+    loggerMocks.warn.mockClear();
     const yielded = await persistLifecycle(
       {
         sessionId: "session-id",
@@ -398,6 +411,9 @@ describe("session lifecycle state", () => {
       {
         ts: 2_000,
         sessionId: "session-id",
+        runId: "yielded-recovery-run",
+        lifecycleGeneration,
+        mainSessionRestartRecovery: true,
         data: {
           phase: "end",
           endedAt: 1_800,
@@ -414,6 +430,8 @@ describe("session lifecycle state", () => {
       runtimeMs: 750,
       abortedLastRun: false,
     });
+    expect(loggerMocks.info).not.toHaveBeenCalled();
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
 
     const resumed = await persistLifecycle(yielded, {
       ts: 2_100,
@@ -592,6 +610,46 @@ describe("session lifecycle state", () => {
     expect(persisted.restartRecoveryRuns).toBeUndefined();
     expect(persisted.mainRestartRecovery).toBeUndefined();
     expect(persisted.lifecycleRunId).toBeUndefined();
+  });
+
+  it("reports an exact recovery run's terminal outcome after persistence", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    loggerMocks.warn.mockClear();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        lifecycleRunId: "recovery-run",
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryRuns: [
+          { runId: "recovery-run", lifecycleGeneration: "pre-restart" },
+          { runId: "recovery-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "recovery-run",
+        lifecycleGeneration,
+        mainSessionRestartRecovery: true,
+        data: { phase: "error", endedAt: 1_800, error: "provider failed" },
+      },
+    );
+
+    expect(persisted.status).toBe("failed");
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "main-session restart recovery terminal: session=agent:main:main run=recovery-run status=error reason=failed",
+    );
   });
 
   it("keeps an active recovery when an older same-run terminal arrives", async () => {

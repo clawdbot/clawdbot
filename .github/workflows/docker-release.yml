@@ -16,6 +16,26 @@ on:
         required: false
         default: ""
         type: string
+      focused_release_evidence_run_id:
+        description: Optional immutable authorized beta focused evidence producer run
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_run_attempt:
+        description: Exact previously verified focused evidence producer attempt
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_workflow_full_ref:
+        description: Exact previously verified focused evidence producer tag
+        required: false
+        default: ""
+        type: string
+      focused_release_evidence_workflow_sha:
+        description: Exact previously verified focused evidence producer SHA
+        required: false
+        default: ""
+        type: string
     outputs:
       version:
         description: Resolved Docker release version without the v prefix
@@ -23,9 +43,9 @@ on:
       include_browser:
         description: Whether the tagged Docker release includes browser images
         value: ${{ jobs.create-manifest.outputs.browser_supported }}
-      vcr_source_refs:
-        description: Newline-delimited attestation-verified immutable GHCR source refs
-        value: ${{ jobs.verify-attestations.outputs.vcr_source_refs }}
+      vcr_source_digests:
+        description: Newline-delimited attestation-verified immutable GHCR source digests
+        value: ${{ jobs.verify-attestations.outputs.vcr_source_digests }}
     secrets:
       DOCKERHUB_USERNAME:
         required: true
@@ -77,7 +97,7 @@ jobs:
           fi
 
       - name: Checkout immutable release tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -111,7 +131,7 @@ jobs:
       channel: ${{ steps.policy.outputs.channel }}
     steps:
       - name: Checkout trusted workflow helpers
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           path: workflow-source
@@ -178,16 +198,109 @@ jobs:
     if: ${{ always() && needs.approve_docker_publish.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
+      attestations: read
       contents: read
     outputs:
       built_at: ${{ steps.build_provenance.outputs.built_at }}
       source_sha: ${{ steps.build_provenance.outputs.source_sha }}
     steps:
       - name: Checkout selected source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.release_sha }}
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout trusted focused evidence verifier
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: .release-harness
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Revalidate focused evidence producer after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ inputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.focused_release_evidence_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" =~ ^[1-9][0-9]*$ ||
+                ! "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" =~ ^[1-9][0-9]*$ ||
+                ! "${PRODUCER_WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ||
+                ! "${PRODUCER_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ||
+                "${PRODUCER_WORKFLOW_SHA:0:12}" != "${BASH_REMATCH[1]}" ]]; then
+            echo "Focused evidence producer identity is missing or invalid after Docker approval." >&2
+            exit 1
+          fi
+          producer_ref="${PRODUCER_WORKFLOW_FULL_REF#refs/tags/}"
+          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOCUSED_RELEASE_EVIDENCE_RUN_ID}")"
+          if ! jq -e \
+            --arg run_id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --arg attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --arg producer_ref "${producer_ref}" \
+            --arg producer_sha "${PRODUCER_WORKFLOW_SHA}" \
+            '.id == ($run_id | tonumber) and .run_attempt == ($attempt | tonumber) and
+             .name == "Authorized Beta Focused Validation" and
+             .path == ".github/workflows/authorized-beta-focused-validation.yml" and
+             .event == "workflow_dispatch" and .status == "completed" and .conclusion == "success" and
+             .head_branch == $producer_ref and .head_sha == $producer_sha' \
+            <<<"${run_json}" >/dev/null; then
+            echo "Focused evidence producer changed after Docker approval." >&2
+            exit 1
+          fi
+          remote_producer_sha="$(
+            gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${producer_ref}" \
+              --jq '.object | select(.type == "commit") | .sha'
+          )"
+          if [[ "${remote_producer_sha}" != "${PRODUCER_WORKFLOW_SHA}" ]]; then
+            echo "Focused evidence producer tag is missing, moved, or annotated after Docker approval." >&2
+            exit 1
+          fi
+
+      - name: Download focused release evidence after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: authorized-beta-focused-v1-${{ inputs.focused_release_evidence_run_id }}-${{ inputs.focused_release_evidence_run_attempt }}
+          path: ${{ runner.temp }}/authorized-beta-focused-evidence
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.focused_release_evidence_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Verify focused release evidence after Docker approval
+        if: ${{ inputs.focused_release_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ID: ${{ inputs.focused_release_evidence_run_id }}
+          FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ inputs.focused_release_evidence_run_attempt }}
+          PRODUCER_WORKFLOW_FULL_REF: ${{ inputs.focused_release_evidence_workflow_full_ref }}
+          PRODUCER_WORKFLOW_SHA: ${{ inputs.focused_release_evidence_workflow_sha }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/authorized-beta-focused-evidence/evidence.json"
+          gh attestation verify "${evidence}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/authorized-beta-focused-validation.yml" \
+            --signer-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-digest "${PRODUCER_WORKFLOW_SHA}" \
+            --source-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --deny-self-hosted-runners
+          node .release-harness/scripts/verify-authorized-beta-focused-candidate.mjs \
+            --repository-root . \
+            --validator .release-harness/scripts/validate-authorized-beta-focused-evidence.mts \
+            --policy .release-harness/scripts/authorized-beta-focused-policy.json \
+            --artifact "${evidence}" \
+            --producer-run-id "${FOCUSED_RELEASE_EVIDENCE_RUN_ID}" \
+            --producer-run-attempt "${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT}" \
+            --producer-workflow-full-ref "${PRODUCER_WORKFLOW_FULL_REF}" \
+            --producer-workflow-sha "${PRODUCER_WORKFLOW_SHA}"
 
       - name: Resolve shared build provenance
         id: build_provenance
@@ -213,7 +326,7 @@ jobs:
       browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
@@ -239,17 +352,17 @@ jobs:
           done
 
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -379,7 +492,6 @@ jobs:
           fi
           docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
             set -eu
-            test -f /app/src/agents/templates/HEARTBEAT.md
             temp_root="$(mktemp -d)"
             trap "rm -rf \"${temp_root}\"" EXIT
             mkdir -p "${temp_root}/home" "${temp_root}/cwd"
@@ -442,24 +554,24 @@ jobs:
       browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -589,7 +701,6 @@ jobs:
           fi
           docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
             set -eu
-            test -f /app/src/agents/templates/HEARTBEAT.md
             temp_root="$(mktemp -d)"
             trap "rm -rf \"${temp_root}\"" EXIT
             mkdir -p "${temp_root}/home" "${temp_root}/cwd"
@@ -659,20 +770,20 @@ jobs:
       browser_supported: ${{ steps.tags.outputs.browser_supported }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -789,30 +900,30 @@ jobs:
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     outputs:
-      vcr_source_refs: ${{ steps.vcr_source_refs.outputs.value }}
+      vcr_source_digests: ${{ steps.vcr_source_digests.outputs.value }}
     permissions:
       contents: read
       packages: write
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.resolve_build_provenance.outputs.source_sha }}
           fetch-depth: 1
 
       - *buildkit_prepull_step
       - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -941,11 +1052,11 @@ jobs:
             "${dockerhub_arm64_refs[@]}"
 
       # Resolve the moving release tags once, then verify the exact immutable
-      # indexes that the VCR publisher will consume. Passing those digest refs
-      # across the job boundary prevents a later tag rewrite from changing the
-      # bytes copied after attestation verification.
+      # indexes that the VCR publisher will consume. Pass only their digests
+      # across the secret-scanned job boundary so a later tag rewrite cannot
+      # change the bytes copied after attestation verification.
       - name: Resolve and verify immutable VCR source refs
-        id: vcr_source_refs
+        id: vcr_source_digests
         shell: bash
         env:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -962,7 +1073,7 @@ jobs:
             tags+=("${image_version}-browser")
           fi
 
-          source_refs=()
+          source_digests=()
           immutable_refs=()
           for index in "${!aliases[@]}"; do
             tagged_ref="${GHCR_IMAGE}:${tags[$index]}"
@@ -977,7 +1088,7 @@ jobs:
                 <<< "${descriptor}"
             )"
             immutable_ref="${GHCR_IMAGE}@${digest}"
-            source_refs+=("${aliases[$index]}=${immutable_ref}")
+            source_digests+=("${aliases[$index]}=${digest}")
             immutable_refs+=("${immutable_ref}")
           done
 
@@ -988,7 +1099,7 @@ jobs:
 
           {
             echo "value<<EOF"
-            printf '%s\n' "${source_refs[@]}"
+            printf '%s\n' "${source_digests[@]}"
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
 

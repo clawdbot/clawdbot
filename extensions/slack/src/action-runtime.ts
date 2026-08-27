@@ -2,7 +2,17 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
+import {
+  createActionGate,
+  imageResultFromFile,
+  jsonResult,
+  readPositiveIntegerParam,
+  readReactionParams,
+  readStringParam,
+  withNormalizedTimestamp,
+} from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
@@ -22,16 +32,6 @@ import { resolveSlackChannelConfig } from "./monitor/channel-config.js";
 import { isSlackChannelAllowedByPolicy } from "./monitor/policy.js";
 import { hasSlackNativeDataBlock } from "./native-data-blocks.js";
 import type { SlackReplyDeliveryMessage } from "./reply-blocks.js";
-import {
-  createActionGate,
-  imageResultFromFile,
-  jsonResult,
-  readPositiveIntegerParam,
-  readReactionParams,
-  readStringParam,
-  type OpenClawConfig,
-  withNormalizedTimestamp,
-} from "./runtime-api.js";
 import { formatSlackTarget } from "./target-parsing.js";
 import { parseSlackTarget, resolveSlackChannelId, slackContextTargetsMatch } from "./targets.js";
 
@@ -50,11 +50,11 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
-const SLACK_REACTION_USER_LIMIT = 100;
+const SLACK_REACTION_RESULT_LIMIT = 100;
 
-type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
+type SlackActionsRuntimeModule = typeof import("./actions.js");
 
-const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.runtime.js"));
+const loadSlackActionsRuntime = createLazyRuntimeModule(() => import("./actions.js"));
 
 const loadSlackAccountsRuntime = createLazyRuntimeModule(() => import("./accounts.runtime.js"));
 const loadSlackChannelTypeRuntime = createLazyRuntimeModule(() => import("./channel-type.js"));
@@ -615,8 +615,8 @@ export async function handleSlackAction(
     const limit = Math.min(
       readPositiveIntegerParam(params, "limit", {
         message: "limit must be a positive integer.",
-      }) ?? SLACK_REACTION_USER_LIMIT,
-      SLACK_REACTION_USER_LIMIT,
+      }) ?? SLACK_REACTION_RESULT_LIMIT,
+      SLACK_REACTION_RESULT_LIMIT,
     );
     const reactions = await slackActionRuntime.listSlackReactions(channelId, messageId, readOpts);
     return jsonResult({
@@ -925,7 +925,8 @@ export async function handleSlackAction(
         if (!downloaded) {
           return jsonResult({
             ok: false,
-            error: "File could not be downloaded (not found, too large, or inaccessible).",
+            error:
+              "File could not be downloaded. Confirm the fileId came from the requested Slack channel or explicit thread and that the file is accessible and within the size limit.",
           });
         }
         if (!isImageContentType(downloaded.contentType)) {
@@ -1016,25 +1017,24 @@ export async function handleSlackAction(
     if (!isActionEnabled("emojiList")) {
       throw new Error("Slack emoji list is disabled.");
     }
-    const limit = readPositiveIntegerParam(params, "limit", {
-      message: "limit must be a positive integer.",
-    });
+    const limit = Math.min(
+      readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      }) ?? SLACK_REACTION_RESULT_LIMIT,
+      SLACK_REACTION_RESULT_LIMIT,
+    );
     const teamId = resolveTrustedCurrentSlackTeamId({ account, context });
     assertSlackDetachedTargetAllowed(account.accountId, teamId);
     const result = await slackActionRuntime.listSlackEmojis(buildActionOpts("read", teamId));
-    if (limit != null && limit > 0 && result.emoji != null) {
-      const entries = Object.entries(result.emoji).toSorted(([a], [b]) => a.localeCompare(b));
-      if (entries.length > limit) {
-        return jsonResult({
-          ok: true,
-          emojis: {
-            ...result,
-            emoji: Object.fromEntries(entries.slice(0, limit)),
-          },
-        });
-      }
-    }
-    return jsonResult({ ok: true, emojis: result });
+    const emojis = Object.entries(result.emoji ?? {})
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .slice(0, limit)
+      .map(([name, value]) =>
+        value.startsWith("alias:")
+          ? { name, identifier: name, aliasOf: value.slice("alias:".length) }
+          : { name, identifier: name },
+      );
+    return jsonResult({ ok: true, emojis });
   }
 
   throw new Error(`Unknown action: ${action}`);

@@ -483,6 +483,7 @@ export async function handleDiscordMessageAction(
         to,
         stickerIds,
         content: readStringParam(params, "message"),
+        ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,

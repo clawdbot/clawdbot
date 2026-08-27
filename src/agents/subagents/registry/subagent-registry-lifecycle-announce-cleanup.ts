@@ -576,6 +576,7 @@ export const startSubagentAnnounceCleanupFlow = (
           }
         : undefined,
     onDeliveryResult: (delivery) => {
+      const previousDropReason = entry.delivery?.lastDropReason;
       if (!context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration)) {
         retireSupersededCleanupInBackground(context, runId, entry, cleanupGeneration);
         return;
@@ -598,15 +599,18 @@ export const startSubagentAnnounceCleanupFlow = (
         latestDeliveryError = undefined;
         return;
       }
-      if (delivery.path === "none" && delivery.disposition !== "intentional_non_delivery") {
-        ensureDeliveryState(entry).lastDropReason = "sink_unavailable";
-      }
+      const deliveryState = ensureDeliveryState(entry);
       latestDeliveryError = formatAnnounceDeliveryError(delivery);
-      if (ensureDeliveryState(entry).lastError !== latestDeliveryError) {
-        ensureDeliveryState(entry).lastError = latestDeliveryError;
+      if (
+        deliveryState.lastError !== latestDeliveryError ||
+        deliveryState.lastDropReason !== previousDropReason
+      ) {
+        deliveryState.lastError = latestDeliveryError;
         params.persist(runId);
       }
     },
+    // Idle completion has no ambient request scope. Missing entry ownership
+    // fails closed instead of widening authority to another live Gateway.
     resolveGatewayContext: getGatewayContextResolver(entry),
   };
   runDetachedCleanupAttempt(context, {

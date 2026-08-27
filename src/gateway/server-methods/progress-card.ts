@@ -6,9 +6,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   normalizeProgressCardInput,
-  PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
-  PROGRESS_CARD_MAX_STEPS,
-  PROGRESS_CARD_MAX_UTF8_BYTES,
   ProgressCardInputError,
 } from "../../session-cards/progress-card-input.js";
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
@@ -17,8 +14,6 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreKey } from "../session-store-key.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-export { PROGRESS_CARD_MAX_STEP_UTF8_BYTES, PROGRESS_CARD_MAX_STEPS, PROGRESS_CARD_MAX_UTF8_BYTES };
 
 function resolveProgressCardSessionKey(
   sessionKey: string,

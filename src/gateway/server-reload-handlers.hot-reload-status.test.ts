@@ -86,7 +86,6 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
           storePath: "/tmp/cron.json",
           cronEnabled: false,
           reconcileExitWatchers: vi.fn(async () => {}),
-          stopExitWatchers: vi.fn(),
           reconcileStreamWatchers: vi.fn(async () => {}),
           stopStreamWatchers: vi.fn(async () => {}),
           reconcileHeartbeatJobs: vi.fn(async () => {}),

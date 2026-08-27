@@ -30,11 +30,12 @@ type StreamMessageOptions = Pick<
   | "canvasPluginSurfaceUrl"
   | "resourceBasePath"
   | "localMediaPreviewRoots"
+  | "connectionEpoch"
   | "assistantAttachmentAuthToken"
   | "resolveArtifactDownload"
-  | "onAssistantAttachmentLoaded"
   | "onRequestOpenImage"
   | "onOpenImage"
+  | "onAssistantAttachmentLoaded"
   | "embedSandboxMode"
   | "allowExternalEmbedUrls"
   | "fetchLinkFavicon"
@@ -92,11 +93,12 @@ export function renderStreamGroupParts(
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               resourceBasePath: opts.resourceBasePath,
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
+              connectionEpoch: opts.connectionEpoch,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               resolveArtifactDownload: opts.resolveArtifactDownload,
-              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
               onRequestOpenImage: opts.onRequestOpenImage,
               onOpenImage: opts.onOpenImage,
+              onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
               embedSandboxMode: opts.embedSandboxMode,
               allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
               fetchLinkFavicon: opts.fetchLinkFavicon,

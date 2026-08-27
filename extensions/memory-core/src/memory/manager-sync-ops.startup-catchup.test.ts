@@ -19,6 +19,7 @@ import {
   type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
@@ -413,6 +414,10 @@ describe("session startup catch-up", () => {
     }
     startupHarnessDatabases.clear();
     closeOpenClawAgentDatabasesForTest();
+    // Closing the agent databases releases their leases through shared state, which
+    // reopens it, so the shared handle has to be released after that and before the
+    // removal or Windows fails the unlink with EBUSY.
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -920,7 +925,7 @@ describe("session startup catch-up", () => {
     expect(harness.indexedContents[0]).not.toContain("replacement store target");
   });
 
-  it("preserves generated-session classification during targeted custom-store indexing", async () => {
+  it("excludes generated cron transcripts from targeted custom-store indexing", async () => {
     const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
     const session = await writeSqliteSession({
       storePath,
@@ -942,8 +947,8 @@ describe("session startup catch-up", () => {
       ],
     });
 
-    expect(harness.indexedPaths).toEqual([session.corpusPath]);
-    expect(harness.indexedContents).toEqual([""]);
+    expect(harness.indexedPaths).toEqual([]);
+    expect(harness.indexedContents).toEqual([]);
   });
 
   it("queues transcript update identity without requiring a session file", async () => {
@@ -1078,6 +1083,10 @@ describe("session startup catch-up", () => {
   it.each([
     "thread.jsonl.bak.2026-06-23T10-00-00.000Z",
     "thread.trajectory.jsonl",
+    "thread.trajectory.jsonl.deleted.2026-06-23T10-00-00.000Z",
+    "thread.trajectory.jsonl.reset.2026-06-23T10-00-00.000Z.zst",
+    "thread.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.deleted.2026-06-23T10-00-00.000Z",
+    "thread.checkpoint.11111111-1111-4111-8111-111111111111.jsonl.reset.2026-06-23T10-00-00.000Z.zst",
     "sessions.json",
   ])("ignores non-corpus session artifact updates for %s", async (fileName) => {
     vi.useFakeTimers();
@@ -1091,10 +1100,8 @@ describe("session startup catch-up", () => {
       await vi.advanceTimersByTimeAsync(6000);
       await harness.waitForSessionSync();
 
-      expect(harness.getPendingArchiveFiles()).toEqual([]);
-      expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.getPendingArchiveFiles(), harness.getDirtyArchiveFiles()]).toEqual([[], []]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }
@@ -1114,8 +1121,7 @@ describe("session startup catch-up", () => {
       await harness.waitForSessionSync();
 
       expect(harness.getDirtyArchiveFiles()).toEqual([]);
-      expect(harness.syncCalls).toEqual([]);
-      expect(harness.indexedPaths).toEqual([]);
+      expect([harness.syncCalls, harness.indexedPaths]).toEqual([[], []]);
     } finally {
       harness.stopTranscriptListener();
     }

@@ -84,19 +84,22 @@ const writeResultAndExit = (value) => {
   exitWorker(0);
 };
 const mode = descriptor.assignment.prompt;
-if (mode === "connection-failure") {
-  process.send(
-    {
-      type: "openclaw-worker-connection-failure-v1",
-      cause: "certificate rejected " + descriptor.admission.credential,
-    },
-    () =>
-      fs.writeFileSync(
-        path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"),
-        "reported",
-      ),
-  );
-  setInterval(() => {}, 1000);
+if (mode === "connection-failure" || mode === "connection-deadline") {
+  const target = new URL(descriptor.connectionEndpoint.url).host;
+  const report = (cause) => new Promise((resolve) => process.send(
+    { type: "openclaw-worker-connection-failure-v1", cause }, resolve,
+  ));
+  await report("worker could not reach gateway " + target + ": certificate rejected " +
+    descriptor.admission.credential + "; check TLS pin/publicUrl configuration");
+  if (mode === "connection-deadline") {
+    await report("worker admission deadline exceeded after 3 attempts to " + target +
+      ": connect failed: Opening handshake has timed out " + descriptor.admission.credential);
+    process.stderr.write("worker admission deadline exceeded\n");
+    exitWorker(7);
+  } else {
+    fs.writeFileSync(path.join(descriptor.assignment.workspaceDir, "connection-failure-reported"), "reported");
+    setInterval(() => {}, 1000);
+  }
 } else if (mode === "wait") {
   setInterval(() => {}, 1000);
 } else if (mode === "tree") {
@@ -147,7 +150,11 @@ if (mode === "connection-failure") {
 }
 `;
 
-export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): WorkerLaunchPlan {
+export function testWorkerDescriptor(
+  workspaceDir: string,
+  prompt = "success",
+  turnId = "turn-1",
+): WorkerLaunchPlan {
   return {
     version: 4,
     admission: {
@@ -167,7 +174,7 @@ export function testWorkerDescriptor(workspaceDir: string, prompt = "success"): 
       operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
       agentRuntimeIdentityToken: "signed-runtime-token",
       runId: "run-1",
-      turnId: "turn-1",
+      turnId,
       prompt,
       suppressPromptTranscript: false,
       workspaceDir,
@@ -216,6 +223,6 @@ export function testWorkerLaunchInput(
     gatewayNamespace: "gateway-1",
     expectedBundleHash: TEST_BUNDLE_HASH,
     placementGeneration: 4,
-    descriptor: testWorkerDescriptor(workspaceDir, prompt),
+    descriptor: testWorkerDescriptor(workspaceDir, prompt, launchId),
   };
 }

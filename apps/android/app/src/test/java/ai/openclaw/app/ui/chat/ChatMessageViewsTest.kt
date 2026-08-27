@@ -3,6 +3,7 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
+import ai.openclaw.app.chat.parseChatMessageContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
@@ -16,6 +17,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -33,6 +35,7 @@ class ChatMessageViewsTest {
     val messages =
       listOf(
         Triple("user", "user body", false),
+        Triple("user", "peer body", false),
         Triple("assistant", "assistant body", false),
         Triple("system", "system body", false),
         Triple("assistant", "live body", true),
@@ -59,12 +62,20 @@ class ChatMessageViewsTest {
             resolveInlineWidgetResource = { _, _ -> null },
             loadImageArtifact = { null },
             loadMediaArtifact = { _, _, _ -> null },
+            senderLabel =
+              when (body) {
+                "peer body" -> "  Alex (Slack)  "
+                "assistant body", "system body", "live body" -> "Spoofed sender"
+                else -> null
+              },
           )
         }
       }
     }
 
     val userBubble = composeRule.onNode(hasContentDescription("You") and hasText("user body")).assertExists()
+    composeRule.onNode(hasContentDescription("Alex (Slack)") and hasText("peer body")).assertExists()
+    composeRule.onNodeWithText("Alex (Slack)", useUnmergedTree = true).assertIsDisplayed()
     val assistantBubble = composeRule.onNode(hasContentDescription("OpenClaw") and hasText("assistant body")).assertExists()
     composeRule.onNode(hasContentDescription("System") and hasText("system body")).assertExists()
     composeRule.onNode(hasContentDescription("OpenClaw") and hasText("live body")).assertExists()
@@ -75,6 +86,7 @@ class ChatMessageViewsTest {
     }
     composeRule.onAllNodesWithText("You", useUnmergedTree = true).assertCountEquals(0)
     composeRule.onAllNodesWithText("OpenClaw", useUnmergedTree = true).assertCountEquals(0)
+    composeRule.onAllNodesWithText("Spoofed sender", useUnmergedTree = true).assertCountEquals(0)
     composeRule.onAllNodesWithText("System", useUnmergedTree = true).assertCountEquals(1)
     composeRule.onAllNodesWithText("OpenClaw · Live", useUnmergedTree = true).assertCountEquals(1)
 
@@ -89,6 +101,77 @@ class ChatMessageViewsTest {
     assistantBubble.performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
     composeRule.onNode(hasText("Listen") and hasClickAction()).assertExists()
     composeRule.onNode(hasText("Reply") and hasClickAction()).assertExists()
+  }
+
+  @Test
+  fun attachmentOnlyUserTurnsRetainEntryActionsWithoutEmptyTextActions() {
+    val actions = mutableListOf<String>()
+    val messages =
+      listOf(
+        Triple("user", "photo.png", "photo-entry"),
+        Triple("user", "report.pdf", "document-entry"),
+        Triple("assistant", "assistant.pdf", "assistant-entry"),
+        Triple("user", "unpersisted.pdf", null),
+        Triple("user", "disabled.pdf", "disabled-entry"),
+      )
+
+    composeRule.setContent {
+      Column {
+        messages.forEach { (role, fileName, entryId) ->
+          ChatBubble(
+            messageId = fileName,
+            entryId = entryId,
+            role = role,
+            live = false,
+            content =
+              listOf(
+                ChatMessageContent(
+                  type = if (fileName == "photo.png") "image" else "file",
+                  fileName = fileName,
+                ),
+              ),
+            timestampMs = null,
+            onReplyMessage = { actions += "reply:$it" },
+            sessionActionsEnabled = fileName != "disabled.pdf",
+            onRewindMessage = { actions += "rewind:$it" },
+            onForkMessage = { actions += "fork:$it" },
+            speechState = null,
+            onToggleListen = { _, _ -> actions += "listen" },
+            inlineMediaPlaybackBlocked = false,
+            inlineWidgetResolverReady = false,
+            resolveInlineWidgetResource = { _, _ -> null },
+            loadImageArtifact = { null },
+            loadMediaArtifact = { _, _, _ -> null },
+          )
+        }
+      }
+    }
+
+    listOf("assistant.pdf", "unpersisted.pdf", "disabled.pdf").forEach { fileName ->
+      val speaker = if (fileName == "assistant.pdf") "OpenClaw" else "You"
+      val semantics =
+        composeRule
+          .onNode(hasContentDescription(speaker) and hasText(fileName))
+          .fetchSemanticsNode()
+          .config
+      assertTrue(SemanticsActions.OnLongClick !in semantics)
+    }
+
+    listOf("photo.png" to "Rewind to here", "report.pdf" to "Fork from here").forEach { (fileName, selectedAction) ->
+      composeRule
+        .onNode(hasContentDescription("You") and hasText(fileName))
+        .performSemanticsAction(SemanticsActions.OnLongClick) { action -> action() }
+
+      listOf("Rewind to here", "Fork from here").forEach { label ->
+        composeRule.onNode(hasText(label) and hasClickAction()).assertExists()
+      }
+      listOf("Copy", "Select text", "Share", "Reply", "Listen").forEach { label ->
+        composeRule.onAllNodesWithText(label).assertCountEquals(0)
+      }
+      composeRule.onNodeWithText(selectedAction).performClick()
+    }
+
+    assertEquals(listOf("rewind:photo-entry", "fork:document-entry"), actions)
   }
 
   @Test
@@ -152,6 +235,112 @@ class ChatMessageViewsTest {
         hasContentDescription("OpenClaw") and
           hasAnyDescendant(hasContentDescription("Play audio") and hasClickAction()),
       ).assertExists()
+  }
+
+  @Test
+  fun attachmentOnlyAssistantTurnShowsDocumentFilenameWithoutLoadingItsUrl() {
+    var artifactRequests = 0
+
+    composeRule.setContent {
+      ChatBubble(
+        messageId = "document-message",
+        entryId = null,
+        role = "assistant",
+        live = false,
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "file",
+              mimeType = "application/pdf",
+              fileName = "quarterly-report.pdf",
+              url = "https://example.test/quarterly-report.pdf",
+            ),
+          ),
+        timestampMs = null,
+        onReplyMessage = {},
+        sessionActionsEnabled = false,
+        onRewindMessage = {},
+        onForkMessage = {},
+        speechState = null,
+        onToggleListen = { _, _ -> },
+        inlineMediaPlaybackBlocked = false,
+        inlineWidgetResolverReady = false,
+        resolveInlineWidgetResource = { _, _ ->
+          artifactRequests += 1
+          null
+        },
+        loadImageArtifact = {
+          artifactRequests += 1
+          null
+        },
+        loadMediaArtifact = { _, _, _ ->
+          artifactRequests += 1
+          null
+        },
+      )
+    }
+
+    composeRule
+      .onNode(hasContentDescription("OpenClaw") and hasText("quarterly-report.pdf"))
+      .assertIsDisplayed()
+    assertEquals(0, artifactRequests)
+  }
+
+  @Test
+  fun omittedImageOnlyTurnsRemainVisibleWithoutLoadingBeyondTheImageCap() {
+    val omittedImage =
+      requireNotNull(
+        parseChatMessageContent(
+          Json.parseToJsonElement(
+            """{"type":"image","mimeType":"image/png","omitted":true,"bytes":5}""",
+          ),
+        ),
+      )
+    var artifactRequests = 0
+
+    composeRule.setContent {
+      Column {
+        listOf(
+          listOf(omittedImage),
+          (1..5).map { index -> omittedImage.copy(fileName = "redacted-$index.png") },
+        ).forEachIndexed { index, images ->
+          ChatBubble(
+            messageId = "omitted-images-$index",
+            entryId = null,
+            role = "assistant",
+            live = false,
+            content = images,
+            timestampMs = null,
+            onReplyMessage = {},
+            sessionActionsEnabled = false,
+            onRewindMessage = {},
+            onForkMessage = {},
+            speechState = null,
+            onToggleListen = { _, _ -> },
+            inlineMediaPlaybackBlocked = false,
+            inlineWidgetResolverReady = true,
+            resolveInlineWidgetResource = { _, _ ->
+              artifactRequests += 1
+              null
+            },
+            loadImageArtifact = {
+              artifactRequests += 1
+              null
+            },
+            loadMediaArtifact = { _, _, _ ->
+              artifactRequests += 1
+              null
+            },
+          )
+        }
+      }
+    }
+
+    composeRule.onNode(hasContentDescription("OpenClaw") and hasText("Attachment")).assertIsDisplayed()
+    (1..4).forEach { index -> composeRule.onNodeWithText("redacted-$index.png").assertIsDisplayed() }
+    composeRule.onAllNodesWithText("redacted-5.png").assertCountEquals(0)
+    composeRule.onNodeWithText("Additional images hidden: 1").assertIsDisplayed()
+    assertEquals(0, artifactRequests)
   }
 
   @Test

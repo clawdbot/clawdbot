@@ -4,7 +4,7 @@ import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
-  resolveEmbeddedAgentReplyRunPhase,
+  resolveEmbeddedReplyActivity,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
@@ -177,22 +177,29 @@ export async function recoverStuckDiagnosticSession(
     let forceCleared = false;
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
     const staleActiveLaneTaskReleaseMs = resolveStaleActiveLaneTaskReleaseMs(params);
-    const activeReplyPhase = activeWorkSessionId
-      ? resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId)
+    const activeReplyActivity = activeWorkSessionId
+      ? resolveEmbeddedReplyActivity(activeWorkSessionId)
+      : undefined;
+    const activeReplyPhase = activeReplyActivity?.phase;
+    // Phase changes refresh the reply operation's activity clock. Session
+    // attention age may predate maintenance, so it cannot own this timeout.
+    const activeReplyAgeMs = activeReplyActivity
+      ? Math.max(0, Date.now() - activeReplyActivity.lastActivityAtMs)
       : undefined;
     const maintenancePhase =
       activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing";
+    const activeMaintenanceProtected =
+      maintenancePhase &&
+      activeReplyAgeMs !== undefined &&
+      activeReplyAgeMs < staleActiveLaneTaskReleaseMs;
 
-    if (
-      activeReplyPhase === "waiting_for_global_lane" ||
-      (maintenancePhase && params.ageMs < staleActiveLaneTaskReleaseMs)
-    ) {
+    if (activeReplyPhase === "waiting_for_global_lane" || activeMaintenanceProtected) {
       // Queued replies and configured maintenance own their lane until their
       // producer finishes or the existing compaction safety window expires.
       return reportRecoveryOutcome({
         status: "skipped",
         action: "keep_lane",
-        reason: maintenancePhase ? "active_reply_work" : "global_lane_wait",
+        reason: activeMaintenanceProtected ? "active_reply_work" : "global_lane_wait",
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         activeSessionId: activeWorkSessionId,

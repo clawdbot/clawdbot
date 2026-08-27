@@ -16,6 +16,7 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { resolveGithubCopilotDomain } from "./domain.js";
+import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
@@ -107,6 +108,7 @@ async function discoverEmbeddingModels(params: {
       },
     },
     policy: params.ssrfPolicy,
+    timeoutMs: COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS,
     auditContext: "memory-remote",
   });
   try {
@@ -312,21 +314,21 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
           return { apiKey: explicitValue, baseUrl: customBaseUrl };
         })()
       : undefined;
-    const value = explicitValue
-      ? explicitValue
-      : (
-          await resolveFirstGithubToken({
-            agentDir: options.agentDir,
-            config: options.config,
-            env: process.env,
-          })
-        ).githubToken;
+    const profileAuth = explicitValue
+      ? undefined
+      : await resolveFirstGithubToken({
+          agentDir: options.agentDir,
+          config: options.config,
+          env: process.env,
+        });
+    const value = explicitValue ?? profileAuth?.githubToken;
     if (!value) {
       throw new Error("No GitHub token available for Copilot embedding provider");
     }
 
     const githubDomain = resolveGithubCopilotDomain({
       env: process.env,
+      explicit: profileAuth?.githubDomain,
       config: options.config,
     });
     // A custom endpoint owns its own explicit credential. Never resolve a

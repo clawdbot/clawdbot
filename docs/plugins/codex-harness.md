@@ -46,9 +46,9 @@ with Codex native code mode enabled (code-mode-only stays off by default), so
 native workspace/code capabilities remain available alongside OpenClaw
 dynamic tools routed through the app-server `item/tool/call` bridge. An
 ordinary OpenClaw sandbox or restricted tool policy disables native code mode
-unless you opt into the experimental sandbox exec-server path. Paired-device
-`remote-exec` instead uses its placement-owned environment without that
-experimental flag.
+unless you opt into the experimental sandbox exec-server path. Node-backed
+`remote-exec` on a paired device or cloud worker instead uses its
+placement-owned environment without that experimental flag.
 
 Eligible native-shell turns also retain `gateway_exec` and `gateway_process`
 as a distinct OpenClaw execution path. Use `gateway_exec` only when a command
@@ -91,12 +91,12 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Codex app-server `0.147.0` or newer. The plugin ships and manages the exact
-  `@openai/codex` `0.148.0` artifact, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.149.1`. The plugin ships and manages
+  `@openai/codex` `0.149.1` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
-  app-servers must report valid SemVer at or above the supported minimum.
-  Versions newer than the managed artifact initialize with a warning;
-  acceptance permits an attempt and is not readiness or capability proof.
+  app-servers must report a parseable semantic version of `0.149.0` or newer.
+  Newer versions continue with a compatibility warning and normal runtime
+  validation.
 - Node.js on the remote Codex app-server host when `remoteWorkspaceRoot` is set
   and cross-machine workspace attachments must be transferred.
 - Codex auth through `openclaw models auth login --provider openai`, an
@@ -237,6 +237,38 @@ processes. Normal Codex turns are supported, but `/btw` side questions are not
 yet bound to paired-device placement and fail with an actionable explanation.
 See [Cloud workers and paired-device placement](/gateway/cloud-workers) and
 [Node command policy](/nodes#command-policy).
+
+## Run Codex on a cloud worker
+
+The bundled Crabbox provider supports both OpenClaw `worker-turn` and Codex
+`remote-exec`, so one configured cloud-worker profile is selectable for either
+harness. Choose the same **Cloud · profile** destination in New Session or
+Move Session after selecting a Codex model. Profile placement requires
+`operator.admin` and a managed Gateway worktree.
+
+Enable the Codex plugin and explicitly allow
+`codex.exec-server.stdio.v1` on the Gateway, as shown in
+[Run Codex on a paired device](/plugins/codex-harness#run-codex-on-a-paired-device).
+The cloud image may include the exact-version bundled Codex plugin; otherwise,
+the profile setup or image must install the matching trusted official npm Codex
+plugin and its pinned platform-native Codex binary. Crabbox validates the
+bundled or prepared installation and preserves its provenance in the disposable
+node's isolated state without installing a plugin during enrollment. The Gateway
+checks the cloud node's current pairing and
+effectively invocable command before starting a Codex process; approve the
+critical allow-once request for each exec-server attempt.
+
+Codex runs its managed exec-server over the enrolled node's authenticated
+outbound connection without starting an OpenClaw worker child or consuming a
+worker slot. Its app-server, model connection, provider authentication, and
+transcript remain Gateway-owned. Process and filesystem access still have the
+node operating-system account's permissions, and only credential-free HTTP is
+forwarded. Workspace changes reconcile to the Gateway-owned worktree. A failed
+or disconnected attempt is terminal and requires a fresh attempt; it never
+resumes the remote process or falls back to Gateway-local or SSH execution.
+
+See [Cloud workers](/gateway/cloud-workers) for profile configuration,
+placement lifecycle, and cleanup.
 
 ## Share threads with Codex Desktop and CLI
 
@@ -920,12 +952,15 @@ from later tool events.
 The `codex` plugin registers `/codex` as a slash command on any channel that
 supports OpenClaw text commands.
 
-Native execution and control require an owner or an `operator.admin`
-Gateway client: binding or resuming threads, sending or stopping turns,
-changing model, fast-mode, or permission state, compacting or reviewing, and
-detaching a binding. Other authorized senders keep read-only status, help,
-account, model, thread, native goal, MCP server, skill, and binding inspection
-commands.
+Native execution, control, and host-wide inspection require an owner or an
+`operator.admin` Gateway client. This includes binding or resuming threads,
+sending or stopping turns, changing model, fast-mode, or permission state,
+compacting or reviewing, detaching a binding, and inspecting account details,
+host status, native threads, paired-node sessions, MCP servers, or skills.
+Other authorized senders retain help, model listings, and read-only inspection
+of their current conversation's binding, model, permissions, Fast mode, and
+native goal. Host-wide reads are restricted because they can expose other
+conversations, private workspaces, account identities, and connected services.
 
 Common forms:
 
@@ -1171,9 +1206,8 @@ dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Heartbeat collaboration instructions
-tell Codex to search for `heartbeat_respond` before ending a heartbeat turn
-when the tool is not already loaded.
+Scheduled heartbeat user messages identify `heartbeat_respond` when structured
+responses are enabled; the tool remains discoverable through Codex tool search.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
@@ -1491,12 +1525,11 @@ instead of a plain OpenAI API-key failure.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.
 
-**The app-server is rejected:** use Codex `0.147.0` or newer. OpenClaw rejects
-older, malformed, and unversioned servers. Same-version prereleases such as
-`0.147.0-alpha.2` remain below the stable minimum; build metadata such as
-`0.147.0+desktop` does not affect precedence. A newer external version is
-permitted to initialize rather than treated as proof of compatibility, so
-startup and capability operations can still fail with their normal diagnostics.
+**The app-server is rejected:** use Codex `0.149.0` or newer. Older, malformed,
+and unversioned servers are rejected. Newer semantic versions continue with a
+compatibility warning and normal runtime validation against the Codex version
+OpenClaw ships. Update or remove custom, remote, or desktop
+binary overrides that select another version.
 
 **`/codex status` cannot connect:** check that the `codex` plugin
 is enabled, that `plugins.allow` includes it when an allowlist is

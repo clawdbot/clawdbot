@@ -51,8 +51,8 @@ import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   buildModelsKeyboard,
   calculateTotalPages,
-  getModelsPageSize,
   parseModelCallbackData,
+  resolveModelListCallback,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -143,6 +143,7 @@ export function createTelegramCallbackRouter({
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
       const nativeCallbackCommand = parseTelegramNativeCommandCallbackData(data);
+      const hasReservedModelPrefix = data.startsWith("mdl1~");
       const hasReservedOpaquePrefix = hasTelegramOpaqueCallbackPrefix(data);
       const opaqueCallbackData = parseTelegramOpaqueCallbackData(callback.data?.trimStart());
       const genericCallbackText = data.startsWith("/") ? data : `callback_data: ${data}`;
@@ -171,7 +172,8 @@ export function createTelegramCallbackRouter({
         !isRuntimeControlCallback &&
         inlineButtonsUnavailable &&
         !nativeCallbackCommand &&
-        !hasReservedOpaquePrefix
+        !hasReservedOpaquePrefix &&
+        !hasReservedModelPrefix
       ) {
         return;
       }
@@ -227,7 +229,9 @@ export function createTelegramCallbackRouter({
 
       if (
         inlineButtonsUnavailable &&
-        ((nativeCallbackCommand && !legacyApprovalCallback) || hasReservedOpaquePrefix)
+        ((nativeCallbackCommand && !legacyApprovalCallback) ||
+          hasReservedOpaquePrefix ||
+          hasReservedModelPrefix)
       ) {
         await terminalizeUnavailableCallback();
         return;
@@ -308,6 +312,7 @@ export function createTelegramCallbackRouter({
       }
       if (
         !nativeCallbackCommand &&
+        !hasReservedModelPrefix &&
         !inlineButtonsUnavailable &&
         (await handleTelegramInteractiveCallback({
           accountId,
@@ -353,6 +358,10 @@ export function createTelegramCallbackRouter({
           authorizeCallback,
         })
       ) {
+        return;
+      }
+      if (hasReservedModelPrefix) {
+        await terminalizeUnavailableCallback();
         return;
       }
 
@@ -535,8 +544,18 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
 
-  if (modelCallback.type === "list") {
-    const { provider, page } = modelCallback;
+  if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
+    const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
+    if (!listSelection) {
+      await retryModelAction(() =>
+        editMessageWithButtons(
+          "This model picker is stale or ambiguous. Reopen /model and try again.",
+          buildTelegramModelsMenuButtons({ providers: providerInfos }),
+        ),
+      );
+      return true;
+    }
+    const { provider, page } = listSelection;
     const modelSet = byProvider.get(provider);
     if (!modelSet || modelSet.size === 0) {
       await retryModelAction(() =>
@@ -548,8 +567,7 @@ async function handleTelegramModelCallback(params: {
       return true;
     }
     const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
-    const pageSize = getModelsPageSize();
-    const totalPages = calculateTotalPages(models.length, pageSize);
+    const totalPages = calculateTotalPages(models.length);
     const safePage = Math.max(1, Math.min(page, totalPages));
     const currentModel =
       sessionState.model || `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
@@ -559,7 +577,6 @@ async function handleTelegramModelCallback(params: {
       currentModel,
       currentPage: safePage,
       totalPages,
-      pageSize,
       modelNames,
     });
     const text = formatModelsAvailableHeader({
@@ -573,7 +590,7 @@ async function handleTelegramModelCallback(params: {
     return true;
   }
 
-  if (modelCallback.type !== "select") {
+  if (modelCallback.type !== "select" && modelCallback.type !== "select-ref") {
     return true;
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });

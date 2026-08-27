@@ -21,7 +21,7 @@
       globalThis.__zod_globalConfig.jitless = true;
 
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1 };
+        var THEMES = { claw: 1, knot: 1, dash: 1, absolutely: 1, tide: 1, beacon: 1, phosphor: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -61,9 +61,25 @@
                 ? mode === "light"
                   ? "dash-light"
                   : "dash"
-                : mode === "light"
-                  ? "light"
-                  : "dark";
+                : theme === "absolutely"
+                  ? mode === "light"
+                    ? "absolutely-light"
+                    : "absolutely"
+                  : theme === "tide"
+                    ? mode === "light"
+                      ? "tide-light"
+                      : "tide"
+                    : theme === "beacon"
+                      ? mode === "light"
+                        ? "beacon-light"
+                        : "beacon"
+                      : theme === "phosphor"
+                        ? mode === "light"
+                          ? "phosphor-light"
+                          : "phosphor"
+                        : mode === "light"
+                          ? "light"
+                          : "dark";
           document.documentElement.setAttribute("data-theme", resolved);
           var resolvedMode = resolved.includes("light") ? "light" : "dark";
           document.documentElement.setAttribute("data-theme-mode", resolvedMode);
@@ -104,6 +120,38 @@
 
       html[data-theme="dash-light"] {
         background: #f7f2ec;
+      }
+
+      html[data-theme="absolutely"] {
+        background: #1c1c1a;
+      }
+
+      html[data-theme="absolutely-light"] {
+        background: #faf9f5;
+      }
+
+      html[data-theme="tide"] {
+        background: #10151b;
+      }
+
+      html[data-theme="tide-light"] {
+        background: #f7f9fb;
+      }
+
+      html[data-theme="beacon"] {
+        background: #000000;
+      }
+
+      html[data-theme="beacon-light"] {
+        background: #ffffff;
+      }
+
+      html[data-theme="phosphor"] {
+        background: #0a0f0a;
+      }
+
+      html[data-theme="phosphor-light"] {
+        background: #f4f7f4;
       }
 
       body {

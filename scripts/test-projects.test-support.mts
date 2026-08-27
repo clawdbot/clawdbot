@@ -562,6 +562,14 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ],
   ],
   [
+    "extensions/slack/src/channel-actions.ts",
+    [
+      "extensions/slack/src/actions.reactions-limit.test.ts",
+      "extensions/slack/src/channel-actions-setup-status.contract.test.ts",
+      "extensions/slack/src/message-tools.test.ts",
+    ],
+  ],
+  [
     "src/gateway/worker-environments/worker-turn-launcher.ts",
     [
       "src/gateway/worker-environments/worker-turn-launcher.test.ts",
@@ -1945,6 +1953,9 @@ function resolveToolingChangedTestTargets(changedPaths: string[], cwd = process.
       return null;
     }
     targets.push(...testTargets);
+    if (CHANNEL_PLUGIN_SHAPE_PARITY_WIRING_PATHS.has(changedPath)) {
+      targets.push(CHANNEL_PLUGIN_SHAPE_PARITY_TEST_TARGET);
+    }
   }
   return [...new Set(targets)];
 }
@@ -2277,7 +2288,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
     [packageAcceptance, crossOsReleaseChecks, pluginPrerelease, installDocker],
   ],
-  [/^\.github\/workflows\/docker-release\.yml$/u, ["src/dockerfile.test.ts"]],
+  [
+    /^\.github\/workflows\/docker-release\.yml$/u,
+    ["src/dockerfile.test.ts", "docker-channel-promote", "vercel-container-registry-publish"],
+  ],
   [/^\.github\/workflows\/install-smoke\.yml$/u, ["install-smoke-no-push-workflow", installDocker]],
   [/^\.github\/workflows\/openclaw-performance\.yml$/u, ["openclaw-performance-workflow"]],
   [/^\.github\/workflows\/plugin-prerelease\.yml$/u, [pluginPrerelease]],
@@ -2287,8 +2301,13 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     [crossOsReleaseChecks, "openclaw-cross-os-release-workflow", packageAcceptance],
   ],
   [
-    /^\.github\/workflows\/(?:openclaw-release-publish|package-acceptance)\.yml$/u,
-    [packageAcceptance],
+    /^\.github\/workflows\/openclaw-release-publish\.yml$/u,
+    [packageAcceptance, "vercel-container-registry-publish"],
+  ],
+  [/^\.github\/workflows\/package-acceptance\.yml$/u, [packageAcceptance]],
+  [
+    /^\.github\/workflows\/vercel-container-registry-publish\.yml$/u,
+    ["docker-channel-promote", "release-plan-producer", "vercel-container-registry-publish"],
   ],
   [
     /^\.github\/workflows\/plugin-clawhub-new\.yml$/u,
@@ -3046,7 +3065,9 @@ function shouldRouteChangedTargetWithoutImportGraph(changedPath: string) {
 }
 
 function resolvePromptSnapshotFixtureTargets(changedPath: string) {
-  if (!/^test\/fixtures\/agents\/prompt-snapshots\/.+\.(?:json|md)$/u.test(changedPath)) {
+  if (
+    !/^test\/fixtures\/agents\/prompt-snapshots\/.+\.(?:json|md(?:\.diff)?)$/u.test(changedPath)
+  ) {
     return null;
   }
   return ["test/scripts/prompt-snapshots.test.ts"];

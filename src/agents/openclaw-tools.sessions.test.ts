@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  configureExecutionDecisionWorkSink,
+  type ExecutionDecisionWork,
+} from "../audit/execution-decision-work.js";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -50,6 +55,7 @@ import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { compactToolOutputHint } from "./tool-schema-hints.js";
 import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
@@ -1198,6 +1204,11 @@ describe("sessions tools", () => {
       }
       return {};
     });
+    const decisionWork: ExecutionDecisionWork[] = [];
+    const clearDecisionSink = configureExecutionDecisionWorkSink((work) => {
+      decisionWork.push(work);
+      return true;
+    });
     try {
       const tool = getSessionTool("sessions_send", {
         agentSessionKey: requesterSessionKey,
@@ -1209,12 +1220,25 @@ describe("sessions tools", () => {
         } as OpenClawConfig,
       });
 
-      const result = await tool.execute("scoped-send", {
-        sessionKey: targetSessionKey,
-        message: "Please check the main session",
-        timeoutSeconds: 0,
-        watch: true,
+      const token = createExecutionIdentityAdmissionToken("scoped-session-send", {
+        contextId: "scoped-session-send-context",
+        executionId: "scoped-session-send-execution",
       });
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: requesterSessionKey,
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        async () =>
+          await tool.execute("scoped-send", {
+            sessionKey: targetSessionKey,
+            message: "Please check the main session",
+            timeoutSeconds: 0,
+            watch: true,
+          }),
+      );
 
       expect(result.details).toMatchObject({
         status: "accepted",
@@ -1222,9 +1246,82 @@ describe("sessions tools", () => {
         watched: false,
       });
       expect(calls.map((call) => call.method)).toEqual(["agent"]);
+      expect(decisionWork).toHaveLength(1);
+      expect(decisionWork[0]).toMatchObject({
+        receipt: {
+          action: { family: "session", operation: "send" },
+          decision: { outcome: "allowed", reasonCode: "session_send_committed" },
+          enforcement: { coverageState: "attribution-only" },
+        },
+        refs: {
+          target: { namespace: "session", value: `["main","${targetSessionKey}"]` },
+        },
+      });
     } finally {
+      clearDecisionSink();
       unregister();
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records the admitted target on the waited-send branch", async () => {
+    const targetSessionKey = "agent:main:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: { runId?: string } };
+      if (request.method === "agent") {
+        return { runId: "run-waited-audit", status: "accepted", acceptedAt: 1 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: request.params?.runId, status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [{ role: "assistant", content: "REPLY_SKIP", timestamp: 2 }] };
+      }
+      return {};
+    });
+    const decisionWork: ExecutionDecisionWork[] = [];
+    const clearDecisionSink = configureExecutionDecisionWorkSink((work) => {
+      decisionWork.push(work);
+      return true;
+    });
+    const token = createExecutionIdentityAdmissionToken("waited-session-send", {
+      contextId: "waited-session-send-context",
+      executionId: "waited-session-send-execution",
+    });
+    const tool = getSessionTool("sessions_send", {
+      agentSessionKey: "agent:main:dashboard:requester",
+      config: TEST_CONFIG,
+    });
+    try {
+      const result = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:dashboard:requester",
+          executionIdentityToken: token,
+          receiptAuthority: () => true,
+        },
+        async () =>
+          await tool.execute("waited-send-audit", {
+            sessionKey: targetSessionKey,
+            message: "wait without reply-back",
+            timeoutSeconds: 1,
+          }),
+      );
+
+      expect(result.details).toMatchObject({ status: "no_reply", sessionKey: targetSessionKey });
+      expect(decisionWork).toHaveLength(1);
+      expect(decisionWork[0]).toMatchObject({
+        receipt: {
+          action: { family: "session", operation: "send" },
+          decision: { outcome: "allowed", reasonCode: "session_send_committed" },
+          enforcement: { coverageState: "attribution-only" },
+        },
+        refs: {
+          target: { namespace: "session", value: `["main","${targetSessionKey}"]` },
+        },
+      });
+    } finally {
+      clearDecisionSink();
     }
   });
 

@@ -69,7 +69,7 @@ type RunLifecycleHost = Omit<
   chatRunStatus?: ChatRunUiStatus | null;
   chatRunStatusClearTimer?: TimerHandle | number | null;
   sessionsResult?: SessionsListResult | null;
-  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal" | "setModelOverride">>;
+  sessions?: Partial<Pick<SessionCapability, "reconcileRunTerminal">>;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   requestUpdate?: () => void;
 };
@@ -562,9 +562,11 @@ export function reconcileChatRunFromCurrentSessionRow(
 }
 
 export function reconcileChatRunAfterSessionStatePublication(host: RunLifecycleHost): boolean {
-  const row = currentSessionRow(host);
-  if (host.chatRunId && row?.lastRunId === host.chatRunId) {
-    return reconcileChatRunFromSessionRow(host, row, { publishRunStatus: false });
+  if (host.chatRunId) {
+    const row = currentSessionRow(host);
+    if (row?.lastRunId === host.chatRunId) {
+      return reconcileChatRunFromSessionRow(host, row, { publishRunStatus: false });
+    }
   }
   // Both session subscriptions and direct event reconciliation can republish
   // canonical rows after the local terminal projection; guard both paths.

@@ -22,6 +22,7 @@ import type {
   WorkerSessionPlacementRetirementService,
   WorkerSessionPlacementStore,
 } from "./worker-environments/placement-store.js";
+import { resolveSessionWorkerPlacementMutationError } from "./worker-environments/session-placement-lifecycle.js";
 
 const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsHandlerTestHarness();
 
@@ -147,6 +148,35 @@ function sequencedPlacementService(
     retireSessionPlacement: vi.fn(retire),
   };
 }
+
+test.each([
+  { action: "fork" as const, allowed: true },
+  { action: "restore" as const, allowed: false },
+  { action: "rewind" as const, allowed: false },
+  { action: "switch" as const, allowed: false },
+])("stopped cloud placement only permits identity-preserving $action", ({ action, allowed }) => {
+  for (const state of ["reclaimed", "failed"] as const) {
+    const sessionId = `stopped-${state}-${action}`;
+    const placement = terminalPlacementRecord(sessionId, state);
+    const placementService = sequencedPlacementService([placement]);
+    const error = resolveSessionWorkerPlacementMutationError({
+      action,
+      context: {
+        workerEnvironmentService: { get: () => ({ state: "destroyed" }) } as never,
+        workerSessionPlacementService: placementService,
+      },
+      key: placement.sessionKey,
+      sessionId,
+    });
+
+    if (allowed) {
+      expect(error).toBeUndefined();
+    } else {
+      expect(error?.message).toContain(`cannot ${action} while cloud worker placement is ${state}`);
+    }
+    expect(placementService.retireSessionPlacement).not.toHaveBeenCalled();
+  }
+});
 
 async function beginClaimedLocalTurn(params: {
   events: string[];
@@ -576,13 +606,35 @@ test.each([
     name: "ordinary reset",
     sessionKey: "discord:group:local-reset",
     incognito: false,
+    state: "local" as const,
   },
   {
     name: "incognito reset",
     sessionKey: "agent:main:dashboard:incognito-local-reset",
     incognito: true,
+    state: "local" as const,
   },
-])("sessions.reset retires the old local placement before $name", async (testCase) => {
+  {
+    name: "reclaimed cloud reset",
+    sessionKey: "discord:group:reclaimed-reset",
+    incognito: false,
+    state: "reclaimed" as const,
+  },
+  {
+    name: "failed cloud reset after worker destruction",
+    sessionKey: "discord:group:destroyed-worker-reset",
+    incognito: false,
+    state: "failed" as const,
+    environment: { state: "destroyed" },
+  },
+  {
+    name: "failed cloud reset after proven bootstrap teardown",
+    sessionKey: "discord:group:failed-worker-reset",
+    incognito: false,
+    state: "failed" as const,
+    environment: { state: "failed", leaseId: null },
+  },
+])("sessions.reset retires the old placement before $name", async (testCase) => {
   await createSessionStoreDir();
   const sessionId = testCase.incognito
     ? await (async () => {
@@ -602,14 +654,25 @@ test.each([
       entries: { [testCase.sessionKey]: sessionStoreEntry(sessionId) },
     });
   }
-  const placementService = sequencedPlacementService([placementRecord(sessionId, "local")], () => {
+  const placement =
+    testCase.state === "local"
+      ? placementRecord(sessionId, "local")
+      : terminalPlacementRecord(sessionId, testCase.state);
+  const placementService = sequencedPlacementService([placement], () => {
     expect(loadSessionEntry(testCase.sessionKey).entry?.sessionId).toBe(sessionId);
   });
 
   const reset = await directSessionReq(
     "sessions.reset",
     { key: testCase.sessionKey },
-    { context: { workerSessionPlacementService: placementService } },
+    {
+      context: {
+        ...(testCase.state === "failed"
+          ? { workerEnvironmentService: { get: () => testCase.environment } as never }
+          : {}),
+        workerSessionPlacementService: placementService,
+      },
+    },
   );
 
   if (!reset.ok) {
@@ -618,8 +681,8 @@ test.each([
   expect(placementService.retireSessionPlacement).toHaveBeenCalledWith({
     status: "retirement-required",
     sessionId,
-    expectedState: "local",
-    expectedGeneration: 0,
+    expectedState: testCase.state,
+    expectedGeneration: placement.generation,
   });
   expect(loadSessionEntry(testCase.sessionKey).entry === undefined).toBe(testCase.incognito);
 });

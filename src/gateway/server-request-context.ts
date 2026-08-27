@@ -44,6 +44,7 @@ type GatewayRequestContextParams = {
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  questionManager?: GatewayRequestContext["questionManager"];
   cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
@@ -195,6 +196,7 @@ export function createGatewayRequestContext(
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    questionManager: params.questionManager,
     scopeUpgradeCoordinator,
     cancelRunBoundApprovals: params.cancelRunBoundApprovals
       ? (runId) => params.cancelRunBoundApprovals!(runId, context)
@@ -364,6 +366,21 @@ export function createGatewayRequestContext(
         }
       }
       params.disconnectDeviceTransports?.(deviceId, opts);
+    },
+    disconnectClientsForUserProfile: (profileId: string) => {
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
+          continue;
+        }
+        // Invalidate before closing so buffered requests cannot retain revoked role scopes.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason = "operator-role-changed";
+        try {
+          gatewayClient.socket.close(4001, "operator role changed");
+        } catch {
+          /* ignore */
+        }
+      }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
       disconnectAllSharedGatewayAuthClients(params.clients);

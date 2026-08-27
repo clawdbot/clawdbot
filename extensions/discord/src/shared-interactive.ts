@@ -1,6 +1,6 @@
 // Discord plugin module implements shared interactive behavior.
 import {
-  reduceLegacyInteractiveReply,
+  legacyInteractiveReplyToPresentation,
   resolveMessagePresentationActionValue,
   resolveMessagePresentationButtonAction,
   resolveMessagePresentationOptionAction,
@@ -180,28 +180,9 @@ function appendDiscordSelectBlock(
 export function buildDiscordInteractiveComponents(
   interactive?: LegacyInteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
-  const blocks = reduceLegacyInteractiveReply(
-    interactive,
-    [] as NonNullable<DiscordComponentMessageSpec["blocks"]>,
-    (state, block) => {
-      if (block.type === "text") {
-        const text = block.text.trim();
-        if (text) {
-          state.push({ type: "text", text });
-        }
-        return state;
-      }
-      if (block.type === "buttons") {
-        appendDiscordButtonBlocks(state, block.buttons);
-        return state;
-      }
-      if (block.type === "select") {
-        appendDiscordSelectBlock(state, block);
-      }
-      return state;
-    },
+  return buildDiscordPresentationComponents(
+    interactive ? legacyInteractiveReplyToPresentation(interactive) : undefined,
   );
-  return blocks.length > 0 ? { blocks } : undefined;
 }
 
 export function buildDiscordPresentationComponents(

@@ -10,11 +10,13 @@ const mocks = vi.hoisted(() => ({
   runGeminiEmbeddingBatches: vi.fn(async () => new Map([["0", [1, 0]]])),
 }));
 
-vi.mock("./embedding-provider.js", () => ({
-  DEFAULT_GEMINI_EMBEDDING_MODEL: "gemini-embedding-001",
-  createGeminiEmbeddingProvider: mocks.createGeminiEmbeddingProvider,
-  buildGeminiEmbeddingRequest: vi.fn(),
-}));
+vi.mock("./embedding-provider.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./embedding-provider.js")>();
+  return {
+    ...actual,
+    createGeminiEmbeddingProvider: mocks.createGeminiEmbeddingProvider,
+  };
+});
 
 vi.mock("./embedding-batch.js", () => ({
   runGeminiEmbeddingBatches: mocks.runGeminiEmbeddingBatches,
@@ -24,15 +26,15 @@ import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter
 
 const provider: MemoryEmbeddingProvider = {
   id: "gemini",
-  model: "gemini-embedding-2-preview",
+  model: "gemini-embedding-2",
   embedQuery: async () => [1, 0],
   embedBatch: async (texts) => texts.map(() => [1, 0]),
 };
 
 const clientBase = {
   baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-  model: "gemini-embedding-2-preview",
-  modelPath: "models/gemini-embedding-2-preview",
+  model: "gemini-embedding-2",
+  modelPath: "models/gemini-embedding-2",
   outputDimensionality: 768,
 };
 
@@ -44,7 +46,7 @@ async function createAdapterWithHeaders(headers: Record<string, string>) {
   return await geminiMemoryEmbeddingProviderAdapter.create({
     config: {} as never,
     provider: "gemini",
-    model: "gemini-embedding-2-preview",
+    model: "gemini-embedding-2",
     fallback: "none",
   });
 }
@@ -53,6 +55,55 @@ describe("Gemini memory embedding adapter", () => {
   beforeEach(() => {
     mocks.createGeminiEmbeddingProvider.mockReset();
     mocks.runGeminiEmbeddingBatches.mockClear();
+  });
+
+  it.each([
+    "gemini-embedding-2",
+    "gemini-embedding-2-preview",
+    "models/gemini-embedding-2",
+    "gemini/gemini-embedding-2",
+    "google/gemini-embedding-2",
+  ])("accepts multimodal memory for %s", (model) => {
+    expect(geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({ model })).toBe(
+      true,
+    );
+  });
+
+  it("keeps legacy Gemini embeddings text-only", () => {
+    expect(
+      geminiMemoryEmbeddingProviderAdapter.supportsMultimodalEmbeddings?.({
+        model: "gemini-embedding-001",
+      }),
+    ).toBe(false);
+  });
+
+  it("formats stable Gemini asynchronous batch documents without a task type", async () => {
+    const result = await createAdapterWithHeaders({});
+
+    await result.runtime?.batchEmbed?.({
+      agentId: "main",
+      chunks: [{ text: "remember this" }],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+      debug: () => {},
+    });
+
+    expect(mocks.runGeminiEmbeddingBatches).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requests: [
+          {
+            custom_id: "0",
+            request: {
+              content: { parts: [{ text: "title: none | text: remember this" }] },
+              model: "models/gemini-embedding-2",
+              outputDimensionality: 768,
+            },
+          },
+        ],
+      }),
+    );
   });
 
   it("keeps durable identity stable across generated client-version changes", async () => {

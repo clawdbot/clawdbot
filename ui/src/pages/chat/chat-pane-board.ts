@@ -50,6 +50,16 @@ import {
 
 export abstract class ChatPaneBoard extends ChatPaneHistory {
   protected commitSidebarLayout(layout: SidebarLayout): void {
+    // User panel intents and the Board mode must move together. Restored state
+    // bypasses this seam so loading a session never mutates its active tab.
+    const board = this.resolveBoardView();
+    if (board.hasBoard && board.face === "dashboard" && board.provider.canMutate) {
+      if (layout.open === true && board.dock === "hidden") {
+        this.handleBoardDockChange(board.reopenDock);
+      } else if (layout.open !== true && (board.dock === "left" || board.dock === "right")) {
+        this.handleBoardDockChange("hidden");
+      }
+    }
     const state = this.state;
     if (!state) {
       return;

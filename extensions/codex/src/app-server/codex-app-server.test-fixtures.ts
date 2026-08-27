@@ -33,6 +33,7 @@ export function threadStartResult(threadId = "thread-1", cwd = "/tmp/openclaw-co
       status: { type: "idle" },
       path: null,
       cwd,
+      projectId: null,
       cliVersion: CODEX_APP_SERVER_VERSION,
       source: "unknown",
       agentNickname: null,

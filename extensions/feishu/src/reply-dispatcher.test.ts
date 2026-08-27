@@ -2517,20 +2517,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(fallbackText).not.toContain(mediaPath);
   });
 
-  it("falls back to legacy mediaUrl when mediaUrls is an empty array", async () => {
-    useNonStreamingAutoAccount();
-    const { options } = createDispatcherHarness();
-    await options.deliver(
-      { text: "caption", mediaUrl: "https://example.com/a.png", mediaUrls: [] },
-      { kind: "final" },
-    );
+  it.each([{ mediaUrls: [] }, { mediaUrls: ["   "] }])(
+    "falls back to legacy mediaUrl when mediaUrls has no usable entries",
+    async ({ mediaUrls }) => {
+      useNonStreamingAutoAccount();
+      const { options } = createDispatcherHarness();
+      await options.deliver(
+        { text: "caption", mediaUrl: "https://example.com/a.png", mediaUrls },
+        { kind: "final" },
+      );
 
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
-    expectMockArgFields(sendMediaFeishuMock, "media send params", {
-      mediaUrl: "https://example.com/a.png",
-    });
-  });
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendMediaFeishuMock, "media send params", {
+        mediaUrl: "https://example.com/a.png",
+      });
+    },
+  );
 
   it("sends attachments after streaming final markdown replies", async () => {
     const { options } = createDispatcherHarness({

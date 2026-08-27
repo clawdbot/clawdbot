@@ -1,4 +1,5 @@
 // Memory Core tests cover manager provider lifecycle availability behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
@@ -301,6 +302,8 @@ describe("memory index", () => {
     const indexedProviderKey = fields.providerKey;
     const firstContent = "# Log\nFirst memory line indexed during provider fallback.";
     const secondContent = "# Log\nSecond memory line indexed during provider fallback.";
+    await fs.writeFile(path.join(fixture.paths.memory, "generation-race-first.md"), firstContent);
+    await fs.writeFile(path.join(fixture.paths.memory, "generation-race-second.md"), secondContent);
 
     let releaseFirstEmbedding: () => void = () => {};
     let releaseSecondEmbedding: () => void = () => {};

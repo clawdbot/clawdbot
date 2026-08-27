@@ -1118,6 +1118,26 @@ describe("talk.config handler", () => {
     },
   );
 
+  it("prefers the user accent over the operator seam color", async () => {
+    markTalkOwnerCold("tts");
+    const runtimeConfig = createTalkConfig("healthy-talk-key");
+    mocks.getSpeechProvider.mockReturnValue({ id: "acme" });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      config: { ...runtimeConfig, ui: { seamColor: "#123456", prefs: { accent: "#52c99a" } } },
+    });
+    const respond = vi.fn();
+
+    await callTalkHandler("talk.config", {
+      params: {},
+      client: { connect: { scopes: ["operator.read"] } },
+      respond,
+      context: { getRuntimeConfig: () => runtimeConfig },
+    });
+
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    expect(respond.mock.calls[0]?.[1]?.config?.ui).toEqual({ seamColor: "#52c99a" });
+  });
+
   it("projects the runtime realtime transport when source config is invalid", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       path: "/tmp/openclaw.json",

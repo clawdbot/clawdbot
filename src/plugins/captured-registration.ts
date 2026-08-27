@@ -1,5 +1,8 @@
 // Captures plugin registrations for controlled registry assembly.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   AgentToolResultMiddleware,
@@ -23,7 +26,7 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-types.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRuntime } from "./runtime/index.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import type {
@@ -179,7 +182,7 @@ export function createCapturedPluginRegistration(params?: {
       source: pluginSource,
       registrationMode: params?.registrationMode ?? "full",
       config: params?.config ?? ({} as OpenClawConfig),
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       logger: noopLogger,
       resolvePath: (input) => input,
       handlers: {
@@ -202,7 +205,7 @@ export function createCapturedPluginRegistration(params?: {
               return normalized;
             })
             .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = normalizeStringEntries([
+          const commands = normalizeUniqueStringEntries([
             ...(opts?.commands ?? []),
             ...descriptors.map((descriptor) => descriptor.name),
           ]);

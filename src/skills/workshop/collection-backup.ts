@@ -41,14 +41,11 @@ export async function createCollectionBackup(params: {
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
   const currentByName = new Map(params.current.map((skill) => [skill.name, skill]));
-  // A restore must never rewrite a kept, externally owned skill. Back up only paths
+  // A restore must never rewrite an unlisted, externally owned skill. Back up only paths
   // this transaction may mutate; newly created result paths are removed on restore.
   const skillDirs = [
     ...new Set(
       params.plan.flatMap((entry) => {
-        if (entry.action === "keep") {
-          return [];
-        }
         const existing = currentByName.get(entry.name);
         return existing ? [path.relative(params.workspaceDir, existing.baseDir)] : [];
       }),

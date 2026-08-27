@@ -22,6 +22,7 @@ import { createGatewayServerVitestConfig } from "../vitest/vitest.gateway-server
 import { createMediaUnderstandingVitestConfig } from "../vitest/vitest.media-understanding.config.ts";
 import { createMediaVitestConfig } from "../vitest/vitest.media.config.ts";
 import { createPluginsVitestConfig } from "../vitest/vitest.plugins.config.ts";
+import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 import { createToolingVitestConfig } from "../vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "../vitest/vitest.tui.config.ts";
 import { createUiIsolatedVitestConfig } from "../vitest/vitest.ui-isolated.config.ts";
@@ -112,9 +113,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("projects cache-warm groups from the owned node test plan", () => {
     const groups = createVitestCacheWarmGroups();
-    expect(groups).toHaveLength(10);
+    expect(groups).toHaveLength(11);
     expect(groups.every((group) => group.configs.length === 1)).toBe(true);
-    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 9);
+    expect(new Set(groups.flatMap((group) => group.configs))).toHaveProperty("size", 10);
     expect(new Set(groups.map((group) => group.shard_name))).toHaveProperty("size", groups.length);
 
     const coreStripeGroups = groups.filter(
@@ -145,9 +146,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const gatewayGroups = groups.filter((group) =>
       group.shard_name.startsWith("cache-warm:agentic-gateway-methods:"),
     );
-    expect(gatewayGroups).toHaveLength(1);
-    expect(gatewayGroups[0]?.includePatterns).toBeUndefined();
-    expect(gatewayGroups[0]?.env).toBeUndefined();
+    expect(gatewayGroups.map((group) => group.configs[0]).toSorted()).toEqual([
+      "test/vitest/vitest.gateway-methods-isolated.config.ts",
+      "test/vitest/vitest.gateway-methods.config.ts",
+    ]);
+    expect(gatewayGroups.every((group) => group.includePatterns === undefined)).toBe(true);
+    expect(gatewayGroups.every((group) => group.env === undefined)).toBe(true);
 
     const autoReplyGroups = groups.filter((group) =>
       group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
@@ -827,6 +831,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(configs).not.toContain("test/vitest/vitest.extension-telegram.config.ts");
   });
 
+  it("keeps compact agentic config ownership aligned with the full agentic project set", () => {
+    const fullAgenticShard = fullSuiteVitestShards.find((shard) => shard.name === "agentic");
+    const intentionallyExcludedConfigs = new Set(["test/vitest/vitest.channels.config.ts"]);
+    const expectedConfigs = (fullAgenticShard?.projects ?? [])
+      .filter((config) => !intentionallyExcludedConfigs.has(config))
+      .toSorted((left, right) => left.localeCompare(right));
+    const actualConfigs = [
+      ...new Set(
+        createNodeTestShards()
+          .filter((shard) => shard.shardName.startsWith("agentic-"))
+          .flatMap((shard) => shard.configs),
+      ),
+    ].toSorted((left, right) => left.localeCompare(right));
+
+    expect(fullAgenticShard).toBeDefined();
+    expect(actualConfigs).toEqual(expectedConfigs);
+  });
+
   it("marks only dist-dependent shards for built artifact restore", () => {
     const requiresDistShardNames = createNodeTestShards()
       .filter((shard) => shard.requiresDist)
@@ -850,6 +872,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     // Stripes partition the tooling files: no overlap, nothing dropped.
     const stripeFiles = stripes.flatMap((stripe) => stripe.includePatterns ?? []);
     expect(new Set(stripeFiles).size).toBe(stripeFiles.length);
+    expect(
+      stripes.find((stripe) =>
+        stripe.includePatterns?.includes(
+          "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+        ),
+      )?.pretestBuildMode,
+    ).toBe("runtime");
     expect(
       toolingShards.find((shard) => shard.shardName === "core-tooling-isolated"),
     ).toMatchObject({
@@ -1503,7 +1532,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(gatewayMethodsShard).toEqual({
       checkName: "checks-node-agentic-gateway-methods",
       shardName: "agentic-gateway-methods",
-      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      configs: [
+        "test/vitest/vitest.gateway-methods.config.ts",
+        "test/vitest/vitest.gateway-methods-isolated.config.ts",
+      ],
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });

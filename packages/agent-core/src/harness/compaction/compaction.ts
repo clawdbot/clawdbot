@@ -294,6 +294,9 @@ function countContentBlockChars(
 
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return 0;
+  }
   let chars = 0;
   const harnessMessage = message as HarnessMessage;
 
@@ -334,9 +337,6 @@ export function estimateTokens(message: AgentMessage): number {
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
     }
     case "bashExecution": {
-      if (harnessMessage.excludeFromContext === true) {
-        return 0;
-      }
       chars =
         estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
       return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);

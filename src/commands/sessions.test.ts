@@ -1,5 +1,6 @@
 // Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import {
   assignSessionOwner,
   recordSessionParticipant,
@@ -16,9 +17,6 @@ import {
   writeStore,
 } from "./sessions.test-helpers.js";
 
-// Disable colors for deterministic snapshots.
-process.env.FORCE_COLOR = "0";
-
 mockSessionsConfig();
 
 import { sessionsCommand } from "./sessions.js";
@@ -31,6 +29,7 @@ describe("sessionsCommand", () => {
 
   afterEach(() => {
     resetMockSessionsConfig();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -727,63 +726,45 @@ describe("sessionsCommand", () => {
     ]);
   });
 
-  it("rejects invalid --active values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-invalid",
+  it.each([
+    {
+      name: "invalid active minutes",
+      options: { active: "0" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "partially numeric active minutes",
+      options: { active: "10m" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+    {
+      name: "an invalid limit",
+      options: { limit: "0" },
+      message: '--limit must be a positive integer or "all", for example --limit 25.',
+    },
+    {
+      name: "active minutes before an invalid limit",
+      options: { active: "0", limit: "0" },
+      message: "--active must be a positive number of minutes, for example --active 30.",
+    },
+  ])("rejects $name before reading session stores", async ({ options, message }) => {
+    const listSessionEntries = vi.spyOn(
+      await import("../config/sessions/session-accessor.js"),
+      "listSessionEntriesReadOnly",
     );
-    const { runtime, errors } = makeRuntime();
+    const { runtime, logs, errors } = makeRuntime();
+    const runtimeExit = vi.spyOn(runtime, "exit");
+    const execution = sessionsCommand(options, runtime);
 
-    await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    cleanupStore(store);
-  });
-
-  it("rejects partial --active values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-active-partial",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, active: "10m" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      "--active must be a positive number of minutes, for example --active 30.",
-    ]);
-
-    cleanupStore(store);
-  });
-
-  it("rejects invalid --limit values", async () => {
-    const store = await writeStore(
-      {
-        "agent:main:demo": {
-          sessionId: "demo",
-          updatedAt: Date.now() - 5 * 60_000,
-        },
-      },
-      "sessions-limit-invalid",
-    );
-    const { runtime, errors } = makeRuntime();
-
-    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors).toStrictEqual([
-      '--limit must be a positive integer or "all", for example --limit 25.',
-    ]);
-
-    cleanupStore(store);
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
+    expect(logs).toEqual([]);
+    expect(errors).toEqual([]);
+    expect(runtimeExit).not.toHaveBeenCalled();
+    expect(listSessionEntries).not.toHaveBeenCalled();
   });
 });

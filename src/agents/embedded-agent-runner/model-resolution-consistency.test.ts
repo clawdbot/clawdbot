@@ -68,6 +68,10 @@ vi.mock("./model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
 }));
 
+vi.mock("../provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../harness/runtime-plugin.js", () => ({
   ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
 }));

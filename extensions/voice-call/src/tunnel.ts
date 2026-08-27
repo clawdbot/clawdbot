@@ -1,6 +1,5 @@
 // Voice Call plugin module implements tunnel behavior.
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   appendBoundedChildOutput,
@@ -16,7 +15,6 @@ import {
 const NGROK_LOG_BUFFER_MAX_CHARS = 16_384;
 const NGROK_ERROR_MARKER = "ERR_NGROK";
 const NGROK_STDERR_TAIL_MAX_CHARS = NGROK_ERROR_MARKER.length - 1;
-const TUNNEL_COMMAND_OUTPUT_MAX_BYTES = 16_384;
 const NGROK_STOP_GRACE_MS = 2_000;
 const NGROK_FORCE_KILL_WAIT_MS = 1_000;
 
@@ -119,11 +117,6 @@ async function startNgrokTunnel(config: {
   authToken?: string;
   domain?: string;
 }): Promise<TunnelResult> {
-  // Set auth token if provided
-  if (config.authToken) {
-    await runNgrokCommand(["config", "add-authtoken", config.authToken]);
-  }
-
   // Build ngrok command args
   const args = ["http", String(config.port), "--log", "stdout", "--log-format", "json"];
 
@@ -135,6 +128,7 @@ async function startNgrokTunnel(config: {
   return new Promise((resolve, reject) => {
     const proc = spawn("ngrok", args, {
       stdio: ["ignore", "pipe", "pipe"],
+      ...(config.authToken ? { env: { ...process.env, NGROK_AUTHTOKEN: config.authToken } } : {}),
     });
 
     // Startup settlement and OS process closure are separate: the deadline can
@@ -254,28 +248,6 @@ async function startNgrokTunnel(config: {
       }
     });
   });
-}
-
-/**
- * Run an ngrok command and wait for completion.
- */
-async function runNgrokCommand(args: string[]): Promise<string> {
-  const result = await runCommandWithTimeout(["ngrok", ...args], {
-    killProcessTree: true,
-    maxOutputBytes: TUNNEL_COMMAND_OUTPUT_MAX_BYTES,
-    outputCapture: "tail",
-    timeoutMs: 30_000,
-  });
-  if (result.termination === "timeout") {
-    throw new Error("ngrok command timed out");
-  }
-  if (result.code === 0) {
-    return result.stdout;
-  }
-  const output = result.stderr
-    ? { text: result.stderr, truncated: Boolean(result.stderrTruncatedBytes) }
-    : { text: result.stdout, truncated: Boolean(result.stdoutTruncatedBytes) };
-  throw new Error(`ngrok command failed: ${formatBoundedChildOutput(output)}`);
 }
 
 /**

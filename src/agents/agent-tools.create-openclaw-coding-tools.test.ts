@@ -2479,13 +2479,16 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("records ordinary write, edit, and apply_patch memory provenance from turn taint", async () => {
+  it("records turn taint and source-session lineage for memory writes, edits, and patches", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-write-taint-"));
     let tainted = false;
     try {
       const tools = createOpenClawCodingTools({
         workspaceDir,
         config: { tools: { fs: { workspaceOnly: true } } },
+        sessionId: "source-session",
+        sessionKey: "agent:main:policy-session",
+        runSessionKey: "agent:main:durable-session",
         senderIsOwner: true,
         isTurnTainted: () => tainted,
       });
@@ -2518,8 +2521,16 @@ describe("createOpenClawCodingTools", () => {
           ),
         ),
       ).resolves.toEqual([
-        expect.objectContaining({ originClass: "untrusted" }),
-        expect.objectContaining({ originClass: "untrusted" }),
+        expect.objectContaining({
+          originClass: "untrusted",
+          sessionId: "source-session",
+          sessionKey: "agent:main:durable-session",
+        }),
+        expect.objectContaining({
+          originClass: "untrusted",
+          sessionId: "source-session",
+          sessionKey: "agent:main:durable-session",
+        }),
       ]);
       await expect(
         applyPatch("patch-existing-memory", {

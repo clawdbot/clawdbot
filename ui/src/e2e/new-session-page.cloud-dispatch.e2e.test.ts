@@ -1,11 +1,15 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
   TARGET_REPO,
   WORKSPACE,
   captureUiProof,
+  captureUiProofEnabled,
   controlUiSessionPath,
   controlUiSessionUrl,
   createNewSessionPageE2eSuite,
@@ -21,13 +25,25 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
   /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
+const cloudProfileRefreshProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "cloud-profile-refresh-retention",
+);
 
 suite.define(() => {
   it("dispatches a cloud target before sending its first turn and shows placement", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(cloudProfileRefreshProofDir, { recursive: true });
+    }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: cloudProfileRefreshProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
     });
     const page = await context.newPage();
     const runtimeLoad = createDeferred();
@@ -247,7 +263,7 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
       await pastePng(composer);
-      await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      await page.getByRole("img", { name: "pixel.png" }).waitFor();
       const startButton = page.getByRole("button", { name: "Start session" });
       await gateway.deferNext("environments.list");
       const profileRequests = (await gateway.getRequests("environments.list")).length;
@@ -268,6 +284,69 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(failedProfileRequests);
       await expect.poll(() => startButton.isDisabled()).toBe(false);
+
+      if (captureUiProofEnabled) {
+        await trigger.click();
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "01-before-refresh.png"),
+        });
+        await page.keyboard.press("Escape");
+      }
+
+      await page.clock.install();
+      await gateway.setMethodResponse("environments.list", {
+        __mockError: { code: "UNAVAILABLE", message: "profile catalog remains unavailable" },
+      });
+      await gateway.deferNext("environments.list");
+      const requestsBeforePersistentFailure = (await gateway.getRequests("environments.list"))
+        .length;
+      await gateway.emitGatewayEvent("node.runnerInventory.changed");
+      await gateway.waitForRequest("environments.list", {
+        after: requestsBeforePersistentFailure,
+      });
+      await expect.poll(() => startButton.isDisabled()).toBe(true);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "02-refresh-pending.png"),
+        });
+      }
+      await gateway.rejectDeferred("environments.list", {
+        code: "UNAVAILABLE",
+        message: "profile catalog remains unavailable",
+      });
+
+      for (const delayMs of CLOUD_PROFILE_RETRY_DELAYS_MS) {
+        const requestsBeforeRetry = (await gateway.getRequests("environments.list")).length;
+        await page.clock.runFor(delayMs + 1);
+        await gateway.waitForRequest("environments.list", { after: requestsBeforeRetry });
+      }
+      await page.clock.resume();
+      expect(await gateway.getRequests("environments.list")).toHaveLength(
+        requestsBeforePersistentFailure + 1 + CLOUD_PROFILE_RETRY_DELAYS_MS.length,
+      );
+      await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
+      await expect.poll(() => trigger.getAttribute("data-machine-class")).toBe("fast");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws · Fast");
+      await expect.poll(() => startButton.isDisabled()).toBe(false);
+      await trigger.click();
+      const retainedCloudProfile = place.getByRole("button", { name: "Cloud · aws" });
+      await expect.poll(() => retainedCloudProfile.isDisabled()).toBe(false);
+      expect(await retainedCloudProfile.getAttribute("title")).toBe(
+        "Cloud worker provider: crabbox",
+      );
+      await expect.poll(() => place.getByRole("button", { name: /Fast/ }).isVisible()).toBe(true);
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "03-after-retry-exhaustion.png"),
+        });
+      }
+      await page.keyboard.press("Escape");
 
       await startButton.click();
 
@@ -297,6 +376,13 @@ suite.define(() => {
         profileId: "aws",
         machineClass: "fast",
       });
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(cloudProfileRefreshProofDir, "04-session-dispatch.png"),
+        });
+      }
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
         .length;
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));

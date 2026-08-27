@@ -55,6 +55,86 @@ openclaw doctor --lint --only core/doctor/local-audio-acceleration --severity-mi
 
 The provider inventory reports the local fallback winner separately from global provider selection, plus capable, requested, and observed backend fields. After transcription runs, `/status` reports the requested or observed backend in the media line. Explicit audio-capable `tools.media.models` CLI entries still bypass auto-selection; use their backend-specific flags such as sherpa `--provider=cuda` or whisper.cpp `--no-gpu`/`--device`.
 
+## OpenAI transcription alongside ChatGPT/Codex OAuth
+
+An OpenAI API key and a ChatGPT/Codex OAuth login are separate credentials even
+though both use the `openai` provider. To keep OAuth first for normal text and
+reasoning requests while using an API key for speech-to-text, create a dedicated
+API-key profile and select it only on the audio model entry.
+
+Repeat these steps for every agent that can receive audio. For a single-agent
+installation, run them once for that agent.
+
+1. List the agent's OpenAI profiles so you can copy the exact OAuth profile ID:
+
+   ```bash
+   openclaw models auth list --agent AGENT_NAME_HERE --provider openai
+   ```
+
+2. Create a dedicated API-key profile. This command prompts for the key; paste it
+   into the prompt rather than putting it in the command line:
+
+   ```bash
+   openclaw models auth paste-api-key --agent AGENT_NAME_HERE --provider openai --profile-id openai:CUSTOM_PROFILE_NAME_HERE
+   ```
+
+   Example:
+
+   ```bash
+   openclaw models auth paste-api-key --agent smith --provider openai --profile-id openai:audio
+   ```
+
+3. Put the OAuth profile first and the audio API-key profile second in the agent's
+   OpenAI auth order. Replace the first profile ID with the exact OAuth profile ID
+   reported by the list command:
+
+   ```bash
+   openclaw models auth order set --agent AGENT_NAME_HERE --provider openai openai:YOUR_OPENAI_ACCOUNT_EMAIL_ADDRESS openai:CUSTOM_PROFILE_NAME_HERE
+   ```
+
+   Example:
+
+   ```bash
+   openclaw models auth order set --agent smith --provider openai openai:youremailaddress@email.com openai:audio
+   ```
+
+4. Configure the OpenAI transcription model and explicitly select the API-key
+   profile:
+
+   ```json5
+   {
+     tools: {
+       media: {
+         models: [
+           {
+             provider: "openai",
+             model: "gpt-transcribe",
+             profile: "openai:audio",
+             baseUrl: "https://api.openai.com/v1",
+             capabilities: ["audio"],
+           },
+         ],
+         audio: { enabled: true },
+       },
+     },
+   }
+   ```
+
+   If you chose a different custom profile name, use that exact profile ID in
+   `profile`. You can also substitute `gpt-4o-mini-transcribe` for the model.
+
+The `profile` field is not required when OpenClaw can unambiguously select a
+compatible API-key profile, but it is strongly recommended. Explicit selection
+keeps audio routing deterministic if another OpenAI API-key profile exists now or
+is added later. The auth order still keeps the OAuth profile first for ordinary
+provider resolution.
+
+<Warning>
+Do not set `models.providers.openai.apiKey` merely to enable transcription on an
+installation that uses ChatGPT/Codex OAuth for normal inference. That setting is
+provider-wide rather than scoped to the audio model entry.
+</Warning>
+
 ## Config examples
 
 ### Provider + CLI fallback (OpenAI + Whisper CLI)

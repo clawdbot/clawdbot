@@ -92,6 +92,7 @@ type CoreCodingToolsOptions = {
   skillInstructionPaths?: readonly string[];
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   baseToolNames?: readonly string[];
   baseToolFactories?: {
@@ -144,15 +145,18 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             bridge: sandboxFsBridge!,
             modelContextWindowTokens: options.modelContextWindowTokens,
             imageSanitization: options.imageSanitization,
+            modelHasVision: options.modelHasVision,
             createTool: options.baseToolFactories?.createReadTool,
           })
         : createOpenClawReadTool(
             (options.baseToolFactories?.createReadTool ?? createReadTool)(options.codingRoot, {
               maxBytes: resolveAdaptiveReadMaxBytes(options),
+              modelHasVision: options.modelHasVision,
             }),
             {
               modelContextWindowTokens: options.modelContextWindowTokens,
               imageSanitization: options.imageSanitization,
+              cwd: options.codingRoot,
             },
           );
       const guarded = options.workspaceOnly
@@ -166,6 +170,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                     readOnlyWorkspaceSkillMounts,
                   ),
                   containerWorkdir: sandbox.containerWorkdir,
+                  bridge: sandboxFsBridge,
                 }
               : { additionalRoots: skillReadRoots, resolutionCwd: options.codingRoot },
           )
@@ -218,11 +223,13 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(edit, sandboxRoot, {
             containerWorkdir: sandbox.containerWorkdir,
+            bridge: sandboxFsBridge,
           })
         : edit,
       options.workspaceOnly
         ? wrapToolWorkspaceRootGuardWithOptions(write, sandboxRoot, {
             containerWorkdir: sandbox.containerWorkdir,
+            bridge: sandboxFsBridge,
           })
         : write,
     );
@@ -248,6 +255,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     shell.push(
       createLazyExecTool({
         ...options.execDefaults,
+        ...(sandbox?.required ? { sandboxRequired: true } : {}),
         cwd: options.codingRoot,
         sandbox: sandbox
           ? {

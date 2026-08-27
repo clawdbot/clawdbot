@@ -402,11 +402,12 @@ function createPluginHandler(
       ? (payload) => outbound.shouldSkipPlainTextSanitization!({ payload })
       : undefined,
     resolveEffectiveTextChunkLimit: outbound?.resolveEffectiveTextChunkLimit
-      ? (fallbackLimit) =>
+      ? ({ fallbackLimit, formatting }) =>
           outbound.resolveEffectiveTextChunkLimit!({
             cfg: params.cfg,
             accountId: params.accountId ?? undefined,
             fallbackLimit,
+            formatting,
           })
       : undefined,
     sendPayload:

@@ -21,7 +21,7 @@ import {
   StaleWorkerBuildError,
   supportsWorkerExecutionContextLaunch,
 } from "./admission.js";
-import { placementTurnOwner } from "./placement-record.js";
+import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { createRemoteExecPlacementSandbox } from "./placement-sandbox.js";
 import type {
   WorkerSessionPlacementRecord,
@@ -207,12 +207,20 @@ async function executeWorkerTurn(params: {
     ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
     timeoutMs: turn.timeoutMs,
   });
+  const portalAvailable =
+    Boolean(environment.nodeDeviceId) &&
+    environment.sshEndpoint === null &&
+    (await params.environments.supportsNodePortal?.(
+      placement.environmentId,
+      placement.activeOwnerEpoch,
+    )) === true;
   const reasoning = mapThinkingLevelForProvider(turn.thinkLevel);
   const { browser, toolAuthority } = resolveWorkerBrowserLaunchPlan({
     desktop: environment.desktop,
     modelRef,
     turn,
     githubPublicationAvailable,
+    portalAvailable,
   });
   params.placements.authorizeWorkerTurnTools(params.turnClaim, toolAuthority.allowedToolNames);
   const { operationalRunInstance, runtimeIdentity } = await prepareWorkerAgentRuntimeIdentity({
@@ -418,6 +426,10 @@ async function executeWorkerTurn(params: {
 }
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
+  const activeWorkerTurns = new Map<
+    string,
+    { claim: WorkerSessionTurnClaim; signal: AbortSignal }
+  >();
   const provider: SessionPlacementAdmissionProvider & {
     resolveSandbox(params: {
       agentId: string;
@@ -503,17 +515,21 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       if (!current || current.state === "local") {
         return await executeLocalTurn({ claim, placements: options.placements, runLocal });
       }
+      let identity = resolvePlacementIdentity(claim, current);
       let routablePlacement = current;
       if (routablePlacement.state === "reclaimed") {
         emitAgentRunStatusEvent({
           runId: claim.runId,
           phase: "provisioning_environment",
-          ...(claim.sessionKey ? { sessionKey: claim.sessionKey } : {}),
-          ...(claim.agentId ? { agentId: claim.agentId } : {}),
+          sessionKey: identity.sessionKey,
+          agentId: identity.agentId,
         });
         routablePlacement = await options.redispatchReclaimed(routablePlacement);
+        identity = resolvePlacementIdentity(
+          { ...claim, agentId: identity.agentId, sessionKey: identity.sessionKey },
+          routablePlacement,
+        );
       }
-      const identity = resolvePlacementIdentity(claim, routablePlacement);
       if (
         routablePlacement.state === "draining" &&
         options.placements
@@ -557,10 +573,23 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           identity,
           placement,
           runId: claim.runId,
+          isCancellationRequested: (activeClaim) => {
+            const active = activeWorkerTurns.get(activeClaim.sessionId);
+            return Boolean(
+              active?.signal.aborted && sameWorkerSessionTurnClaim(active.claim, activeClaim),
+            );
+          },
           ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
         });
         placement = admitted.placement;
         turnClaim = admitted.turnClaim;
+      }
+      const activeWorkerTurn =
+        !remoteExec && turn.abortSignal
+          ? { claim: turnClaim, signal: turn.abortSignal }
+          : undefined;
+      if (activeWorkerTurn) {
+        activeWorkerTurns.set(turnClaim.sessionId, activeWorkerTurn);
       }
       let handedOff = false;
       try {
@@ -620,7 +649,9 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
         }
         if (
           error instanceof WorkerRunnerCapacityError ||
-          (error instanceof WorkerRunnerUnavailableError && !handedOff)
+          (error instanceof WorkerRunnerUnavailableError && !handedOff) ||
+          // Canceling the exact worker turn must not destroy its reusable placement.
+          (!remoteExec && handedOff && turn.abortSignal?.aborted)
         ) {
           await releaseClaimIfOwned(options.placements, turnClaim);
           throw error;
@@ -672,6 +703,10 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           await releaseClaimIfOwned(options.placements, turnClaim);
         }
         throw error;
+      } finally {
+        if (activeWorkerTurn && activeWorkerTurns.get(turnClaim.sessionId) === activeWorkerTurn) {
+          activeWorkerTurns.delete(turnClaim.sessionId);
+        }
       }
     },
   };

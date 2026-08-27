@@ -110,7 +110,7 @@ function createMemoryEmbeddingOptions(overrides?: {
       baseUrl: overrides?.baseUrl,
       apiKey: "fixture-token",
       headers: {
-        Authorization: "Bearer ignored",
+        Authorization: "Bearer destination-header",
         "x-api-key": "hidden",
         "x-deployment": "tenant-a",
       },
@@ -193,7 +193,7 @@ describe("memory-core generic embedding provider bridge", () => {
       },
     });
     expect(server.requests[0]?.body).not.toHaveProperty("encoding_format");
-    expect(server.requests[0]?.headers.authorization).toBe("Bearer fixture-token");
+    expect(server.requests[0]?.headers.authorization).toBe("Bearer destination-header");
     expect(server.requests[0]?.headers["x-api-key"]).toBe("hidden");
     expect(server.requests[0]?.headers["x-deployment"]).toBe("tenant-a");
     expect(server.requests[1]?.body).toEqual({
