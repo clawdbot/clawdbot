@@ -96,6 +96,8 @@ const repositoryScriptEntries = [
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // Native shell UI tests connect to this manually launched loopback Gateway fixture.
+  "scripts/test-ios-shell-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
