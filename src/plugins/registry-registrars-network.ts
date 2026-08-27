@@ -373,7 +373,13 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         source: record.source,
         message: `channel registration rejected: ${id} is declared by ${declaredClaimants.join(", ")}`,
       });
-      pluginsWithChannelRegistrationConflict.add(record.id);
+      // Only the channel is refused. The duplicate-registration branches below mark the whole
+      // plugin conflicted, which drops every agent tool it registers AFTERWARDS -- so the same
+      // plugin keeps or loses its tools depending on whether it called `registerTool` before or
+      // after `registerChannel`, an order the plugin author chooses freely. That order dependence
+      // is tolerable for a genuine duplicate, where the plugin did contest the channel; here it
+      // never claimed the channel at all, and its tools have nothing to do with the declaration
+      // that took it away.
       return;
     }
     const existingRuntime = registry.channels.find((entry) => entry.plugin.id === id);

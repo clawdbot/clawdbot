@@ -31,6 +31,7 @@ function writeMultiChannelPlugin(params: {
   preferOver?: Record<string, string[]>;
   registeredChannelIds?: string[];
   throwOnRegister?: boolean;
+  toolFirst?: boolean;
 }): string {
   const pluginDir = path.join(params.rootDir, params.id);
   fs.mkdirSync(pluginDir, { recursive: true });
@@ -83,18 +84,23 @@ function writeMultiChannelPlugin(params: {
         });`,
     )
     .join("\n        ");
+  const toolRegistration = `api.registerTool({
+          name: ${JSON.stringify(params.toolName)},
+          description: "fixture",
+          parameters: { type: "object", properties: {} },
+          execute() { return { content: [{ type: "text", text: "ok" }] }; },
+        }, { name: ${JSON.stringify(params.toolName)} });`;
+  const body = params.toolFirst
+    ? `${toolRegistration}
+        ${registrations}`
+    : `${registrations}
+        ${toolRegistration}`;
   fs.writeFileSync(
     path.join(pluginDir, "index.cjs"),
     `module.exports = {
       id: ${JSON.stringify(params.id)},
       register(api) {
-        ${registrations}
-        api.registerTool({
-          name: ${JSON.stringify(params.toolName)},
-          description: "fixture",
-          parameters: { type: "object", properties: {} },
-          execute() { return { content: [{ type: "text", text: "ok" }] }; },
-        }, { name: ${JSON.stringify(params.toolName)} });
+        ${body}
         ${params.throwOnRegister ? 'throw new Error("register failed after channel registration");' : ""}
       },
     };`,
@@ -500,6 +506,74 @@ describe("plugin loader preferOver cede", () => {
       pluginId: "zz-fallback",
       message: "ceded channel has no registered owner: zzalpha (ceded to zz-replacement)",
     });
+  });
+
+  // Refusing the channel must not cost the plugin anything else it registered. The duplicate-
+  // registration branches mark the whole plugin conflicted, which drops every tool registered
+  // after that point -- so reusing that marker here made an unrelated capability depend on
+  // whether the plugin author happened to call `registerTool` before or after `registerChannel`.
+  it.each([
+    { order: "channel first", toolFirst: false },
+    { order: "tool first", toolFirst: true },
+  ])("keeps a rejected squatter's declared tool, registered $order", ({ toolFirst }) => {
+    const root = makePluginLoaderTempDir();
+    const fallbackDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-fallback",
+      channelIds: ["zzalpha", "zzbeta"],
+      toolName: "zz_fallback_tool",
+    });
+    const replacementDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-replacement",
+      channelIds: ["zzalpha"],
+      toolName: "zz_replacement_tool",
+      preferOver: { zzalpha: ["zz-fallback"] },
+    });
+    const squatterDir = writeMultiChannelPlugin({
+      rootDir: root,
+      id: "zz-squatter",
+      channelIds: ["zzgamma"],
+      registeredChannelIds: ["zzalpha"],
+      toolName: "zz_squatter_tool",
+      toolFirst,
+    });
+    const env = {
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: makePluginLoaderTempDir(),
+    };
+    const rawConfig = {
+      channels: {
+        zzalpha: { token: "alpha" },
+        zzbeta: { token: "beta" },
+        zzgamma: { token: "gamma" },
+      },
+      plugins: { load: { paths: [fallbackDir, replacementDir, squatterDir] } },
+    };
+    const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: autoEnabled.config,
+      activationSourceConfig: rawConfig,
+      autoEnabledReasons: autoEnabled.autoEnabledReasons,
+      env,
+    });
+
+    // The channel is still refused, in both orders.
+    expect(
+      registry.diagnostics.find(
+        (diag) =>
+          diag.pluginId === "zz-squatter" && diag.message.includes("zzalpha is declared by"),
+      ),
+    ).toMatchObject({ level: "error" });
+    expect(registry.channels.find((entry) => entry.plugin.id === "zzalpha")?.pluginId).not.toBe(
+      "zz-squatter",
+    );
+    // The tool it declared survives either way.
+    expect(registry.plugins.find((entry) => entry.id === "zz-squatter")?.toolNames).toContain(
+      "zz_squatter_tool",
+    );
   });
 
   // The shape above keeps the fallback loaded through a second channel. The ordinary shape is one
