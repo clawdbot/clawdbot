@@ -13,7 +13,7 @@ import {
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
-import type { CodexDynamicToolCallResponse } from "./protocol.js";
+import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
@@ -27,102 +27,62 @@ describe("dynamic tool execution helpers", () => {
     vi.useRealTimers();
   });
 
-  it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {
-    const timeoutMs = CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
-
+  it.each<{
+    name: string;
+    tool: string;
+    arguments: CodexDynamicToolCallParams["arguments"];
+    timeoutMs: number;
+  }>([
+    {
+      name: "keeps explicit dynamic tool timeouts above the default bridge deadline",
+      tool: "image_generate",
+      arguments: { prompt: "cat", timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000 },
+      timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000,
+    },
+    {
+      name: "ignores partial dynamic tool timeout strings",
+      tool: "session_status",
+      arguments: { timeoutMs: "1abc" },
+      timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+    },
+    {
+      name: "honors timeoutSeconds when timeoutMs is absent",
+      tool: "session_status",
+      arguments: { timeoutSeconds: 30 },
+      timeoutMs: 60_000,
+    },
+    {
+      name: "prefers timeoutMs over timeoutSeconds",
+      tool: "session_status",
+      arguments: { timeoutMs: 5_000, timeoutSeconds: 30 },
+      timeoutMs: 5_000,
+    },
+    {
+      name: "ignores non-positive timeoutSeconds",
+      tool: "session_status",
+      arguments: { timeoutSeconds: -1 },
+      timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+    },
+    {
+      name: "rejects fractional timeoutSeconds and falls back to the default",
+      tool: "session_status",
+      arguments: { timeoutSeconds: 1.5 },
+      timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+    },
+  ])("$name", ({ tool, arguments: args, timeoutMs }) => {
     expect(
       resolveDynamicToolCallTimeoutMs({
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
-          callId: "call-long",
+          callId: "call-timeout",
           namespace: null,
-          tool: "image_generate",
-          arguments: { prompt: "cat", timeoutMs },
+          tool,
+          arguments: args,
         },
         config: undefined,
       }),
     ).toBe(timeoutMs);
-  });
-
-  it("ignores partial dynamic tool timeout strings", () => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-partial-timeout",
-          namespace: null,
-          tool: "session_status",
-          arguments: { timeoutMs: "1abc" },
-        },
-        config: undefined,
-      }),
-    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
-  });
-
-  it("honors timeoutSeconds when timeoutMs is absent", () => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-seconds",
-          namespace: null,
-          tool: "session_status",
-          arguments: { timeoutSeconds: 30 },
-        },
-        config: undefined,
-      }),
-    ).toBe(60_000);
-  });
-
-  it("prefers timeoutMs over timeoutSeconds", () => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-both",
-          namespace: null,
-          tool: "session_status",
-          arguments: { timeoutMs: 5_000, timeoutSeconds: 30 },
-        },
-        config: undefined,
-      }),
-    ).toBe(5_000);
-  });
-
-  it("ignores non-positive timeoutSeconds", () => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-bad-seconds",
-          namespace: null,
-          tool: "session_status",
-          arguments: { timeoutSeconds: -1 },
-        },
-        config: undefined,
-      }),
-    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
-  });
-
-  it("rejects fractional timeoutSeconds and falls back to the default", () => {
-    expect(
-      resolveDynamicToolCallTimeoutMs({
-        call: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-fractional-seconds",
-          namespace: null,
-          tool: "session_status",
-          arguments: { timeoutSeconds: 1.5 },
-        },
-        config: undefined,
-      }),
-    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
   });
 
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
