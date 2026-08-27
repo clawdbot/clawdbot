@@ -653,6 +653,31 @@ describe("Pi session catalog", () => {
 
     const content = await fs.readFile(file);
     const growth = Buffer.alloc(PI_SESSION_READ_LIMIT_BYTES - content.length + 1);
+    const actualStat = fs.stat.bind(fs);
+    const legacyStatSpy = vi.spyOn(fs, "stat").mockImplementationOnce(async (target) => {
+      if (target !== file) {
+        return await actualStat(target);
+      }
+      await fs.appendFile(file, growth);
+      return { isFile: () => true, size: content.length } as Awaited<
+        ReturnType<typeof fs.stat>
+      >;
+    });
+    const legacyStats = await fs.stat(file);
+    const legacyText = await fs.readFile(file, "utf8");
+    expect(legacyStats.size).toBe(content.length);
+    const legacyBytes = Buffer.byteLength(legacyText);
+    expect(legacyBytes).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
+    console.log(
+      `[acpx-runtime-proof] legacy-race ${JSON.stringify({
+        snapshotBytes: legacyStats.size,
+        readBytes: legacyBytes,
+        capBytes: PI_SESSION_READ_LIMIT_BYTES,
+      })}`,
+    );
+    legacyStatSpy.mockRestore();
+    await fs.writeFile(file, content);
+
     const buffers: Buffer[] = [];
     const actualOpen = fs.open.bind(fs);
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
@@ -680,7 +705,7 @@ describe("Pi session catalog", () => {
       ]);
       expect(new Set(buffers).size).toBe(1);
       expect(buffers[0]?.length).toBe(content.length);
-const finalSize = (await fs.stat(file)).size;
+      const finalSize = (await fs.stat(file)).size;
       expect(finalSize).toBeGreaterThan(PI_SESSION_READ_LIMIT_BYTES);
       const message = transcript.items.find((item) => item.type === "agentMessage");
       console.log(
@@ -729,6 +754,7 @@ const finalSize = (await fs.stat(file)).size;
       openSpy.mockRestore();
     }
   });
+
   it("auto-detects the store and honors the node-local Web UI switch", async () => {
     const directory = await createPiStore();
     const binDirectory = await installFakePi();
