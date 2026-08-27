@@ -244,7 +244,7 @@ export function renderAppearanceSection(
               props.themeModeOverridden,
             )}
             ${themeModeProvenance}`,
-            stacked: true,
+            stackedOnNarrow: true,
             control: renderSettingsSegmented({
               value: props.themeMode,
               options: [
@@ -388,18 +388,28 @@ export function renderAppearanceSection(
                   </button>
                 `;
               })}
-              <input
-                type="color"
+              <span
                 class="settings-accent-swatch settings-accent-swatch--custom ${customAccentSelected
                   ? "settings-accent-swatch--active"
                   : ""}"
-                data-accent-custom
-                aria-label=${t("configView.appearance.customAccent")}
-                title=${t("configView.appearance.customAccent")}
-                .value=${props.accent ?? ACCENT_PRESETS[1].hex}
-                @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
-                  props.setAccent(event.currentTarget.value)}
-              />
+                style=${styleMap({
+                  "--settings-accent-swatch": props.accent ?? ACCENT_PRESETS[1].hex,
+                })}
+              >
+                <input
+                  type="color"
+                  class="settings-accent-swatch__input"
+                  data-accent-custom
+                  aria-label=${t("configView.appearance.customAccent")}
+                  title=${t("configView.appearance.customAccent")}
+                  .value=${props.accent ?? ACCENT_PRESETS[1].hex}
+                  @input=${(event: Event & { currentTarget: HTMLInputElement }) =>
+                    props.setAccent(event.currentTarget.value)}
+                />
+                <span class="settings-accent-swatch__picker" aria-hidden="true"
+                  >${icons.pipette}</span
+                >
+              </span>
             </div>
           </div>
         </div>

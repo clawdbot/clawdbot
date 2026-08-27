@@ -266,6 +266,18 @@
     background var(--duration-fast) ease;
 }
 
+@media (max-width: 768px) {
+  .settings-theme-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 400px) {
+  .settings-theme-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .settings-theme-card:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
@@ -479,21 +491,55 @@
 }
 
 .settings-accent-swatch--custom {
+  position: relative;
   overflow: hidden;
 }
 
-.settings-accent-swatch--custom::-webkit-color-swatch-wrapper {
+.settings-accent-swatch__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   padding: 0;
+  border: 0;
+  opacity: 0;
 }
 
-.settings-accent-swatch--custom::-webkit-color-swatch {
-  border: 0;
-  border-radius: 50%;
+.settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+  box-shadow: var(--focus-ring);
 }
 
-.settings-accent-swatch--custom::-moz-color-swatch {
-  border: 0;
+.settings-accent-swatch__picker {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
   border-radius: 50%;
+  /* At 55% black, even a white swatch leaves a dark-enough scrim for the
+     white pipette to keep 4.5:1 contrast; the chosen accent cannot erase it. */
+  background: color-mix(in srgb, black 55%, transparent);
+  color: white;
+  filter: drop-shadow(0 1px 1px color-mix(in srgb, black 35%, transparent));
+  pointer-events: none;
+}
+
+.settings-accent-swatch__picker svg {
+  width: 15px;
+  height: 15px;
+}
+
+@media (forced-colors: active) {
+  .settings-accent-swatch__picker {
+    background: CanvasText;
+    color: Canvas;
+    filter: none;
+  }
+
+  .settings-accent-swatch--custom:has(.settings-accent-swatch__input:focus-visible) {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
 }
 
 .settings-theme-import {
@@ -1076,15 +1122,5 @@
   .mcp-server-form {
     grid-template-columns: minmax(0, 1fr);
     align-items: stretch;
-  }
-}
-
-/* ===========================================
-   Mobile Responsiveness
-   =========================================== */
-
-@media (max-width: 768px) {
-  .settings-theme-grid {
-    grid-template-columns: 1fr;
   }
 }
