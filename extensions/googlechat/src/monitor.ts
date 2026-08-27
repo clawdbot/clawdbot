@@ -253,7 +253,10 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const replyThreadName = isGroup ? message.thread?.name : undefined;
+  // Google Chat includes thread metadata on roots; only replies may adopt a child session.
+  // Routing roots by that metadata would fracture the space's baseline conversation context.
+  const replyThreadName =
+    isGroup && message.threadReply === true ? message.thread?.name : undefined;
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
     channel: "googlechat",

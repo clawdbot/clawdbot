@@ -203,10 +203,11 @@ describe("googlechat monitor thread sessions", () => {
       groupSystemPrompt: undefined,
     });
 
-    for (const [messageId, threadId] of [
-      ["first", "spaces/CLASSIFY/threads/first"],
-      ["second", "spaces/CLASSIFY/threads/second"],
-      ["root", undefined],
+    for (const [messageId, threadId, threadReply] of [
+      ["first", "spaces/CLASSIFY/threads/first", true],
+      ["second", "spaces/CLASSIFY/threads/second", true],
+      ["thread-root", "spaces/CLASSIFY/threads/thread-root", false],
+      ["root", undefined, false],
     ]) {
       await testing.processMessageWithPipeline({
         event: {
@@ -216,6 +217,7 @@ describe("googlechat monitor thread sessions", () => {
             name: `spaces/CLASSIFY/messages/${messageId}`,
             text: "hello",
             ...(threadId ? { thread: { name: threadId } } : {}),
+            threadReply,
             sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
           },
         } satisfies GoogleChatEvent,
@@ -236,6 +238,7 @@ describe("googlechat monitor thread sessions", () => {
     expect(sessionKeys).toEqual([
       "session-1:thread:spaces/classify/threads/first",
       "session-1:thread:spaces/classify/threads/second",
+      "session-1",
       "session-1",
     ]);
   });

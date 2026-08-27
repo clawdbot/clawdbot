@@ -58,6 +58,8 @@ export type GoogleChatMessage = {
   argumentText?: string;
   sender?: GoogleChatUser;
   thread?: GoogleChatThread;
+  /** True when this message replies to an existing thread root. */
+  threadReply?: boolean;
   cardsV2?: GoogleChatCardV2[];
   attachment?: GoogleChatAttachment[];
   annotations?: GoogleChatAnnotation[];
