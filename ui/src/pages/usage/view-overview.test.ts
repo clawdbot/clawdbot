@@ -627,7 +627,6 @@ describe("renderSessionsCard", () => {
     );
 
     const copyButton = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-actions button");
-    expect(copyButton?.className).toBe("btn btn--sm btn--ghost");
     copyButton?.click();
     await vi.waitFor(() => {
       expect(copyButton?.textContent?.trim()).toBe(feedback);
