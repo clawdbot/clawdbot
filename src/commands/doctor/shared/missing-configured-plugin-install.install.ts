@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { stripAnsi } from "../../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -97,6 +98,7 @@ export async function installCandidate(params: {
   notices: string[];
   warnings: string[];
   failedPluginId?: string;
+  code?: string;
 }> {
   const consent = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   try {
@@ -117,6 +119,7 @@ export async function installCandidate(params: {
       notices: [],
       warnings: [sanitizeTerminalText(error.message)],
       failedPluginId: params.candidate.pluginId,
+      ...(error.capabilityConsent ? { code: PLUGIN_CAPABILITY_CONSENT_REQUIRED } : {}),
     };
   }
 }
