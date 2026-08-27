@@ -296,6 +296,7 @@ export async function recoverEmbeddedRunOverflow(
         log.info(
           `auto-compaction succeeded for ${input.provider}/${input.modelId}; retrying prompt`,
         );
+        input.markOwnedTranscriptRetry();
         if (preflightRecovery?.source === "mid-turn") {
           input.prepareCurrentTranscriptRetry();
         } else {

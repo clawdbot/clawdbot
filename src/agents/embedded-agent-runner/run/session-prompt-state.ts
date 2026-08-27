@@ -188,7 +188,6 @@ export function createEmbeddedRunSessionPromptState(input: {
       }
     },
     continueFromCurrentTranscript: () => {
-      settleOwnedTranscriptProjection = true;
       activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT);
     },
     onUserMessagePersisted,
