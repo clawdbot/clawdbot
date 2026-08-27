@@ -165,9 +165,12 @@ export function describeSlackMessageTool({
       actions: messageIdActions,
     });
   }
-  const channelManagementActions = actions.filter((action) =>
-    (SLACK_CHANNEL_MANAGEMENT_ACTIONS as readonly string[]).includes(action),
-  ) as ChannelMessageActionName[];
+  const channelManagementActions: ChannelMessageActionName[] = [];
+  for (const action of SLACK_CHANNEL_MANAGEMENT_ACTIONS) {
+    if (actions.includes(action)) {
+      channelManagementActions.push(action);
+    }
+  }
   if (channelManagementActions.length > 0) {
     schema.push({
       properties: createSlackChannelManagementSchema(),
