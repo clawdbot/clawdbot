@@ -36,6 +36,8 @@ Selecting `gateway`, `daemon`, or `health` (or running the full wizard with no `
 
 ## Gateway section
 
+For **Trusted Proxy** auth, enter comma-separated IPv4 or IPv6 addresses or CIDR ranges, such as `10.0.0.1, ::1, 10.0.0.0/24`. The wizard rejects malformed addresses and empty entries before saving; surrounding whitespace is ignored.
+
 For **Trusted Proxy** auth, entering a loopback proxy address shows a security warning and asks for explicit consent before setting `gateway.auth.trustedProxy.allowLoopback`. Declining leaves it unset and warns that loopback proxy requests will be rejected at runtime. See [Trusted proxy auth](/gateway/trusted-proxy-auth#configure-with-the-wizard) for the trust requirements.
 
 Reconfiguring trusted-proxy mode defaults the loopback prompt to the existing opt-in and preserves `deviceAutoApprove` unchanged. An explicit refusal revokes loopback consent; without a loopback address, the existing setting is retained.

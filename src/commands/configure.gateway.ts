@@ -1,4 +1,5 @@
 // Configure wizard Gateway port, bind, auth, and Tailscale prompts.
+import { parseIpAddressOrCidr } from "@openclaw/net-policy/ip";
 import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import {
   normalizeOptionalString,
@@ -305,12 +306,10 @@ export async function promptGatewayConfig(
       await text({
         message: "Trusted proxy IPs (comma-separated)",
         placeholder: "10.0.1.10,192.168.1.5",
-        validate: (value) => {
-          if (!normalizeOptionalString(value)) {
-            return "At least one trusted proxy IP is required";
-          }
-          return undefined;
-        },
+        validate: (value) =>
+          (value ?? "").split(",").every((address) => parseIpAddressOrCidr(address))
+            ? undefined
+            : "Enter comma-separated IPv4 or IPv6 addresses or CIDR ranges (e.g. 10.0.0.1, ::1, 10.0.0.0/24); no empty entries.",
       }),
       runtime,
       1,
@@ -320,8 +319,12 @@ export async function promptGatewayConfig(
     const existingProxy =
       cfg.gateway?.auth?.mode === "trusted-proxy" ? cfg.gateway.auth.trustedProxy : undefined;
     let allowLoopback = existingProxy?.allowLoopback;
-    // Classify CIDR base addresses with the same loopback rules as runtime auth.
-    if (trustedProxies.some((address) => isLoopbackAddress(address.split("/")[0]))) {
+    // Parse CIDR bases before classification so runtime-accepted aliases still require consent.
+    if (
+      trustedProxies.some((address) =>
+        isLoopbackAddress(parseIpAddressOrCidr(address)?.[0].toString()),
+      )
+    ) {
       const title = t("wizard.gateway.trustedProxyLoopbackTitle");
       note(t("wizard.gateway.trustedProxyLoopbackWarning"), title);
       allowLoopback =
