@@ -457,6 +457,12 @@ describe("runDoctorLintCli", () => {
       });
 
       expect(exitCode).toBe(1);
+      expect(
+        await runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
+        }),
+      ).toBe(1);
       const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
       expect(payload).toMatchObject({
         ok: false,
