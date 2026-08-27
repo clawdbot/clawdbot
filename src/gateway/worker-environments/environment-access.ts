@@ -144,6 +144,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
           throw serviceError("invalid_state", "Node worker tunnel runtime is unavailable");
         }
         startup = nodeTunnels.start({
+          executionMode:
+            record.profileSnapshot.executionMode === "remote-exec" ? "remote-exec" : "worker-turn",
           environmentId: record.environmentId,
           ownerEpoch: record.ownerEpoch,
           deviceId: nodeDeviceId,

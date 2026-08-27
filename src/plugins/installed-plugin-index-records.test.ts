@@ -81,14 +81,19 @@ function updatePersistedInstallRecordsWithoutClearingCache(
 ) {
   runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const now = Date.now();
       db.prepare(
         `
-          UPDATE installed_plugin_index
-             SET install_records_json = ?,
+          UPDATE config_machine_state
+             SET value_json = json_set(
+                   value_json,
+                   '$.index.installRecords', json(?),
+                   '$.revision', ?
+                 ),
                  updated_at_ms = ?
-           WHERE index_key = 'installed-plugin-index'
+           WHERE state_key = 'plugins.installedIndex'
         `,
-      ).run(JSON.stringify(records), Date.now());
+      ).run(JSON.stringify(records), now, now);
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );

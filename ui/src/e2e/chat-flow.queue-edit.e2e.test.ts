@@ -262,6 +262,7 @@ suite.define(() => {
 
       await page
         .getByRole("alert")
+        .locator("summary")
         .getByText("Could not store this message for reconnect.", { exact: false })
         .waitFor({ timeout: 10_000 });
       await row.waitFor();

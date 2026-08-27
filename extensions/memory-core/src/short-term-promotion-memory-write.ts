@@ -82,6 +82,31 @@ async function writeExistingMemoryInPlace(params: {
     await handle.truncate(Buffer.byteLength(params.content));
     await handle.sync();
     return true;
+  } catch (error) {
+    const original = Buffer.from(params.expectedContent, "utf-8");
+    try {
+      let restored = 0;
+      while (restored < original.length) {
+        const { bytesWritten } = await handle.write(
+          original,
+          restored,
+          original.length - restored,
+          restored,
+        );
+        if (bytesWritten <= 0) {
+          throw new Error("MEMORY.md restore write made no progress", { cause: error });
+        }
+        restored += bytesWritten;
+      }
+      await handle.truncate(original.length);
+      await handle.sync();
+    } catch (restoreError) {
+      throw new Error(
+        "MEMORY.md in-place write failed and restoring the original content also failed",
+        { cause: restoreError },
+      );
+    }
+    throw error;
   } finally {
     await handle.close();
   }

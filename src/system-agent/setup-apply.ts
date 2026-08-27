@@ -1,6 +1,7 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { resolveSystemAgentOnboardingTarget as resolveSystemTarget } from "../commands/onboard-agent-target.js";
 import type { FirstOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
@@ -611,7 +612,9 @@ export async function applySystemAgentSetup(
                     env: process.env,
                   })
                 : undefined,
-            deadlineMs: 15_000,
+            ...(gateway.action === "reused"
+              ? { deadlineMs: 15_000 }
+              : resolveGatewayStartupTiming()),
           });
           if (probe.ok) {
             lines.push(`Gateway: running at ${probeLinks.wsUrl}`);

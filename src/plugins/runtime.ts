@@ -259,22 +259,26 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
   return state.workspaceDir ?? undefined;
 }
 
+/** Reads registration/request/active registry precedence without initializing a cold runtime. */
+export function getPluginRegistryForContext(): PluginRegistry | null {
+  return (
+    state.registrationContext?.registry ??
+    getPluginRuntimeGatewayRequestScope()?.pluginRegistry ??
+    getActivePluginRegistry()
+  );
+}
+
 export function requireActivePluginRegistry(): PluginRegistry {
-  if (state.registrationContext) {
-    return state.registrationContext.registry;
+  const registry = getPluginRegistryForContext();
+  if (registry) {
+    return registry;
   }
-  const scopedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-  if (scopedRegistry) {
-    return scopedRegistry;
-  }
-  if (!state.activeRegistry) {
-    state.activeRegistry = createEmptyPluginRegistry();
-    markPluginRegistryActive(state.activeRegistry);
-    state.activeVersion += 1;
-    settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
-    syncPluginAgentEventBridge();
-  }
-  return asPluginRegistry(state.activeRegistry)!;
+  state.activeRegistry = createEmptyPluginRegistry();
+  markPluginRegistryActive(state.activeRegistry);
+  state.activeVersion += 1;
+  settlePreparedMessageToolCatalog(state.activeRegistry, state.activeVersion);
+  syncPluginAgentEventBridge();
+  return state.activeRegistry;
 }
 
 /** Binds unchanged direct SDK facades to the registry currently running synchronous register(). */

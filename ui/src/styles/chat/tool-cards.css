@@ -689,7 +689,8 @@
   margin-inline-start: auto;
 }
 
-.chat-tool-card__action-btn {
+.chat-tool-card__action-btn,
+.chat-tool-card__actions :where(.chat-copy-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -707,7 +708,8 @@
 }
 
 .chat-tool-card__action-btn:hover,
-.chat-tool-card__action-btn:focus-visible {
+.chat-tool-card__action-btn:focus-visible,
+.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }

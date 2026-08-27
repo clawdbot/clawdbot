@@ -42,6 +42,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 }));
 
 vi.mock("../agents/memory-search.js", () => ({
+  DEFAULT_MEMORY_EMBEDDING_PROVIDER: "openai",
   resolveMemorySearchConfig,
 }));
 
@@ -67,27 +68,6 @@ vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   auditShortTermPromotionArtifacts,
   repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
-  getBuiltinMemoryEmbeddingProviderDoctorMetadata: vi.fn((provider: string) => {
-    if (provider === "gemini") {
-      return { authProviderId: "google", envVars: ["GEMINI_API_KEY"] };
-    }
-    if (provider === "mistral") {
-      return { authProviderId: "mistral", envVars: ["MISTRAL_API_KEY"] };
-    }
-    if (provider === "openai") {
-      return { authProviderId: "openai", envVars: ["OPENAI_API_KEY"] };
-    }
-    return null;
-  }),
-  listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata: vi.fn(() => [
-    {
-      providerId: "openai",
-      authProviderId: "openai",
-      envVars: ["OPENAI_API_KEY"],
-      transport: "remote",
-    },
-    { providerId: "local", authProviderId: "local", envVars: [], transport: "local" },
-  ]),
 }));
 
 vi.mock("./doctor-workspace.js", async (importOriginal) => {
@@ -324,7 +304,9 @@ describe("noteMemorySearchHealth", () => {
     expectFirstNoteContains(
       'Memory search provider is set to "local"',
       "openclaw plugins install @openclaw/llama-cpp-provider",
+      "openclaw config set memory.search.provider openai",
     );
+    expectFirstNoteExcludes("github-copilot");
   });
 
   it("supports silent structured collection through an injected note sink", async () => {
@@ -687,7 +669,7 @@ describe("noteMemorySearchHealth", () => {
     resolveMemorySearchConfig.mockImplementation((_cfg: OpenClawConfig, agentId: string) =>
       agentId === "personal"
         ? undefined
-        : { provider: "auto", local: {}, remote: {}, sources: ["memory"] },
+        : { provider: "openai", local: {}, remote: {}, sources: ["memory"] },
     );
 
     await noteMemorySearchHealth(memoryCfg);
@@ -706,12 +688,6 @@ describe("noteMemorySearchHealth", () => {
     [
       "treats SecretRef remote apiKey as configured for explicit provider",
       "openai",
-      { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-    ],
-    ["does not warn in auto mode when remote apiKey is configured", "auto", "from-config"],
-    [
-      "treats SecretRef remote apiKey as configured in auto mode",
-      "auto",
       { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     ],
   ])("%s", async (_name, provider, apiKey) => {
@@ -1005,22 +981,11 @@ describe("noteMemorySearchHealth", () => {
     expectFirstNoteExcludes("openclaw auth add --provider");
   });
 
-  it("warns for legacy auto mode as OpenAI when no API key is configured", async () => {
-    await runMemorySearchHealth("auto");
-
-    expect(note).toHaveBeenCalledTimes(1);
-    expectFirstNoteContains(
-      'provider is set to "openai"',
-      "OPENAI_API_KEY",
-      "openclaw configure --section model",
-    );
-  });
-
-  it("does not probe unrelated embedding providers for legacy auto mode", async () => {
+  it("does not probe unrelated embedding providers for the resolved default", async () => {
     resolveApiKeyForProviderCore.mockImplementation(async () => {
       throw new Error("missing key");
     });
-    await runMemorySearchHealth("auto");
+    await runMemorySearchHealth("openai");
 
     expect(note).toHaveBeenCalledTimes(1);
     const providerCalls = resolveApiKeyForProviderCore.mock.calls as Array<[{ provider: string }]>;
@@ -1028,9 +993,9 @@ describe("noteMemorySearchHealth", () => {
     expect(providersChecked).toEqual(["openai"]);
   });
 
-  it("skips auth-profile probing for legacy auto mode when no auth store exists", async () => {
+  it("skips auth-profile probing for the resolved default when no auth store exists", async () => {
     hasAnyAuthProfileStoreSource.mockReturnValue(false);
-    await runMemorySearchHealth("auto");
+    await runMemorySearchHealth("openai");
 
     const providerCalls = resolveApiKeyForProviderCore.mock.calls as Array<[{ provider: string }]>;
     const providersChecked = providerCalls.map(([arg]) => arg.provider);
@@ -1043,15 +1008,9 @@ describe("noteMemorySearchHealth", () => {
     expectFirstNoteContains("GEMINI_API_KEY", 'provider is set to "gemini"');
   });
 
-  it("uses OpenAI env var hints for legacy auto mode", async () => {
-    await runMemorySearchHealth("auto");
-
-    expectFirstNoteContains('provider is set to "openai"', "OPENAI_API_KEY");
-  });
-
   it("does not warn when only lowercase memory.md exists", async () => {
     resolveAgentWorkspaceDir.mockReturnValue("/tmp/agent-default/workspace");
-    await runMemorySearchHealth("auto");
+    await runMemorySearchHealth("openai");
 
     expect(noteWorkspaceMemoryHealth).toHaveBeenCalledWith(cfg, {
       agentId: "agent-default",

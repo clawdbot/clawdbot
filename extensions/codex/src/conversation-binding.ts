@@ -26,11 +26,11 @@ import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
+  isCodexAppServerUnsafeSubscriptionError,
   retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./app-server/attempt-client-cleanup.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
-import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   consumeCodexAppServerLiveThread,
   isCodexAppServerClientRuntimeLive,
@@ -40,6 +40,7 @@ import {
 } from "./app-server/client-runtime.js";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
+  isCodexAppServerOverloadError,
   type CodexAppServerClient,
 } from "./app-server/client.js";
 import {
@@ -771,9 +772,10 @@ async function attachExistingThread(
                     `Codex thread ${params.threadId} has an active run; stop it before binding its conversation.`,
                   );
                 }
-                return await client.request(
-                  CODEX_CONTROL_METHODS.resumeThread,
-                  {
+                return await resumeCodexAppServerThread({
+                  client,
+                  abandonClient: async () => closeCodexStartupClientBestEffort(client),
+                  request: {
                     threadId: params.threadId,
                     cwd: resolved.workspaceDir,
                     ...(resolved.model ? { model: resolved.model } : {}),
@@ -781,18 +783,13 @@ async function attachExistingThread(
                     personality: CODEX_NATIVE_PERSONALITY_NONE,
                     ...buildThreadRequestRuntimeOptions(params, resolved),
                   },
-                  requestOptions,
-                );
+                  ...requestOptions,
+                });
               },
               onClientChange: (client) => {
                 resolved.client = client;
               },
             });
-        if (!resolved.runtime.networkProxy && response.thread.id !== params.threadId) {
-          throw new Error(
-            `Codex conversation resume returned ${response.thread.id} for ${params.threadId}.`,
-          );
-        }
         await writeThreadBindingFromResponse(params, resolved, response);
       } finally {
         releaseCodexAppServerClientLease(resolved.clientLease);
@@ -890,7 +887,8 @@ async function runBoundTurn(params: {
   const clientLease: CodexAppServerClientLease = { client };
   let activeTurnId: string | undefined;
   let activeTurnCleanup: () => void = () => undefined;
-  let retiredUnsafeClient: CodexAppServerClient | undefined;
+  // Released or retired subscriptions need no further cleanup on that physical client.
+  let isolatedSubscriptionClient: CodexAppServerClient | undefined;
   let turnRoute: CodexThreadRouteReservation | undefined;
   let liveThreadOwnership:
     | {
@@ -1005,11 +1003,12 @@ async function runBoundTurn(params: {
         run: async (requestClient, requestOptions) =>
           await resumeCodexAppServerThread({
             client: requestClient,
+            onSubscriptionReleased: () => {
+              isolatedSubscriptionClient = requestClient;
+            },
             abandonClient: async () => {
-              // A retired connection may still serve sibling leases; remember
-              // its identity so incognito cleanup never retires it a second time.
-              retiredUnsafeClient = requestClient;
               await closeCodexStartupClientBestEffort(requestClient);
+              isolatedSubscriptionClient = requestClient;
             },
             request: {
               threadId,
@@ -1113,6 +1112,9 @@ async function runBoundTurn(params: {
       },
     };
   } catch (error) {
+    if (isCodexAppServerOverloadError(error) && error.method === "thread/resume") {
+      throw error;
+    }
     if (
       (error instanceof CodexConversationTurnTimeoutError && activeTurnId) ||
       (turnRoute && isCodexAppServerIndeterminateRequestCancellationError(error))
@@ -1126,8 +1128,8 @@ async function runBoundTurn(params: {
       if (!completed) {
         // Retirement detaches the physical client while sibling leases finish;
         // never send another cleanup request or retire that detached client twice.
-        retiredUnsafeClient = client;
         await retireUnsafeCodexTurnClientBestEffort(client, "turn interrupt");
+        isolatedSubscriptionClient = client;
       }
     }
     if (params.incognito) {
@@ -1135,7 +1137,7 @@ async function runBoundTurn(params: {
         kind: "clear",
         threadId,
       });
-      if (bindingReleased && retiredUnsafeClient !== client) {
+      if (bindingReleased && isolatedSubscriptionClient !== client) {
         const unsubscribed = await unsubscribeCodexThreadBestEffort(client, {
           threadId,
           timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -1152,7 +1154,7 @@ async function runBoundTurn(params: {
     try {
       if (
         ownsNativeSubscription &&
-        retiredUnsafeClient !== client &&
+        isolatedSubscriptionClient !== client &&
         !params.incognito &&
         isCodexAppServerClientRuntimeLive(client)
       ) {
@@ -1394,6 +1396,9 @@ async function projectConversationSourceHistory(
 }
 
 function isCodexThreadNotFoundError(error: unknown): boolean {
+  if (isCodexAppServerOverloadError(error) || isCodexAppServerUnsafeSubscriptionError(error)) {
+    return false;
+  }
   const message = formatErrorMessage(error);
   return (
     /\bthread not found:/iu.test(message) ||

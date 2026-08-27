@@ -359,7 +359,6 @@ function createMessageActionContextButton(params: {
   button.type = "button";
   button.disabled = params.disabled;
   button.setAttribute("role", "menuitem");
-  button.setAttribute("aria-label", params.label);
   const label = document.createElement("span");
   label.dataset.copyLabel = "";
   label.textContent = params.label;

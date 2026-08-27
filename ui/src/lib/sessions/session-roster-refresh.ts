@@ -37,7 +37,12 @@ type SessionRosterRefreshHost = {
     list: Readonly<Record<string, unknown>>,
   ) => Promise<SessionsListResult | null>;
   decorate: (result: SessionsListResult | null) => SessionsListResult | null;
-  onCanonicalList: (result: SessionsListResult | null) => void;
+  onCanonicalList: (
+    result: SessionsListResult | null,
+    requestRevision: number,
+    agentId?: string,
+    observed?: SessionsListResult | null,
+  ) => void;
 };
 
 type ManagedSessionListRefresh = {
@@ -144,6 +149,7 @@ function retainSessionPaginationWindow(
 }
 
 export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
+  let requestRevision = 0;
   let inFlight: Promise<void> | null = null;
   let queuedExplicitRefresh: SessionRefreshOptions | null = null;
   let eventRefreshQueued = false;
@@ -287,6 +293,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!scope) {
       return null;
     }
+    const issuedRevision = ++requestRevision;
     const { append = false, force: _force, backgroundHydrate = false, ...requestOptions } = options;
     // Every canonical roster replaces visible session names, so omitted title
     // enrichment must inherit the UI default instead of publishing fallback ids.
@@ -342,7 +349,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         );
       }
       nextResult = host.decorate(nextResult);
-      host.onCanonicalList(nextResult);
+      host.onCanonicalList(nextResult, issuedRevision, requestOptions.agentId, result);
       const state = host.readState();
       const error = host.observerError();
       host.publish(
@@ -519,6 +526,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   };
 
   return {
+    get requestRevision() {
+      return requestRevision;
+    },
     list,
     listSnapshot(scope: SessionListScope): SessionListSnapshot {
       if (isPrimarySessionListQuery(scope)) {

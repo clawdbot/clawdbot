@@ -1760,37 +1760,39 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it.each([
-    ["group", true],
-    ["channel", true],
-    ["direct", false],
-  ] as const)("persists sender attribution for %s turns only", async (chatType, shouldPersist) => {
-    await runPrepared({
-      ctx: {
-        ...createInboundBody("hello"),
-        OriginatingChannel: "telegram",
-        OriginatingTo: "chat-1",
-        ChatType: chatType,
-      },
-      sessionCtx: {
-        ...createSessionBody("hello"),
-        Provider: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "chat-1",
-        ChatType: chatType,
-        SenderId: "user-42",
-        SenderName: "Ada",
-        SenderUsername: "ada",
-      },
-      sessionEntry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-        chatType,
-        channel: "telegram",
-      } as SessionEntry,
-    });
+    ["group", false],
+    ["channel", false],
+    ["direct", true],
+  ] as const)(
+    "persists sender attribution for %s turns from external contacts",
+    async (chatType, requiresChannelAdmission) => {
+      await runPrepared({
+        ctx: {
+          ...createInboundBody("hello"),
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: chatType,
+          ...(requiresChannelAdmission ? { InboundAccessAuthorized: true } : {}),
+        },
+        sessionCtx: {
+          ...createSessionBody("hello"),
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat-1",
+          ChatType: chatType,
+          SenderId: "user-42",
+          SenderName: "Ada",
+          SenderUsername: "ada",
+        },
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType,
+          channel: "telegram",
+        } as SessionEntry,
+      });
 
-    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
-    if (shouldPersist) {
+      const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
       expect(message).toMatchObject({
         __openclaw: {
           senderId: "user-42",
@@ -1798,11 +1800,73 @@ describe("runPreparedReply media-only handling", () => {
           senderUsername: "ada",
         },
       });
-    } else {
-      expect(message).not.toHaveProperty("__openclaw.senderId");
-      expect(message).not.toHaveProperty("__openclaw.senderName");
-      expect(message).not.toHaveProperty("__openclaw.senderUsername");
-    }
+    },
+  );
+
+  it("does not persist sender attribution for operator-authored direct turns", async () => {
+    await runPrepared({
+      ctx: {
+        ...createInboundBody("hello"),
+        OriginatingChannel: "telegram",
+        OriginatingTo: "chat-1",
+        ChatType: "direct",
+        InboundAccessAuthorized: true,
+        SenderIsSelf: true,
+      },
+      sessionCtx: {
+        ...createSessionBody("hello"),
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "chat-1",
+        ChatType: "direct",
+        SenderId: "user-42",
+        SenderName: "Ada",
+        SenderUsername: "ada",
+      },
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        chatType: "direct",
+        channel: "telegram",
+      } as SessionEntry,
+    });
+
+    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+    expect(message).not.toHaveProperty("__openclaw.senderId");
+    expect(message).not.toHaveProperty("__openclaw.senderName");
+    expect(message).not.toHaveProperty("__openclaw.senderUsername");
+  });
+
+  it("does not persist sender attribution for gateway-local direct turns without channel admission", async () => {
+    await runPrepared({
+      ctx: {
+        ...createInboundBody("hello"),
+        OriginatingChannel: "webchat",
+        OriginatingTo: "chat-1",
+        ChatType: "direct",
+      },
+      sessionCtx: {
+        ...createSessionBody("hello"),
+        Provider: "webchat",
+        OriginatingChannel: "webchat",
+        OriginatingTo: "chat-1",
+        ChatType: "direct",
+        SenderId: "gateway-cli",
+        SenderName: "Gateway CLI",
+        SenderUsername: "cli",
+      },
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        chatType: "direct",
+        channel: "webchat",
+      } as SessionEntry,
+    });
+
+    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+    expect(message).not.toHaveProperty("__openclaw.senderId");
+    expect(message).not.toHaveProperty("__openclaw.senderName");
+    expect(message).not.toHaveProperty("__openclaw.senderUsername");
   });
 
   it("normalizes second-based inbound timestamps before preparing user turns", async () => {

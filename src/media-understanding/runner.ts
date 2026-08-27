@@ -943,42 +943,41 @@ export async function runCapability(params: {
     if (shouldLogVerbose()) {
       logVerbose("Skipping image understanding: primary model supports vision natively");
     }
-    const model = params.activeModel?.model?.trim();
-    const reason = "primary model supports vision natively";
-    // Native hydration resolves local paths and media-store refs only; a
-    // remote-URL-only image is never delivered that way, so claiming the
-    // handoff would suppress its marker while it silently vanishes.
+    const attempt = {
+      type: "provider" as const,
+      provider: activeProvider,
+      model: params.activeModel?.model?.trim() || undefined,
+      outcome: "skipped" as const,
+      reason: "primary model supports vision natively",
+    };
+    // Native hydration ignores understanding limits but only resolves local paths
+    // and media-store refs. Selected and dropped remote URLs both need failure
+    // markers; claiming a handoff would silently hide them.
     const nativeDeliverable = (item: MediaAttachment) =>
       Boolean(item.path) ||
       (Boolean(item.url) && classifyMediaReferenceSource(item.url ?? "").isMediaStoreUrl);
+    const attachmentDispositions = buildDispositions(
+      { kind: "handed-to-native-vision" },
+      { kind: "not-selected" },
+    );
+    for (const item of params.media) {
+      if (attachmentDispositions[item.index] && !nativeDeliverable(item)) {
+        attachmentDispositions[item.index] = {
+          kind: "failed",
+          reason: "remote-url image is not natively deliverable",
+        };
+      }
+    }
     return {
       outputs: [],
       decision: await buildDecision(
         "skipped",
-        selection.selected.map((item) => {
-          if (!nativeDeliverable(item)) {
-            return { attachmentIndex: item.index, attempts: [] };
-          }
-          const attempt = {
-            type: "provider" as const,
-            provider: activeProvider,
-            model: model || undefined,
-            outcome: "skipped" as const,
-            reason,
-          };
-          return {
-            attachmentIndex: item.index,
-            attempts: [attempt],
-            chosen: attempt,
-          };
-        }),
-        {
-          ...buildDispositions({ kind: "handed-to-native-vision" }),
-          ...createAttachmentDispositions(
-            selection.selected.filter((item) => !nativeDeliverable(item)).map((item) => item.index),
-            { kind: "failed", reason: "remote-url image is not natively deliverable" },
-          ),
-        },
+        selection.selected.map((item) =>
+          nativeDeliverable(item)
+            ? { attachmentIndex: item.index, attempts: [attempt], chosen: attempt }
+            : { attachmentIndex: item.index, attempts: [] },
+        ),
+        attachmentDispositions,
       ),
     };
   }

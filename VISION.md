@@ -130,6 +130,7 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - New core skills when they can live on [ClawHub](https://clawhub.ai/)
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
+- Cloud-based sandbox providers as OpenClaw plugins; implement provider support in [Crabbox](https://github.com/openclaw/crabbox) instead
 - Wrapper channels around already supported channels without a clear capability or security gap
 - MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure

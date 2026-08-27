@@ -3,6 +3,44 @@ import XCTest
 
 @MainActor
 final class TalkSystemSpeechSynthesizerTests: XCTestCase {
+    func testLiveOldCancellationDoesNotStopReplacement() async throws {
+        try XCTSkipUnless(
+            ProcessInfo.processInfo.environment["OPENCLAW_LIVE_TEST"] == "1",
+            "Requires working native speech/audio services; run with OPENCLAW_LIVE_TEST=1.")
+        let speaker = TalkSystemSpeechSynthesizer.shared
+        defer { speaker.stop() }
+        let first = await self.startSpeech()
+        defer { first.cancel() }
+
+        first.cancel()
+        var replacementStarts = 0
+        try await speaker.speak(
+            text: "Replacement speech.", language: "en-US",
+            onStart: { replacementStarts += 1 })
+
+        XCTAssertEqual(replacementStarts, 1)
+        try await self.assertCanceled(first)
+    }
+
+    private func startSpeech() async -> Task<Void, Error> {
+        let started = self.expectation(description: "utterance started")
+        let speech = Task { @MainActor in
+            try await TalkSystemSpeechSynthesizer.shared.speak(
+                text: String(repeating: "This utterance will be interrupted. ", count: 20),
+                language: "en-US",
+                onStart: { started.fulfill() })
+        }
+        await self.fulfillment(of: [started], timeout: 10)
+        return speech
+    }
+
+    private func assertCanceled(_ speech: Task<Void, Error>) async throws {
+        do {
+            try await speech.value
+            XCTFail("Interrupted speech completed successfully")
+        } catch TalkSystemSpeechSynthesizer.SpeakError.canceled {}
+    }
+
     func testWatchdogTimeoutDefaultsToLatinProfile() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
             text: String(repeating: "a", count: 100),
@@ -37,7 +75,7 @@ final class TalkSystemSpeechSynthesizerTests: XCTestCase {
 
     func testWatchdogTimeoutClampsVeryLongUtterances() {
         let timeout = TalkSystemSpeechSynthesizer.watchdogTimeoutSeconds(
-            text: String(repeating: "a", count: 10_000),
+            text: String(repeating: "a", count: 10000),
             language: "en-US")
 
         XCTAssertEqual(timeout, 900.0, accuracy: 0.001)

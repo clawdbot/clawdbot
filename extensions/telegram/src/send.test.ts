@@ -2138,14 +2138,20 @@ describe("sendMessageTelegram", () => {
     expect(botApi.sendMessage).toHaveBeenCalledTimes(3);
   });
 
-  it("does not continue after accepted-send bookkeeping fails", async () => {
+  it.each([
+    new Error("delivery observer failed"),
+    createHtmlParseError(),
+    new Error("Bad Request: message text is empty"),
+    createChunkRejection("delivery observer failed"),
+  ])("does not continue after accepted-send bookkeeping fails: %s", async (observerError) => {
     botApi.sendMessage
       .mockResolvedValueOnce({ message_id: 54, chat: { id: "123" } })
-      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } });
+      .mockResolvedValueOnce({ message_id: 55, chat: { id: "123" } })
+      .mockResolvedValue({ message_id: 56, chat: { id: "123" } });
     const onDeliveryResult = vi
       .fn()
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("delivery observer failed"));
+      .mockRejectedValueOnce(observerError);
 
     let observed: unknown;
     try {

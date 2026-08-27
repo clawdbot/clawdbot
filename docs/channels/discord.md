@@ -1128,7 +1128,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    Discord auto-enables native exec approvals when `enabled` is unset or `"auto"` and at least one approver can be resolved, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`. Set `enabled: false` to disable Discord as a native approval client explicitly.
+    Discord native exec approvals require `enabled: true` or `enabled: "auto"` and at least one resolved approver, either from `execApprovals.approvers` or from `commands.ownerAllowFrom`. Leaving `enabled` unset or setting it to `false` disables native exec approval delivery. Discord does not infer exec approvers from channel `allowFrom`, legacy `dm.allowFrom`, or direct-message `defaultTo`.
 
     For sensitive owner-only group commands such as `/diagnostics` and `/export-trajectory`, OpenClaw sends approval prompts and final results privately. It tries Discord DM first when the invoking owner has a Discord owner route; otherwise it falls back to the first available owner route from `commands.ownerAllowFrom`, such as Telegram.
 

@@ -16,7 +16,7 @@ import type {
   WorkerEnvironmentStore,
   WorkerEnvironmentTransitionPatch,
 } from "./store.js";
-import type { WorkerTunnelManager } from "./tunnel.js";
+import type { WorkerTunnelStopReason } from "./tunnel-contract.js";
 
 export type WorkerProviderLifecycleInputOptions = {
   store: WorkerEnvironmentStore;
@@ -45,7 +45,13 @@ export type WorkerProviderLifecycleInputOptions = {
 };
 
 export type WorkerProviderLifecycleOptions = WorkerProviderLifecycleInputOptions & {
-  tunnelManager?: Pick<WorkerTunnelManager, "stop">;
+  tunnelManager?: {
+    stop(
+      environmentId: string,
+      ownerEpoch?: number,
+      reason?: WorkerTunnelStopReason,
+    ): Promise<void>;
+  };
   credentialBroker: WorkerCredentialBroker;
   callBootstrap: <T>(
     installation: WorkerInstallationArtifact,

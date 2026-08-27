@@ -30,8 +30,8 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "./context.ts";
-import "./app-host.ts";
 import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
+import "./app-host.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -740,21 +740,6 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     expect(
       shouldMergeChatChrome({ mobileNavLayout: true, routeId: "chat", onboarding: false }),
     ).toBe(false);
-  });
-
-  it("wires merged header window events for the shell lifecycle", () => {
-    const addEventListener = vi.spyOn(window, "addEventListener");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
-
-    shell.connectedCallback();
-
-    expect(addEventListener).toHaveBeenCalledWith(COMMAND_PALETTE_OPEN_EVENT, expect.any(Function));
-    expect(addEventListener).toHaveBeenCalledWith(
-      SHELL_NAV_DRAWER_TOGGLE_EVENT,
-      expect.any(Function),
-    );
-    shell.disconnectedCallback();
-    addEventListener.mockRestore();
   });
 
   it("prevents unhandled window file drops without overriding accepted targets", () => {

@@ -915,7 +915,6 @@ describe("chat pane connection lifecycle", () => {
     const cancelCommit = vi.fn();
     const initialScrollGeneration = state.chatScrollGeneration;
     state.chatScrollCommitCleanup = cancelCommit;
-    state.chatIsProgrammaticScroll = true;
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -927,7 +926,6 @@ describe("chat pane connection lifecycle", () => {
     expect(cancelCommit).toHaveBeenCalledOnce();
     expect(state.chatScrollCommitCleanup).toBeNull();
     expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
-    expect(state.chatIsProgrammaticScroll).toBe(false);
   });
 
   it("retires pending model selection state when the Gateway owner changes", () => {

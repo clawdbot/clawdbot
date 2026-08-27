@@ -1,36 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
-export type UpstreamProviderCatalogModel = {
+export type UpstreamProviderCatalogModel = Record<string, unknown> & {
   id: string;
-  name: string;
-  status?: string;
-  reasoning?: boolean;
-  tool_call?: boolean;
-  attachment?: boolean;
-  reasoning_options?: ReadonlyArray<{ type: string; values?: ReadonlyArray<string | null> }>;
-  modalities?: { input?: readonly string[]; output?: readonly string[] };
-  provider?: { npm?: string; api?: string };
-  limit: { context: number; input?: number; output: number };
-  cost?: {
-    input: number;
-    output: number;
-    cache_read?: number;
-    cache_write?: number;
-    tiers?: ReadonlyArray<{
-      input: number;
-      output: number;
-      cache_read?: number;
-      cache_write?: number;
-      tier: { type: string; size: number };
-    }>;
-    context_over_200k?: {
-      input: number;
-      output: number;
-      cache_read?: number;
-      cache_write?: number;
-    };
-  };
+  limit: Record<string, unknown> & { context: number; output: number };
 };
 
 export type UpstreamProviderCatalog = {
@@ -46,6 +19,14 @@ export type ProjectedUpstreamProviderCatalogModel = ModelDefinitionConfig & {
   baseUrl: string;
   input: Array<"text" | "image">;
 };
+
+export function readLiveModelCatalogId(row: unknown): string | undefined {
+  const record = readLiveModelCatalogRecord(row);
+  if (record?.object !== undefined && record.object !== "model") {
+    return undefined;
+  }
+  return readLiveModelCatalogStringField(record, "id");
+}
 
 export function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
   return asOptionalRecord(body);
@@ -381,42 +362,44 @@ function readUpstreamProviderCatalogCostValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function buildUpstreamProviderCatalogCost(
-  rawCost: UpstreamProviderCatalogModel["cost"],
-): ModelDefinitionConfig["cost"] {
-  const cost = {
+function readUpstreamProviderCatalogCost(rawCost: Record<string, unknown> | undefined) {
+  return {
     input: readUpstreamProviderCatalogCostValue(rawCost?.input),
     output: readUpstreamProviderCatalogCostValue(rawCost?.output),
     cacheRead: readUpstreamProviderCatalogCostValue(rawCost?.cache_read),
     cacheWrite: readUpstreamProviderCatalogCostValue(rawCost?.cache_write),
   };
-  const upstreamTiers = (rawCost?.tiers ?? [])
-    .filter(
-      (tier) =>
-        tier.tier?.type === "context" && Number.isSafeInteger(tier.tier.size) && tier.tier.size > 0,
-    )
-    .toSorted((left, right) => left.tier.size - right.tier.size);
-  if (upstreamTiers.length === 0 && rawCost?.context_over_200k) {
-    upstreamTiers.push({
-      ...rawCost.context_over_200k,
-      tier: { type: "context", size: 200_000 },
-    });
+}
+
+function buildUpstreamProviderCatalogCost(value: unknown): ModelDefinitionConfig["cost"] {
+  const rawCost = readLiveModelCatalogRecord(value);
+  const cost = readUpstreamProviderCatalogCost(rawCost);
+  const upstreamTiers = (Array.isArray(rawCost?.tiers) ? rawCost.tiers : [])
+    .flatMap((rawTier) => {
+      const row = readLiveModelCatalogRecord(rawTier);
+      const tier = readLiveModelCatalogRecord(row?.tier);
+      const size = readLiveModelCatalogPositiveSafeIntegerField(tier, "size");
+      return tier?.type === "context" && size
+        ? [{ size, cost: readUpstreamProviderCatalogCost(row) }]
+        : [];
+    })
+    .toSorted((left, right) => left.size - right.size);
+  const legacyCost = readLiveModelCatalogRecord(rawCost?.context_over_200k);
+  if (upstreamTiers.length === 0 && legacyCost) {
+    upstreamTiers.push({ size: 200_000, cost: readUpstreamProviderCatalogCost(legacyCost) });
   }
   const firstTier = upstreamTiers[0];
   if (!firstTier) {
     return cost;
   }
   const tieredPricing: NonNullable<ModelDefinitionConfig["cost"]["tieredPricing"]> = [
-    { ...cost, range: [0, firstTier.tier.size] },
+    { ...cost, range: [0, firstTier.size] },
   ];
   for (const [index, tier] of upstreamTiers.entries()) {
-    const nextThreshold = upstreamTiers[index + 1]?.tier.size;
+    const nextThreshold = upstreamTiers[index + 1]?.size;
     tieredPricing.push({
-      input: readUpstreamProviderCatalogCostValue(tier.input),
-      output: readUpstreamProviderCatalogCostValue(tier.output),
-      cacheRead: readUpstreamProviderCatalogCostValue(tier.cache_read),
-      cacheWrite: readUpstreamProviderCatalogCostValue(tier.cache_write),
-      range: nextThreshold ? [tier.tier.size, nextThreshold] : [tier.tier.size],
+      ...tier.cost,
+      range: nextThreshold ? [tier.size, nextThreshold] : [tier.size],
     });
   }
   return { ...cost, tieredPricing };
@@ -429,6 +412,16 @@ function parseUpstreamProviderCatalogUrl(value: string): URL | undefined {
     return undefined;
   }
 }
+
+const UPSTREAM_PROVIDER_API_BY_PACKAGE = new Map<
+  string,
+  ProjectedUpstreamProviderCatalogModel["api"]
+>([
+  ["@ai-sdk/anthropic", "anthropic-messages"],
+  ["@ai-sdk/google", "google-generative-ai"],
+  ["@ai-sdk/openai", "openai-responses"],
+  ["@ai-sdk/openai-compatible", "openai-completions"],
+]);
 
 /** Projects authoritative provider-owned model metadata into its runtime transport and capabilities. */
 export function projectUpstreamProviderCatalogModel(params: {
@@ -452,13 +445,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     readLiveModelCatalogStringField(modelProvider, "npm") ??
     params.provider.npm ??
     "@ai-sdk/openai-compatible";
-  const apiByPackage: Record<string, ProjectedUpstreamProviderCatalogModel["api"]> = {
-    "@ai-sdk/anthropic": "anthropic-messages",
-    "@ai-sdk/google": "google-generative-ai",
-    "@ai-sdk/openai": "openai-responses",
-    "@ai-sdk/openai-compatible": "openai-completions",
-  };
-  const api = apiByPackage[npm];
+  const api = UPSTREAM_PROVIDER_API_BY_PACKAGE.get(npm);
   if (!api) {
     return undefined;
   }
@@ -514,7 +501,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     baseUrl,
     reasoning: readLiveModelCatalogBooleanField(model, "reasoning") ?? false,
     input,
-    cost: buildUpstreamProviderCatalogCost(params.model?.cost),
+    cost: buildUpstreamProviderCatalogCost(model.cost),
     contextWindow,
     ...(contextTokens && contextTokens <= contextWindow ? { contextTokens } : {}),
     maxTokens,

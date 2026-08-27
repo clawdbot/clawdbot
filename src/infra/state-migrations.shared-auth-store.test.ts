@@ -154,14 +154,18 @@ describe("shared auth store relocation", () => {
     const database = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
     expect(
       database
-        .prepare("SELECT store_key, store_json FROM auth_profile_stores WHERE store_key = 'shared'")
+        .prepare(
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.store'",
+        )
         .get(),
-    ).toEqual({ store_key: "shared", store_json: JSON.stringify(fixture.sharedStore) });
+    ).toEqual({ value_json: JSON.stringify(fixture.sharedStore) });
     expect(
       database
-        .prepare("SELECT store_key, state_json FROM auth_profile_state WHERE store_key = 'shared'")
+        .prepare(
+          "SELECT value_json FROM config_machine_state WHERE state_key = 'authProfiles.state'",
+        )
         .get(),
-    ).toEqual({ store_key: "shared", state_json: JSON.stringify(fixture.sharedState) });
+    ).toEqual({ value_json: JSON.stringify(fixture.sharedState) });
     expect(
       database
         .prepare("SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ?")
@@ -196,10 +200,10 @@ describe("shared auth store relocation", () => {
         .get() as { state_json: string; updated_at: number };
       const target = fixture.stateDb.openOpenClawStateDatabase({ env: fixture.env }).db;
       target
-        .prepare("INSERT INTO auth_profile_stores VALUES ('shared', ?, ?)")
+        .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.store', ?, ?)")
         .run(sourceStore.store_json, sourceStore.updated_at);
       target
-        .prepare("INSERT INTO auth_profile_state VALUES ('shared', ?, ?)")
+        .prepare("INSERT INTO config_machine_state VALUES ('authProfiles.state', ?, ?)")
         .run(sourceState.state_json, sourceState.updated_at);
       if (
         crashState === "copied-source-empty-not-flipped" ||
@@ -267,12 +271,22 @@ describe("shared auth store relocation", () => {
         location: "state-db",
       });
       expect(retry).toEqual({ changes: [], warnings: [] });
-      expect(target.prepare("SELECT COUNT(*) AS count FROM auth_profile_stores").get()).toEqual({
-        count: 1,
-      });
-      expect(target.prepare("SELECT COUNT(*) AS count FROM auth_profile_state").get()).toEqual({
-        count: 1,
-      });
+      expect(
+        target
+          .prepare(
+            `SELECT COUNT(*) AS count FROM config_machine_state
+              WHERE state_key = 'authProfiles.store'`,
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        target
+          .prepare(
+            `SELECT COUNT(*) AS count FROM config_machine_state
+              WHERE state_key = 'authProfiles.state'`,
+          )
+          .get(),
+      ).toEqual({ count: 1 });
       const cleanedSource = new DatabaseSync(sourcePath, { readOnly: true });
       expect(
         cleanedSource

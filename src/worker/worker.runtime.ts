@@ -5,8 +5,10 @@ import {
   WORKER_PORTAL_PROTOCOL_FEATURE,
   type WorkerHelloOk,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { waitForExecScope } from "../agents/bash-process-registry.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import {
@@ -58,12 +60,49 @@ async function assertWorkerDirectory(pathname: string, label: string): Promise<s
   return resolved;
 }
 
+/** Holds process-local state until every command owned by this environment has exited. */
+export async function createWorkerRuntimeEnvironment(sessionId: string) {
+  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
+  await chmod(stateDir, 0o700);
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  let closing: Promise<void> | undefined;
+  return {
+    stateDir,
+    close: () =>
+      (closing ??= (async () => {
+        const supervisor = getProcessSupervisor();
+        const scopeKey = `worker:${sessionId}`;
+        supervisor.cancelScope(scopeKey, "manual-cancel");
+        await supervisor.waitForScope?.(scopeKey);
+        await waitForExecScope(scopeKey);
+        // Process completion writes its task outcome into this environment's state.
+        // Restore the ambient directory only after those callbacks have settled.
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+        await rm(stateDir, { recursive: true, force: true });
+      })()),
+  };
+}
+
 export async function runWorkerDescriptor(
   descriptor: WorkerLaunchDescriptor,
   options: {
     signal?: AbortSignal;
     onConnectionFailure?: (cause: string | undefined) => void;
     browserRuntime?: WorkerBrowserRuntime;
+    /** Supplied by the managed process owner, which closes state after its final turn. */
+    environmentStateDir?: string;
   } = {},
 ): Promise<WorkerRuntimeResult> {
   if (
@@ -86,12 +125,10 @@ export async function runWorkerDescriptor(
       "worker workspace path escapes its assigned containment root; reprovision the worker workspace and retry",
     );
   }
-  const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-"));
-  await chmod(stateDir, 0o700);
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+  const environment = options.environmentStateDir
+    ? undefined
+    : await createWorkerRuntimeEnvironment(descriptor.admission.sessionId);
+  const stateDir = options.environmentStateDir ?? environment!.stateDir;
 
   const abortController = new AbortController();
   let turnStarted = false;
@@ -214,7 +251,7 @@ export async function runWorkerDescriptor(
         sessions: connection,
         signal: abortController.signal,
       });
-      if (options.signal?.aborted) {
+      if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
     } catch (error) {
@@ -222,7 +259,7 @@ export async function runWorkerDescriptor(
       if (fenced) {
         return fenced;
       }
-      if (options.signal?.aborted) {
+      if (options.signal?.aborted && !options.environmentStateDir) {
         throw toWorkerRuntimeError(options.signal.reason, "worker interrupted");
       }
       if (resultFenceAcked && connection.state.kind === "ready") {
@@ -256,16 +293,6 @@ export async function runWorkerDescriptor(
     inference.dispose();
     live.dispose();
     await connection.stop();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
-    await rm(stateDir, { recursive: true, force: true });
+    await environment?.close();
   }
 }

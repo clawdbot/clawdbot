@@ -16,12 +16,16 @@ type MergeScenario = {
   autoError?: string;
   autoResult?: "enabled" | "inconclusive" | "unavailable";
   checks?: "fail" | "green" | "pending";
+  cleanupMetadataError?: string;
   commentEmpty?: boolean;
   commentFailures?: number;
   existingAutoMethod?: "" | "MERGE" | "REBASE" | "SQUASH";
   mergeStateStatus?: string;
   mergeable?: string;
   recommendation?: "ready" | "needs_work";
+  remoteDeleteError?: string;
+  remoteReadError?: string;
+  remoteRefsJson?: string;
   reviewArtifacts?: "valid" | "invalid";
 };
 
@@ -172,7 +176,11 @@ gh_route() {
         *"--json mergeCommit"*) printf '%s\\n' "$OPENCLAW_TEST_LANDED_SHA" ;;
         *"--json commits"*) printf '1\\n' ;;
         *"--json headRefName,headRepository"*)
-          printf '%s\\n' '{"headRefName":"feature","headRepository":{"name":"openclaw"},"headRepositoryOwner":{"login":"openclaw"},"isCrossRepository":false,"maintainerCanModify":true}'
+          if [ -n "$OPENCLAW_TEST_CLEANUP_METADATA_ERROR" ]; then
+            printf '%s\\n' "$OPENCLAW_TEST_CLEANUP_METADATA_ERROR" >&2
+            return 1
+          fi
+          printf '%s\\n' '{"headRefName":"topic/nested","headRepository":{"name":"fixture"},"headRepositoryOwner":{"login":"contributor"},"isCrossRepository":true,"maintainerCanModify":true}'
           ;;
         *"--json url"*) printf 'https://github.com/openclaw/openclaw/pull/123\\n' ;;
         *) printf '%s\\n' '{"state":"OPEN"}' ;;
@@ -232,7 +240,20 @@ gh_route() {
           fi
           printf 'https://github.com/openclaw/openclaw/pull/123#issuecomment-1\\n'
           ;;
-        *"git/refs/"*) printf 'remote-cleanup\\n' >> "$OPENCLAW_TEST_LIFECYCLE" ;;
+        *"git/refs/"*)
+          printf 'remote-cleanup\\n' >> "$OPENCLAW_TEST_LIFECYCLE"
+          if [ -n "$OPENCLAW_TEST_REMOTE_DELETE_ERROR" ]; then
+            printf '%s\\n' "$OPENCLAW_TEST_REMOTE_DELETE_ERROR" >&2
+            return 1
+          fi
+          ;;
+        *"git/matching-refs/"*)
+          printf '%s\\n' "$OPENCLAW_TEST_REMOTE_REFS_JSON"
+          if [ -n "$OPENCLAW_TEST_REMOTE_READ_ERROR" ]; then
+            printf '%s\\n' "$OPENCLAW_TEST_REMOTE_READ_ERROR" >&2
+            return 1
+          fi
+          ;;
         *) : ;;
       esac
       ;;
@@ -257,6 +278,7 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_AUTO_STATE: autoState,
       OPENCLAW_TEST_CHECKS_EXIT_STATUS: scenario.checks === "pending" ? "8" : "0",
       OPENCLAW_TEST_CHECKS_JSON: JSON.stringify(checks),
+      OPENCLAW_TEST_CLEANUP_METADATA_ERROR: scenario.cleanupMetadataError ?? "",
       OPENCLAW_TEST_COMMENT_ATTEMPTS: commentAttempts,
       OPENCLAW_TEST_COMMENT_BODY: commentBody,
       OPENCLAW_TEST_COMMENT_EMPTY: scenario.commentEmpty ? "true" : "false",
@@ -270,6 +292,9 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_MERGE_STATE_STATUS: scenario.mergeStateStatus ?? "BEHIND",
       OPENCLAW_TEST_POST_AUTO_META: postAutoMeta,
       OPENCLAW_TEST_PRE_AUTO_META: preAutoMeta,
+      OPENCLAW_TEST_REMOTE_DELETE_ERROR: scenario.remoteDeleteError ?? "",
+      OPENCLAW_TEST_REMOTE_READ_ERROR: scenario.remoteReadError ?? "",
+      OPENCLAW_TEST_REMOTE_REFS_JSON: scenario.remoteRefsJson ?? "[]",
       OPENCLAW_TEST_REVIEW_ARTIFACTS: scenario.reviewArtifacts ?? "valid",
       OPENCLAW_TEST_REVIEW_RECOMMENDATION: scenario.recommendation ?? "ready",
       OPENCLAW_TEST_RG_CALLS: rgCalls,
@@ -356,6 +381,10 @@ describePosix("scripts/pr merge-run", () => {
       `Merged via squash.\n\n- Prepared head SHA: [${headSha}](https://github.com/openclaw/openclaw/pull/123/commits/${headSha})\n- Landed commit: [${landedSha}](https://github.com/openclaw/openclaw/commit/${landedSha})`,
     );
     expect(result.rgCalls).toBe("");
+    expect(result.calls.match(/^plain api .*git\/.*$/gmu)).toEqual([
+      "plain api -X DELETE repos/contributor/fixture/git/refs/heads%2Ftopic%2Fnested",
+    ]);
+    expect(result.calls).not.toContain("matching-refs");
     expect(result.lifecycle).toBe(
       "comment\nremote-cleanup\nworktree-cleanup .worktrees/pr-123\nbranch-cleanup temp/pr-123\nbranch-cleanup pr-123\nbranch-cleanup pr-123-prep\n",
     );
@@ -368,6 +397,107 @@ describePosix("scripts/pr merge-run", () => {
     expect(result.commentAttempts).toBe(3);
     expect(result.lifecycle.match(/^comment$/gmu)).toHaveLength(3);
     expect(result.lifecycle).toContain("remote-cleanup");
+  });
+
+  it("keeps cleanup metadata failures nonfatal and completes local cleanup", () => {
+    const cleanupMetadataError = "gh: connection reset by peer while reading PR head metadata";
+    const result = runMerge({ cleanupMetadataError });
+
+    expect(
+      { exitCode: result.status, lifecycle: result.lifecycle },
+      `${result.stdout}\n${result.stderr}`,
+    ).toEqual({
+      exitCode: 0,
+      lifecycle:
+        "comment\nworktree-cleanup .worktrees/pr-123\nbranch-cleanup temp/pr-123\nbranch-cleanup pr-123\nbranch-cleanup pr-123-prep\n",
+    });
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "Warning: unable to read PR head metadata for remote branch cleanup",
+    );
+    expect(result.stderr).toContain(cleanupMetadataError);
+    expect(result.calls).not.toMatch(/^(?:path|plain) api .*git\//mu);
+    expect(result.stdout).toContain("merge-run complete for PR #123");
+  });
+
+  it.each<MergeScenario & { name: string; warns: boolean }>([
+    {
+      name: "already-absent source branch completes cleanup without a false warning",
+      remoteDeleteError: "gh: Reference does not exist (HTTP 422)",
+      remoteRefsJson: "[]",
+      warns: false,
+    },
+    {
+      name: "transport failure after deletion accepts authoritative absence",
+      remoteDeleteError: "unexpected EOF after DELETE",
+      remoteRefsJson: "[]",
+      warns: false,
+    },
+    {
+      name: "longer prefix sibling is neither the target nor another deletion candidate",
+      remoteRefsJson: '[{"ref":"refs/heads/topic/nested-more"}]',
+      warns: false,
+    },
+    {
+      name: "present source branch warns with the original error and remains nonfatal",
+      remoteDeleteError: "gh: Resource not accessible by integration (HTTP 403)",
+      remoteRefsJson: '[{"ref":"refs/heads/topic/nested-more"},{"ref":"refs/heads/topic/nested"}]',
+      warns: true,
+    },
+    ...[
+      "gh: Bad credentials (HTTP 401)",
+      "gh: Not Found (HTTP 404)",
+      "connection reset by peer",
+    ].map((remoteReadError) => ({
+      name: `inaccessible source branch remains nonfatal and warns: ${remoteReadError}`,
+      remoteReadError,
+      // Even an empty array cannot prove absence when the read failed.
+      remoteRefsJson: "[]",
+      warns: true,
+    })),
+    ...[
+      "",
+      "not JSON",
+      "{}",
+      "null",
+      "[null]",
+      "[{}]",
+      '[{"ref":123}]',
+      '[{"ref":""}]',
+      '[{"ref":"refs/tags/topic/nested"}]',
+      "[]\n[]",
+    ].map((remoteRefsJson) => ({
+      name: `invalid ref evidence remains nonfatal and warns: ${JSON.stringify(remoteRefsJson)}`,
+      remoteRefsJson,
+      warns: true,
+    })),
+  ])("$name", ({ warns, ...scenario }) => {
+    const remoteDeleteError =
+      scenario.remoteDeleteError ?? "gh: Resource not accessible by integration (HTTP 403)";
+    const result = runMerge({ ...scenario, remoteDeleteError });
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status, output).toBe(0);
+    expect(result.stdout).toContain("merge-run complete for PR #123");
+    expect(result.lifecycle).toBe(
+      "comment\nremote-cleanup\nworktree-cleanup .worktrees/pr-123\nbranch-cleanup temp/pr-123\nbranch-cleanup pr-123\nbranch-cleanup pr-123-prep\n",
+    );
+    if (warns) {
+      expect(output).toContain(
+        "Warning: failed to delete remote branch contributor/fixture:topic/nested",
+      );
+      expect(output).toContain(remoteDeleteError);
+      if (scenario.remoteReadError) {
+        expect(output).toContain(scenario.remoteReadError);
+      }
+    } else {
+      expect(output).not.toContain("Warning:");
+    }
+    expect(result.calls.match(/^plain api .*git\/(?:refs|matching-refs)\/.*$/gmu)).toEqual([
+      "plain api -X DELETE repos/contributor/fixture/git/refs/heads%2Ftopic%2Fnested",
+      "plain api -X GET repos/contributor/fixture/git/matching-refs/heads%2Ftopic%2Fnested",
+    ]);
+    expect(result.calls).not.toMatch(/^path api .*git\//mu);
+    expect(result.calls).not.toContain("--delete-branch");
   });
 
   it("fails closed without cleanup when structured comment creation never succeeds", () => {

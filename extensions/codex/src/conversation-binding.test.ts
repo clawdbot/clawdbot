@@ -134,7 +134,7 @@ import {
   isCodexAppServerLiveThreadClaimed,
   retainCodexAppServerLiveThread,
 } from "./app-server/client-runtime.js";
-import type { CodexAppServerClient } from "./app-server/client.js";
+import { CodexAppServerRpcError, type CodexAppServerClient } from "./app-server/client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { codexNativeSubagentMonitorRuntime } from "./app-server/native-subagent-monitor.js";
 import type { JsonValue } from "./app-server/protocol.js";
@@ -1047,6 +1047,46 @@ describe("codex conversation binding", () => {
     expect(bindingAfterStart?.threadId).toBe("thread-new");
     expect(bindingAfterStart?.networkProxyProfileName).toBe(NETWORK_PROXY_PROFILE_NAME);
     expect(bindingAfterStart?.networkProxyConfigFingerprint).toBe(NETWORK_PROXY_CONFIG_FINGERPRINT);
+  });
+
+  it("releases a structured initial-attach resume failure before reusing the client", async () => {
+    const sessionFile = path.join(tempDir, "structured-resume-failure.jsonl");
+    const rejection = new CodexAppServerRpcError(
+      { code: -32_603, message: "resume response assembly failed" },
+      "thread/resume",
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        throw rejection;
+      }
+      if (method === "thread/unsubscribe") {
+        return { status: "unsubscribed" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-structured-resume-failure",
+      request,
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+      addCloseHandler: vi.fn(() => () => undefined),
+    } as unknown as CodexAppServerClient;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+
+    await expect(
+      startCodexConversationThread({
+        sessionFile,
+        threadId: "thread-structured-resume-failure",
+        workspaceDir: tempDir,
+      }),
+    ).rejects.toBe(rejection);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/resume",
+      "thread/unsubscribe",
+    ]);
+    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
   it("drops a retained native child before applying bound-only apps and sandbox policy", async () => {
@@ -3406,6 +3446,58 @@ describe("codex conversation binding", () => {
   });
 
   it.each([
+    { label: "structured failure", code: -32_603, cleaned: true },
+    { label: "overload rejection", code: -32_001, cleaned: false },
+  ])(
+    "preserves incognito reconnect $label without redundant cleanup",
+    async ({ code, cleaned }) => {
+      const sessionFile = path.join(tempDir, "incognito-reconnect.jsonl");
+      await writeTestConversationBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+      const binding = await readTestConversationBinding(sessionFile);
+      const rejection = new CodexAppServerRpcError(
+        {
+          code,
+          message: cleaned ? "resume response assembly failed" : "thread not found: thread-1",
+        },
+        "thread/resume",
+      );
+      let unsubscribed = false;
+      const request = vi.fn(async (method: string) => {
+        if (method === "thread/resume") {
+          throw rejection;
+        }
+        if (method === "thread/unsubscribe" && cleaned && !unsubscribed) {
+          unsubscribed = true;
+          return { status: "unsubscribed" };
+        }
+        throw new Error(`unexpected cleanup or fallback: ${method}`);
+      });
+      const closeAndWait = vi.fn(async () => true);
+      const client = { request, closeAndWait, getInstanceId: () => "reconnected-client" };
+      sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue(client);
+      const { event, ctx } = boundConversationClaim(
+        sessionFile,
+        "agent:main:dashboard:incognito-reconnect",
+      );
+
+      await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
+        handled: true,
+        reply: {
+          text: `Codex app-server turn failed: ${rejection.message}`,
+        },
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual(
+        cleaned ? ["thread/resume", "thread/unsubscribe"] : ["thread/resume"],
+      );
+      expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+      expect(closeAndWait).not.toHaveBeenCalled();
+      await expect(readTestConversationBinding(sessionFile)).resolves.toEqual(
+        cleaned ? undefined : binding,
+      );
+    },
+  );
+
+  it.each([
     { label: "ordinary", sessionKey: undefined },
     { label: "incognito", sessionKey: "agent:main:dashboard:incognito-resume-failure" },
   ])(
@@ -3418,7 +3510,7 @@ describe("codex conversation binding", () => {
       });
       const request = vi.fn(async (method: string) => {
         if (method === "thread/resume") {
-          throw new Error("conversation resume response timed out");
+          throw new Error("thread not found: thread-1");
         }
         if (method === "thread/unsubscribe") {
           throw new Error("detached client must not receive another cleanup request");
@@ -3442,7 +3534,7 @@ describe("codex conversation binding", () => {
 
       await expect(handleCodexConversationInboundClaim(event, ctx)).resolves.toEqual({
         handled: true,
-        reply: { text: "Codex app-server turn failed: conversation resume response timed out" },
+        reply: { text: "Codex app-server turn failed: thread not found: thread-1" },
       });
 
       expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);

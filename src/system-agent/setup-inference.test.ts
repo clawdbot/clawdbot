@@ -14,6 +14,7 @@ import {
   type AgentExecutionAuthBinding,
 } from "../agents/execution-auth-binding.js";
 import { ensureSelectedAgentHarnessPlugin } from "../agents/harness/runtime-plugin.js";
+import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -4586,6 +4587,50 @@ describe("activateSetupInference", () => {
       configHarness.currentRuntime(),
     );
   });
+
+  it.each([
+    { outcome: "succeeds", errorType: PreparedModelRuntimePublicationSupersededError },
+    { outcome: "remains indeterminate", errorType: Error },
+  ])(
+    "$outcome after a committed Codex catalog refresh rejects with $errorType.name",
+    async ({ errorType }) => {
+      const configHarness = createPreRosterConfigTransformHarness();
+      const refreshError = new errorType("prepared model runtime publication was superseded");
+      const refreshPreparedModelRuntimeSnapshots = vi.fn(async () => {
+        expect(configHarness.current().agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+        throw refreshError;
+      });
+      const activation = activateCodexSetup({
+        workspace: "/tmp/work",
+        deps: {
+          readConfigFileSnapshot: configHarness.readSnapshot as never,
+          transformConfigWithPendingPluginInstalls: configHarness.transform as never,
+          refreshPreparedModelRuntimeSnapshots,
+        },
+      });
+
+      if (errorType === PreparedModelRuntimePublicationSupersededError) {
+        await expect(activation).resolves.toMatchObject({
+          ok: true,
+          modelRef: "openai/gpt-5.6-sol",
+          lines: ["Inference verified: openai/gpt-5.6-sol"],
+        });
+        expect(mocks.appendAudit).toHaveBeenCalledOnce();
+      } else {
+        await expect(activation).rejects.toBeInstanceOf(SetupInferenceActivationIndeterminateError);
+        await expect(activation).rejects.toThrow(
+          new SetupInferenceActivationIndeterminateError(
+            `Inference activation committed, but the prepared model catalog could not be refreshed (${refreshError.message}). Restart the Gateway before using the new inference route.`,
+          ),
+        );
+        expect(mocks.appendAudit).not.toHaveBeenCalled();
+      }
+      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledOnce();
+      expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(
+        configHarness.currentRuntime(),
+      );
+    },
+  );
 
   it("probes a newly loaded Codex harness inside an older Gateway registry scope", async () => {
     const oldRegistry = createEmptyPluginRegistry();

@@ -106,8 +106,8 @@ export async function runManagerCloseSession(params: {
             missingBackendError: acpError,
           });
         }
-        // Treat unavailable backends as terminal for this cached handle so it
-        // cannot continue counting against maxConcurrentSessions.
+        // Treat unavailable backends as terminal for this cached handle so a
+        // later operation cannot reuse an unusable runtime.
         params.runtimeHandles.clear(sessionKey);
         runtimeNotice = acpError.message;
       } else {

@@ -121,6 +121,7 @@ export interface ShellChromeHost extends HTMLElement {
 
 export class ShellChromeOwner {
   private pendingLazyAction = readLazyShellAction();
+  private listeners: AbortController | undefined;
 
   constructor(private readonly host: ShellChromeHost) {}
 
@@ -133,56 +134,62 @@ export class ShellChromeOwner {
   }
 
   connect(): void {
+    this.disconnect();
+    this.listeners = new AbortController();
+    // One connection owns all three targets; abort removes exactly its listeners.
+    const options = { signal: this.listeners.signal };
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
-    host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen);
-    window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
-    window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
-    window.addEventListener(KEYBOARD_SHORTCUTS_REQUEST_EVENT, this.handleKeyboardShortcutsRequest);
-    document.addEventListener("keydown", this.handleDocumentKeydown);
-    window.addEventListener("resize", this.handleWindowResize);
-    window.addEventListener("dragover", this.handleUnhandledFileDrag);
-    window.addEventListener("drop", this.handleUnhandledFileDrag);
-    window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
+    host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
+    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen, options);
+    window.addEventListener(
+      SHELL_NAV_DRAWER_TOGGLE_EVENT,
+      this.handleShellNavDrawerToggle,
+      options,
+    );
+    window.addEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest, options);
+    window.addEventListener(
+      KEYBOARD_SHORTCUTS_REQUEST_EVENT,
+      this.handleKeyboardShortcutsRequest,
+      options,
+    );
+    document.addEventListener("keydown", this.handleDocumentKeydown, options);
+    window.addEventListener("resize", this.handleWindowResize, options);
+    window.addEventListener("dragover", this.handleUnhandledFileDrag, options);
+    window.addEventListener("drop", this.handleUnhandledFileDrag, options);
+    window.addEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState, options);
     // Shipped Mac hosts use these same events even when native web chrome is absent.
-    window.addEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
-    window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
-    window.addEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
-    window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession);
-    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
-    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
-    window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen);
+    window.addEventListener(
+      "openclaw:native-toggle-sidebar",
+      this.handleNativeToggleSidebar,
+      options,
+    );
+    window.addEventListener("openclaw:native-open-search", this.handleNativeOpenSearch, options);
+    window.addEventListener(
+      "openclaw:native-toggle-search",
+      this.handleNativeToggleSearch,
+      options,
+    );
+    window.addEventListener("openclaw:native-new-session", this.handleNativeNewSession, options);
+    window.addEventListener("openclaw:native-navigate", this.handleNativeNavigate, options);
+    window.addEventListener(
+      TERMINAL_PANEL_TOGGLE_EVENT,
+      this.handleDeferredTerminalToggle,
+      options,
+    );
+    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle, options);
+    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle, options);
+    window.addEventListener(
+      CUSTODIAN_PANEL_TOGGLE_EVENT,
+      this.handleDeferredCustodianToggle,
+      options,
+    );
+    window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
   }
 
   disconnect(): void {
-    const host = this.host;
-    host.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, this.handleCommandPaletteOpen);
-    window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, this.handleShellNavDrawerToggle);
-    window.removeEventListener(DEBUG_OVERLAY_REQUEST_EVENT, this.handleDebugOverlayRequest);
-    window.removeEventListener(
-      KEYBOARD_SHORTCUTS_REQUEST_EVENT,
-      this.handleKeyboardShortcutsRequest,
-    );
-    document.removeEventListener("keydown", this.handleDocumentKeydown);
-    window.removeEventListener("resize", this.handleWindowResize);
-    window.removeEventListener("dragover", this.handleUnhandledFileDrag);
-    window.removeEventListener("drop", this.handleUnhandledFileDrag);
-    window.removeEventListener(NATIVE_HISTORY_STATE_EVENT, this.handleNativeHistoryState);
-    window.removeEventListener("openclaw:native-toggle-sidebar", this.handleNativeToggleSidebar);
-    window.removeEventListener("openclaw:native-open-search", this.handleNativeOpenSearch);
-    window.removeEventListener("openclaw:native-toggle-search", this.handleNativeToggleSearch);
-    window.removeEventListener("openclaw:native-new-session", this.handleNativeNewSession);
-    window.removeEventListener("openclaw:native-navigate", this.handleNativeNavigate);
-    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle);
-    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle);
-    window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle);
-    window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredCustodianToggle);
-    window.removeEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen);
+    this.listeners?.abort();
+    this.listeners = undefined;
   }
 
   toggleNavigationSurface(trigger?: HTMLElement): void {

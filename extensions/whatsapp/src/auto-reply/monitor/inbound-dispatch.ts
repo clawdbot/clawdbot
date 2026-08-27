@@ -476,6 +476,7 @@ export async function prepareWhatsAppInboundContext(params: {
     sender: {
       id: params.sender.id ?? params.sender.e164,
       name: params.sender.name,
+      isSelf: params.msg.platform.fromMe === true,
     },
     conversation: {
       kind: conversationKind,

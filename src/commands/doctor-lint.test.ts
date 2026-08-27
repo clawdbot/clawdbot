@@ -451,12 +451,13 @@ describe("runDoctorLintCli", () => {
     });
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     try {
-      const exitCode = await runDoctorLintCli(runtime, {
-        json: true,
-        onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
-      });
-
-      expect(exitCode).toBe(1);
+      for (let run = 0; run < 2; run++) {
+        const exitCode = await runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: [CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID],
+        });
+        expect(exitCode).toBe(1);
+      }
       const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
       expect(payload).toMatchObject({
         ok: false,

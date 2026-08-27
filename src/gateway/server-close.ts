@@ -208,23 +208,9 @@ type RestartRunAbortParams = {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   markMainSessionsAbortedForRestart?: (params: {
-    sessionKeys: Set<string>;
-    sessionIds: Set<string>;
-    activeRuns: Array<{
-      runId: string;
-      lifecycleGeneration: string;
-      sessionKey: string;
-      sessionId: string;
-      observedAt?: number;
-    }>;
+    activeRuns: RestartRecoveryCandidate[];
     reason: string;
-    isActiveRun: (run: {
-      runId: string;
-      lifecycleGeneration: string;
-      sessionKey: string;
-      sessionId: string;
-      observedAt?: number;
-    }) => boolean;
+    isActiveRun: (run: RestartRecoveryCandidate) => boolean;
   }) => Promise<void> | void;
   resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
 };
@@ -270,24 +256,10 @@ function collectActiveRestartSessionRefs(
     RestartRunAbortParams,
     "chatAbortControllers" | "resolveActiveSessionIdForKey" | "restartRecoveryCandidates"
   >,
-): {
-  sessionKeys: Set<string>;
-  sessionIds: Set<string>;
-  activeRuns: Array<{
-    runId: string;
-    lifecycleGeneration: string;
-    sessionKey: string;
-    sessionId: string;
-    observedAt?: number;
-  }>;
-} {
-  const sessionKeys = new Set<string>();
-  const sessionIds = new Set<string>();
+): RestartRecoveryCandidate[] {
   const activeRuns = new Map<string, RestartRecoveryCandidate>();
   const observedAt = Date.now();
   const addRun = (run: RestartRecoveryCandidate) => {
-    sessionKeys.add(run.sessionKey);
-    sessionIds.add(run.sessionId);
     activeRuns.set(`${run.runId}\u0000${run.lifecycleGeneration}`, {
       ...run,
       observedAt: run.observedAt ?? observedAt,
@@ -295,18 +267,12 @@ function collectActiveRestartSessionRefs(
   };
   for (const [runId, entry] of listRestartRecoveryRuns(params.chatAbortControllers)) {
     const sessionKey = entry.sessionKey.trim();
-    if (sessionKey) {
-      sessionKeys.add(sessionKey);
-    }
     // Registration metadata can predate a reset or compaction session-id rotation.
     const resolvedSessionId =
       entry.kind === "agent" || !sessionKey
         ? undefined
         : params.resolveActiveSessionIdForKey?.(sessionKey);
     const sessionId = resolvedSessionId || entry.sessionId.trim();
-    if (sessionId) {
-      sessionIds.add(sessionId);
-    }
     if (runId && entry.lifecycleGeneration && sessionKey && sessionId) {
       addRun({
         runId,
@@ -324,7 +290,7 @@ function collectActiveRestartSessionRefs(
       sessionId: resolvedSessionId || candidate.sessionId,
     });
   }
-  return { sessionKeys, sessionIds, activeRuns: [...activeRuns.values()] };
+  return [...activeRuns.values()];
 }
 
 async function settleTerminalSessionPersistenceForRestart(
@@ -374,10 +340,7 @@ async function markActiveRunsForRestartRecovery(
     return;
   }
   await settleTerminalSessionPersistenceForRestart(params.chatAbortControllers);
-  const refs = collectActiveRestartSessionRefs(params);
-  if (refs.sessionKeys.size === 0 && refs.sessionIds.size === 0) {
-    return;
-  }
+  const activeRuns = collectActiveRestartSessionRefs(params);
   try {
     const markerTimeout = createTimeoutRace(
       RESTART_MARKER_SLOW_WARNING_MS,
@@ -385,7 +348,7 @@ async function markActiveRunsForRestartRecovery(
     );
     const markerOutcome = Promise.resolve(
       params.markMainSessionsAbortedForRestart({
-        ...refs,
+        activeRuns,
         reason: params.reason,
         isActiveRun: (run) => {
           const entry = params.chatAbortControllers.get(run.runId);
@@ -418,7 +381,7 @@ async function markActiveRunsForRestartRecovery(
     } else if (firstOutcome.status === "failed") {
       throw firstOutcome.error;
     }
-    for (const run of refs.activeRuns) {
+    for (const run of activeRuns) {
       params.restartRecoveryCandidates?.delete(run.runId);
     }
   } catch (err) {
@@ -521,14 +484,6 @@ async function drainRestartPendingRepliesForShutdown(
   const abortedQueuedTurns = abortQueuedTurnsForRestart(params);
   if (abortedQueuedTurns > 0) {
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
-  }
-
-  if (
-    drainResult.counts.activeRuns <= 0 &&
-    (params.restartRecoveryCandidates?.size ?? 0) === 0 &&
-    listRestartRecoveryRuns(params.chatAbortControllers).length === 0
-  ) {
-    return;
   }
 
   await markActiveRunsForRestartRecovery({

@@ -103,8 +103,8 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.118.0",
-    "@google/genai": "2.17.1",
+    "@anthropic-ai/sdk": "0.120.0",
+    "@google/genai": "2.18.0",
     "@mistralai/mistralai": "2.5.0",
     "openai": "7.5.0",
     "partial-json": "0.1.7",

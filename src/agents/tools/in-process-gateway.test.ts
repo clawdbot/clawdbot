@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 
@@ -27,6 +28,7 @@ import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import {
   callAgentToolGatewayRequest,
+  callInProcessGatewayTool,
   callInProcessGatewayToolWithCreation,
   withAgentToolGatewayRuntimeIdentity,
 } from "./in-process-gateway.js";
@@ -107,6 +109,157 @@ describe("trusted in-process Gateway session creation", () => {
       },
     );
     expect(getGatewaySessionSpawnContext()).toBeUndefined();
+  });
+
+  it("keeps session creation on the admitted Gateway through async settlement", async () => {
+    const admitted = { gateway: "admitted" } as unknown as GatewayRequestContext;
+    const replacement = { gateway: "replacement" } as unknown as GatewayRequestContext;
+    const params = { agentId: "main", label: "worker" };
+    const creation = {
+      via: "spawn" as const,
+      actor: { type: "agent" as const, id: "main" },
+      requesterSessionKey: "agent:main:main",
+    };
+    const controller = new AbortController();
+    let current = admitted;
+    let admittedDispatches = 0;
+    let replacementDispatches = 0;
+    const dispatchThroughSelectedGateway = (
+      options:
+        | {
+            resolveGatewayContext?: () => GatewayRequestContext | undefined;
+            sessionCreation?: unknown;
+            signal?: AbortSignal;
+            syntheticScopes?: string[];
+            timeoutMs?: number;
+          }
+        | undefined,
+    ) => {
+      const selected = options?.resolveGatewayContext?.() ?? replacement;
+      if (selected === admitted) {
+        admittedDispatches += 1;
+      } else if (selected === replacement) {
+        replacementDispatches += 1;
+      }
+      return selected;
+    };
+    const runAsAdmittedCaller = async <T>(run: () => Promise<T>) =>
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: () => current,
+        },
+        run,
+      );
+
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+      expect(dispatchThroughSelectedGateway(options)).toBe(admitted);
+      expect(options).toEqual({
+        forceSyntheticClient: true,
+        resolveGatewayContext: expect.any(Function),
+        sessionCreation: creation,
+        signal: controller.signal,
+        syntheticScopes: ["operator.write"],
+        timeoutMs: 2_000,
+      });
+      return { key: "agent:main:worker" };
+    });
+
+    await expect(
+      runAsAdmittedCaller(() =>
+        callInProcessGatewayToolWithCreation("sessions.create", params, creation, {
+          signal: controller.signal,
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).resolves.toEqual({ key: "agent:main:worker" });
+    expect(mocks.dispatch).toHaveBeenLastCalledWith("sessions.create", params, expect.any(Object));
+    expect({ admittedDispatches, replacementDispatches }).toEqual({
+      admittedDispatches: 1,
+      replacementDispatches: 0,
+    });
+
+    current = admitted;
+    const dispatchesBeforeReplacement = mocks.dispatch.mock.calls.length;
+    await expect(
+      runAsAdmittedCaller(async () => {
+        current = replacement;
+        return await callInProcessGatewayToolWithCreation("sessions.create", params, creation);
+      }),
+    ).rejects.toThrow("Gateway instance unavailable for sessions.create");
+    expect(mocks.dispatch).toHaveBeenCalledTimes(dispatchesBeforeReplacement);
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(replacementDispatches).toBe(0);
+
+    for (const settlement of ["resolve", "reject"] as const) {
+      current = admitted;
+      const pendingDispatch = createDeferred<{ key: string }>();
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+        expect(dispatchThroughSelectedGateway(options)).toBe(admitted);
+        return await pendingDispatch.promise;
+      });
+
+      const expectedDispatchCount = mocks.dispatch.mock.calls.length + 1;
+      const creationCall = runAsAdmittedCaller(() =>
+        callInProcessGatewayToolWithCreation("sessions.create", params, creation),
+      );
+      await vi.waitFor(() => expect(mocks.dispatch).toHaveBeenCalledTimes(expectedDispatchCount));
+      current = replacement;
+      if (settlement === "resolve") {
+        pendingDispatch.resolve({ key: "agent:main:worker" });
+      } else {
+        pendingDispatch.reject(new Error("inner dispatch failed"));
+      }
+      await expect(creationCall).rejects.toThrow(
+        "Gateway instance unavailable for sessions.create",
+      );
+      expect(replacementDispatches).toBe(0);
+    }
+  });
+
+  it("retains the generic helper's admitted binding and transport fallback", async () => {
+    const admitted = { gateway: "admitted" } as unknown as GatewayRequestContext;
+    const replacement = { gateway: "replacement" } as unknown as GatewayRequestContext;
+    let current = admitted;
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => ({
+      selected: options?.resolveGatewayContext?.() ?? replacement,
+    }));
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: () => current,
+        },
+        () => callInProcessGatewayTool("sessions.list", {}),
+      ),
+    ).resolves.toEqual({ selected: admitted });
+
+    current = admitted;
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          gatewayContextResolver: () => current,
+        },
+        async () => {
+          current = replacement;
+          return await callInProcessGatewayTool("sessions.list", {});
+        },
+      ),
+    ).rejects.toThrow("Gateway instance unavailable for sessions.list");
+
+    mocks.hasContext = false;
+    await callInProcessGatewayTool("sessions.list", { limit: 5 });
+    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
+      "sessions.list",
+      {},
+      { limit: 5 },
+      { scopes: ["operator.write"] },
+    );
   });
 });
 

@@ -445,6 +445,8 @@ date context. Falls back to the host timezone.
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
 - `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `min(16, max(8, available CPU parallelism))`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback.
 
+<a id="agentsdefaultsmodelselectionscope" />
+
 ### `agents.defaults.modelSelectionScope`
 
 Optional scope for chat commands and Gateway session model updates without an explicit scope.
@@ -1008,6 +1010,8 @@ scripts/sandbox-browser-setup.sh   # optional browser image
 ```
 
 For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
+
+<a id="agentsentries-per-agent-overrides" />
 
 ### `agents.entries` (per-agent overrides)
 

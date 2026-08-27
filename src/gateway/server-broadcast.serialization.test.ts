@@ -2,13 +2,26 @@
 // not consume per-client seqs (which would fire every client's gap detector and
 // cause a synchronized reconnect storm) and must leave a server-side record.
 import { once } from "node:events";
+import { existsSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { resolveSessionStorePathCore } from "../config/sessions.js";
+import {
+  deleteSessionEntryLifecycle,
+  patchSessionEntryCore,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setVerbose } from "../global-state.js";
+import type { SystemPresence } from "../infra/system-presence.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { createGatewayConnectionState } from "./server-connection-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const warnSpy = vi.hoisted(() => vi.fn());
@@ -65,6 +78,20 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it("never sends raw presence when its owner projection is missing", () => {
+    const peer = makeClient("unprepared");
+    const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
+    warnSpy.mockClear();
+    broadcast("presence", {
+      presence: [{ text: "watcher", ts: 1, watchedSessions: ["agent:main:hidden"] }],
+    });
+    expect(peer.socket.send).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("presence recipient projection unavailable"),
+    );
+    broadcast("skills.changed", {});
+    expect(peer.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+  });
   it.each([
     { state: "closing", readyState: WebSocket.CLOSING },
     { state: "closed", readyState: WebSocket.CLOSED },
@@ -209,5 +236,196 @@ describe("broadcast serialization failures", () => {
 
     expect(filtered.socket.send).not.toHaveBeenCalled();
     expect(dataReads).toBe(0);
+  });
+});
+
+describe("presence recipient projection", () => {
+  it("preserves scoped sentinels, recipient ordering, and current visibility without changing the source", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      let cfg: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
+      const sharedKey = "agent:main:shared";
+      const incognitoKey = "agent:main:dashboard:incognito-presence";
+      const keys = [
+        sharedKey,
+        incognitoKey,
+        "agent:main:global",
+        "agent:work:global",
+        "agent:work:unknown",
+      ];
+      for (const [agentId, sessionKey, visibility] of [
+        ["main", sharedKey, "shared"],
+        ["main", incognitoKey, "shared"],
+        ["main", "global", "draft"],
+        ["work", "global", "read-only"],
+        ["work", "unknown", "suggest"],
+      ] as const) {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey },
+          {
+            sessionId: `${agentId}-${sessionKey}`,
+            updatedAt: 1,
+            visibility,
+            createdActor: { type: "human", id: "creator" },
+          },
+        );
+      }
+      const reader = makeClient("reader");
+      reader.client.authenticatedUserProfile = {
+        profileId: ensureProfileForEmail("presence-reader@example.test").id,
+        displayName: "Reader",
+        avatarRevision: "1",
+        hasAvatar: false,
+        updatedAt: 1,
+      };
+      const admin = makeClient("admin");
+      admin.client.connect.scopes = ["operator.admin"];
+      const connection = createGatewayConnectionState({ cfg, getRuntimeConfig: () => cfg });
+      const person = {
+        text: "watcher",
+        ts: 42,
+        instanceId: "watcher",
+        user: { id: "creator", name: "Creator" },
+      };
+      const watcher = { ...person, watchedSessions: [...keys, "agent:main:deleted"] };
+      const presence = [watcher, { text: "idle", ts: 41 }];
+      Object.freeze(watcher.watchedSessions);
+      presence.forEach(Object.freeze);
+      Object.freeze(presence);
+      const payload = { presence };
+      const stateVersion = { presence: 7, health: 3 };
+      const lastFrame = (peer: ReturnType<typeof makeClient>) =>
+        // SAFETY: These sockets record JSON frames emitted by the real presence broadcaster below.
+        JSON.parse(peer.socket.send.mock.lastCall![0]) as {
+          payload: { presence: SystemPresence[] };
+          seq: number;
+          stateVersion: typeof stateVersion;
+        };
+      for (const order of [
+        [reader, admin],
+        [admin, reader],
+      ]) {
+        connection.clients.clear();
+        order.forEach((peer) => connection.clients.add(peer.client));
+        connection.broadcast("presence", payload, { stateVersion });
+        expect(lastFrame(reader).payload.presence).toEqual([
+          { ...person, watchedSessions: [sharedKey, "agent:work:global", "agent:work:unknown"] },
+          presence[1],
+        ]);
+        expect(lastFrame(admin).payload.presence).toEqual([
+          { ...person, watchedSessions: keys },
+          presence[1],
+        ]);
+        expect(lastFrame(reader).stateVersion).toEqual(stateVersion);
+      }
+      await patchSessionEntryCore({ agentId: "main", sessionKey: sharedKey }, () => ({
+        visibility: "draft",
+      }));
+      await deleteSessionEntryLifecycle({
+        agentId: "work",
+        storePath: resolveSessionStorePathCore(undefined, { agentId: "work" }),
+        target: { canonicalKey: "global", storeKeys: ["global"] },
+        archiveTranscript: false,
+      });
+      connection.broadcast("presence", payload);
+      expect(lastFrame(reader).payload.presence).toEqual([
+        { ...person, watchedSessions: ["agent:work:unknown"] },
+        presence[1],
+      ]);
+      expect(lastFrame(admin).payload.presence[0]?.watchedSessions).toEqual(
+        keys.filter((key) => key !== "agent:work:global"),
+      );
+
+      cfg = {
+        ...cfg,
+        gateway: {
+          roles: {
+            default: "restricted",
+            definitions: {
+              restricted: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        },
+      };
+      connection.broadcastToConnIds("presence", payload, new Set([reader.client.connId]), {
+        stateVersion,
+      });
+      expect(lastFrame(reader)).toEqual({
+        type: "event",
+        event: "presence",
+        payload: { presence: [person, presence[1]] },
+        seq: 4,
+        stateVersion,
+      });
+      expect(lastFrame(admin).seq).toBe(3);
+      expect(watcher.watchedSessions).toEqual([...keys, "agent:main:deleted"]);
+    });
+  });
+
+  it("keeps solo and system authority without treating pending identity or missing read scope as solo", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const key = "agent:main:private";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        {
+          sessionId: "private",
+          updatedAt: 1,
+          visibility: "draft",
+          createdActor: { type: "human", id: "creator" },
+        },
+      );
+      const person = { text: "watcher", ts: 1 };
+      const presence = [{ ...person, watchedSessions: [key] }];
+      const solo = makeClient("solo").client;
+      solo.connect.scopes = ["operator.write"];
+      const pending = makeClient("pending").client;
+      pending.authenticatedGitHubIdentitySync = async () => ({
+        profileId: "creator",
+        updatedAt: 1,
+      });
+      const node = makeClient("node").client;
+      node.connect.role = "node";
+      node.connect.scopes = ["operator.admin"];
+      const noRead = makeClient("no-read").client;
+      noRead.connect.scopes = [];
+      const project = createPresenceRecipientProjection({ cfg: {}, presence });
+      expect(project(solo)).toEqual(presence);
+      for (const client of [pending, node, noRead, null]) {
+        expect(project(client)).toEqual([person]);
+      }
+      pending.connect.scopes = ["operator.admin"];
+      expect(project(pending)).toEqual(presence);
+      const cfg: OpenClawConfig = { gateway: { roles: { definitions: {} } } };
+      const restrictedProject = createPresenceRecipientProjection({ cfg, presence });
+      expect(restrictedProject(solo)).toEqual([person]);
+      solo.internal = { operatorRoleActor: { kind: "system" } };
+      expect(restrictedProject(solo)).toEqual(presence);
+      pending.authenticatedUserProfile = {
+        profileId: "creator",
+        displayName: null,
+        avatarRevision: "1",
+        hasAvatar: false,
+        updatedAt: 1,
+      };
+      pending.connect.scopes = ["operator.read"];
+      expect(project(pending)).toEqual(presence);
+    });
+  });
+
+  it("omits obsolete watches without creating missing agent stores or omission metadata", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const person = { text: "watcher", ts: 1 };
+      const project = createPresenceRecipientProjection({
+        cfg: { agents: { entries: { uncreated: {} } } },
+        presence: [
+          { ...person, watchedSessions: ["agent:uncreated:missing"] },
+          { ...person, watchedSessions: [] },
+          person,
+        ],
+      });
+      const admin = makeClient("admin").client;
+      admin.connect.scopes = ["operator.admin"];
+      expect(project(admin)).toEqual([person, person, person]);
+      expect(existsSync(state.agentDir("uncreated"))).toBe(false);
+    });
   });
 });

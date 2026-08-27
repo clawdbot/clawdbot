@@ -126,9 +126,9 @@ verifyDepsBeforeRun: false
 blockExoticSubdeps: true
 
 overrides:
-  "@agentclientprotocol/codex-acp@1.6.0>@openai/codex": 0.149.1
+  "@agentclientprotocol/codex-acp@1.6.0>@openai/codex": 0.150.1
   "@codemirror/commands@6.11.0>@codemirror/view": 6.43.9
-  "@anthropic-ai/sdk": 0.118.0
+  "@anthropic-ai/sdk": 0.120.0
   "@opentelemetry/core": 2.10.0
   "@opentelemetry/propagator-jaeger": 2.10.0
   "@aws-sdk/core": 3.977.8

@@ -528,23 +528,10 @@ export async function prepareGatewayLifecycle(params: {
       agentRunSeq,
       nodeSendToSession,
       resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
-      markMainSessionsAbortedForRestart: async ({
-        sessionKeys,
-        sessionIds,
-        activeRuns,
-        reason,
-        isActiveRun,
-      }) => {
-        if (sessionKeys.size === 0 && sessionIds.size === 0) {
-          return;
-        }
+      markMainSessionsAbortedForRestart: async (restart) => {
         await shutdownRuntime.markRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
-          sessionKeys,
-          sessionIds,
-          activeRuns,
-          isActiveRun,
-          reason,
+          ...restart,
         });
       },
       getPendingReplyCount: getTotalPendingReplies,

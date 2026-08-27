@@ -53,7 +53,8 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import type { ChatTranscriptSession, TranscriptRow } from "./chat-transcript-controller.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,

@@ -296,6 +296,7 @@ export function resolveDeliveryState(params: {
   delivered?: boolean;
   deliveryAttempted?: boolean;
   error?: string;
+  deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
 }): CronResolvedDeliveryState {
   const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
   const primaryDeliveryRequested = primaryDeliveryPlan.requested;
@@ -332,6 +333,7 @@ export function resolveDeliveryState(params: {
         delivered: false,
         status: "not-delivered",
         error: params.error,
+        deliverySuppressionReason: params.deliverySuppressionReason,
         failureNotification: noFailureNotification,
       };
     }
@@ -353,6 +355,7 @@ export function resolveDeliveryState(params: {
       delivered: false,
       status: "not-delivered",
       error: params.error,
+      deliverySuppressionReason: params.deliverySuppressionReason,
       failureNotification: { status: "not-requested" },
     };
   }
