@@ -643,6 +643,7 @@ suite.define(() => {
   it.each([
     { machineId: "fast", expectedMachineClass: "fast" },
     { machineId: "standard", expectedMachineClass: undefined },
+    { machineId: undefined, expectedMachineClass: undefined },
   ])(
     "moves to a cloud profile with machine $machineId",
     async ({ machineId, expectedMachineClass }) => {
@@ -660,10 +661,14 @@ suite.define(() => {
                 id: "aws",
                 providerId: "crabbox",
                 trust: "disposable",
-                machines: [
-                  { id: "standard", label: "Standard", default: true },
-                  { id: "fast", label: "Fast" },
-                ],
+                ...(machineId
+                  ? {
+                      machines: [
+                        { id: "standard", label: "Standard", default: true },
+                        { id: "fast", label: "Fast" },
+                      ],
+                    }
+                  : {}),
               },
             ],
             environments: [],
@@ -677,8 +682,17 @@ suite.define(() => {
         await gateway.deferNext("sessions.move");
         await page.getByRole("button", { name: "Runs on Cloud" }).click();
         await page.getByText("Move session…", { exact: true }).click();
-        await page.locator('[data-value="cloud:aws"]').click();
-        await page.locator(`[data-value="machine:${machineId}"]`).click();
+        const profile = page.locator('[data-value="cloud:aws"]');
+        await profile.click();
+        await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
+        if (machineId) {
+          await page.locator(`[data-value="machine:${machineId}"]`).click();
+        } else {
+          const dialog = page.locator("openclaw-modal-dialog");
+          expect(await dialog.getByText("Machine", { exact: true }).count()).toBe(0);
+          expect(await dialog.locator('[data-value^="machine:"]').count()).toBe(0);
+          await capture(page, "optionless-cloud-move.png");
+        }
         await page.getByRole("button", { name: "Move session", exact: true }).click();
 
         const request = await gateway.waitForRequest("sessions.move");

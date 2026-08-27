@@ -24,7 +24,11 @@ function parseCrabboxMachineShapes(stdout: string): CrabboxMachineShapes {
   }
   return new Map(
     parsed.flatMap<[string, readonly CrabboxMachineShape[]]>((entry) => {
-      if (!isRecord(entry)) {
+      // An explicit unmapped disposition overrides even a stray legacy summary.
+      if (
+        !isRecord(entry) ||
+        (isRecord(entry.classCatalog) && entry.classCatalog.disposition === "unmapped")
+      ) {
         return [];
       }
       const rawClasses = Array.isArray(entry.classes) ? entry.classes : [];

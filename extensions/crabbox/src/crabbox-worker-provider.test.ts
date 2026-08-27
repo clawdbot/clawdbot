@@ -224,13 +224,52 @@ describe("Crabbox worker provider", () => {
       },
     ]);
     await provider.listMachineOptions?.(PROFILE);
-    expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([
-      { id: "standard", label: "Standard", default: true },
-      { id: "fast", label: "Fast" },
-      { id: "large", label: "Large" },
-      { id: "beast", label: "Beast" },
-    ]);
+    expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([]);
     expect(calls.filter((argv) => argv[1] === "providers")).toHaveLength(1);
+  });
+
+  it.each(["machine0", "firecracker"])(
+    "honors unmapped %s metadata over stray legacy classes",
+    async (backend) => {
+      const provider = providerWithRunner(async () =>
+        commandResult({
+          stdout: JSON.stringify([
+            {
+              provider: backend,
+              classCatalog: { disposition: "unmapped", profiles: [] },
+              classes: [{ class: "standard", vcpu: 8, memoryGb: 16 }],
+            },
+          ]),
+        }),
+      );
+      expect(
+        await provider.listMachineOptions?.({ ...PROFILE, provider: backend, class: "custom" }),
+      ).toEqual([]);
+    },
+  );
+
+  it("preserves advertised order, defaults, and independently optional resources", async () => {
+    const provider = providerWithRunner(async () =>
+      commandResult({
+        stdout: JSON.stringify([
+          {
+            provider: "aws",
+            classCatalog: { disposition: "mapped" },
+            classes: [
+              { class: "memory", memoryGb: 16 },
+              { class: "standard", vcpu: 8 },
+              { class: "unknown", vcpu: null, memoryGb: null },
+              { class: "standard", vcpu: 99, memoryGb: 99 },
+            ],
+          },
+        ]),
+      }),
+    );
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
+      { id: "memory", label: "Memory", memoryGb: 16 },
+      { id: "standard", label: "Standard", cpu: 8, default: true },
+      { id: "unknown", label: "Unknown" },
+    ]);
   });
 
   it("bounds and filters malformed catalogs before gateway normalization", async () => {
@@ -258,6 +297,10 @@ describe("Crabbox worker provider", () => {
       memoryGb: 64,
     });
     expect(options?.some((option) => option.id === invalidClass)).toBe(false);
+    const customOptions = await provider.listMachineOptions?.({ ...PROFILE, class: "custom" });
+    expect(customOptions).toHaveLength(32);
+    expect(customOptions?.at(-2)?.id).toBe("class-30");
+    expect(customOptions?.at(-1)).toEqual({ id: "custom", label: "custom", default: true });
   });
 
   it("keeps machine-shape catalogs separate per resolved binary", async () => {
@@ -298,14 +341,9 @@ describe("Crabbox worker provider", () => {
       return commandResult({ stdout: "[]" });
     });
 
-    // A hung binary must degrade to label-only choices instead of holding the
-    // picker response for the full lifecycle budget.
-    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
-      { id: "standard", label: "Standard", default: true },
-      { id: "fast", label: "Fast" },
-      { id: "large", label: "Large" },
-      { id: "beast", label: "Beast" },
-    ]);
+    // A hung binary must leave sizing unavailable without holding the picker
+    // response for the full lifecycle budget.
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
     expect(requestedTimeoutMs).toBe(CRABBOX_MACHINE_CATALOG_TIMEOUT_MS);
     expect(requestedTimeoutMs).toBeLessThan(CRABBOX_LIFECYCLE_TIMEOUT_MS);
   });
@@ -343,6 +381,36 @@ describe("Crabbox worker provider", () => {
         Promise.resolve(commandResult({ stdout: JSON.stringify([{ provider: "aws" }]) })),
       warns: false,
     },
+    ...[
+      { name: "returns empty classes", metadata: { classes: [] } },
+      {
+        name: "returns unusable classes",
+        metadata: { classes: [null, {}, { class: " " }, { class: "x".repeat(129) }] },
+      },
+      {
+        name: "reports only a mapped rich catalog",
+        metadata: {
+          classCatalog: {
+            disposition: "mapped",
+            profiles: [
+              {
+                class: "standard",
+                target: "linux",
+                architecture: "amd64",
+                primary: { type: "xxl", vcpu: 8, memory: { value: 16, unit: "GB" } },
+              },
+            ],
+          },
+        },
+      },
+    ].map(({ name, metadata }) => ({
+      name,
+      result: () =>
+        Promise.resolve(
+          commandResult({ stdout: JSON.stringify([{ provider: "aws", ...metadata }]) }),
+        ),
+      warns: false,
+    })),
     {
       name: "reports another provider",
       result: () =>
@@ -358,16 +426,11 @@ describe("Crabbox worker provider", () => {
         ),
       warns: false,
     },
-  ])("keeps complete label-only options when providers $name", async ({ result, warns }) => {
+  ])("offers no machine override when providers $name", async ({ result, warns }) => {
     const warn = vi.fn();
     const provider = providerWithRunner(result, warn);
 
-    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([
-      { id: "standard", label: "Standard", default: true },
-      { id: "fast", label: "Fast" },
-      { id: "large", label: "Large" },
-      { id: "beast", label: "Beast" },
-    ]);
+    expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
     await provider.listMachineOptions?.(PROFILE);
     expect(warn).toHaveBeenCalledTimes(warns ? 1 : 0);
   });
