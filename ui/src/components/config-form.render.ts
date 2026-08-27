@@ -277,7 +277,7 @@ export function renderConfigForm(props: ConfigFormProps) {
                               href=${docsUrl}
                               target=${EXTERNAL_LINK_TARGET}
                               rel=${buildExternalLinkRel()}
-                              >${t("configForm.readGuide")} <span aria-hidden="true">→</span></a
+                              >${t("common.learnMore")}</a
                             >
                           </div>
                         </wa-popover>
