@@ -633,8 +633,6 @@ describe("renderSessionsCard", () => {
       expect(copyButton?.getAttribute("aria-label")).toBe(feedback);
     });
     expect(writeText).toHaveBeenCalledWith("Selected thread");
-    expect(copyButton?.dataset[copied ? "copied" : "error"]).toBe("1");
-    expect(copyButton?.dataset[copied ? "error" : "copied"]).toBeUndefined();
     expect(onSelectSession).toHaveBeenCalledOnce();
     rows[0]?.querySelector<HTMLElement>(".session-bar-value")?.click();
     expect(onSelectSession).toHaveBeenCalledWith(

@@ -259,7 +259,6 @@ describe("renderChannelWizard", () => {
         reset();
         expect(button?.textContent?.trim()).toBe("Kopieren");
         expect(button?.getAttribute("aria-label")).toBe("Kopieren");
-        expect(button?.dataset[copied ? "copied" : "error"]).toBeUndefined();
       } finally {
         await i18n.setLocale("en");
       }

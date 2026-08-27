@@ -11,13 +11,13 @@ export function copyMarkdownLabel(): string {
   return t("chat.actions.copyAsMarkdown");
 }
 
-function setButtonLabel(button: HTMLButtonElement, label: string) {
+function setButtonLabel(button: HTMLButtonElement, label: string, showFeedback = false) {
   button.setAttribute("aria-label", label);
   // Feedback sits beside fixed-size icons; actionable tooltips dismiss on click.
   const feedback = button.parentElement?.querySelector<HTMLElement>("[data-copy-feedback]");
   if (feedback) {
-    feedback.hidden = !button.dataset.copied && !button.dataset.error;
-    feedback.textContent = feedback.hidden ? "" : label;
+    feedback.hidden = !showFeedback;
+    feedback.textContent = label;
   }
   // Preserve Lit's marker nodes so a later locale change can rerender this label.
   const visibleLabel = button.querySelector("[data-copy-label]")?.lastChild;
@@ -28,41 +28,38 @@ function setButtonLabel(button: HTMLButtonElement, label: string) {
 
 export async function handleCopyButton(event: Event, text: string, idleLabel: string) {
   const button = event.currentTarget as HTMLButtonElement | null;
-  if (!button || button.dataset.copying === "1") {
+  if (!button || button.dataset.copyState === "copying") {
     return false;
   }
 
   // Older reset timers must not replace feedback from a newer copy attempt.
   const attempt = String(Number(button.dataset.copyAttempt ?? "0") + 1);
   button.dataset.copyAttempt = attempt;
-  button.dataset.copying = "1";
+  button.dataset.copyState = "copying";
   button.setAttribute("aria-busy", "true");
   button.disabled = true;
-  delete button.dataset.copied;
-  delete button.dataset.error;
   setButtonLabel(button, idleLabel);
 
   // Retired buttons must not overwrite a newer copy through the legacy fallback.
   const isCurrent = () => button.isConnected && button.dataset.copyAttempt === attempt;
   const copied = await copyToClipboard(text, isCurrent);
-  delete button.dataset.copying;
+  delete button.dataset.copyState;
   button.removeAttribute("aria-busy");
   button.disabled = false;
   if (!isCurrent()) {
     return false;
   }
 
-  const feedback = copied ? "copied" : "error";
-  button.dataset[feedback] = "1";
+  button.dataset.copyState = copied ? "copied" : "error";
   const feedbackLabel = t(copied ? "common.copied" : "common.copyFailed");
-  setButtonLabel(button, feedbackLabel);
+  setButtonLabel(button, feedbackLabel, true);
 
   const duration = copied ? COPIED_FOR_MS : ERROR_FOR_MS;
   window.setTimeout(() => {
     if (!isCurrent()) {
       return;
     }
-    delete button.dataset[feedback];
+    delete button.dataset.copyState;
     // A locale rerender can replace the idle label while feedback is still active.
     const renderedLabel =
       button.querySelector("[data-copy-label]")?.textContent ?? button.getAttribute("aria-label");
@@ -74,7 +71,11 @@ export async function handleCopyButton(event: Event, text: string, idleLabel: st
   return copied;
 }
 
-function createCopyButton(text: string, idleLabel: string, bare = false): TemplateResult {
+export function renderCopyButton(
+  text: string,
+  idleLabel = copyMarkdownLabel(),
+  bare = false,
+): TemplateResult {
   // Chat footers own their ghost chrome; .btn backgrounds would box the icon.
   return html`
     <openclaw-tooltip .content=${idleLabel}>
@@ -94,10 +95,6 @@ function createCopyButton(text: string, idleLabel: string, bare = false): Templa
   `;
 }
 
-export function renderCopyButton(text: string, label?: string): TemplateResult {
-  return createCopyButton(text, label ?? copyMarkdownLabel());
-}
-
 export function renderCopyAsMarkdownButton(markdown: string): TemplateResult {
-  return createCopyButton(markdown, copyMarkdownLabel(), true);
+  return renderCopyButton(markdown, copyMarkdownLabel(), true);
 }

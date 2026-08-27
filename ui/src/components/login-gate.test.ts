@@ -222,11 +222,11 @@ describe("login gate failure recovery", () => {
     buttons[1]?.click();
 
     await vi.waitFor(() => {
-      expect(buttons[0]?.dataset.copied).toBe("1");
-      expect(buttons[1]?.dataset.copied).toBe("1");
+      expect(buttons[0]?.getAttribute("aria-label")).toBe("Copied!");
+      expect(buttons[1]?.getAttribute("aria-label")).toBe("Copied!");
     });
     expect(writeText.mock.calls).toEqual([["openclaw status"], ["openclaw gateway run"]]);
-    expect(buttons[2]?.dataset.copied).toBeUndefined();
+    expect(buttons[2]?.getAttribute("aria-label")).toBe("Copy command");
   });
 
   it("keeps the latest command-copy feedback until its own reset", async () => {
@@ -263,8 +263,7 @@ describe("login gate failure recovery", () => {
     expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
     finishCopy();
     await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe("Copied!"));
-    expect(button?.dataset.error).toBeUndefined();
-    expect(button?.dataset.copied).toBe("1");
+    expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(false);
 
     failedReset();
     expect(button?.getAttribute("aria-label")).toBe("Copied!");
@@ -277,7 +276,6 @@ describe("login gate failure recovery", () => {
     successfulReset();
 
     expect(button?.getAttribute("aria-label")).toBe("Copy command");
-    expect(button?.dataset.copied).toBeUndefined();
     expect(command?.querySelector<HTMLElement>('[role="status"]')?.hidden).toBe(true);
     expect(writeText).toHaveBeenCalledTimes(2);
     expect(execCommand).toHaveBeenCalledOnce();

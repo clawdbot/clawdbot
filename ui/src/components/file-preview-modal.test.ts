@@ -237,7 +237,7 @@ describe("openclaw-file-preview-modal", () => {
 
     await vi.waitFor(() => {
       expect(writeText).toHaveBeenCalledWith(contents);
-      expect(copyButton?.dataset.copied).toBe("1");
+      expect(copyButton?.getAttribute("aria-label")).toBe("Copied!");
     });
   });
 

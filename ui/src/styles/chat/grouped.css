@@ -924,26 +924,26 @@ img.chat-avatar.chat-avatar--logo {
   opacity: 0;
 }
 
-.chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-copy {
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
   opacity: 0;
 }
 
-.chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
+.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
   opacity: 1;
 }
 
-.chat-copy-btn[data-copying="1"] {
+.chat-copy-btn[data-copy-state="copying"] {
   opacity: 0;
   pointer-events: none;
 }
 
-.chat-copy-btn[data-error="1"] {
+.chat-copy-btn[data-copy-state="error"] {
   border-color: var(--danger-subtle);
   background: var(--danger-subtle);
   color: var(--danger);
 }
 
-.chat-copy-btn[data-copied="1"] {
+.chat-copy-btn[data-copy-state="copied"] {
   border-color: var(--ok-subtle);
   background: var(--ok-subtle);
   color: var(--ok);
