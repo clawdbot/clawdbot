@@ -526,26 +526,15 @@ export function createPdfTool(options?: {
           throw new Error("Sandboxed PDF tool does not allow remote URLs.");
         }
 
+        // Relative file references are forwarded untouched and resolved by the
+        // shared media loader against workspaceDir (owner boundary for path
+        // resolution), so tools never fork their own anchoring rules.
         const resolvedPdf = (() => {
           if (sandboxConfig) {
             return trimmed;
           }
           if (trimmed.startsWith("~")) {
             return resolveUserPath(trimmed);
-          }
-          // Resolve relative paths against workspaceDir so agents can reference
-          // workspace-relative PDFs (e.g. "docs/report.pdf") — matching the
-          // image tool behaviour.
-          if (
-            !isHttpUrl &&
-            !refInfo.isFileUrl &&
-            !refInfo.isDataUrl &&
-            !refInfo.isMediaStoreUrl &&
-            !refInfo.looksLikeWindowsDrivePath &&
-            !path.isAbsolute(trimmed) &&
-            options?.workspaceDir
-          ) {
-            return path.resolve(options.workspaceDir, trimmed);
           }
           return trimmed;
         })();
@@ -572,6 +561,7 @@ export function createPdfTool(options?: {
           : await loadWebMediaRaw(resolvedPath, {
               maxBytes,
               localRoots,
+              ...(options?.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
               ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
               ssrfPolicy: remoteMediaSsrfPolicy,
               // Forward the run abort signal into the fetch layer so an abort

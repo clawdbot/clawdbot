@@ -60,9 +60,59 @@ describe("PDF tool workspace-relative references", () => {
           pdf: "docs/guide.pdf",
         });
 
-        const [loadRef] = (loadSpy as { mock: { calls: unknown[][] } }).mock.calls[0] ?? [];
-        expect(loadRef).toBe(path.join(workspaceDir, "docs", "guide.pdf"));
+        const [loadRef, loadOptions] =
+          (loadSpy as { mock: { calls: unknown[][] } }).mock.calls[0] ?? [];
+        expect(loadRef).toBe("docs/guide.pdf");
+        expect(loadOptions).toMatchObject({ workspaceDir });
         expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("reads the workspace copy, not a same-relative-path file near process.cwd", async () => {
+    // The shared loader must anchor "docs/guide.pdf" to workspaceDir. A
+    // decoy with the same relative path sits next to process.cwd(); if the
+    // resolver fell back to the runner cwd the decoy bytes would win (or the
+    // run would fail with not-found) instead of the workspace payload.
+    const nativeSpy = vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf");
+    await withTempPdfAgentDir(async (agentDir) => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-pdf-ws-live-"));
+      try {
+        await fs.mkdir(path.join(workspaceDir, "docs"), { recursive: true });
+        const workspaceBytes = Buffer.from("%PDF-1.4 WORKSPACE-ANCHORED", "utf8");
+        await fs.writeFile(path.join(workspaceDir, "docs", "guide.pdf"), workspaceBytes);
+        const { loadSpy } = await stubPdfToolInfra(agentDir, {
+          mockLoad: false,
+          provider: "anthropic",
+          input: ["text", "document"],
+        });
+        nativeSpy.mockResolvedValue("native summary");
+        const tool = (await import("./pdf-tool.js")).createPdfTool({
+          config: { agents: { defaults: { pdfModel: { primary: ANTHROPIC_PDF_MODEL } } } } as never,
+          agentDir,
+          workspaceDir,
+          fsPolicy: { workspaceOnly: true },
+        });
+        if (!tool) {
+          throw new Error("expected PDF tool");
+        }
+
+        const result = await tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "docs/guide.pdf",
+        });
+
+        const [loadRef, loadOptions] =
+          (loadSpy as { mock: { calls: unknown[][] } }).mock.calls[0] ?? [];
+        expect(loadRef).toBe("docs/guide.pdf");
+        expect(loadOptions).toMatchObject({ workspaceDir });
+        expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+        const analyzed = nativeSpy.mock.calls[0]?.[0] as
+          | { pdfs?: Array<{ base64?: string }> }
+          | undefined;
+        expect(analyzed?.pdfs?.[0]?.base64).toBe(workspaceBytes.toString("base64"));
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
