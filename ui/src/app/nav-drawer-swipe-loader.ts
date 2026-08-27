@@ -1,4 +1,4 @@
-import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.ts";
+import type { NavDrawerSwipeOwner } from "./nav-drawer-swipe.runtime.ts";
 
 type NavDrawerSwipeHost = HTMLElement & {
   readonly onboardingMode: boolean;
@@ -20,7 +20,7 @@ export class NavDrawerSwipeLoader {
       return;
     }
     this.pending = true;
-    void import("./nav-drawer-swipe.ts").then(
+    void import("./nav-drawer-swipe.runtime.ts").then(
       ({ NavDrawerSwipeOwner }) => {
         this.owner = new NavDrawerSwipeOwner(this.host, this.requestOpen);
         this.pending = false;

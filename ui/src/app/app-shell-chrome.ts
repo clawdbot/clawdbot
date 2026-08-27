@@ -1,13 +1,14 @@
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
 import { isSessionRouteId, routeIdFromPath, type RouteId } from "../app-route-paths.ts";
 import {
+  applyCommandPaletteTargetEvent,
   COMMAND_PALETTE_OPEN_EVENT,
   COMMAND_PALETTE_TARGET_EVENT,
   isCommandPaletteShortcut,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
+  shellNavDrawerTriggerFromEvent,
   type CommandPaletteElement,
   type CommandPaletteTargetDetail,
-  type ShellNavDrawerToggleDetail,
 } from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -69,6 +70,10 @@ type KeyboardShortcutsDialogElement = HTMLElement & {
   isOpen: boolean;
   toggle: () => void;
 };
+
+function isSettingsTakeover(routeId: RouteId | undefined): boolean {
+  return routeId !== undefined && isSettingsNavigationRoute(routeId);
+}
 
 export interface ShellChromeHost extends HTMLElement {
   readonly context: ApplicationContext<RouteId> | undefined;
@@ -190,7 +195,11 @@ export class ShellChromeOwner {
     const host = this.host;
     const context = host.context;
     // Desktop settings takeover has no app nav; its mobile drawer still owns navigation.
-    if (!context || host.onboardingMode || (this.isSettingsTakeover() && !isMobileNavLayout())) {
+    if (
+      !context ||
+      host.onboardingMode ||
+      (isSettingsTakeover(host.routeState.routeId) && !isMobileNavLayout())
+    ) {
       return;
     }
     if (isMobileNavLayout()) {
@@ -246,9 +255,7 @@ export class ShellChromeOwner {
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
     if (options.restoreFocus) {
-      requestAnimationFrame(() => {
-        this.restoreFocusTo(trigger);
-      });
+      requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   }
 
@@ -266,7 +273,6 @@ export class ShellChromeOwner {
   }
 
   readonly handleNativeToggleSidebar = (): void => this.toggleNavigationSurface();
-
   readonly handleNativeOpenSearch = (): void => this.openPalette();
 
   readonly handleNativeToggleSearch = (event: Event): void => {
@@ -394,7 +400,7 @@ export class ShellChromeOwner {
       } else if (
         !event.defaultPrevented &&
         matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
-        this.isSettingsTakeover() &&
+        isSettingsTakeover(host.routeState.routeId) &&
         !this.shouldIgnoreSettingsEscape(event)
       ) {
         event.preventDefault();
@@ -443,7 +449,10 @@ export class ShellChromeOwner {
       window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
       return;
     }
-    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) && this.isSettingsTakeover()) {
+    if (
+      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) &&
+      isSettingsTakeover(host.routeState.routeId)
+    ) {
       if (host.navDrawerOpen) {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
@@ -535,10 +544,8 @@ export class ShellChromeOwner {
     this.handleCommandPaletteOpen(new CustomEvent(COMMAND_PALETTE_OPEN_EVENT), this.openPalette);
 
   readonly refreshControlUi = (): void => globalThis.location.reload();
-
   readonly handleShellNavDrawerToggle = (event: Event): void => {
-    const trigger = (event as CustomEvent<ShellNavDrawerToggleDetail>).detail?.trigger;
-    this.toggleNavigationSurface(trigger instanceof HTMLElement ? trigger : undefined);
+    this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
 
   readonly togglePalette = (): void => {
@@ -739,35 +746,19 @@ export class ShellChromeOwner {
     host.navigate("chat", { ...navigation, search: `?${search.toString()}` });
   };
 
-  readonly handleCommandPaletteTarget = (event: Event): void => {
-    const host = this.host;
-    const detail = (event as CustomEvent<CommandPaletteTargetDetail>).detail;
-    if (!detail || !(detail.owner instanceof Element)) {
-      return;
-    }
-    if (detail.onSlashCommand) {
-      host.commandPaletteTarget = detail;
-    } else if (host.commandPaletteTarget?.owner === detail.owner) {
-      host.commandPaletteTarget = undefined;
-    }
-    host.requestUpdate();
-  };
+  readonly handleCommandPaletteTarget = (event: Event): void =>
+    applyCommandPaletteTargetEvent(this.host, event);
 
-  /** Native titlebar chrome treats drawer, takeover, and onboarding layouts as collapsed. */
   nativeNavCollapsed(): boolean {
     const host = this.host;
     const mobileNavLayout = isMobileNavLayout();
     return (
       host.onboardingMode ||
       mobileNavLayout ||
-      (this.isSettingsTakeover() && !mobileNavLayout) ||
+      (isSettingsTakeover(host.routeState.routeId) && !mobileNavLayout) ||
       (!host.navDrawerOpen &&
         !host.desktopNavigationExpanded &&
         (host.context?.navigation.snapshot.navCollapsed ?? false))
     );
-  }
-  private isSettingsTakeover(): boolean {
-    const routeId = this.host.routeState.routeId;
-    return routeId ? isSettingsNavigationRoute(routeId) : false;
   }
 }
