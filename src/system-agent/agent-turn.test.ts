@@ -494,14 +494,13 @@ describe("runSystemAgentTurn", () => {
       },
     );
 
-    expect(runCliAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "claude-cli",
-        model: "claude-opus-4-8",
-        agentDir,
-        authProfileId: "anthropic:claude-cli",
-      }),
-    );
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      agentDir,
+    });
+    expect(runCliAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
   });
 
   it("reuses the guarded CLI binding when a denied proposal becomes approved", async () => {
