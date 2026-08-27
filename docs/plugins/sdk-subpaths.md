@@ -90,8 +90,9 @@ The `plugin-sdk/archive` subpath exposes ordinary bounded `extractArchive` and
 already-created empty directory that the caller keeps unpublished until success.
 The caller must discard that entire private directory after any error. The helper
 validates required regular files and creates only closed-manifest regular-file
-aliases within the shared extraction deadline and output limits. Timeout rejection
-joins already-started filesystem work before returning control to the cleanup owner.
+aliases within the shared extraction deadline and output limits. Timeout cancellation
+joins extraction final-tree mutations and alias-copy stream teardown before returning
+control to the cleanup owner; read-only validation probes remain deadline-raced.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
