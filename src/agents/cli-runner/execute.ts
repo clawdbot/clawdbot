@@ -10,7 +10,6 @@ import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { compareValidSemver } from "../../infra/semver.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { CliBackendThinkingLevel } from "../../plugins/cli-backend.types.js";
-import { materializeSecretInput } from "../../secrets/resolve-secret-input-string.js";
 import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   fingerprintCliRuntimeArtifact,
@@ -77,29 +76,45 @@ async function resolveCliBackendEnvValues(params: {
   env: NodeJS.ProcessEnv;
   values: Record<string, SecretInput>;
 }): Promise<Record<string, string>> {
-  const entries = await Promise.all(
-    Object.entries(params.values).map(async ([key, value]) => {
-      // Preserve literal strings unchanged (including $NAME / ${NAME} text).
-      // Only structured SecretRef objects are materialized — materializeSecretInput
-      // would otherwise coerce env-template strings into host SecretRefs.
-      if (typeof value === "string") {
-        return [key, value] as const;
-      }
-      if (!isSecretRef(value)) {
-        return [key, ""] as const;
-      }
-      if (!params.config) {
-        return [key, ""] as const;
-      }
+  const literals: Array<readonly [string, string]> = [];
+  const secretRefs: Array<readonly [string, SecretInput]> = [];
+  for (const [key, value] of Object.entries(params.values)) {
+    // Preserve literal strings unchanged (including $NAME / ${NAME} text).
+    // Only structured SecretRef objects are materialized — materializeSecretInput
+    // would otherwise coerce env-template strings into host SecretRefs.
+    if (typeof value === "string") {
+      literals.push([key, value]);
+      continue;
+    }
+    if (!isSecretRef(value) || !params.config) {
+      literals.push([key, ""]);
+      continue;
+    }
+    secretRefs.push([key, value]);
+  }
+  if (secretRefs.length === 0) {
+    return Object.fromEntries(literals);
+  }
+  // Defer the secrets provider graph until a SecretRef actually needs
+  // materialization. A static import stalls agents-core Vitest collection.
+  const { materializeSecretInput } = await import(
+    "../../secrets/resolve-secret-input-string.js"
+  );
+  const config = params.config;
+  if (!config) {
+    return Object.fromEntries([...literals, ...secretRefs.map(([key]) => [key, ""] as const)]);
+  }
+  const materialized = await Promise.all(
+    secretRefs.map(async ([key, value]) => {
       const resolved = await materializeSecretInput({
-        config: params.config,
+        config,
         value,
         env: params.env,
       });
       return [key, resolved ?? ""] as const;
     }),
   );
-  return Object.fromEntries(entries);
+  return Object.fromEntries([...literals, ...materialized]);
 }
 
 function normalizeCliBackendThinkingLevel(
