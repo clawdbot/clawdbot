@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
+import { execFile } from "node:child_process";`nimport { constants as fsConstants } from "node:fs";`nimport fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
+import path from "node:path";`nimport { promisify } from "node:util";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -58,7 +58,7 @@ import { listPiSummaryPage } from "./pi-session-store.js";
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 const PI_TERMINAL_RESUME_COMMAND = "acpx.pi.terminal.resume.v1";
-const PI_SESSION_READ_LIMIT_BYTES = 32 * 1024 * 1024;
+const PI_SESSION_READ_LIMIT_BYTES = 32 * 1024 * 1024;`nconst execFileAsync = promisify(execFile);
 
 const temporaryDirectories: string[] = [];
 const originalSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
@@ -682,6 +682,34 @@ describe("Pi session catalog", () => {
     }
   });
 
+  it("rejects a cached Pi FIFO without blocking the session read", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const directory = await createPiStore();
+    const file = path.join(directory, "session.jsonl");
+    await listLocalPiSessionPage({ limit: 20 });
+    await fs.rm(file);
+    await execFileAsync("mkfifo", [file]);
+
+    const openFlags: number[] = [];
+    const actualOpen = fs.open.bind(fs);
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (target, flags) => {
+      if (target === file) {
+        openFlags.push(flags as number);
+      }
+      return await actualOpen(target, flags);
+    });
+    try {
+      await expect(
+        readLocalPiTranscriptPage({ threadId: "pi-session", limit: 20 }),
+      ).rejects.toThrow("Pi session was not found");
+      expect(openFlags).not.toStrictEqual([]);
+      expect(openFlags.some((flags) => (flags & fsConstants.O_NONBLOCK) !== 0)).toBe(true);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
   it("auto-detects the store and honors the node-local Web UI switch", async () => {
     const directory = await createPiStore();
     const binDirectory = await installFakePi();
