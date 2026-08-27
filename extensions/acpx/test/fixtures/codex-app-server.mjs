@@ -114,7 +114,7 @@ async function handle(method, params) {
   throw new Error(`unsupported fixture method: ${method}`);
 }
 
-readline.createInterface({ input: process.stdin }).on("line", async (line) => {
+async function handleLine(line) {
   let message;
   try {
     message = JSON.parse(line);
@@ -142,4 +142,8 @@ readline.createInterface({ input: process.stdin }).on("line", async (line) => {
       error: { code: -32601, message: error instanceof Error ? error.message : String(error) },
     });
   }
+}
+
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  void handleLine(line);
 });
