@@ -43,6 +43,7 @@ import {
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentTool, AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-identity.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import {
   createEditTool,
@@ -1242,6 +1243,7 @@ export function wrapReadToolWithSkillContent(
 
 function createSandboxReadOperations(params: SandboxToolParams) {
   return {
+    resolveQueueKey: (absolutePath: string) => resolveSandboxFileQueueKey(params, absolutePath),
     resolvePath: (filePath: string) => {
       const normalizedMediaSource = normalizeMediaReferenceSource(filePath);
       if (classifyMediaReferenceSource(normalizedMediaSource).isMediaStoreUrl) {
@@ -1266,6 +1268,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolveQueueKey: (absolutePath: string) => resolveSandboxFileQueueKey(params, absolutePath),
       mkdir: async (dir: string) => {
         await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
       },
@@ -1284,6 +1287,7 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
 function createSandboxEditOperations(params: SandboxToolParams) {
   return withMemoryWriteProvenance(
     {
+      resolveQueueKey: (absolutePath: string) => resolveSandboxFileQueueKey(params, absolutePath),
       readFile: (absolutePath: string) =>
         params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
       writeFile: (absolutePath: string, content: string) =>
@@ -1294,6 +1298,15 @@ function createSandboxEditOperations(params: SandboxToolParams) {
     } as const,
     params.memoryWriteProvenance,
   );
+}
+
+async function resolveSandboxFileQueueKey(params: SandboxToolParams, absolutePath: string) {
+  return await resolveSandboxFileMutationQueueKey({
+    bridge: params.bridge,
+    root: params.root,
+    filePath: absolutePath,
+    cwd: params.root,
+  });
 }
 
 async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: string) {

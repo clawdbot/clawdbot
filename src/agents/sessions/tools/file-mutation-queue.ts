@@ -3,9 +3,7 @@
  *
  * Serializes edits/writes targeting the same real file while allowing independent files to mutate in parallel.
  */
-import { realpathSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-import { hasErrnoCode } from "../../../infra/errors.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../../../infra/boundary-path.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 
 const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
@@ -13,22 +11,15 @@ const fileMutationTails = resolveGlobalMap<string, Promise<void>>(
   "close-only",
 );
 
-function getMutationQueueKey(filePath: string): string {
-  const resolvedPath = resolve(filePath);
-  const missingSegments: string[] = [];
-  let candidate = resolvedPath;
-  while (true) {
-    try {
-      return resolve(realpathSync.native(candidate), ...missingSegments.toReversed());
-    } catch (error) {
-      const parent = dirname(candidate);
-      if (!hasErrnoCode(error, "ENOENT") || parent === candidate) {
-        return resolvedPath;
-      }
-      missingSegments.push(basename(candidate));
-      candidate = parent;
-    }
-  }
+function resolveLocalFileMutationQueueKey(filePath: string): string {
+  return resolveIdentityPathViaExistingAncestorSync(filePath);
+}
+
+export async function resolveFileMutationQueueKey(
+  filePath: string,
+  resolveQueueKey?: (absolutePath: string) => string | Promise<string>,
+): Promise<string> {
+  return await (resolveQueueKey?.(filePath) ?? resolveLocalFileMutationQueueKey(filePath));
 }
 
 /**
@@ -39,11 +30,22 @@ export async function withFileMutationQueue<T>(filePath: string, fn: () => Promi
   return await withFileMutationQueues([filePath], fn);
 }
 
-export async function withFileMutationQueues<T>(
+export async function withFileMutationQueueKey<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  return await withFileMutationQueueKeys([key], fn);
+}
+
+async function withFileMutationQueues<T>(
   filePaths: readonly string[],
   fn: () => Promise<T>,
 ): Promise<T> {
-  const keys = [...new Set(filePaths.map(getMutationQueueKey))].toSorted();
+  return await withFileMutationQueueKeys(filePaths.map(resolveLocalFileMutationQueueKey), fn);
+}
+
+export async function withFileMutationQueueKeys<T>(
+  queueKeys: readonly string[],
+  fn: () => Promise<T>,
+): Promise<T> {
+  const keys = [...new Set(queueKeys)].toSorted();
   const current = Promise.all(
     keys.map((key) => (fileMutationTails.get(key) ?? Promise.resolve()).catch(() => undefined)),
   ).then(fn);

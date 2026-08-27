@@ -2,7 +2,10 @@
 // the pinned mutation helper and remote stat/path guards.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSandboxedReadTool, createSandboxedWriteTool } from "../agent-tools.read.js";
+import { withFileMutationQueueKey } from "../sessions/tools/file-mutation-queue.js";
 import { SANDBOX_CREATE_EXISTS_EXIT_CODE } from "./fs-bridge-mutation-helper.js";
 import { createSandbox } from "./fs-bridge.test-helpers.js";
 import {
@@ -101,6 +104,64 @@ describe("remote sandbox fs bridge", () => {
       }),
     ).resolves.toMatchObject({ code: SANDBOX_CREATE_EXISTS_EXIT_CODE });
   });
+
+  it.runIf(process.platform !== "win32")(
+    "orders sandbox tools through one remote alias identity",
+    async () => {
+      await withTempDir("openclaw-remote-fs-queue-", async (stateDir) => {
+        const workspaceDir = path.join(stateDir, "host-workspace");
+        const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
+        await fs.mkdir(workspaceDir);
+        await fs.mkdir(remoteWorkspaceDir);
+        const sandbox = createSandbox({ workspaceDir, agentWorkspaceDir: workspaceDir });
+        const { runtime } = createLocalRemoteRuntime({
+          remoteWorkspaceDir,
+          remoteAgentWorkspaceDir: remoteWorkspaceDir,
+        });
+        const bridge = createRemoteShellSandboxFsBridge({ sandbox, runtime });
+        const remotePath = path.join(remoteWorkspaceDir, "race-target.txt");
+        const hostPath = path.join(workspaceDir, "race-target.txt");
+        const aliasIdentity = await bridge.resolveFileIdentity!({
+          filePath: remotePath,
+          cwd: workspaceDir,
+        });
+        await expect(
+          bridge.resolveFileIdentity!({ filePath: hostPath, cwd: workspaceDir }),
+        ).resolves.toBe(aliasIdentity);
+
+        const blockerStarted = createDeferred();
+        const releaseBlocker = createDeferred();
+        const blocker = withFileMutationQueueKey(`${workspaceDir}\0${aliasIdentity}`, async () => {
+          blockerStarted.resolve();
+          await releaseBlocker.promise;
+        });
+        await blockerStarted.promise;
+        const statSpy = vi.spyOn(bridge, "stat");
+        const writeTool = createSandboxedWriteTool({ root: workspaceDir, bridge });
+        const readTool = createSandboxedReadTool({ root: workspaceDir, bridge });
+        const writeResult = writeTool.execute("write", {
+          path: remotePath,
+          content: "remote snapshot",
+        });
+        const readResult = readTool.execute("read", { path: hostPath });
+        void readResult.catch(() => {});
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(statSpy).not.toHaveBeenCalled();
+
+        releaseBlocker.resolve();
+        await blocker;
+        const [, result] = await Promise.all([writeResult, readResult]);
+        expect(statSpy).toHaveBeenCalled();
+        expect(result.content).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "text", text: "remote snapshot" }),
+          ]),
+        );
+      });
+    },
+  );
 
   it.each([
     {

@@ -21,6 +21,11 @@ export type SandboxFsStat = {
 /** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
+  /**
+   * Returns one backend-owned physical identity for file-operation ordering.
+   * Optional to preserve the shipped plugin bridge contract; older bridges use resolvePath identity.
+   */
+  resolveFileIdentity?(params: { filePath: string; cwd?: string }): Promise<string>;
   /** Reads a safely opened regular file, rejecting growth beyond an optional byte limit. */
   readFile(params: {
     filePath: string;
