@@ -2,7 +2,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type {
   OpenKeyedStoreOptions,
