@@ -384,21 +384,11 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       : {}),
     ...(getObservedReplyDelivery() ? { observedReplyDelivery: true } : {}),
     ...(replyAdmission?.status === "accepted" ? { deferredToActiveRun: replyAdmission.mode } : {}),
-    // Eligibility keys off settled visible delivery: a suppressed or cancelled
-    // final (including the core fallback itself) leaves channel-level recovery
-    // eligible, while any settled visible delivery clears it. An aborted or
-    // timed-out settle leaves delivery unresolved, and a fallback reported as
-    // delivered must not stay recoverable — either could double-send.
-    ...(noVisibleReplyFallbackDirected &&
-    queuedSettleResult === "settled" &&
-    !turnLedger.hasVisibleDelivery() &&
+    // Channel recovery inherits the same delivery-policy gate as the core
+    // fallback. Settlement can prove invisibility, but cannot override policy.
+    ...(queuedSettleResult === "settled" &&
     !noVisibleReplyFallbackDelivered &&
-    !getObservedReplyDelivery() &&
-    !replyAcceptedByActiveRun &&
-    !emptyFinalAllowedAsSilent &&
-    !deliberateSilentTerminalReply &&
-    !pendingContinuation &&
-    !channelTransformSuppressed
+    noVisibleReplyFallbackAllowed()
       ? { noVisibleReplyFallbackEligible: true }
       : {}),
     ...(noVisibleReplyFallbackDelivered ? { noVisibleReplyFallbackDelivered: true } : {}),

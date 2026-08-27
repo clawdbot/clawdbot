@@ -886,7 +886,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(result.queuedFinal).toBe(false);
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
-    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
     expect(result.sendPolicyDenied).toBe(true);
   });
 
@@ -920,8 +920,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    // Direct silent policy is disallow; eligibility remains for transport fallbacks.
-    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
   it("does not deliver no-visible fallback after observed reply delivery", async () => {

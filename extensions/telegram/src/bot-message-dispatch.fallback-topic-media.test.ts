@@ -2,6 +2,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchReplyWithBufferedBlockDispatcherRuntime } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -142,6 +143,36 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
       streamMode: "off",
     });
 
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not bypass sendPolicy denial with a no-visible-reply fallback", async () => {
+    let sharedDispatchResult:
+      | Awaited<ReturnType<typeof dispatchReplyWithBufferedBlockDispatcherRuntime>>
+      | undefined;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
+      sharedDispatchResult = await dispatchReplyWithBufferedBlockDispatcherRuntime({
+        ...params,
+        replyResolver: async () => undefined,
+      });
+      return sharedDispatchResult;
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      cfg: {
+        session: { sendPolicy: { default: "deny" } },
+      },
+      streamMode: "off",
+    });
+
+    expect(sharedDispatchResult).toMatchObject({
+      queuedFinal: false,
+      sendPolicyDenied: true,
+    });
+    expect(sharedDispatchResult).not.toHaveProperty("noVisibleReplyFallbackEligible");
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
