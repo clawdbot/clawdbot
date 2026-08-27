@@ -20,6 +20,7 @@ export interface FrvClient {
     plan: Record<string, unknown>,
     operationDeadline?: number,
   ) => Promise<{ branch: string; runId: string; workflowSha: string }>;
+  ensureWorkflowRef?: (branch: string, workflowSha: string) => Promise<void>;
   getAttemptJobs: (runId: string, runAttempt: number) => Promise<Record<string, unknown>[]>;
   getJobLog: (jobId: number) => Promise<string>;
   getParentJobs: (runId: string) => Promise<Record<string, unknown>[]>;
@@ -50,6 +51,7 @@ export type FrvConcreteClient = FrvClient &
       FrvClient,
       | "deleteWorkflowRef"
       | "dispatchContinuation"
+      | "ensureWorkflowRef"
       | "loadSourceManifest"
       | "rerunFailed"
       | "rerunParent"

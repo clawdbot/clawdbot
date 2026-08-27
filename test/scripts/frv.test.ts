@@ -1,6 +1,6 @@
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import {
   continueFailed,
   continuationBranchName,
@@ -841,6 +841,10 @@ function preflightMethods(
 }
 
 describe("frv continuation controller", () => {
+  expectTypeOf<ReturnType<typeof createClient>["ensureWorkflowRef"]>().toEqualTypeOf<
+    (branch: string, workflowSha: string) => Promise<void>
+  >();
+
   it("uses the canonical release-ci identity accepted by tooling and evidence validators", () => {
     const branch = continuationBranchName("77", SHA);
     const requestedIdentityJson = JSON.stringify({
