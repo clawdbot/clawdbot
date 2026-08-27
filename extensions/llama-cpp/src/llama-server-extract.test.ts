@@ -8,6 +8,7 @@ import { selectLlamaServerAsset, type LlamaServerAsset } from "./llama-server-as
 import { extractLlamaServerArchive } from "./llama-server-extract.js";
 
 const tempRoots: string[] = [];
+const TEST_ARCHIVE_ROOT = selectLlamaServerAsset("linux", "x64").archiveRoot;
 
 afterEach(async () => {
   await Promise.all(
@@ -28,11 +29,11 @@ async function createTarArchive(
   build: (buildDir: string) => Promise<void>,
 ): Promise<{ archivePath: string; destDir: string }> {
   const stageDir = path.join(root, "stage");
-  const buildDir = path.join(stageDir, "llama-build");
+  const buildDir = path.join(stageDir, TEST_ARCHIVE_ROOT);
   await fs.mkdir(buildDir, { recursive: true });
   await build(buildDir);
   const archivePath = path.join(root, "asset.tar.gz");
-  await tar.c({ file: archivePath, cwd: stageDir, gzip: true }, ["llama-build"]);
+  await tar.c({ file: archivePath, cwd: stageDir, gzip: true }, [TEST_ARCHIVE_ROOT]);
   const destDir = path.join(root, "dest");
   await fs.mkdir(destDir, { recursive: true });
   return { archivePath, destDir };
@@ -72,10 +73,10 @@ describe("extractLlamaServerArchive", () => {
     });
 
     await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).resolves.toBe(
-      path.join(destDir, "llama-build", asset.executable),
+      path.join(destDir, asset.archiveRoot, asset.executable),
     );
 
-    const buildDir = path.join(destDir, "llama-build");
+    const buildDir = path.join(destDir, asset.archiveRoot);
     for (const [source, aliases] of asset.regularFileAliases) {
       for (const alias of aliases) {
         expect((await fs.lstat(path.join(buildDir, alias))).isFile()).toBe(true);
@@ -94,7 +95,9 @@ describe("extractLlamaServerArchive", () => {
 
     await extractLlamaServerArchive({ archivePath, destDir, asset });
 
-    await expect(fs.lstat(path.join(destDir, "llama-build", "unexpected-link"))).rejects.toThrow();
+    await expect(
+      fs.lstat(path.join(destDir, asset.archiveRoot, "unexpected-link")),
+    ).rejects.toThrow();
     await expect(fs.lstat(path.join(root, "escape.txt"))).rejects.toThrow();
   });
 
@@ -110,7 +113,7 @@ describe("extractLlamaServerArchive", () => {
     await extractLlamaServerArchive({ archivePath, destDir, asset });
 
     await expect(
-      fs.lstat(path.join(destDir, "llama-build", "unexpected-hardlink")),
+      fs.lstat(path.join(destDir, asset.archiveRoot, "unexpected-hardlink")),
     ).rejects.toThrow();
   });
 
@@ -175,7 +178,7 @@ describe("extractLlamaServerArchive", () => {
     });
 
     await expect(extractLlamaServerArchive({ archivePath, destDir, asset })).rejects.toThrow(
-      /invalid llama-server archive manifest filename/u,
+      /invalid archive regular-file manifest filename/u,
     );
   });
 
