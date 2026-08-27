@@ -46,7 +46,11 @@ export class NavDrawerSwipeOwner {
   }
 
   disconnect(): void {
-    this.reset();
+    this.host.removeEventListener("touchstart", this.handleStart);
+    this.host.removeEventListener("touchmove", this.handleMove);
+    this.host.removeEventListener("touchend", this.handleEnd);
+    this.host.removeEventListener("touchcancel", this.handleCancel);
+    this.closed();
   }
 
   reset(): void {

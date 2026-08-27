@@ -108,7 +108,9 @@ export class ShellChromeOwner {
     void import("./nav-drawer-swipe.ts").then(({ NavDrawerSwipeOwner }) => {
       const owner = new NavDrawerSwipeOwner(host, () => this.toggleNavigationSurface());
       this.navDrawerSwipeOwner = owner;
-      owner.connect();
+      if (host.isConnected) {
+        owner.connect();
+      }
     }, Boolean);
   }
 
@@ -172,7 +174,7 @@ export class ShellChromeOwner {
       options,
     );
     window.addEventListener(SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen, options);
-    void this.navDrawerSwipeOwnerLoad.then((owner) => host.isConnected && owner.connect());
+    this.navDrawerSwipeOwner?.connect();
   }
 
   disconnect(): void {
@@ -195,7 +197,15 @@ export class ShellChromeOwner {
       }
       host.navDrawerTrigger = trigger ?? this.visibleNavDrawerToggle() ?? null;
       host.navDrawerOpen = true;
-      this.navDrawerSwipeOwner?.opened();
+      if (this.navDrawerSwipeOwner) {
+        this.navDrawerSwipeOwner.opened();
+      } else {
+        void host.updateComplete.then(() => {
+          if (host.isConnected && host.navDrawerOpen) {
+            host.querySelector<HTMLElement>(".shell-nav")?.focus({ preventScroll: true });
+          }
+        });
+      }
       return;
     }
     // A responsive handoff expands this shell without overwriting the desktop preference.
@@ -407,7 +417,13 @@ export class ShellChromeOwner {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
-      if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event)) {
+      if (document.openClawModalLayers?.size) {
+        return;
+      }
+      if (
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.escape, event) ||
+        matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)
+      ) {
         event.preventDefault();
         host.closeNavDrawer({ restoreFocus: true });
       } else if (event.key === "Tab") {
