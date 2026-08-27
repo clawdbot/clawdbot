@@ -198,15 +198,13 @@ export class ChatPane extends ChatPaneLayoutRender {
       selectedSession.sharingRole === "viewer" &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
-    // Every composer-disabling gate needs a visible reason here or a banner in
-    // sessionDisabledBanner; a silently disabled composer is a silent failure.
+    // Placement progress already explains its gate in the transcript. Other
+    // gates need a reason here or a sessionDisabledBanner.
     const disabledReason = modelUnavailable
       ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
       : sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : placementStartupPending
-          ? t("newSession.starting")
-          : null;
+        : null;
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&

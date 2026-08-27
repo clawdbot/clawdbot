@@ -4,7 +4,6 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { renderPlacementStartupStatus } from "./components/chat-working-indicator.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 
@@ -123,6 +122,37 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
     })}
-    ${renderPlacementStartupStatus(props.placementStartup, props.onRetrySessionPlacementStartup)}
+    ${renderPlacementStartupError(props.placementStartup, props.onRetrySessionPlacementStartup)}
+  `;
+}
+
+function renderPlacementStartupError(
+  status: ApplicationPlacementStartupStatus | null | undefined,
+  onRetry?: () => void,
+) {
+  if (status?.phase !== "failed") {
+    return nothing;
+  }
+  return html`
+    <div
+      class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-cloud-startup-error"
+      role="alert"
+    >
+      <span class="chat-composer-neighbor-card__icon" aria-hidden="true"
+        >${icons.alertTriangle}</span
+      >
+      <span class="chat-composer-neighbor-card__copy"
+        ><strong
+          >${t("newSession.placementStartFailed", {
+            error: status.error ?? t("newSession.createFailed"),
+          })}</strong
+        ></span
+      >
+      ${status.retryable && onRetry
+        ? html`<button class="btn btn--sm" type="button" @click=${onRetry}>
+            ${t("common.retry")}
+          </button>`
+        : nothing}
+    </div>
   `;
 }
