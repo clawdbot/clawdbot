@@ -7,6 +7,10 @@ import {
   waitForControlUiTerminalReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  activateChatHeaderPanelAction,
+  openChatSidePanelType,
+} from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -36,6 +40,95 @@ async function captureLayout(page: Page, theme: string, state: string): Promise<
 }
 
 suite.define(() => {
+  it.each(
+    [
+      { label: "Files", slot: "workspace", shortcut: "Shift+Meta+B" },
+      { label: "Terminal", slot: "terminal", shortcut: "Control+Backquote" },
+    ].flatMap((target) => [
+      { ...target, action: "shortcut" },
+      { ...target, action: "header" },
+    ]),
+  )("reveals retained $label via $action before toggling it closed", async (target) => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 800, width: 1280 } },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["terminal.open"],
+          terminalEnabled: true,
+          methodResponses: { "tasks.list": { tasks: [] } },
+          historyMessages: [
+            { role: "assistant", content: [{ type: "text", text: "Panel shortcut workspace." }] },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForControlUiGatewayReady(page);
+        await page.getByPlaceholder("Message OpenClaw").waitFor();
+        const panel = page.locator(`.side-panel__panel[data-panel-slot="${target.slot}"]`);
+        const tab = page.locator(".side-panel__header-tabs").getByRole("tab", {
+          name: target.label,
+          exact: true,
+        });
+        const tasks = page.locator('.side-panel__panel[data-panel-slot="tasks"]');
+        const toggle = (visible = false) =>
+          target.action === "shortcut"
+            ? page.keyboard.press(target.shortcut)
+            : activateChatHeaderPanelAction(
+                page,
+                target.slot === "terminal"
+                  ? "Toggle terminal"
+                  : visible
+                    ? "Collapse session workspace"
+                    : "Show session files",
+              );
+        const capture = async (state: string) => {
+          if (screenshotDir) {
+            await fs.mkdir(screenshotDir, { recursive: true });
+            await page.screenshot({
+              animations: "disabled",
+              caret: "hide",
+              path: path.join(screenshotDir, `${target.action}-${target.slot}-${state}.png`),
+            });
+          }
+        };
+
+        await openChatSidePanelType(page, target.label);
+        await panel.waitFor({ state: "visible" });
+        await gateway.waitForRequest(
+          target.slot === "terminal" ? "terminal.open" : "sessions.files.list",
+        );
+        await openChatSidePanelType(page, "Tasks");
+        await tasks.waitFor({ state: "visible" });
+        expect(await panel.count()).toBe(1);
+        expect(await panel.isVisible()).toBe(false);
+        expect(await tab.getAttribute("aria-selected")).toBe("false");
+        await capture("retained");
+
+        await toggle();
+        try {
+          await expect.poll(() => panel.isVisible()).toBe(true);
+        } finally {
+          await capture("shortcut-result");
+        }
+        expect(await tab.getAttribute("aria-selected")).toBe("true");
+        const tasksToggle = page.locator(".chat-tasks-toggle");
+        expect(await tasksToggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await tasksToggle.getAttribute("aria-label")).toBe("Show background tasks");
+
+        await toggle(true);
+        await expect.poll(() => tab.count()).toBe(0);
+        expect(await tasks.isVisible()).toBe(true);
+        await toggle();
+        await panel.waitFor({ state: "visible" });
+        await page.locator(".side-panel__minimize").click();
+        await panel.waitFor({ state: "hidden" });
+        await toggle();
+        await panel.waitFor({ state: "visible" });
+        expect(await tasks.count()).toBe(1);
+        await capture("restored");
+      },
+    );
+  });
+
   it.each(["light", "dark"] as const)(
     "toggles main content back to bottom and right in %s mode",
     async (theme) => {

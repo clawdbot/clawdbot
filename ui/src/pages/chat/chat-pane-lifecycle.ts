@@ -51,6 +51,7 @@ import {
   CHAT_SPACE_ACTIVATION_SELECTOR,
   keyboardEventPathMatches,
 } from "./chat-pane-shared.ts";
+import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import {
   subscribeChatPaneSnapshotInvalidation,
   subscribeChatPaneStartup,
@@ -77,7 +78,7 @@ import {
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
-import { closeSlot, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot } from "./sidebar-layout.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 1_200;
 const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
@@ -303,44 +304,31 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    const togglePanelSlot = (slot: SidebarSlotId) => {
+    const panelSlot =
+      this.state?.terminalAvailable && isTerminalPanelShortcut(event)
+        ? "terminal"
+        : matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+          ? "workspace"
+          : null;
+    if (this.active && this.presented && !event.defaultPrevented && this.state && panelSlot) {
       const state = this.state;
-      if (!state) {
-        return;
-      }
-      const visible =
-        state.sidebarLayout.open === true &&
-        state.sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+      event.preventDefault();
+      // Dashboard hides retained tabs in its projection. Decide visibility there,
+      // but mutate stored layout so revealing a tab preserves every tab's order.
+      const layout = resolveSidebarLayoutForBoard({
+        board: this.resolveBoardView(),
+        layout: state.sidebarLayout,
+        paneWidth: this.paneWidth,
+      });
+      const visible = isSidebarSlotVisible(layout, panelSlot);
       if (visible) {
-        releaseAttachmentWorkspaceOwner(state, slot);
+        releaseAttachmentWorkspaceOwner(state, panelSlot);
       }
       this.commitSidebarLayout(
-        visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
+        visible
+          ? closeSlot(state.sidebarLayout, panelSlot)
+          : openSlot(state.sidebarLayout, panelSlot),
       );
-    };
-    if (
-      this.active &&
-      this.presented &&
-      !event.defaultPrevented &&
-      this.state?.terminalAvailable &&
-      isTerminalPanelShortcut(event)
-    ) {
-      event.preventDefault();
-      togglePanelSlot("terminal");
-      return;
-    }
-    if (
-      this.active &&
-      this.presented &&
-      !event.defaultPrevented &&
-      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
-    ) {
-      const state = this.state;
-      if (!state) {
-        return;
-      }
-      event.preventDefault();
-      togglePanelSlot("workspace");
       return;
     }
 

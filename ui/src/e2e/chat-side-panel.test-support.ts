@@ -38,7 +38,7 @@ export async function openChatSidePanelType(page: Page, label: string): Promise<
     return;
   }
   await panel.getByRole("button", { name: "Add side panel tab" }).click();
-  await panel.locator("wa-dropdown-item").filter({ hasText: label }).click();
+  await panel.locator(".side-panel-type-menu wa-dropdown-item").filter({ hasText: label }).click();
 }
 
 export async function activateChatHeaderPanelAction(page: Page, label: string): Promise<void> {

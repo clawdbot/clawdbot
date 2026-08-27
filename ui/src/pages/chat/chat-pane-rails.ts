@@ -27,10 +27,10 @@ export function createChatPaneRails(params: {
   updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
 }) {
   const { state, sidebarLayout } = params;
-  const hasPanelSlot = (slot: SidebarSlotId) =>
-    sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+  const isPanelSlotVisible = (slot: SidebarSlotId) => isSidebarSlotVisible(sidebarLayout, slot);
+  // The board projection can hide retained tabs; only stored layout owns mutations.
   const openPanelSlot = (slot: SidebarSlotId) => {
-    params.updateSidebarLayout(openSlot(sidebarLayout, slot));
+    params.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
     if (slot === "companion") {
       params.setObserverVisibility(true);
     }
@@ -40,19 +40,19 @@ export function createChatPaneRails(params: {
       params.setObserverVisibility(false);
     }
     releaseAttachmentWorkspaceOwner(state, slot);
-    params.updateSidebarLayout(closeSlot(sidebarLayout, slot));
+    params.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
-    hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
+    isPanelSlotVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
-    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
+    expanded: isPanelSlotVisible("workspace"),
     narrowLayout: false,
     presented: params.presented,
   });
   const sessionWorkspace = {
     ...sessionWorkspaceBase,
-    collapsed: !hasPanelSlot("workspace"),
+    collapsed: !isPanelSlotVisible("workspace"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("workspace"),
     onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
@@ -69,7 +69,7 @@ export function createChatPaneRails(params: {
   });
   const backgroundTasks = {
     ...backgroundTasksBase,
-    collapsed: !hasPanelSlot("tasks"),
+    collapsed: !isPanelSlotVisible("tasks"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };

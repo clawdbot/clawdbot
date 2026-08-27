@@ -876,6 +876,10 @@ describe("chat pane keyboard shortcuts", () => {
       title: "report.pdf",
       src: "/media/report.pdf",
     };
+    const attachment = state.attachmentSidebarContent;
+    state.sidebarLayout = openSlot(state.sidebarLayout, "detail");
+    dispatchSidebarShortcut(pane);
+    expect(state.attachmentSidebarContent).toBe(attachment);
 
     const collapseEvent = new KeyboardEvent("keydown", {
       cancelable: true,

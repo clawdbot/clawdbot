@@ -13,7 +13,10 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
+import {
+  activateChatHeaderPanelAction,
+  openChatSidePanelType,
+} from "./chat-side-panel.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -376,6 +379,96 @@ describeControlUiE2e("Board split transcript restore", () => {
       await video?.saveAs(path.join(proofDir, "dashboard-side-panel-transition.webm"));
     }
   }, 120_000);
+
+  it.each(
+    [
+      { label: "Files", slot: "workspace", shortcut: "Shift+Meta+B" },
+      { label: "Terminal", slot: "terminal", shortcut: "Control+Backquote" },
+    ].flatMap((target) => [
+      { ...target, action: "shortcut" },
+      { ...target, action: "header" },
+    ]),
+  )("reveals $label hidden by Dashboard via $action", async (target) => {
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+    contexts.add(context);
+    try {
+      const page = await context.newPage();
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        terminalEnabled: true,
+        featureMethods: [
+          "board.get",
+          "board.update",
+          "chat.metadata",
+          "chat.startup",
+          "terminal.open",
+        ],
+        methodResponses: {
+          "board.get": boardSnapshot("right"),
+          "board.update": {
+            sequence: [boardSnapshot("hidden", 2), boardSnapshot("right", 3)],
+          },
+          "tasks.list": { tasks: [] },
+        },
+      });
+      const capture = async (state: string) => {
+        const screenshotDir = process.env.OPENCLAW_TERMINAL_LAYOUT_SCREENSHOT_DIR?.trim();
+        if (screenshotDir) {
+          await mkdir(screenshotDir, { recursive: true });
+          await page.screenshot({
+            animations: "disabled",
+            caret: "hide",
+            path: path.join(
+              screenshotDir,
+              `dashboard-${target.action}-${target.slot}-${state}.png`,
+            ),
+          });
+        }
+      };
+      await showDashboard(page);
+      await page.locator(".side-panel").waitFor();
+      await openChatSidePanelType(page, "Tasks");
+      await openChatSidePanelType(page, target.label);
+      const panel = page.locator(`.side-panel__panel[data-panel-slot="${target.slot}"]`);
+      await panel.waitFor({ state: "visible" });
+      await gateway.waitForRequest(
+        target.slot === "terminal" ? "terminal.open" : "sessions.files.list",
+      );
+      const tabLabels = page.locator(".side-panel__header-tabs .tabstrip-tab__label");
+      const initialOrder = await tabLabels.allTextContents();
+      expect(initialOrder).toHaveLength(3);
+      await page.locator('wa-radio.settings-segmented__btn[value="dashboard"]').click();
+      await expect.poll(() => page.locator(".side-panel").count()).toBe(0);
+      await capture("hidden");
+
+      if (target.action === "shortcut") {
+        await page.keyboard.press(target.shortcut);
+      } else {
+        await activateChatHeaderPanelAction(
+          page,
+          target.slot === "terminal" ? "Toggle terminal" : "Show session files",
+        );
+      }
+      try {
+        await expect.poll(() => panel.isVisible()).toBe(true);
+      } finally {
+        await capture("shortcut-result");
+      }
+      expect(await tabLabels.allTextContents()).toEqual(initialOrder);
+      expect(
+        await page.locator("wa-radio.settings-segmented__btn--active").getAttribute("value"),
+      ).toBe("split");
+      expect(
+        (await gateway.getRequests("board.update")).map((request) => request.params),
+      ).toMatchObject([
+        { ops: [{ kind: "tab_update", tabId: "main", chatDock: "hidden" }] },
+        { ops: [{ kind: "tab_update", tabId: "main", chatDock: "right" }] },
+      ]);
+    } finally {
+      contexts.delete(context);
+      await context.close();
+    }
+  });
 
   it("activates Side chat from a split dashboard panel", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
