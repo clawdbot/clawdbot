@@ -209,7 +209,13 @@ export async function prepareLlamaCppSetup(
 }
 
 function hasLocalMemoryIntent(config: ProviderAuthContext["config"]): boolean {
-  return config.memory?.search?.provider === "local";
+  return (
+    config.memory?.search?.provider === "local" ||
+    Object.values(config.agents?.entries ?? {}).some(
+      (agent) => agent.memory?.search?.provider === "local",
+    ) ||
+    config.agents?.list?.some((agent) => agent.memory?.search?.provider === "local") === true
+  );
 }
 
 async function resolveSetupPlan(
@@ -224,6 +230,7 @@ async function resolveSetupPlan(
 
   candidate = candidates.find((entry) => entry.model.id === DEFAULT_LLAMA_CPP_MODEL_ID);
   const totalmemBytes = os.totalmem();
+  const localMemoryIntent = hasLocalMemoryIntent(ctx.config);
   if (candidate && meetsLlamaCppDefaultModelRamFloor(totalmemBytes)) {
     const consent = await ctx.prompter.confirm({
       message:
@@ -233,7 +240,7 @@ async function resolveSetupPlan(
     if (consent) {
       return { kind: "chat", candidate };
     }
-  } else if (!hasLocalMemoryIntent(ctx.config)) {
+  } else if (!localMemoryIntent) {
     await ctx.prompter.note(
       `This Gateway has ${formatRamGb(totalmemBytes)} GB RAM; the recommended model needs 16 GB+. Configure an existing smaller GGUF, use Ollama or LM Studio, or choose a cloud provider.`,
       "Setup skipped",
@@ -241,16 +248,16 @@ async function resolveSetupPlan(
     return undefined;
   }
 
-  const primaryModel = readPrimaryModel(ctx.config);
-  if (hasLocalMemoryIntent(ctx.config) && primaryModel?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`)) {
+  const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
+  if (localMemoryIntent && existing && !existing.localService) {
     await ctx.prompter.note(
-      `Embedding-only setup cannot replace the provider while ${primaryModel} is your current chat model. Choose another chat model, then retry llama.cpp setup.`,
+      "Embedding-only setup cannot replace your existing llama.cpp server without changing its chat routes. Move those routes to another provider and remove the existing server config, then retry llama.cpp setup.",
       "Setup skipped",
     );
     return undefined;
   }
 
-  if (hasLocalMemoryIntent(ctx.config)) {
+  if (localMemoryIntent) {
     const consent = await ctx.prompter.confirm({
       message:
         "OpenClaw can install a verified llama.cpp server and download only the local embedding model (about 0.3 GB). This will not install or change your chat model. Continue?",
