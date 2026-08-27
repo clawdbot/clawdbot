@@ -101,12 +101,14 @@ export async function cleanupCodexAttempt(
               resourceState.client,
               resourceState.thread.threadId,
               resourceState.thread.liveThreadOwnership?.release ??
-                (async (threadId) => {
+                (async (threadId, assertCurrent) => {
                   const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
                     threadId,
                     timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+                    assertCurrent,
                   });
                   if (!released) {
+                    assertCurrent?.();
                     await closeCodexStartupClientBestEffort(resourceState.client);
                     throw new CodexAppServerUnsafeSubscriptionError(
                       `Codex retained thread subscription could not be released: ${threadId}`,

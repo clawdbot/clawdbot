@@ -5,6 +5,7 @@ import {
 import {
   buildModelCatalogMergeKey,
   parseModelCatalogRef,
+  type ModelCatalogRef,
 } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { MODEL_APIS } from "../config/types.models.js";
@@ -163,8 +164,7 @@ export function collectConfiguredProviderIdsNeedingStaticCatalog(params: {
 }
 
 export function prepareConfiguredRuntimeModels(params: {
-  config: OpenClawConfig;
-  configuredModelRefs?: readonly ConfiguredModelRef[];
+  configuredModelRefs: readonly ModelCatalogRef[];
   metadataSnapshot: PluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerStaticModels: readonly ProviderRuntimeModel[];
@@ -176,12 +176,7 @@ export function prepareConfiguredRuntimeModels(params: {
 }): PreparedConfiguredRuntimeModel[] {
   const prepared: PreparedConfiguredRuntimeModel[] = [];
   const seen = new Set<string>();
-  for (const { value } of params.configuredModelRefs ?? collectConfiguredModelRefs(params.config)) {
-    const parsed = parseModelCatalogRef(value);
-    if (!parsed) {
-      continue;
-    }
-    const { modelId, provider } = parsed;
+  for (const { modelId, provider } of params.configuredModelRefs) {
     const key = buildModelCatalogMergeKey(provider, modelId);
     if (seen.has(key)) {
       continue;

@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery } from "./hybrid.js";
+import { runVectorKnnQuery } from "./manager-search-knn.js";
 import { searchKeyword, searchPathKeyword, searchVector } from "./manager-search.js";
 import { runMemorySearchWithDeadline } from "./search-deadline.js";
 import { vectorToBlob } from "./vector-blob.js";
@@ -106,6 +107,7 @@ function searchVectorFixture(db: DatabaseSync, options: Partial<VectorSearchOpti
     limit: 5,
     snippetMaxChars: 200,
     ensureVectorReady: async () => false,
+    runVectorKnn: async (request) => runVectorKnnQuery(db, request),
     sourceFilterVec: { sql: "", params: [] },
     sourceFilterChunks: { sql: "", params: [] },
     ...options,

@@ -3,16 +3,17 @@ import { sql } from "kysely";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import {
-  runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import {
   materializeSessionStateDeletePlans,
   type SessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
+import {
+  runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
+  withSqliteSessionDeletions,
+} from "./session-accessor.sqlite-deletion.js";
 import {
   readSessionEntryCount,
   readSessionEntryStore,
@@ -571,20 +572,27 @@ async function finalizeSqliteSessionEntryMaintenancePlansWithCommit(
     let archivedTranscripts: SessionLifecycleArchivedTranscript[];
     try {
       const materializedPlans = await materializeSessionStateDeletePlans(batch.stateDeletePlans);
-      archivedTranscripts = await commit(() => {
-        let committed: SessionLifecycleArchivedTranscript[] = [];
-        runOpenClawAgentWriteTransaction((database) => {
-          assertPlannedLifecycleArtifactEntriesUnchanged(database, batch.entryRemovals);
-          committed = deleteMaterializedSessionStatePlans(
-            database,
-            materializedPlans,
-            undefined,
-            new Set(batch.entryRemovals.map((removal) => removal.sessionKey)),
-          );
-          deletePlannedLifecycleArtifactEntries(database, batch.entryRemovals);
-        }, toDatabaseOptions(scope));
-        return committed;
-      });
+      archivedTranscripts = await withSqliteSessionDeletions(
+        scope,
+        batch.entryRemovals.flatMap(({ expectedEntry: entry, sessionKey }) =>
+          entry ? [{ entry, sessionKey }] : [],
+        ),
+        async () =>
+          await commit(() => {
+            let committed: SessionLifecycleArchivedTranscript[] = [];
+            runOpenClawAgentWriteTransaction((database) => {
+              assertPlannedLifecycleArtifactEntriesUnchanged(database, batch.entryRemovals);
+              committed = deleteMaterializedSessionStatePlans(
+                database,
+                materializedPlans,
+                undefined,
+                new Set(batch.entryRemovals.map((removal) => removal.sessionKey)),
+              );
+              deletePlannedLifecycleArtifactEntries(database, batch.entryRemovals);
+            }, toDatabaseOptions(scope));
+            return committed;
+          }),
+      );
     } catch (error) {
       warn("SQLite session maintenance cleanup failed", error, batch.stateDeletePlans);
       break;

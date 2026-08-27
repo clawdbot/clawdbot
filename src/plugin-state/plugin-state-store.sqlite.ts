@@ -32,6 +32,7 @@ import {
 // Plugin-wide fuse only; namespace maxEntries still owns normal cache eviction.
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
 export const MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN = 50_000;
+export const MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES = 512;
 const PLUGIN_STATE_EXPIRY_BATCH_ROWS = 1_024;
 let maxPluginStateEntriesPerPluginForTests: number | undefined;
 
@@ -39,6 +40,12 @@ type PluginStateEntriesTable = OpenClawStateKyselyDatabase["plugin_state_entries
 type PluginStateStoreDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
 
 type PluginStateRow = Selectable<PluginStateEntriesTable>;
+
+export type PluginDoctorRawStateEntry = Omit<PluginStateEntry<unknown>, "value" | "expiresAt"> & {
+  valueJson: string;
+  value?: unknown;
+  expiresAt: number | null;
+};
 
 type CountRow = {
   count: number | bigint;
@@ -1090,6 +1097,101 @@ export function pluginStateDeleteIf(params: {
   }
 }
 
+/** Deletes one bounded set of exact observed rows in a single synchronous transaction. */
+export function pluginStateDeleteEntriesIfUnchanged(params: {
+  pluginId: string;
+  namespace: string;
+  entries: readonly PluginDoctorRawStateEntry[];
+  assertOwnedInTransaction: (database: DatabaseSync) => void;
+  env?: NodeJS.ProcessEnv;
+}): { deleted: number; changed: number } {
+  if (params.entries.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES) {
+    throw new RangeError(
+      `Plugin state bulk deletion cannot exceed ${MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES} entries.`,
+    );
+  }
+  if (params.entries.length === 0) {
+    return { deleted: 0, changed: 0 };
+  }
+  // Copy plugin-visible envelopes before BEGIN; no plugin-owned accessors run in the transaction.
+  const observed = params.entries.map(({ value: _value, ...entry }) => entry);
+  return runWriteTransaction(
+    "delete",
+    ({ db }) => {
+      params.assertOwnedInTransaction(db);
+      let deleted = 0;
+      for (const entry of observed) {
+        let query = getPluginStateKysely(db)
+          .deleteFrom("plugin_state_entries")
+          .where("plugin_id", "=", params.pluginId)
+          .where("namespace", "=", params.namespace)
+          .where("entry_key", "=", entry.key)
+          .where("value_json", "=", entry.valueJson)
+          .where("created_at", "=", entry.createdAt);
+        query =
+          entry.expiresAt === null
+            ? query.where("expires_at", "is", null)
+            : query.where("expires_at", "=", entry.expiresAt);
+        deleted += Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0);
+      }
+      return { deleted, changed: observed.length - deleted };
+    },
+    envOptions(params.env),
+  );
+}
+
+/** Doctor-only bounded raw read keeps malformed rows visible and preserves exact CAS bytes. */
+export function pluginStateDoctorEntriesInKeyRange(params: {
+  pluginId: string;
+  namespace: string;
+  prefix: string;
+  after?: string;
+  limit: number;
+  env?: NodeJS.ProcessEnv;
+}): PluginDoctorRawStateEntry[] {
+  if (
+    !params.prefix ||
+    !Number.isSafeInteger(params.limit) ||
+    params.limit < 1 ||
+    params.limit > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||
+    (params.after !== undefined && !params.after.startsWith(params.prefix))
+  ) {
+    throw new RangeError(
+      `Plugin doctor state reads require a valid prefix and a limit of 1-${MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES}.`,
+    );
+  }
+  return readPluginStateRowsInKeyRange(
+    {
+      ...params,
+      keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
+      keyEndExclusive: `${params.prefix}\uffff`,
+    },
+    (row): PluginDoctorRawStateEntry => {
+      const createdAt = normalizeSqliteNumber(row.created_at);
+      const expiresAt = normalizeSqliteNumber(row.expires_at);
+      const entry: PluginDoctorRawStateEntry = {
+        key: row.entry_key,
+        valueJson: row.value_json,
+        createdAt: createdAt ?? 0,
+        expiresAt: expiresAt ?? null,
+      };
+      if (
+        !Number.isSafeInteger(createdAt) ||
+        (createdAt ?? -1) < 0 ||
+        (row.expires_at !== null && !Number.isSafeInteger(expiresAt))
+      ) {
+        return entry;
+      }
+      try {
+        entry.value = JSON.parse(row.value_json) as unknown;
+      } catch {
+        // Keep corrupt rows in the page so Doctor can advance past them safely.
+      }
+      return entry;
+    },
+  );
+}
+
 export function pluginStateEntries(params: {
   pluginId: string;
   namespace: string;
@@ -1123,7 +1225,7 @@ export function pluginStateEntries(params: {
 }
 
 /** Internal bounded key-range read for core owners with sortable plugin-state keys. */
-export function pluginStateEntriesInKeyRange(params: {
+type PluginStateKeyRangeParams = {
   pluginId: string;
   namespace: string;
   keyStartInclusive: string;
@@ -1131,7 +1233,18 @@ export function pluginStateEntriesInKeyRange(params: {
   limit: number;
   order?: "asc" | "desc";
   env?: NodeJS.ProcessEnv;
-}): PluginStateEntry<unknown>[] {
+};
+
+export function pluginStateEntriesInKeyRange(
+  params: PluginStateKeyRangeParams,
+): PluginStateEntry<unknown>[] {
+  return readPluginStateRowsInKeyRange(params, (row) => rowToEntry(row, "entries"));
+}
+
+function readPluginStateRowsInKeyRange<T>(
+  params: PluginStateKeyRangeParams,
+  mapRow: (row: PluginStateRow) => T,
+): T[] {
   if (!Number.isSafeInteger(params.limit) || params.limit < 1) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",
@@ -1160,7 +1273,7 @@ export function pluginStateEntriesInKeyRange(params: {
             limit: params.limit,
             order: params.order ?? "asc",
             now: Date.now(),
-          }).map((row) => rowToEntry(row, "entries")),
+          }).map(mapRow),
         envOptions(params.env),
       ) ?? []
     );

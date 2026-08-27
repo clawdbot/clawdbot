@@ -29,6 +29,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentMessage, StreamFn } from "../../runtime/index.js";
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
@@ -970,6 +971,7 @@ type MutableSession = {
   abort: () => Promise<void>;
   dispose: () => void;
   steer: (text: string) => Promise<void>;
+  [agentSessionSetContextReplacementHook]: (callback: (() => void) | undefined) => void;
 };
 
 type SessionPromptOverride = (
@@ -1222,6 +1224,7 @@ export function createDefaultEmbeddedSession(params?: {
     abort: async () => {},
     dispose: () => {},
     steer: async () => {},
+    [agentSessionSetContextReplacementHook]: () => {},
   };
 
   return session;

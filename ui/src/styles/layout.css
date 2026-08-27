@@ -2157,6 +2157,7 @@ openclaw-settings-save-indicator:empty {
   padding-top: 12px;
   margin: 12px 0 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 0;
 }
 
 .sidebar-online__list {

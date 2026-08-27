@@ -10,7 +10,6 @@ import {
   repairManagedNpmRootOpenClawPeer,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
-  type ManagedNpmOverrideOmissions,
   type ManagedNpmRootInstalledDependency,
 } from "../infra/npm-managed-root.js";
 import {
@@ -27,7 +26,7 @@ import {
   formatManagedNpmProjectQuarantineArtifacts,
   formatNpmCommandFailureOutput,
   isManagedNpmProjectCorruptionInstallFailure,
-  classifyNpmManagedOverrideCompatibilityError,
+  isNpmAliasOverrideCompatibilityError,
   listManagedNpmRootPackageNames,
   listNewManagedNpmRootPackageDirs,
   quarantineManagedNpmProjectRebuildArtifacts,
@@ -255,16 +254,17 @@ export async function installPluginFromManagedNpmRoot(
       );
       return null;
     };
-    const syncManagedPeerDependenciesForInstall = async (options?: {
-      overrideOmissions?: ManagedNpmOverrideOmissions;
-    }): Promise<{ ok: true; changed: boolean } | { ok: false; error: string }> => {
+    let omitNpmAliasOverrides = false;
+    const syncManagedPeerDependenciesForInstall = async (): Promise<
+      { ok: true; changed: boolean } | { ok: false; error: string }
+    > => {
       try {
         return {
           ok: true,
           changed: await syncManagedNpmRootPeerDependencies({
             npmRoot,
             managedOverrides,
-            overrideOmissions: options?.overrideOmissions,
+            omitNpmAliasOverrides,
             timeoutMs,
             signal: params.signal,
           }),
@@ -276,18 +276,15 @@ export async function installPluginFromManagedNpmRoot(
         };
       }
     };
-    let overrideOmissions: ManagedNpmOverrideOmissions = {};
     const preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
     await upsertManagedNpmRootDependency({
       npmRoot,
       packageName: params.packageName,
       dependencySpec: prepared.dependencySpec,
       managedOverrides,
-      overrideOmissions,
+      omitNpmAliasOverrides,
     });
-    const initialPeerSync = await syncManagedPeerDependenciesForInstall({
-      overrideOmissions,
-    });
+    const initialPeerSync = await syncManagedPeerDependenciesForInstall();
     if (!initialPeerSync.ok) {
       return await rollbackFailedManagedNpmInstall({ ok: false, error: initialPeerSync.error });
     }
@@ -315,35 +312,19 @@ export async function installPluginFromManagedNpmRoot(
       }),
     };
     let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
-    let compatibility = classifyNpmManagedOverrideCompatibilityError(install);
-    while (install.code !== 0 && compatibility) {
-      const nextOverrideOmissions = {
-        npmAliases: overrideOmissions.npmAliases === true || compatibility.npmAliases,
-        pnpmParentChildSelectors:
-          overrideOmissions.pnpmParentChildSelectors === true ||
-          compatibility.pnpmParentChildSelectors,
-      };
-      if (
-        nextOverrideOmissions.npmAliases === (overrideOmissions.npmAliases === true) &&
-        nextOverrideOmissions.pnpmParentChildSelectors ===
-          (overrideOmissions.pnpmParentChildSelectors === true)
-      ) {
-        break;
-      }
+    if (install.code !== 0 && isNpmAliasOverrideCompatibilityError(install)) {
       logger.warn?.(
         "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
       );
-      overrideOmissions = nextOverrideOmissions;
+      omitNpmAliasOverrides = true;
       await upsertManagedNpmRootDependency({
         npmRoot,
         packageName: params.packageName,
         dependencySpec: prepared.dependencySpec,
         managedOverrides,
-        overrideOmissions,
+        omitNpmAliasOverrides,
       });
-      const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall({
-        overrideOmissions,
-      });
+      const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
       if (!aliasRetryPeerSync.ok) {
         return await rollbackFailedManagedNpmInstall({
           ok: false,
@@ -351,7 +332,6 @@ export async function installPluginFromManagedNpmRoot(
         });
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
-      compatibility = classifyNpmManagedOverrideCompatibilityError(install);
     }
     if (!recovery && install.code !== 0 && isManagedNpmProjectCorruptionInstallFailure(install)) {
       const originalError = formatNpmCommandFailureOutput(install);
@@ -375,9 +355,7 @@ export async function installPluginFromManagedNpmRoot(
     }
     let settledManagedPeerDependencies = false;
     for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
-      const peerSync = await syncManagedPeerDependenciesForInstall({
-        overrideOmissions,
-      });
+      const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
         return await rollbackFailedManagedNpmInstall({ ok: false, error: peerSync.error });
       }
@@ -395,9 +373,7 @@ export async function installPluginFromManagedNpmRoot(
       }
     }
     if (!settledManagedPeerDependencies) {
-      const peerSync = await syncManagedPeerDependenciesForInstall({
-        overrideOmissions,
-      });
+      const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
         return await rollbackFailedManagedNpmInstall({ ok: false, error: peerSync.error });
       }

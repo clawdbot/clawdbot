@@ -665,6 +665,15 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 ## Feature details
 
 <AccordionGroup>
+  <Accordion title="Introductions when joining a server">
+    When the bot joins an allowed Discord server, OpenClaw posts one room-specific introduction. It prefers the server's system channel when the bot can view and send messages there; otherwise, it uses the first text channel with both **View Channel** and **Send Messages** permissions. If no eligible channel exists, no introduction is sent.
+
+    Introductions use the channel name and topic, plus recent messages when available. Reading earlier messages also requires **Read Message History**; when that permission is missing, OpenClaw still introduces itself using channel metadata instead of failing.
+
+    Introductions are enabled by default, apply only to newly joined servers, and never run in direct messages. Set `channels.discord.joinIntro: false` to disable them, or set `channels.discord.accounts.<accountId>.joinIntro` to override one account. See [group join introductions](/channels#group-join-introductions) for the history limits, target-channel selection, once-per-room behavior, and untrusted-content handling.
+
+  </Accordion>
+
   <Accordion title="Reply tags and native replies">
     Discord supports reply tags in agent output:
 
@@ -1710,6 +1719,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 
 - startup/auth: `enabled`, `token`, `applicationId`, `accounts.*`, `allowBots`
 - policy: `groupPolicy`, `dmPolicy`, `allowFrom`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
+- group introductions: `joinIntro`, `accounts.*.joinIntro` (default: `true`)
 - command: `commands.native`, `commands.allowFrom` (global), `configWrites`, `slashCommand.ephemeral`
 - gateway: `proxy`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`

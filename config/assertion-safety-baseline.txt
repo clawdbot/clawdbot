@@ -768,7 +768,7 @@ extensions/memory-core/src/memory/manager-embedding-ops.ts	2
 extensions/memory-core/src/memory/manager-keyword-retrieval.ts	1
 extensions/memory-core/src/memory/manager-reindex-lock.ts	1
 extensions/memory-core/src/memory/manager-search-orchestration.ts	3
-extensions/memory-core/src/memory/manager-search.ts	13
+extensions/memory-core/src/memory/manager-search.ts	12
 extensions/memory-core/src/memory/manager-source-state.ts	2
 extensions/memory-core/src/memory/manager-sync-base.ts	5
 extensions/memory-core/src/memory/manager-vector-rebuild-state.ts	1
@@ -1542,7 +1542,7 @@ packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
 packages/ai/src/transports/openai-responses-replay-internal.ts	11
 packages/ai/src/transports/openai-responses-replay-messages-internal.ts	15
-packages/ai/src/transports/openai-responses-stream-internal.ts	3
+packages/ai/src/transports/openai-responses-stream-internal.ts	2
 packages/ai/src/transports/openai-responses-stream-observer-internal.ts	1
 packages/ai/src/transports/openai-responses-stream-slots-internal.ts	2
 packages/ai/src/transports/openai-responses-stream-terminal-internal.ts	2
@@ -2895,7 +2895,7 @@ src/gateway/node-browser-proxy-policy.ts	1
 src/gateway/node-command-policy.ts	2
 src/gateway/node-invoke-system-run-approval.ts	1
 src/gateway/node-pairing-ssh-verify.ts	1
-src/gateway/node-registry-private.ts	3
+src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	27
 src/gateway/openai-agent-run-usage.ts	1
 src/gateway/openai-http.ts	29
