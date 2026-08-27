@@ -74,7 +74,7 @@ function parseRoleSnapshotLine(line: string) {
       return null;
     }
     try {
-      name = JSON.parse(encoded) as string;
+      name = JSON.parse(encoded) as string; // SAFETY: encoded matches one complete JSON string literal.
     } catch {
       return null;
     }
