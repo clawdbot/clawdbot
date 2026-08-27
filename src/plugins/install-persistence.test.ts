@@ -930,6 +930,7 @@ describe("persistPluginInstall", () => {
 
   it("rejects invalid authored plugin config even for a disabled install", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
+    let committed = false;
     const baseConfig = {
       plugins: {
         entries: {
@@ -968,6 +969,9 @@ describe("persistPluginInstall", () => {
         },
         pluginId: "needs-config",
         enable: false,
+        onCommitted: () => {
+          committed = true;
+        },
         install: {
           source: "npm",
           spec: "needs-config@1.0.0",
@@ -976,6 +980,7 @@ describe("persistPluginInstall", () => {
       }),
     ).rejects.toThrow("has invalid configured settings");
 
+    expect(committed).toBe(false);
     expect(enablePluginInConfigMock).not.toHaveBeenCalled();
     expect(writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock).not.toHaveBeenCalled();
     expect(configWriteMock).not.toHaveBeenCalled();

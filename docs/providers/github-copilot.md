@@ -169,6 +169,36 @@ in against public `github.com`), so routing stays correct even after the
 environment variable is unset.
 </Note>
 
+### Tenant request identity
+
+OpenClaw uses the `copilot-developer-cli` request identity by default, including
+for data-residency tenants. First confirm that your enterprise permits Copilot
+CLI and the selected model. A `*.ghe.com` hostname does not imply a different
+integration policy.
+
+If your tenant administrator or GitHub support requires a different identity,
+use the existing provider header setting:
+
+```json5
+{
+  models: {
+    providers: {
+      "github-copilot": {
+        params: { githubDomain: "your-org.ghe.com" },
+        headers: { "Copilot-Integration-Id": "vscode-chat" },
+      },
+    },
+  },
+}
+```
+
+The provider identity applies to model selection during setup, live model
+discovery, inference, and embeddings. Header names are case-insensitive; `request.headers` takes precedence
+over provider `headers`. Embedding-specific `memory.search.remote.headers` still
+takes precedence for embedding discovery and requests. Unrelated provider headers
+are not forwarded to the catalog or embedding endpoints. Changing the identity
+does not grant access to models or clients disabled by your organization's policy.
+
 ## Optional flags
 
 | Command                                                                | Flag            | Description                                          |
@@ -200,7 +230,7 @@ You can also omit `--auth-choice`; passing `--github-copilot-token` infers the
 GitHub Copilot provider auth choice. If the flag is omitted, onboarding falls
 back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
-`tokenRef` instead of plaintext in `auth-profiles.json`.
+`tokenRef` instead of plaintext in the auth profile store.
 
 Fresh non-interactive setup validates the token before saving it. When setup
 must choose a default, it also checks the live Copilot model catalog. OpenClaw
@@ -261,6 +291,17 @@ configured default model is never replaced.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
     models keep the OpenAI Responses transport. OpenClaw selects the correct
     transport based on the model ref.
+  </Accordion>
+
+  <Accordion title="Thinking levels">
+    Use `/think xhigh` or `/think max` when the selected model exposes that
+    level. Copilot's live catalog determines the supported efforts for your
+    account, and OpenClaw preserves those efforts in Responses requests.
+    When a Responses model starts its native effort range at `low`, `minimal`
+    maps to `low` instead of sending an unsupported value.
+    Explicit live limits take precedence over the bundled catalog. Gemini's
+    Chat Completions transport does not expose `max`.
+    See [Thinking levels](/tools/thinking) for session and per-message controls.
   </Accordion>
 
   <Accordion title="Request compatibility">

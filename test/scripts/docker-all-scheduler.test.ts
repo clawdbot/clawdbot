@@ -627,6 +627,7 @@ describe("scripts/test-docker-all scheduler", () => {
     for (const fileName of [
       "docker-e2e-plan.mts",
       "docker-e2e-scenarios.mts",
+      "local-check-runtime.mts",
       "managed-child-process.mts",
       "official-external-channel-catalog.json",
       "release-version.mjs",

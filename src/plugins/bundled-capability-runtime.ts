@@ -6,7 +6,6 @@ import { loadOpenClawPluginsWithInternalOverrides } from "./loader-runtime-load.
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -26,13 +25,24 @@ function createCapabilityRegistrationRuntime(
   };
 }
 
-export function loadBundledCapabilityRuntimeRegistry(params: {
-  pluginIds: readonly string[];
-  env?: PluginLoadOptions["env"];
-  config?: PluginLoadOptions["config"];
-  pluginSdkResolution?: PluginSdkResolutionPreference;
-  discovery?: PluginDiscoveryResult;
-}) {
+export function loadBundledCapabilityRuntimeRegistry(
+  params: Pick<
+    PluginLoadOptions,
+    | "env"
+    | "config"
+    | "workspaceDir"
+    | "installRecords"
+    | "manifestRegistry"
+    | "activationSourceConfig"
+    | "autoEnabledReasons"
+    | "preferBuiltPluginArtifacts"
+    | "pluginSdkResolution"
+  > & {
+    pluginIds: readonly string[];
+    discovery?: PluginDiscoveryResult;
+  },
+) {
+  const { pluginIds: requestedPluginIds, ...loadOptions } = params;
   const env = params.env ?? process.env;
   // Only the speech owner may opt into legacy global-disable compatibility before capture.
   const config =
@@ -42,14 +52,25 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           config: params.config,
           pluginIds: params.pluginIds,
         }) ?? {});
-  const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
+  const discovery = params.manifestRegistry
+    ? undefined
+    : (params.discovery ??
+      discoverOpenClawPlugins({
+        env,
+        workspaceDir: params.workspaceDir,
+        installRecords: params.installRecords,
+      }));
   const pluginIds = new Set(params.pluginIds);
-  const manifestRegistry = loadPluginManifestRegistryCore({
-    config,
-    env,
-    candidates: discovery.candidates,
-    diagnostics: discovery.diagnostics,
-  });
+  const manifestRegistry =
+    params.manifestRegistry ??
+    loadPluginManifestRegistryCore({
+      config,
+      env,
+      workspaceDir: params.workspaceDir,
+      installRecords: params.installRecords,
+      candidates: discovery?.candidates,
+      diagnostics: discovery?.diagnostics,
+    });
   const scopedManifestRegistry = {
     plugins: manifestRegistry.plugins.filter(
       (plugin) => plugin.origin === "bundled" && pluginIds.has(plugin.id),
@@ -58,10 +79,10 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   };
   return loadOpenClawPluginsWithInternalOverrides(
     {
+      ...loadOptions,
       config,
       env,
-      onlyPluginIds: [...params.pluginIds],
-      pluginSdkResolution: params.pluginSdkResolution,
+      onlyPluginIds: [...requestedPluginIds],
       cache: false,
       activate: false,
       // Channel setup entries cannot register providers; keep their runtime entry in discovery mode.

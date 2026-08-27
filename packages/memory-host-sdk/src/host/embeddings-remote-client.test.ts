@@ -1,5 +1,5 @@
 // Memory Host SDK tests cover embeddings remote client behavior.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";
 
@@ -9,6 +9,10 @@ const configuredProvider = {
   headers: { "X-Provider-Tenant": "provider-a" },
   models: [],
 };
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("resolveRemoteEmbeddingBearerClient", () => {
   it.each<{
@@ -43,6 +47,7 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       tenant: "remote-b",
     },
   ])("$name", async ({ remote, authorization, tenant }) => {
+    vi.stubEnv("OPENAI_API_KEY", "");
     const client = await resolveRemoteEmbeddingBearerClient({
       provider: "openai",
       defaultBaseUrl: "https://api.openai.com/v1",
@@ -73,6 +78,46 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
         },
       }),
     ).rejects.toThrow(/memory\.search\.remote\.apiKey|Authorization header/);
+  });
+
+  it("lets the last source replace mixed-case auth, tenant, and default headers", async () => {
+    const client = await resolveRemoteEmbeddingBearerClient({
+      provider: "openai",
+      defaultBaseUrl: configuredProvider.baseUrl,
+      options: {
+        config: {
+          models: {
+            providers: {
+              openai: {
+                ...configuredProvider,
+                headers: {
+                  Authorization: "first",
+                  authorization: "second",
+                  "X-Tenant": "first",
+                  "x-tenant": "second",
+                },
+              },
+            },
+          },
+        },
+        model: "fixture-embedding",
+        remote: {
+          headers: {
+            Authorization: "Bearer remote",
+            "X-Tenant": "remote",
+            "content-type": "application/json; charset=utf-8",
+            "X-Unchanged": "value",
+          },
+        },
+      },
+    });
+
+    expect(client.headers).toEqual({
+      "content-type": "application/json; charset=utf-8",
+      Authorization: "Bearer remote",
+      "X-Tenant": "remote",
+      "X-Unchanged": "value",
+    });
   });
 
   it("treats loopback address families as distinct credential destinations", async () => {
@@ -129,8 +174,8 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
         remote: {
           apiKey: "sk-test",
           headers: {
-            originator: "openclaw",
-            "User-Agent": "openclaw",
+            Originator: "caller",
+            "user-agent": "caller",
           },
         },
       },

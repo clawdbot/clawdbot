@@ -779,6 +779,7 @@ enum class GatewayMethod(
   SessionsGithubPublish("sessions.github.publish"),
   DiagnosticsLanes("diagnostics.lanes"),
   SessionMembersListEvidence("session.members.listEvidence"),
+  PluginsInspect("plugins.inspect"),
 }
 
 enum class GatewayEvent(

@@ -148,7 +148,7 @@ describe("agent event handler", () => {
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
     clearTrackedActiveRun?: AgentEventHandlerOptions["clearTrackedActiveRun"];
-    markTrackedRunTerminalPersisted?: AgentEventHandlerOptions["markTrackedRunTerminalPersisted"];
+    settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
     trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
     resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
     updateRunToolErrorSummary?: AgentEventHandlerOptions["updateRunToolErrorSummary"];
@@ -184,7 +184,7 @@ describe("agent event handler", () => {
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
       clearTrackedActiveRun: params?.clearTrackedActiveRun ?? clearTrackedActiveRun,
-      markTrackedRunTerminalPersisted: params?.markTrackedRunTerminalPersisted,
+      settleTrackedTerminal: params?.settleTrackedTerminal,
       trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
       resolveActiveLifecycleGenerationForRun: params?.resolveActiveLifecycleGenerationForRun,
       updateRunToolErrorSummary: params?.updateRunToolErrorSummary,
@@ -2654,7 +2654,7 @@ describe("agent event handler", () => {
       },
       "session-recovery",
     );
-    const markTrackedRunTerminalPersisted = vi.fn();
+    const settleTrackedTerminal = vi.fn();
     const trackTrackedRunTerminalPersistence = vi.fn();
     const {
       broadcast,
@@ -2667,7 +2667,7 @@ describe("agent event handler", () => {
     } = createHarness({
       resolveSessionKeyForRun: () => "session-recovery",
       lifecycleErrorRetryGraceMs: 0,
-      markTrackedRunTerminalPersisted,
+      settleTrackedTerminal,
       trackTrackedRunTerminalPersistence,
     });
     sessionEventSubscribers.subscribe("conn-session");
@@ -2706,7 +2706,7 @@ describe("agent event handler", () => {
       persistence: expect.any(Promise),
     });
     await waitForFast(() => {
-      expect(markTrackedRunTerminalPersisted).toHaveBeenCalledWith({
+      expect(settleTrackedTerminal).toHaveBeenCalledWith({
         runId: "completed-during-marker-write",
         clientRunId: "completed-during-marker-write",
         sessionKey: "session-recovery",
@@ -2715,6 +2715,9 @@ describe("agent event handler", () => {
         broadcastToConnIds.mock.calls.filter(([event]) => event === "sessions.changed"),
       ).toHaveLength(1);
     });
+    expect(settleTrackedTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+      broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
     expect(chatRunState.registry.peek("completed-during-marker-write")).toBeUndefined();
     expect(clearAgentRunContext).toHaveBeenCalledWith("completed-during-marker-write");
     expect(clearTrackedActiveRun).toHaveBeenCalledWith({
@@ -2973,11 +2976,11 @@ describe("agent event handler", () => {
     persistGatewaySessionLifecycleEventMock.mockRejectedValueOnce(
       new Error("disk full sk-abcdefghijklmnopqrstuvwxyz123456"),
     );
-    const markTrackedRunTerminalPersisted = vi.fn();
+    const settleTrackedTerminal = vi.fn();
     const { broadcastToConnIds, handler, sessionEventSubscribers } = createHarness({
       resolveSessionKeyForRun: () => "session-failed-write",
       lifecycleErrorRetryGraceMs: 0,
-      markTrackedRunTerminalPersisted,
+      settleTrackedTerminal,
     });
     sessionEventSubscribers.subscribe("conn-session");
 
@@ -3006,7 +3009,15 @@ describe("agent event handler", () => {
     expect(logErrorMock).toHaveBeenCalledWith(
       "gateway: terminal session persistence failed session=session-failed-write run=run-failed-write error=Error: disk full sk-abc…3456",
     );
-    expect(markTrackedRunTerminalPersisted).not.toHaveBeenCalled();
+    expect(settleTrackedTerminal).toHaveBeenCalledWith({
+      runId: "run-failed-write",
+      clientRunId: "run-failed-write",
+      sessionKey: "session-failed-write",
+      persisted: false,
+    });
+    expect(settleTrackedTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+      broadcastToConnIds.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
   });
 
   it("does not clear a same-id retry when an old restart terminal arrives", () => {
@@ -4552,9 +4563,11 @@ describe("agent event handler", () => {
   );
 
   it("does not project maintenance child events onto its selected parent session", () => {
+    const settleTrackedTerminal = vi.fn();
     const { broadcast, broadcastToConnIds, nodeSendToSession, sessionMessageSubscribers, handler } =
       createHarness({
         resolveSessionKeyForRun: () => "session-maintenance-parent",
+        settleTrackedTerminal,
       });
     sessionMessageSubscribers.subscribe("conn-selected", "session-maintenance-parent");
     registerAgentRunContext("run-maintenance-child", {
@@ -4599,6 +4612,12 @@ describe("agent event handler", () => {
     expect(broadcastToConnIds).not.toHaveBeenCalled();
     expect(nodeSendToSession).not.toHaveBeenCalled();
     expect(persistGatewaySessionLifecycleEventMock).not.toHaveBeenCalled();
+    expect(settleTrackedTerminal).toHaveBeenCalledWith({
+      runId: "run-maintenance-child",
+      clientRunId: "run-maintenance-child",
+      sessionKey: "session-maintenance-parent",
+      persisted: false,
+    });
   });
 
   it("sends non-control-UI-visible live chat only to exact session message subscribers", () => {

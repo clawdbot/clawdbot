@@ -19,6 +19,7 @@ import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStepStatus
 import ai.openclaw.app.chat.ChatProgressCard
+import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSubagentActivity
@@ -330,7 +331,7 @@ fun ChatScreen(
   val micCooldown by viewModel.micCooldown.collectAsState()
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
-  val inlineMediaPlaybackBlocked = messageSpeechState != null || talkModeEnabled || talkModeListening
+  val inlineMediaPlaybackBlocked = messageSpeechState?.isActive == true || talkModeEnabled || talkModeListening
   val thinkingSupported =
     chatThinkingSupported(
       selection = thinkingLevelSelection,
@@ -745,6 +746,7 @@ fun ChatScreen(
       onRetryOutbox = viewModel::retryChatOutboxCommand,
       onDeleteOutbox = viewModel::deleteChatOutboxCommand,
       onResolveQuestion = viewModel::resolveChatQuestion,
+      onQuestionDraftChanged = viewModel::updateChatQuestionDraft,
       onSkipQuestion = viewModel::skipChatQuestion,
       onStarterPrompt = { prompt -> inputDrafts[composerOwner] = prompt },
       onReplyMessage = { value -> viewModel.setChatReplyDraft(value, composerOwner) },
@@ -1322,8 +1324,9 @@ private fun ChatMessageList(
   recoveryOutboxItems: List<ChatOutboxItem>,
   onRetryOutbox: (String) -> Unit,
   onDeleteOutbox: (String) -> Unit,
-  onResolveQuestion: (String, Map<String, List<String>>) -> Unit,
-  onSkipQuestion: (String) -> Unit,
+  onResolveQuestion: (ChatQuestionPrompt, Map<String, List<String>>) -> Unit,
+  onQuestionDraftChanged: (ChatQuestionPrompt, (ChatQuestionDraft) -> ChatQuestionDraft) -> Unit,
+  onSkipQuestion: (ChatQuestionPrompt) -> Unit,
   onStarterPrompt: (String) -> Unit,
   onReplyMessage: (String) -> Unit,
   sessionActionsEnabled: Boolean,
@@ -1448,7 +1451,7 @@ private fun ChatMessageList(
               moreWorkingCount = item.moreWorkingCount,
             )
           is ChatTimelineItem.QuestionPrompt ->
-            ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+            ChatQuestionCard(prompt = item.prompt, onDraftChanged = onQuestionDraftChanged, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
           is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
           is ChatTimelineItem.SystemNotice -> ChatSystemNoticeRow(item)
           is ChatTimelineItem.SystemDivider -> ChatSystemDividerRow(item)
@@ -1781,7 +1784,7 @@ internal fun ChatBubble(
       onRewind = entryId?.let { value -> { onRewindMessage(value) } },
       onFork = entryId?.let { value -> { onForkMessage(value) } },
       enabled = !live,
-      listenActive = messageSpeech != null,
+      listenActive = messageSpeech?.isActive == true,
       onToggleListen = toggleListen,
       modifier =
         Modifier
@@ -1869,7 +1872,7 @@ internal fun ChatBubble(
           messageSpeech?.let { speech ->
             FullChatSpeechIndicator(
               phase = speech.phase,
-              onStop = { onToggleListen(checkNotNull(messageId), messageText) },
+              onToggle = { onToggleListen(checkNotNull(messageId), messageText) },
             )
           }
           timestampMs?.let {
@@ -1889,10 +1892,10 @@ internal fun ChatBubble(
 @Composable
 private fun FullChatSpeechIndicator(
   phase: MessageSpeechPhase,
-  onStop: () -> Unit,
+  onToggle: () -> Unit,
 ) {
   Surface(
-    onClick = onStop,
+    onClick = onToggle,
     shape = RoundedCornerShape(999.dp),
     color = ClawTheme.colors.surfacePressed,
   ) {
@@ -1903,17 +1906,22 @@ private fun FullChatSpeechIndicator(
     ) {
       Icon(
         imageVector =
-          if (phase == MessageSpeechPhase.Preparing) {
-            Icons.Default.HourglassEmpty
-          } else {
-            Icons.AutoMirrored.Filled.VolumeUp
+          when (phase) {
+            MessageSpeechPhase.Preparing -> Icons.Default.HourglassEmpty
+            MessageSpeechPhase.Speaking -> Icons.AutoMirrored.Filled.VolumeUp
+            MessageSpeechPhase.Failed -> Icons.Default.Refresh
           },
         contentDescription = null,
         modifier = Modifier.size(14.dp),
         tint = ClawTheme.colors.textMuted,
       )
       Text(
-        text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
+        text =
+          when (phase) {
+            MessageSpeechPhase.Preparing -> nativeString("Preparing audio…")
+            MessageSpeechPhase.Speaking -> nativeString("Speaking…")
+            MessageSpeechPhase.Failed -> nativeString("Audio error · Retry")
+          },
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
       )

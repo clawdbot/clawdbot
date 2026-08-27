@@ -365,6 +365,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         canMutate: board.provider.canMutate,
         canGrant: board.provider.canGrant,
         callbacks: {
+          appViewGeneration: board.provider.appViewGeneration,
           applyOps: (ops) => board.provider.applyOps(ops),
           grant: (name, decision) => board.provider.grant(name, decision),
           selectTab: (tabId) => {

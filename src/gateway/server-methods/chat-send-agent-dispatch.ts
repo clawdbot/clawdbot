@@ -18,6 +18,7 @@ import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import {
@@ -71,10 +72,9 @@ type StartChatDispatchParams = {
   };
   request: NormalizedChatSendRequest;
   session: PreparedChatSendSession;
-  terminalizeRestartSafeAdmission: (terminalState: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }) => Promise<boolean>;
+  terminalizeRestartSafeAdmission: (
+    terminalState: RestartSafeChatTerminalState,
+  ) => Promise<boolean>;
   timing: {
     chatSendAckedAtMs: number;
     chatSendTiming: ChatRunTiming | undefined;

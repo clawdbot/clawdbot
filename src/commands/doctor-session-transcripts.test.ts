@@ -14,6 +14,7 @@ const repairCanonicalSessionKeys = vi.hoisted(() => vi.fn());
 const migrateLegacyMainSessionKeys = vi.hoisted(() => vi.fn());
 const runDoctorSessionSqlite = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
+const runPostSessionPluginDoctorStateRepairs = vi.hoisted(() => vi.fn());
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
@@ -21,6 +22,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 
 vi.mock("./doctor-session-sqlite.js", () => ({
   runDoctorSessionSqlite,
+}));
+
+vi.mock("../infra/state-migrations.doctor.js", () => ({
+  runPostSessionPluginDoctorStateRepairs,
 }));
 
 vi.mock("./doctor-session-incognito-key-repair.js", () => ({
@@ -142,9 +147,15 @@ describe("doctor session transcript repair", () => {
       warnings: [],
     });
     runDoctorSessionSqlite.mockReset();
+    runPostSessionPluginDoctorStateRepairs
+      .mockReset()
+      .mockResolvedValue({ changes: [], warnings: [] });
     withDoctorSqliteMaintenanceLock
       .mockReset()
-      .mockImplementation(async (params: { run: () => unknown }) => await params.run());
+      .mockImplementation(
+        async (params: { run: (authority: { assertCurrent(): void }) => unknown }) =>
+          await params.run({ assertCurrent() {} }),
+      );
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-transcripts-"));
   });
 
@@ -374,6 +385,22 @@ describe("doctor session transcript repair", () => {
         "reserved key repair call order",
       ),
     );
+    expect(
+      expectDefined(
+        repairCanonicalSessionDeliveryStates.mock.invocationCallOrder[0],
+        "delivery state repair call order",
+      ),
+    ).toBeLessThan(
+      expectDefined(
+        runPostSessionPluginDoctorStateRepairs.mock.invocationCallOrder[0],
+        "post-session plugin repair call order",
+      ),
+    );
+    expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith({
+      config: cfg,
+      env,
+      maintenanceAuthority: { assertCurrent: expect.any(Function) },
+    });
     expect(withDoctorSqliteMaintenanceLock).toHaveBeenCalledWith({
       env,
       operation: "session SQLite import",
@@ -464,6 +491,49 @@ describe("doctor session transcript repair", () => {
     });
     expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
+    expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith({
+      config: cfg,
+      env,
+      maintenanceAuthority: undefined,
+    });
+  });
+
+  it("reports post-session plugin changes and actionable ownership warnings", async () => {
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    runDoctorSessionSqlite.mockResolvedValueOnce({
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        unreferencedJsonlFiles: 0,
+        validatedTranscriptEvents: 0,
+      },
+    });
+    runPostSessionPluginDoctorStateRepairs.mockResolvedValueOnce({
+      changes: ["Removed 2 orphaned plugin session bindings"],
+      warnings: ["Plugin lifecycle ownership unavailable; rerun openclaw doctor --fix"],
+    });
+
+    await noteSessionTranscriptHealth({
+      cfg: {},
+      env: { ...process.env, OPENCLAW_STATE_DIR: root },
+      sessionDirs: [sessionsDir],
+      sessionSqlite: true,
+      shouldRepair: true,
+    });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Removed 2 orphaned plugin session bindings"),
+      "Plugin session repair",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("rerun openclaw doctor --fix"),
+      "Plugin session repair",
+    );
   });
 
   it("skips session SQLite import when the Gateway owns the state lock", async () => {

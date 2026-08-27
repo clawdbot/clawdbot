@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import {
   createServer as createHttpServer,
@@ -61,10 +61,9 @@ export type SecretEgressProxyHandle = {
 
 type ConnectTarget = { hostname: string; port: number };
 type RegisteredRun = {
-  digest: Buffer;
   key: string;
   sentinelBindings: Map<string, { allowedHosts: Set<string>; name: string }>;
-  token: string;
+  token: Buffer;
 };
 
 function normalizeHostname(raw: string): string {
@@ -120,15 +119,12 @@ function runKey(run: Readonly<{ instanceId: string; runId: string }>): string {
   return `${run.runId}\0${run.instanceId}`;
 }
 
-// Proxy tokens are 256-bit random bearer credentials, not user-chosen passwords, so a
-// slow KDF would add per-request latency on the proxy hot path without making brute force
-// any more infeasible. A process-keyed MAC is the right primitive: it normalizes attacker-
-// controlled input to a fixed length for constant-time compare, and a leaked digest cannot
-// be correlated back to a token without the in-memory key.
-const tokenMacKey = randomBytes(32);
-
-function tokenDigest(token: string): Buffer {
-  return createHmac("sha256", tokenMacKey).update(token).digest();
+function parseProxyToken(token: string): Buffer | undefined {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+    return undefined;
+  }
+  const bytes = Buffer.from(token, "base64url");
+  return bytes.length === 32 && bytes.toString("base64url") === token ? bytes : undefined;
 }
 
 function parseBasicProxyPassword(header: string | string[] | undefined): string | undefined {
@@ -329,9 +325,12 @@ export async function startSecretEgressProxyServer(params: {
     if (!password) {
       return "invalid-proxy-auth";
     }
-    const candidate = tokenDigest(password);
+    const candidate = parseProxyToken(password);
+    if (!candidate) {
+      return "invalid-proxy-auth";
+    }
     for (const registered of tokens.values()) {
-      if (timingSafeEqual(candidate, registered.digest)) {
+      if (timingSafeEqual(candidate, registered.token)) {
         return registered;
       }
     }
@@ -611,12 +610,10 @@ export async function startSecretEgressProxyServer(params: {
       const key = runKey(run);
       let registered = tokens.get(key);
       if (!registered) {
-        const token = randomBytes(32).toString("base64url");
         registered = {
-          digest: tokenDigest(token),
           key,
           sentinelBindings: new Map(),
-          token,
+          token: randomBytes(32),
         };
         tokens.set(key, registered);
       }
@@ -633,7 +630,8 @@ export async function startSecretEgressProxyServer(params: {
       // proxy-URL credentials. Base64 is acceptable here: loopback is the only
       // listener, the token is run-scoped, and a process that can read it from
       // this env can already read the sentinels that authorize substitution.
-      const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${registered.token}@127.0.0.1:${address.port}`;
+      const token = registered.token.toString("base64url");
+      const proxyUrl = `http://${PROXY_AUTH_USERNAME}:${token}@127.0.0.1:${address.port}`;
       return {
         HTTPS_PROXY: proxyUrl,
         HTTP_PROXY: proxyUrl,

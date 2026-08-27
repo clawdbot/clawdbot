@@ -47,12 +47,7 @@ import type { ChatPage } from "../pages/chat/chat-page.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectShellRouteState, type ShellRouteState } from "./app-host-route-state.ts";
 import { OpenClawApp } from "./app-root.ts";
-import {
-  isBrowserPanelAvailable,
-  isDesktopPanelAvailable,
-  ShellChromeOwner,
-  type ShellChromeHost,
-} from "./app-shell-chrome.ts";
+import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
 import {
   ShellGatewayOwner,
   type OutboxStoreRuntime,
@@ -64,6 +59,7 @@ import { renderApplicationShell, type ShellViewHost } from "./app-shell-view.ts"
 import { ShellWorkboardOwner, type ShellWorkboardHost } from "./app-shell-workboard.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import { syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import {
   BROWSER_PANEL_ELEMENT,
   COMMAND_PALETTE_ELEMENT,
@@ -74,21 +70,17 @@ import {
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
-import { hasStoredLazyShellAction } from "./lazy-shell-action.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
+import { isBrowserPanelAvailable, isDesktopPanelAvailable } from "./panel-availability.ts";
 import {
   changedServerUiPrefs,
   isApplyingServerUiPrefs,
   pushServerUiPrefs,
 } from "./server-prefs.ts";
 import { setSettingsChangeListener } from "./settings.ts";
-import {
-  isStaleChunkImportError,
-  retryStaleChunkReloadWhenReachable,
-  scheduleStaleChunkReload,
-} from "./stale-chunk-reload.ts";
+import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 type AppSidebarElement = HTMLElement & {
   dismissTransientMenus: () => boolean;
@@ -160,8 +152,7 @@ class OpenClawShell
   readonly lazyCustomElements = new LazyCustomElementRequestController(
     this,
     () => this.shellChrome.cancelPendingLazyAction(),
-    () =>
-      hasStoredLazyShellAction() ? retryStaleChunkReloadWhenReachable() : Promise.resolve(false),
+    (canReload) => this.shellChrome.retryPendingLazyAction(canReload),
   );
   // Gates lazy-action replay on the element being rendered; while the shell is
   // still splash-gated, replaying would loop through the open handlers forever.
@@ -469,6 +460,7 @@ class OpenClawShell
 
   override disconnectedCallback() {
     this.shellChrome.disconnect();
+    syncControlUiSystemChrome();
     this.outboxStoreImport.dispose();
     this.sidebarUpdateCardImport.dispose();
     this.outboxStoreUnsubscribe?.();
@@ -600,9 +592,7 @@ class OpenClawShell
     this.shellChrome.closeNavDrawer(options);
   }
 
-  resizeNavigation(splitRatio: number) {
-    this.shellChrome.resizeNavigation(splitRatio);
-  }
+  resizeNavigation = (splitRatio: number) => this.shellChrome.resizeNavigation(splitRatio);
 
   openNewSession(agentId: string, target?: NewSessionTarget) {
     this.shellNavigation.openNewSession(agentId, target);
@@ -628,11 +618,7 @@ class OpenClawShell
   readonly handleCommandPaletteSlashCommand = (command: string) =>
     this.shellChrome.handleCommandPaletteSlashCommand(command);
   readonly restorePendingLazyAction = () => this.shellChrome.restorePendingLazyAction();
-
-  nativeNavCollapsed(): boolean {
-    return this.shellChrome.nativeNavCollapsed();
-  }
-
+  nativeNavCollapsed = () => this.shellChrome.nativeNavCollapsed();
   /** Keep the tab/window title on the active destination. Runs after every
    * render so route changes and locale switches both refresh it; before the
    * first committed route the static boot title from index.html stays. */
@@ -667,6 +653,7 @@ class OpenClawShell
 
   override updated() {
     this.syncDocumentTitle();
+    syncControlUiSystemChrome();
     // Render-gated pending lazy actions replay on the update that first
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();

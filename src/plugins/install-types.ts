@@ -29,6 +29,7 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_OPENCLAW_EXTENSIONS: "invalid_openclaw_extensions",
   NPM_METADATA_FAILURE: "npm_metadata_failure",
   NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+  RELEASE_COHORT_UNAVAILABLE: "release_cohort_unavailable",
   PLUGIN_ID_MISMATCH: "plugin_id_mismatch",
   SECURITY_SCAN_BLOCKED: "security_scan_blocked",
   SECURITY_SCAN_FAILED: "security_scan_failed",
@@ -73,6 +74,17 @@ export type PluginInstallPolicyRequest = {
   source?: InstallPolicySource;
 };
 
+export type PluginInstallArtifactConsentRequest = {
+  pluginId: string;
+  currentArtifactDir?: string;
+  stagedArtifactDir: string;
+  mode: "install" | "update";
+};
+
+export type PluginInstallArtifactConsentHandler = (
+  request: PluginInstallArtifactConsentRequest,
+) => Promise<void>;
+
 export type PackageInstallCommonParams = InstallSafetyOverrides & {
   extensionsDir?: string;
   npmDir?: string;
@@ -84,8 +96,25 @@ export type PackageInstallCommonParams = InstallSafetyOverrides & {
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
+  onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
 };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;
 };
+
+/**
+ * Detects npm failures caused by a target that is not published, as opposed to a
+ * broken install. Channel-aware installs use this to widen the selector instead
+ * of failing when the requested release has no artifact.
+ */
+export function isUnavailableNpmTarget(result: {
+  ok: false;
+  code?: string;
+  error: string;
+}): boolean {
+  return (
+    result.code === PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND ||
+    /\b(ETARGET|notarget)\b|No matching version found|dist-tag|tag .*not found/i.test(result.error)
+  );
+}

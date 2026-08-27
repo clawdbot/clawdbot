@@ -113,7 +113,6 @@ export function createResponsesTerminalController(params: {
   outputs: ResponsesOutputTracker;
   getLastTextBlock: () => TextBlockReference | null;
   setLastTextBlock: (block: TextBlockReference | null) => void;
-  markFinalized: () => void;
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
@@ -204,21 +203,31 @@ export function createResponsesTerminalController(params: {
     stream.push({ type: "text_end", contentIndex: index, content: text, partial: output });
     return index;
   };
-  const appendToolCall = (item: Extract<ResponseOutputItem, { type: "function_call" }>): number => {
-    const validated = resolveCompletedResponsesToolCall(item);
-    const toolCall: ToolCall = {
-      type: "toolCall",
-      id: resolveResponsesToolCallId(item),
-      name: validated.name,
-      arguments: validated.arguments,
-    };
-    blocks.push(toolCall);
-    const contentIndex = blocks.length - 1;
-    stream.push({ type: "toolcall_start", contentIndex, partial: output });
+  const emitToolCallCompletion = (
+    item: { type: "function_call"; id?: string; call_id?: string },
+    outputIndex: number | undefined,
+    started: { block: ToolCall; contentIndex: number } | undefined,
+    validated: Pick<ToolCall, "name" | "arguments">,
+  ): void => {
+    // Complete the same public block with authoritative identities and arguments;
+    // scratch JSON must never survive into transcript replay.
+    const completed = { id: resolveResponsesToolCallId(item, started?.block.id), ...validated };
+    const toolCall: ToolCall & { partialJson?: string } = started
+      ? Object.assign(started.block, completed)
+      : { type: "toolCall", ...completed };
+    delete toolCall.partialJson;
+    const contentIndex = started?.contentIndex ?? blocks.length;
+    if (!started) {
+      blocks.push(toolCall);
+      stream.push({ type: "toolcall_start", contentIndex, partial: output });
+    }
+    params.outputs.set(item, contentIndex, outputIndex, true);
     stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
-    return contentIndex;
   };
-  const recoverTerminalOutput = (items: ResponseOutputItem[], includeToolCalls: boolean) => {
+  const recoverTerminalOutput = (
+    items: ResponseOutputItem[],
+    completeToolCall?: (outputIndex: number) => void,
+  ) => {
     let hasCompletedLaterOutput = false;
     for (const [outputIndex, item] of [...items.entries()].toReversed()) {
       const tracked = params.outputs.get(item, outputIndex);
@@ -234,15 +243,12 @@ export function createResponsesTerminalController(params: {
         hasCompletedLaterOutput = true;
         continue;
       }
-      if (item.type === "function_call" && !includeToolCalls) {
+      if (item.type === "function_call" && !completeToolCall) {
         continue;
       }
       // Previously emitted content indexes cannot be reordered after a missing earlier item.
       if (hasCompletedLaterOutput) {
         throw new Error("Responses stream omitted an output item before completed output");
-      }
-      if (item.type === "function_call") {
-        resolveCompletedResponsesToolCall(item);
       }
     }
     for (const [terminalIndex, item] of items.entries()) {
@@ -281,11 +287,11 @@ export function createResponsesTerminalController(params: {
             model,
             options?.reasoningReplayMetadata,
           );
-        } else if (includeToolCalls && item.type === "function_call") {
-          if (params.outputs.get(item, terminalIndex)) {
+        } else if (completeToolCall && item.type === "function_call") {
+          if (params.outputs.get(item, terminalIndex)?.completed) {
             continue;
           }
-          params.outputs.set(item, appendToolCall(item), terminalIndex, true);
+          completeToolCall(terminalIndex);
         }
       }
     }
@@ -323,7 +329,6 @@ export function createResponsesTerminalController(params: {
     >["response"],
     terminalEventType: "response.completed" | "response.incomplete",
   ) => {
-    params.markFinalized();
     backfillReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
@@ -335,5 +340,10 @@ export function createResponsesTerminalController(params: {
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
   };
-  return { finalizeResponse, finalizeFailedResponse: finalizeTerminalFacts, recoverTerminalOutput };
+  return {
+    finalizeResponse,
+    finalizeFailedResponse: finalizeTerminalFacts,
+    recoverTerminalOutput,
+    emitToolCallCompletion,
+  };
 }

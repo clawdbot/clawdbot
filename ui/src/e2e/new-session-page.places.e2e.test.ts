@@ -280,7 +280,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 393, height: 852 });
       const mobileModelSettings = page.locator(
-        '.new-session-page__composer [data-chat-model-settings="true"]',
+        '.new-session-page__composer [data-chat-model-select="true"]',
       );
       const mobilePermission = page.locator(
         '.new-session-page__composer [data-chat-permission-select="true"]',
@@ -330,7 +330,14 @@ suite.define(() => {
       await mobileModelSettings.click();
       await expect.poll(() => page.locator(".chat-controls__model-menu").isVisible()).toBe(true);
       await captureProjectUiProof(page, "mobile-new-session-model-open.png");
-      await page.locator(".chat-controls__mobile-effort-option").click();
+      expect(
+        await page
+          .locator(".chat-controls__model-menu")
+          .getByText(/Effort|Fast mode/)
+          .count(),
+      ).toBe(0);
+      await page.keyboard.press("Escape");
+      await page.locator('[data-chat-thinking-select="true"]').click();
       await expect.poll(() => page.locator(".chat-controls__effort-menu").isVisible()).toBe(true);
       await captureProjectUiProof(page, "mobile-new-session-effort-open.png");
       await page.keyboard.press("Escape");

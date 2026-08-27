@@ -99,6 +99,7 @@ const nodeDrivenBrowserLayoutTests = [
   "src/pages/chat/chat-responsive.browser.test.ts",
   "src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "src/components/form-controls.browser.test.ts",
+  "src/components/sidebar-footer-layout.browser.test.ts",
   "src/pages/sessions/view.browser.test.ts",
   "src/styles/corner-shape.browser.test.ts",
   "src/styles/cursor-policy.browser.test.ts",

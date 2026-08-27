@@ -1,6 +1,11 @@
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
+import {
+  formatPluginCapabilityConsentLines,
+  resolvePluginCapabilityConsentCliOptions,
+} from "../../cli/plugin-capability-consent.js";
 import { resolvePluginInstallSourcePlan } from "../../cli/plugin-install-plan.js";
 import { createPluginInstallLogger } from "../../cli/plugins-command-helpers.js";
+import { resolvePendingPluginCapabilityReview } from "../../plugins/capability-consent.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../../plugins/clawhub.js";
 import type { ConfigSnapshotForInstallPersist } from "../../plugins/install-persistence.js";
 import {
@@ -8,7 +13,25 @@ import {
   NON_CLAWHUB_INSTALL_FORCE_FLAG,
   type NonClawHubInstallSourceClass,
 } from "../../plugins/install-provenance.js";
+import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { installManagedPluginSource } from "../../plugins/management-service.js";
+
+export function formatPluginCommandCapabilityConsentError(
+  error: unknown,
+  retryCommand: string,
+): string | null {
+  if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+    return null;
+  }
+  const review = resolvePendingPluginCapabilityReview(error.capabilityConsent.pluginId);
+  if (review?.reviewToken !== error.capabilityConsent.reviewToken) {
+    return null;
+  }
+  return [
+    ...formatPluginCapabilityConsentLines(review),
+    `Review these capabilities, then rerun ${stripAnsi(retryCommand)} --accept-capabilities to continue.`,
+  ].join("\n");
+}
 
 function resolveNonClawHubChatInstallAcknowledgement(params: {
   force: boolean;
@@ -27,6 +50,7 @@ function resolveNonClawHubChatInstallAcknowledgement(params: {
 
 export async function installPluginFromPluginsCommand(params: {
   raw: string;
+  acceptCapabilities: boolean;
   force: boolean;
   snapshot: ConfigSnapshotForInstallPersist;
 }): Promise<
@@ -49,20 +73,38 @@ export async function installPluginFromPluginsCommand(params: {
   const warnings: string[] = [];
   const logger = createPluginInstallLogger();
   const clawhub = plan.request.source === "clawhub";
-  const result = await installManagedPluginSource({
-    request: plan.request,
-    snapshot: params.snapshot,
-    logger: clawhub
-      ? {
-          info: logger.info,
-          warn: (message) => {
-            warnings.push(stripAnsi(message));
-            logger.warn(message);
-          },
-          terminalLinks: false,
-        }
-      : logger,
-  });
+  let result: Awaited<ReturnType<typeof installManagedPluginSource>>;
+  try {
+    result = await installManagedPluginSource({
+      request: plan.request,
+      snapshot: params.snapshot,
+      ...resolvePluginCapabilityConsentCliOptions({
+        acceptCapabilities: params.acceptCapabilities,
+        action: "install",
+        allowPrompt: false,
+      }),
+      logger: clawhub
+        ? {
+            info: logger.info,
+            warn: (message) => {
+              warnings.push(stripAnsi(message));
+              logger.warn(message);
+            },
+            terminalLinks: false,
+          }
+        : logger,
+    });
+  } catch (error) {
+    const forceFlag = params.force ? " --force" : "";
+    const consentError = formatPluginCommandCapabilityConsentError(
+      error,
+      `/plugins install ${params.raw}${forceFlag}`,
+    );
+    if (consentError) {
+      return { ok: false, error: consentError };
+    }
+    throw error;
+  }
   if (!result.ok) {
     const warning = "warning" in result ? result.warning : warnings.join("\n");
     const warningPrefix = warning ? `${warning} ` : "";

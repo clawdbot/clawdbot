@@ -46,6 +46,7 @@ import {
   expectedPackageBuildCommit,
   expectedPackageTargetVersion,
   extractLastOpenClawVersion,
+  npmRegistryEnv,
   packAndServeSmokeArtifact,
   parseSmokeCliArgs,
   printSmokeTargetSummary,
@@ -178,6 +179,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   private snapshot!: SnapshotInfo;
   private phases!: PhaseRunner;
   private guest!: WindowsGuest;
+  private guestEnv: Record<string, string> = {};
 
   protected status = {
     freshAgent: "skip",
@@ -204,7 +206,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   async run(): Promise<void> {
     this.runDir = await makeTempDir("openclaw-parallels-windows.");
     this.phases = new PhaseRunner(this.runDir);
-    this.guest = new WindowsGuest(this.options.vmName, this.phases);
+    this.guest = new WindowsGuest(this.options.vmName, this.phases, () => this.guestEnv);
     this.tgzDir = await makeTempDir("openclaw-parallels-windows-tgz.");
     try {
       validateSnapshotRestoreMode(this.options.mode, "Windows smoke");
@@ -228,6 +230,8 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
           this.hostIp,
           this.hostPort,
           this.artifactLabel(),
+          false,
+          this.options.provider,
         );
       }
       if (!this.server) {
@@ -296,6 +300,9 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phase("fresh.gateway-restart", 420, () => this.gatewayAction("restart"));
     await this.phase("fresh.gateway-status", 420, () => this.verifyGatewayReachable());
     this.status.freshGateway = "pass";
+    await this.phase("fresh.gateway-stop-before-local-agent", 420, () =>
+      this.gatewayAction("stop"),
+    );
     await this.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
     this.status.freshAgent = "pass";
   }
@@ -352,6 +359,9 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phase("upgrade.gateway-restart", 420, () => this.gatewayAction("restart"));
     await this.phase("upgrade.gateway-status", 420, () => this.verifyGatewayReachable());
     this.status.upgradeGateway = "pass";
+    await this.phase("upgrade.gateway-stop-before-local-agent", 420, () =>
+      this.gatewayAction("stop"),
+    );
     await this.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
     this.status.upgradeAgent = "pass";
   }
@@ -378,6 +388,8 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   }
 
   private restoreSnapshot(): void {
+    // A restored baseline must resolve public packages, not the previous candidate registry.
+    this.guestEnv = {};
     if (shouldSkipSnapshotRestore()) {
       say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
       return;
@@ -488,16 +500,13 @@ Invoke-OpenClaw --version
     if (!this.artifact || !this.server) {
       die("package artifact/server missing");
     }
+    this.guestEnv = npmRegistryEnv(this.options.npmRegistry ?? this.server.registry?.url);
     const tgzUrl = this.server.urlFor(this.artifact.path);
-    const registryScript = this.options.npmRegistry
-      ? `$env:NPM_CONFIG_REGISTRY = ${psSingleQuote(this.options.npmRegistry)}`
-      : "";
     return this.guestPowerShellBackground(
       `install-main-${tempName.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`,
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
 curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
-${registryScript}
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
@@ -569,6 +578,7 @@ ${this.windowsPluginIsolationScript()}`,
         this.waitForGuestReady(120);
       },
       label,
+      env: this.guestEnv,
       onLaunchRetry: warn,
       script: `${windowsOpenClawResolver}\n${script}`,
       timeoutMs: this.remainingPhaseTimeoutMs(timeoutMs) ?? timeoutMs,
@@ -668,10 +678,11 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
     const start = Date.now();
     while (Date.now() < deadline) {
       const probe = this.guestPowerShell(
-        "Invoke-OpenClaw gateway probe --url ws://127.0.0.1:18789 --timeout 30000 --json",
+        "Invoke-OpenClaw gateway status --deep --require-rpc --timeout 30000 --json",
         { check: false, timeoutMs: 60_000 },
       );
-      if (/"ok"\s*:\s*true/.test(probe)) {
+      const status = JSON.parse(probe || "{}") as { rpc?: { ok?: boolean } };
+      if (status.rpc?.ok === true) {
         return;
       }
       if (!recoveryTried && Date.now() - start >= this.gatewayRecoveryAfterMs) {

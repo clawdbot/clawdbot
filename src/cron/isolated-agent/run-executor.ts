@@ -73,6 +73,7 @@ import {
   type CronLiveSelection,
   type MutableCronSession,
   type PersistCronSessionEntry,
+  setCronSessionAgentHarnessId,
   setCronSessionRuntimeModel,
   syncCronSessionLiveSelection,
 } from "./run-session-state.js";
@@ -281,6 +282,7 @@ function createCronPromptExecutor(params: {
   modelFallbacksOverride?: string[];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
+  persistSessionEntry: PersistCronSessionEntry;
   persistRunContinuationSession?: () => Promise<void>;
   setRunContinuationCliExecutionProvider?: (provider?: string) => Promise<void>;
   abortSignal?: AbortSignal;
@@ -589,6 +591,13 @@ function createCronPromptExecutor(params: {
           provider: providerOverride,
           model: modelOverride,
         });
+        setCronSessionAgentHarnessId({
+          entry: params.cronSession.sessionEntry,
+          agentHarnessId: candidateRuntime,
+        });
+        // Native bindings can exist before turn/start fails; deletion must retain
+        // the selected owner even when no result metadata is ever returned.
+        await params.persistSessionEntry();
         await params.persistRunContinuationSession?.();
         await params.setRunContinuationCliExecutionProvider?.(
           cliExecution ? executionProvider : undefined,
@@ -954,6 +963,7 @@ export async function executeCronRun(params: {
     modelFallbacksOverride: params.modelFallbacksOverride,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
+    persistSessionEntry: params.persistSessionEntry,
     persistRunContinuationSession: params.persistRunContinuationSession,
     setRunContinuationCliExecutionProvider: params.setRunContinuationCliExecutionProvider,
     abortSignal: params.abortSignal,

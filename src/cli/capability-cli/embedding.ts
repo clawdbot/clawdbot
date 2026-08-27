@@ -111,7 +111,7 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
   embedding
     .command("create")
     .description("Create embeddings")
-    .requiredOption("--text <text>", "Input text", collectOption, [])
+    .requiredOption("--text <text>", "Input text", collectOption)
     .option("--provider <id>", "Provider id")
     .option("--model <provider/model>", "Model override")
     .option(

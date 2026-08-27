@@ -83,9 +83,6 @@ import { createLazyConfiguredOllamaStreamFn } from "./src/stream-registration.js
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
-const loadOllamaEmbeddingProvider = createLazyRuntimeModule(
-  () => import("./src/embedding-provider.runtime.js"),
-);
 const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
     (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,
@@ -1020,25 +1017,6 @@ export default definePluginEntry({
           resolveProviderApiKey: ctx.resolveProviderApiKey,
           capContextTokens: true,
         }),
-      createEmbeddingProvider: async ({ config, model, provider: embeddingProvider, remote }) => {
-        const { createOllamaEmbeddingProvider } = await loadOllamaEmbeddingProvider();
-        const { provider, client } = await createOllamaEmbeddingProvider({
-          config,
-          remote,
-          model: model || DEFAULT_OLLAMA_EMBEDDING_MODEL,
-          provider: embeddingProvider || OLLAMA_PROVIDER_ID,
-        });
-        return {
-          id: provider.id,
-          model: provider.model,
-          maxInputTokens: provider.maxInputTokens,
-          embedQuery: async (text, options) =>
-            await provider.embed(text, { ...options, inputType: "query" }),
-          embedBatch: async (texts, options) =>
-            await provider.embedBatch(texts, { ...options, inputType: "document" }),
-          client,
-        };
-      },
       resolveSyntheticAuth: ({ provider, providerConfig }) => {
         if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;

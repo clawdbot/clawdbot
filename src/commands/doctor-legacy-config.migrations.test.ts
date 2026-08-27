@@ -238,33 +238,33 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
-  it("removes null workspace values from agents.list entries", () => {
+  it("removes null workspace values from agents.entries", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        list: [
-          { id: "main", workspace: null as unknown as string },
-          { id: "beta", workspace: "/beta" },
-          { id: "gamma" },
-        ],
+        entries: {
+          main: { workspace: null as unknown as string },
+          beta: { workspace: "/beta" },
+          gamma: {},
+        },
       },
     });
 
-    expect(res.config.agents?.list).toEqual([
-      { id: "main" },
-      { id: "beta", workspace: "/beta" },
-      { id: "gamma" },
-    ]);
-    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+    expect(res.config.agents?.entries).toEqual({
+      main: {},
+      beta: { workspace: "/beta" },
+      gamma: {},
+    });
+    expect(res.changes).toContain("Removed null workspace value from agents.entries entry.");
   });
 
-  it("does not alter agents.list when no workspace is null", () => {
+  it("does not alter agents.entries when no workspace is null", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
-        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+        entries: { main: { workspace: "/main" }, beta: {} },
       },
     });
 
-    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
+    expect(res.config.agents?.entries).toEqual({ main: { workspace: "/main" }, beta: {} });
     expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
   });
 
@@ -278,26 +278,25 @@ describe("normalizeCompatibilityConfigValues", () => {
               activeHours: { start: "99:99", end: "17:00" },
             },
           },
-          list: [
-            {
-              id: "ops",
+          entries: {
+            ops: {
               heartbeat: {
                 prompt: "Check alerts",
                 activeHours: { start: "09:00", end: "not-a-time" },
               },
             },
-          ],
+          },
         },
       }),
     );
 
     expect(res.config.agents?.defaults?.heartbeat).toEqual({ every: "30m" });
-    expect(res.config.agents?.list?.[0]?.heartbeat).toEqual({ prompt: "Check alerts" });
+    expect(res.config.agents?.entries?.ops?.heartbeat).toEqual({ prompt: "Check alerts" });
     expect(res.changes).toContain(
       "Removed invalid agents.defaults.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
     );
     expect(res.changes).toContain(
-      "Removed invalid agents.list[0].heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
+      "Removed invalid agents.entries.ops.heartbeat.activeHours; heartbeats will use unrestricted hours until it is reconfigured.",
     );
     expect(validateConfigObject(res.config).ok).toBe(true);
   });
@@ -309,6 +308,9 @@ describe("normalizeCompatibilityConfigValues", () => {
           heartbeat: {
             activeHours: { start: "09:00", end: "24:00", timezone: "user" },
           },
+        },
+        entries: {
+          ops: { heartbeat: { activeHours: { start: "22:00", end: "06:00" } } },
         },
       },
     });
@@ -1486,6 +1488,65 @@ describe("normalizeCompatibilityConfigValues", () => {
         agentRuntime: { id: "claude-cli" },
       },
     });
+  });
+
+  it("migrates legacy Claude CLI refs in agent entries", () => {
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        agents: {
+          entries: {
+            main: {
+              description: "Primary agent",
+              model: {
+                primary: "claude-cli/claude-opus-4-7",
+                fallbacks: ["claude-cli/claude-sonnet-4-6", "openai/gpt-5.5"],
+              },
+              models: {
+                "claude-cli/claude-opus-4-7": { alias: "Legacy Opus" },
+                "anthropic/claude-opus-4-7": {
+                  alias: "Canonical Opus",
+                  agentRuntime: { id: "openclaw" },
+                },
+                "claude-cli/claude-sonnet-4-6": { alias: "Sonnet" },
+              },
+              modelPolicy: {
+                allow: ["claude-cli/claude-opus-4-7", "claude-cli/claude-sonnet-4-6"],
+              },
+            },
+            worker: { model: "openai/gpt-5.5" },
+          },
+        },
+      }),
+    );
+
+    expect(res.config.agents?.entries).toStrictEqual({
+      main: {
+        description: "Primary agent",
+        model: {
+          primary: "anthropic/claude-opus-4-7",
+          fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+        },
+        models: {
+          "anthropic/claude-opus-4-7": {
+            alias: "Canonical Opus",
+            agentRuntime: { id: "openclaw" },
+          },
+          "anthropic/claude-sonnet-4-6": {
+            alias: "Sonnet",
+            agentRuntime: { id: "claude-cli" },
+          },
+        },
+        modelPolicy: {
+          allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
+        },
+      },
+      worker: { model: "openai/gpt-5.5" },
+    });
+    expect(res.changes).toEqual([
+      "Moved agents.entries.main.model legacy runtime primary refs to canonical provider refs and selected claude-cli runtime.",
+      "Moved agents.entries.main.models legacy runtime keys to canonical provider keys.",
+      "Moved agents.entries.main.modelPolicy.allow legacy runtime refs to canonical provider refs.",
+    ]);
   });
 
   it("migrates legacy Claude CLI model maps and allowlists when the primary is canonical", () => {

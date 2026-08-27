@@ -60,6 +60,7 @@ function pickPackageInstallCommonParams(
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
+    onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     onEffectiveMode: params.onEffectiveMode,
   });
 }
@@ -195,6 +196,7 @@ async function installBundleFromSourceDir(
       copyErrorPrefix: "failed to copy plugin bundle",
       hasDeps: false,
       depsLogMessage: "",
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
     }),
   );
   return installed.ok
@@ -335,6 +337,7 @@ async function installPluginFromPackageDir(
       sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
       depsLogMessage: "Installing plugin dependencies…",
       nameEncoder: encodePluginInstallDirName,
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       afterInstall: async (installedDir) => {
         return await scanAndLinkInstalledPackage({
           runtime,
@@ -401,6 +404,7 @@ export async function installPluginFromArchive(
             trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
             requirePluginManifest: true,
             installPolicyRequest,
+            onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
             onEffectiveMode: (resolvedMode) => {
               effectiveMode = resolvedMode;
             },

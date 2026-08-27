@@ -365,15 +365,35 @@
 
 /* Stacked variant: title/description above a full-width control
    (textareas, wide inputs, segmented controls that would wrap). */
-.settings-row--stacked {
+.settings-row--stacked,
+.settings-row--stacked-on-narrow {
   flex-direction: column;
   align-items: stretch;
   gap: var(--space-2);
 }
 
-.settings-row--stacked .settings-row__control {
+.settings-row--stacked .settings-row__control,
+.settings-row--stacked-on-narrow .settings-row__control {
   max-width: none;
   justify-content: flex-start;
+}
+
+@media (min-width: 769px) {
+  .settings-row--stacked-on-narrow,
+  .settings-row--stacked-on-narrow .settings-row__control {
+    width: auto;
+  }
+
+  .settings-row--stacked-on-narrow {
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+  }
+
+  .settings-row--stacked-on-narrow .settings-row__control {
+    max-width: 60%;
+    justify-content: flex-end;
+  }
 }
 
 /* Trailing action rows hold only a button cluster: give it the full row

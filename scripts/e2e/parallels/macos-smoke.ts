@@ -13,7 +13,6 @@ import {
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
   parseMacosDsclUserHomeLine,
-  packOpenClaw,
   modelProviderConfigBatchJson,
   posixCodexPlatformPackageRepairFunction,
   posixProviderOnlyPluginIsolationScript,
@@ -30,7 +29,6 @@ import {
   shouldSkipSnapshotRestore,
   shellQuote,
   validateSnapshotRestoreMode,
-  startHostServer,
   warn,
   withProgressOnStderr,
   writeJson,
@@ -47,7 +45,13 @@ import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runne
 import { MacosDiscordSmoke } from "./macos-discord.ts";
 import { resolveMacosVmName, waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { parseSmokeCliArgs, type SmokeCliOptions } from "./smoke-common.ts";
+import {
+  npmRegistryEnv,
+  packAndServeSmokeArtifact,
+  parseSmokeCliArgs,
+  posixStopGatewayScript,
+  type SmokeCliOptions,
+} from "./smoke-common.ts";
 
 interface MacosOptions extends SmokeCliOptions {
   vmNameExplicit: boolean;
@@ -189,6 +193,7 @@ class MacosSmoke {
   private snapshot!: SnapshotInfo;
   private phases!: PhaseRunner;
   private guest!: MacosGuest;
+  private guestEnv: Record<string, string> = {};
   private discord: MacosDiscordSmoke | null = null;
   private guestUser = "";
   private guestTransport: "current-user" | "sudo" = "current-user";
@@ -238,6 +243,7 @@ class MacosSmoke {
     this.guest = new MacosGuest(
       {
         getTransport: () => this.guestTransport,
+        getEnv: () => this.guestEnv,
         getUser: () => this.guestUser,
         path: guestPath,
         resolveDesktopHome: (user) => this.resolveDesktopHome(user),
@@ -274,23 +280,19 @@ class MacosSmoke {
           this.options.hostPortExplicit,
           defaultOptions().hostPort,
         );
-        this.artifact = await packOpenClaw({
-          destination: this.tgzDir,
-          packageSpec: this.options.targetPackageSpec,
-          requireControlUi: true,
-        });
+        [this.artifact, this.server, this.hostPort] = await packAndServeSmokeArtifact(
+          this.tgzDir,
+          this.options.targetPackageSpec,
+          this.hostIp,
+          this.hostPort,
+          this.artifactLabel(),
+          true,
+          this.options.provider,
+        );
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =
             this.artifact.version || (await packageVersionFromTgz(this.artifact.path));
         }
-        this.server = await startHostServer({
-          artifactPath: this.artifact.path,
-          dir: this.tgzDir,
-          hostIp: this.hostIp,
-          label: this.artifactLabel(),
-          port: this.hostPort,
-        });
-        this.hostPort = this.server.port;
       } else if (this.targetInstallsDirectly()) {
         this.targetExpectVersion = run(
           "npm",
@@ -642,6 +644,8 @@ exec node "$entry" ${argv}`,
   }
 
   private restoreSnapshot(): void {
+    // A restored baseline must resolve public packages, not the previous candidate registry.
+    this.guestEnv = {};
     if (shouldSkipSnapshotRestore()) {
       say(`Skip snapshot restore; using current running VM ${this.options.vmName}`);
       this.waitForCurrentUser();
@@ -734,14 +738,12 @@ ${guestOpenClaw} --version`,
   }
 
   private installMain(tempName: string): void {
-    const npmRegistryEnv = this.options.npmRegistry
-      ? `NPM_CONFIG_REGISTRY=${shellQuote(this.options.npmRegistry)} npm_config_registry=${shellQuote(this.options.npmRegistry)} `
-      : "";
+    this.guestEnv = npmRegistryEnv(this.options.npmRegistry ?? this.server?.registry?.url);
     if (this.targetInstallsDirectly()) {
       this
         .guestSh(`printf 'install-source: registry-spec %s\\n' ${shellQuote(this.options.targetPackageSpec || "")}
 for attempt in 1 2; do
-  if ${npmRegistryEnv}${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
+  if ${guestNpm} install -g ${shellQuote(this.options.targetPackageSpec || "")}; then
     break
   fi
   if [ "$attempt" -eq 2 ]; then
@@ -761,7 +763,7 @@ ${guestOpenClaw} --version`);
 curl -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${shellQuote(
       tgzUrl,
     )} -o /tmp/${tempName}
-${npmRegistryEnv}${guestNpm} install -g /tmp/${tempName}
+${guestNpm} install -g /tmp/${tempName}
 ${guestOpenClaw} --version`);
   }
 
@@ -958,29 +960,7 @@ sleep 1`,
   }
 
   private guestOpenClaw(args: string[], check: boolean): boolean {
-    const result = run(
-      "prlctl",
-      [
-        "exec",
-        this.options.vmName,
-        ...(this.guestTransport === "sudo"
-          ? [
-              "/usr/bin/sudo",
-              "-H",
-              "-u",
-              this.guestUser,
-              "/usr/bin/env",
-              `HOME=${this.guestHome()}`,
-              `PATH=${guestPath}`,
-            ]
-          : ["--current-user", "/usr/bin/env", `PATH=${guestPath}`]),
-        guestOpenClaw,
-        ...args,
-      ],
-      { check: false, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs() },
-    );
-    this.log(result.stdout);
-    this.log(result.stderr);
+    const result = this.guest.run([guestOpenClaw, ...args], { check: false });
     if (check && result.status !== 0) {
       throw new Error(`openclaw ${args.join(" ")} failed`);
     }
@@ -1036,6 +1016,9 @@ exit 1`);
   }
 
   private verifyTurn(): void {
+    this.guestSh(
+      `set -euo pipefail\n${posixStopGatewayScript(this.guestTransport === "sudo" ? undefined : guestOpenClawEntryRunner)}`,
+    );
     this.guestOpenClawEntryExec(["models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(
       this.auth.modelId,

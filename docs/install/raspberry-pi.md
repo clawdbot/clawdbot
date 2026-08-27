@@ -194,7 +194,7 @@ Most OpenClaw features work on ARM64 without changes (Node.js, Telegram, WhatsAp
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions.
+- `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions.
 - `~/.openclaw/workspace/` -- agent workspace (SOUL.md, memory, artifacts).
 
 These survive reboots and benefit from SSD over SD card for both performance and longevity. Take a portable snapshot with:

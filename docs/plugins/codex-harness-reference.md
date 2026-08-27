@@ -172,7 +172,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.149.1`):
+with the official plugin (currently `@openai/codex` `0.150.1`):
 
 ```bash
 codex app-server --listen stdio://
@@ -317,7 +317,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin manages stable Codex app-server `0.149.1`. Explicit custom
+The plugin manages stable Codex app-server `0.150.1`. Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
 parseable semantic version of `0.149.0` or newer. Older, malformed, and
 unversioned handshakes are rejected. Newer versions log a compatibility warning
@@ -446,7 +446,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path uses the pinned Codex `0.149.1` app-server.
+This preview path uses the pinned Codex `0.150.1` app-server.
 
 ```json5
 {
@@ -758,39 +758,44 @@ be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
 If discovery is temporarily unavailable or times out, the subscription route
-uses offline hints derived from the bundled OpenAI model manifest:
+uses offline hints derived from the bundled OpenAI model manifest, with Codex
+plugin fallbacks for `gpt-5.5` and `gpt-5.5-pro` reasoning efforts:
 
-| Model id      | Display name | Reasoning efforts                    |
-| ------------- | ------------ | ------------------------------------ |
-| `gpt-5.6-sol` | GPT-5.6 Sol  | low, medium, high, xhigh, max, ultra |
-| `gpt-5.5`     | GPT-5.5      | low, medium, high, xhigh             |
-| `gpt-5.5-pro` | gpt-5.5-pro  | medium, high, xhigh                  |
+| Model id      | Display name | Reasoning efforts             |
+| ------------- | ------------ | ----------------------------- |
+| `gpt-5.6-sol` | GPT-5.6 Sol  | low, medium, high, xhigh, max |
+| `gpt-5.5`     | GPT-5.5      | low, medium, high, xhigh      |
+| `gpt-5.5-pro` | gpt-5.5-pro  | medium, high, xhigh           |
 
 Offline hints never prove account entitlement. An authenticated discovery
 response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.149.1`. A live `model/list`
-probe against the official `0.149.0` app-server returned these public picker
+The current bundled harness is `@openai/codex` `0.150.1`. A live `model/list`
+probe against the official `0.150.1` app-server returned these public picker
 rows:
 
-| Model id        | Input modalities | Reasoning efforts                    |
-| --------------- | ---------------- | ------------------------------------ |
-| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
-| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
-| `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
+| Model id        | Input modalities | Reasoning efforts               |
+| --------------- | ---------------- | ------------------------------- |
+| `gpt-5.5`       | text, image      | low, medium, high, xhigh        |
+| `gpt-5.6`       | text, image      | low, medium, high, xhigh, ultra |
+| `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, ultra |
+| `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, ultra |
+| `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, ultra |
+| `gpt-5.4`       | text, image      | low, medium, high, xhigh        |
+| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh        |
+| `gpt-5.3-codex` | text, image      | low, medium, high, xhigh        |
+| `gpt-5.2`       | text, image      | low, medium, high, xhigh        |
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
 inspect the actual public picker for your account.
 
-The app-server catalog can report `ultra`; OpenClaw reasoning controls currently
-expose levels through `max`. Hidden models can also appear in the app-server
-catalog for internal or specialized flows without being normal model-picker
-choices.
+The app-server catalog can report `ultra`; OpenClaw reasoning controls for the
+Codex runtime currently expose levels through `max`. Hidden models can also
+appear in the app-server catalog for internal or specialized flows without being
+normal model-picker choices.
 </Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:

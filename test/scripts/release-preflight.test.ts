@@ -132,6 +132,7 @@ function makeIsolatedPreflightFixture(params: Parameters<typeof makeReleaseFixtu
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/error-format.mts",
     "scripts/lib/failed-trailer.mts",
+    "scripts/lib/local-check-runtime.mts",
     "scripts/lib/managed-child-process.mts",
     "scripts/lib/release-version.mjs",
     "scripts/lib/tsx-cli-shim.mjs",

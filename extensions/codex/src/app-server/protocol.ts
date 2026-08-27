@@ -436,6 +436,7 @@ export type CodexThread = {
   createdAt?: number | null;
   updatedAt?: number | null;
   status?: CodexThreadStatus | null;
+  canAcceptDirectInput?: boolean | null;
   modelProvider?: string | null;
   cwd?: string | null;
   source?: CodexSessionSource | null;

@@ -1,7 +1,8 @@
 // Gateway Protocol schema module defines protocol validation shapes.
-import type { Static } from "typebox";
+import type { Static, TSchema } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import type { PluginDeclaredSurfaceGroup } from "./plugin-declared-surface-groups.js";
 import { NonEmptyString } from "./primitives.js";
 
 /**
@@ -132,6 +133,132 @@ export const PluginsListResultSchema = closedObject({
   mutationAllowed: Type.Boolean(),
 });
 
+/** Request payload for inspecting one plugin's declared capability surface. */
+export const PluginsInspectParamsSchema = closedObject({
+  pluginId: NonEmptyString,
+});
+
+/** Effective operator hook-policy grant with optional explicit config value. */
+export const PluginHookGrantSchema = closedObject({
+  /** Effective policy after origin defaults and operator config. */
+  effective: Type.Boolean(),
+  /** Present only when plugins.entries.<id>.hooks sets the flag explicitly. */
+  configured: Type.Optional(Type.Boolean()),
+});
+
+/** Install provenance and pinned artifact integrity for one plugin. */
+export const PluginInspectSourceSchema = closedObject({
+  kind: Type.Union([
+    Type.Literal("bundled"),
+    Type.Literal("clawhub"),
+    Type.Literal("npm"),
+    Type.Literal("git"),
+    Type.Literal("path"),
+    Type.Literal("archive"),
+    Type.Literal("marketplace"),
+    Type.Literal("official-catalog"),
+  ]),
+  spec: Type.Optional(NonEmptyString),
+  packageName: Type.Optional(NonEmptyString),
+  /** Pinned artifact integrity recorded at install (npm SSRI, sha-256, or git commit). */
+  integrity: Type.Optional(NonEmptyString),
+  integrityKind: Type.Optional(
+    Type.Union([Type.Literal("ssri"), Type.Literal("sha256"), Type.Literal("git-commit")]),
+  ),
+});
+
+/** Manifest-declared capability surface in enumerable terms. All arrays sorted. */
+export const PluginDeclaredSurfaceSchema = closedObject({
+  channels: Type.Array(NonEmptyString),
+  providers: Type.Array(NonEmptyString),
+  tools: Type.Array(NonEmptyString),
+  /** Manifest contract families and identifiers, rendered as `family: id`. */
+  contracts: Type.Array(NonEmptyString),
+  /** Bundle-format hook names; code plugins register hooks at runtime and list nothing here. */
+  hooks: Type.Array(NonEmptyString),
+  mcpServers: Type.Array(NonEmptyString),
+  cliCommands: Type.Array(NonEmptyString),
+  cliBackends: Type.Array(NonEmptyString),
+  skills: Type.Array(NonEmptyString),
+  /** Dot paths from configContracts.dangerousFlags. */
+  dangerousConfigFlags: Type.Array(NonEmptyString),
+} satisfies Record<PluginDeclaredSurfaceGroup, TSchema>);
+
+/** Operator-granted capability flags with effective values. */
+export const PluginOperatorGrantsSchema = closedObject({
+  hooks: closedObject({
+    allowPromptInjection: PluginHookGrantSchema,
+    allowConversationAccess: PluginHookGrantSchema,
+  }),
+  llm: Type.Optional(
+    closedObject({
+      allowModelOverride: Type.Optional(Type.Boolean()),
+      allowedModels: Type.Optional(Type.Array(NonEmptyString)),
+      allowedCompletionModels: Type.Optional(Type.Array(NonEmptyString)),
+      allowAuthProfileOverride: Type.Optional(Type.Boolean()),
+      allowAgentIdOverride: Type.Optional(Type.Boolean()),
+    }),
+  ),
+  subagent: Type.Optional(
+    closedObject({
+      allowModelOverride: Type.Optional(Type.Boolean()),
+      allowedModels: Type.Optional(Type.Array(NonEmptyString)),
+    }),
+  ),
+});
+
+/** Persisted ClawHub per-release trust verdict from the install record. */
+export const PluginInstallTrustSchema = closedObject({
+  disposition: Type.Union([
+    Type.Literal("clean"),
+    Type.Literal("review-recommended"),
+    Type.Literal("review-required"),
+    Type.Literal("blocked"),
+  ]),
+  reasons: Type.Optional(Type.Array(Type.String())),
+  checkedAt: Type.Optional(NonEmptyString),
+  acknowledgedAt: Type.Optional(NonEmptyString),
+  pending: Type.Optional(Type.Boolean()),
+  stale: Type.Optional(Type.Boolean()),
+});
+
+/** Newly declared capability items grouped by their existing manifest surface. */
+export const PluginDeclaredSurfaceWideningSchema = Type.Partial(PluginDeclaredSurfaceSchema, {
+  additionalProperties: false,
+});
+
+/** Typed failure payload that lets clients review and acknowledge plugin capabilities. */
+export const CapabilityConsentErrorDetailsSchema = closedObject({
+  capabilityConsentCode: Type.Literal("PLUGIN_CAPABILITY_CONSENT_REQUIRED"),
+  pluginId: NonEmptyString,
+  reviewToken: NonEmptyString,
+  widened: Type.Optional(PluginDeclaredSurfaceWideningSchema),
+  acceptedAt: Type.Optional(NonEmptyString),
+});
+
+/** Consent-relevant snapshot of one plugin for install/enable review. */
+export const PluginsInspectResultSchema = closedObject({
+  ok: Type.Literal(true),
+  plugin: closedObject({
+    id: NonEmptyString,
+    name: NonEmptyString,
+    version: Type.Optional(NonEmptyString),
+    description: Type.Optional(Type.String()),
+    origin: Type.Optional(NonEmptyString),
+    installed: Type.Boolean(),
+    enabled: Type.Boolean(),
+  }),
+  source: Type.Optional(PluginInspectSourceSchema),
+  declared: PluginDeclaredSurfaceSchema,
+  reviewToken: NonEmptyString,
+  grants: PluginOperatorGrantsSchema,
+  trust: Type.Optional(PluginInstallTrustSchema),
+});
+
+const PluginCapabilityAcknowledgmentSchema = closedObject({
+  reviewToken: NonEmptyString,
+});
+
 /** Request payload for searching installable ClawHub plugin families. */
 export const PluginsSearchParamsSchema = closedObject({
   query: NonEmptyString,
@@ -175,11 +302,13 @@ export const PluginsInstallParamsSchema = Type.Union([
     version: Type.Optional(NonEmptyString),
     acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
+    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
   }),
   closedObject({
     source: Type.Literal("official"),
     pluginId: NonEmptyString,
     acknowledgeInstallPolicyWarning: Type.Optional(Type.Literal(true)),
+    acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
   }),
 ]);
 
@@ -217,6 +346,7 @@ export const PluginsUninstallResultSchema = closedObject({
 export const PluginsSetEnabledParamsSchema = closedObject({
   pluginId: NonEmptyString,
   enabled: Type.Boolean(),
+  acknowledgeCapabilities: Type.Optional(PluginCapabilityAcknowledgmentSchema),
 });
 
 /** Successful plugin enablement policy update. */
@@ -230,6 +360,13 @@ export const PluginsSetEnabledResultSchema = closedObject({
 export type PluginCatalogEntry = Static<typeof PluginCatalogEntrySchema>;
 export type PluginsListParams = Static<typeof PluginsListParamsSchema>;
 export type PluginsListResult = Static<typeof PluginsListResultSchema>;
+export type PluginsInspectParams = Static<typeof PluginsInspectParamsSchema>;
+export type PluginsInspectResult = Static<typeof PluginsInspectResultSchema>;
+export type PluginHookGrant = Static<typeof PluginHookGrantSchema>;
+export type PluginInspectSource = Static<typeof PluginInspectSourceSchema>;
+export type PluginDeclaredSurface = Static<typeof PluginDeclaredSurfaceSchema>;
+export type PluginOperatorGrants = Static<typeof PluginOperatorGrantsSchema>;
+export type PluginInstallTrust = Static<typeof PluginInstallTrustSchema>;
 export type PluginsSearchParams = Static<typeof PluginsSearchParamsSchema>;
 export type PluginsSearchResult = Static<typeof PluginsSearchResultSchema>;
 export type PluginsInstallParams = Static<typeof PluginsInstallParamsSchema>;

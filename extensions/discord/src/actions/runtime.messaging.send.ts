@@ -9,6 +9,7 @@ import {
 // Discord plugin module implements runtime.messaging.send behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
+import { coerceDiscordComponentParam } from "../components.js";
 import {
   createReusableDiscordReplyReference,
   resolveDiscordReplyReference,
@@ -201,7 +202,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const silent = ctx.params.silent === true;
       const suppressEmbeds =
         ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
-      const rawComponents = ctx.params.components;
+      const rawComponents = coerceDiscordComponentParam(ctx.params.components);
       const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
         ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
         : null;

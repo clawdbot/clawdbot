@@ -473,6 +473,14 @@ export function createDispatchReplyOperationCoordinator(params: {
       params.messageAuditTerminal?.observeRunId(runId);
       params.replyOptions?.onAgentRunStart?.(runId, executionIdentityToken);
     };
+    const onAgentRunTerminalOutcome: NonNullable<
+      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunTerminalOutcome"]
+    > = (outcome) => {
+      if (outcome === "failed" || agentRunTerminalOutcome === undefined) {
+        agentRunTerminalOutcome = outcome;
+      }
+      params.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
+    };
     return {
       ...params.replyOptions,
       ...(abortSignal
@@ -482,6 +490,7 @@ export function createDispatchReplyOperationCoordinator(params: {
           }
         : {}),
       onAgentRunStart,
+      onAgentRunTerminalOutcome,
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };

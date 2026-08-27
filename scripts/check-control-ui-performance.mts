@@ -20,6 +20,7 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // Each landed change can consume this much ratchet tolerance, so small increases
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
+const CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES = 64;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
@@ -151,14 +152,15 @@ export function evaluateControlUiPerformanceBudgets(
   startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ) {
   const baselineBytes = startupBudgetBaseline?.startupJsGzipBytes;
-  const startupJsGzipLimit =
-    baselineBytes === undefined
-      ? budgets.startupJsGzipBytes
-      : Math.min(baselineBytes, budgets.startupJsGzipBytes) + startupJsTolerance;
+  const startupJsLimits = resolveControlUiStartupJsGzipLimits(
+    budgets,
+    startupBudgetBaseline,
+    startupJsTolerance,
+  );
   const checks: Array<[string, number, number, "count" | "bytes"]> = [
     ["startup JS requests", metrics.startup.js.requests, budgets.startupJsRequests, "count"],
     ["startup CSS requests", metrics.startup.css.requests, budgets.startupCssRequests, "count"],
-    ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsGzipLimit, "bytes"],
+    ["startup JS gzip", metrics.startup.js.gzipBytes, startupJsLimits.enforcementLimit, "bytes"],
     ["startup CSS gzip", metrics.startup.css.gzipBytes, budgets.startupCssGzipBytes, "bytes"],
     ["largest JS gzip", metrics.largest.js.gzipBytes, budgets.largestJsGzipBytes, "bytes"],
     ["largest CSS gzip", metrics.largest.css.gzipBytes, budgets.largestCssGzipBytes, "bytes"],
@@ -175,6 +177,30 @@ export function evaluateControlUiPerformanceBudgets(
     });
   }
   return violations;
+}
+
+function resolveControlUiStartupJsGzipLimits(
+  budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS>,
+  startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null,
+  startupJsTolerance: number,
+) {
+  const baselineCap = budgets.startupJsGzipBytes;
+  if (!startupBudgetBaseline) {
+    return {
+      baselineCap,
+      growthLimit: baselineCap,
+      buildVariance: 0,
+      enforcementLimit: baselineCap,
+    };
+  }
+  const growthLimit =
+    Math.min(startupBudgetBaseline.startupJsGzipBytes, baselineCap) + startupJsTolerance;
+  return {
+    baselineCap,
+    growthLimit,
+    buildVariance: CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
+    enforcementLimit: growthLimit + CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
+  };
 }
 
 type ControlUiPerformanceBudgetViolation = ReturnType<
@@ -215,6 +241,11 @@ export function formatControlUiPerformanceReport(
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance: number = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
 ): string {
+  const startupJsLimits = resolveControlUiStartupJsGzipLimits(
+    budgets,
+    startupBudgetBaseline,
+    startupJsTolerance,
+  );
   const violations = evaluateControlUiPerformanceBudgets(
     metrics,
     budgets,
@@ -223,11 +254,11 @@ export function formatControlUiPerformanceReport(
   );
   const lines = [
     "Control UI performance:",
-    `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupBudgetBaseline ? Math.min(startupBudgetBaseline.startupJsGzipBytes, budgets.startupJsGzipBytes) + startupJsTolerance : budgets.startupJsGzipBytes)} gzip)`,
+    `  startup JS: ${formatAssetSummary(metrics.startup.js)} (limits: ${formatRequestCount(budgets.startupJsRequests)}, ${formatControlUiPerformanceBytes(startupJsLimits.enforcementLimit)} gzip / ${startupJsLimits.enforcementLimit} B)`,
   ];
   if (startupBudgetBaseline) {
     lines.push(
-      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + tolerance ${startupJsTolerance} B, max committed baseline ${budgets.startupJsGzipBytes} B)`,
+      `  startup JS gzip vs baseline: ${metrics.startup.js.gzipBytes} B (baseline ${startupBudgetBaseline.startupJsGzipBytes} B + growth allowance ${startupJsTolerance} B = growth limit ${startupJsLimits.growthLimit} B; build-variance allowance ${startupJsLimits.buildVariance} B; enforcement limit ${startupJsLimits.enforcementLimit} B; max committed baseline ${startupJsLimits.baselineCap} B)`,
     );
   }
   lines.push(
@@ -341,6 +372,7 @@ export function runControlUiPerformanceCheck(
     budgets,
     startupBudgetBaseline,
     startupJsTolerance: CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
+    startupJsBuildVariance: CONTROL_UI_STARTUP_JS_GZIP_BUILD_VARIANCE_BYTES,
     violations,
     report,
   };

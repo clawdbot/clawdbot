@@ -213,7 +213,7 @@ export function createBrowserNodeProxyRequest(params: {
       const failure = parseBrowserProxyFailure(proxy);
       if (failure) {
         const { status, body } = failure.error;
-        throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
+        throw new BrowserServiceError(body.error, body, status);
       }
       if (!("result" in proxy)) {
         throw new Error("Browser proxy returned a failure without an error payload.");

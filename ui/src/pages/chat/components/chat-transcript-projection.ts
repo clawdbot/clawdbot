@@ -53,7 +53,8 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import type { ChatTranscriptSession, TranscriptRow } from "./chat-transcript-controller.ts";
+import type { ChatTranscriptSession } from "./chat-transcript-controller.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
@@ -427,7 +428,7 @@ export function projectChatTranscript(
       return renderStreamGroup(item.parts, {
         ...streamGroupOptions,
         questionPrompts,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       });
@@ -458,7 +459,7 @@ export function projectChatTranscript(
         streamOptions: {
           ...streamGroupOptions,
           questionPrompts,
-          startupPhase: props.startupStatus?.phase,
+          startupLabel: props.startupLabel,
           waitingApproval: props.waitingApproval,
           runOutputTokens: props.runOutputTokens,
         },
@@ -528,7 +529,7 @@ export function projectChatTranscript(
       parts: activeStatusParts,
       options: {
         ...streamGroupOptions,
-        startupPhase: props.startupStatus?.phase,
+        startupLabel: props.startupLabel,
         waitingApproval: props.waitingApproval,
         runOutputTokens: props.runOutputTokens,
       },
@@ -646,7 +647,7 @@ export function projectChatTranscript(
     props.showToolCalls,
     Boolean(props.runActive),
     Boolean(props.runWorking),
-    props.startupStatus?.phase,
+    props.startupLabel,
     Boolean(props.waitingApproval),
     props.questionPrompts,
     Boolean(props.autoExpandToolCalls),

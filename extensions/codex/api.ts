@@ -11,6 +11,7 @@ const CODEX_PLUGIN_ROOT = path.dirname(fileURLToPath(import.meta.url));
 export { CODEX_MANAGED_APP_SERVER_CHECK_ID };
 
 export function registerCodexManagedAppServerDoctorChecks(host: {
+  getHealthCheck(id: string): HealthCheck | undefined;
   registerHealthCheck(check: HealthCheck): void;
 }): void {
   registerChecks({ ...host, pluginRoot: CODEX_PLUGIN_ROOT });

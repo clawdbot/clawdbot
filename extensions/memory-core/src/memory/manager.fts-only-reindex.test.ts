@@ -66,7 +66,6 @@ function restoreFtsOnlyStateDir(): void {
 
 vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: createEmbeddingProviderMock,
-  resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
   resolveEmbeddingProviderIndexIdentity: () => undefined,
@@ -119,7 +118,7 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   async function createManager(
-    params: { provider?: string; vectorEnabled?: boolean } = {},
+    params: { provider?: string; purpose?: "status"; vectorEnabled?: boolean } = {},
   ): Promise<MemoryIndexManager> {
     const store =
       params.vectorEnabled === undefined
@@ -146,7 +145,7 @@ describe("memory manager FTS-only reindex", () => {
         list: [{ id: "main", default: true }],
       },
     } as OpenClawConfig;
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: params.purpose });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -191,6 +190,25 @@ describe("memory manager FTS-only reindex", () => {
     const secondStatus = memoryManager.status();
     expect(secondStatus.chunks).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
+  it("keeps a reopened semantic index valid before discovering the provider model", async () => {
+    providerAvailable = true;
+    const indexed = await createManager({ provider: "openai" });
+    await indexed.sync({ force: true });
+    expect(indexed.status().chunks).toBeGreaterThan(0);
+    await indexed.close();
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+    createEmbeddingProviderMock.mockClear();
+
+    const reopened = await createManager({ provider: "openai", purpose: "status" });
+    expect(reopened.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    expect(reopened.status().custom?.providerState).toEqual({
+      mode: "pending",
+      requestedProvider: "openai",
+    });
+    expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
   });
 
   it("returns keyword matches when optional provider construction fails during search bootstrap", async () => {

@@ -294,10 +294,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       {
         name: "GitHub-hosted",
         pullRequest: githubPullRequestCompact,
-        pullRequestJobs: 80,
+        pullRequestJobs: 81,
         pullRequestMax: 186,
         push: githubCompact,
-        pushJobs: 71,
+        pushJobs: 72,
         pushMax: 149,
       },
       {
@@ -1675,6 +1675,24 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shardName: "auto-reply-reply-dispatch",
       },
       {
+        checkName: "checks-node-auto-reply-reply-dispatch-core",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch-core",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch-delivery",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch-delivery",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-dispatch-lifecycle",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-dispatch-lifecycle",
+      },
+      {
         checkName: "checks-node-auto-reply-reply-session",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
@@ -1697,5 +1715,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
     expect(actual).toEqual(listTestFiles("src/auto-reply/reply"));
     expect(new Set(actual).size).toBe(actual.length);
+  });
+
+  it("keeps each dispatch entrypoint in its own dedicated shard", () => {
+    const dispatchEntrypoints = new Map([
+      ["auto-reply-reply-dispatch-core", "src/auto-reply/reply/dispatch-from-config.test.ts"],
+      [
+        "auto-reply-reply-dispatch-delivery",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+      ],
+      [
+        "auto-reply-reply-dispatch-lifecycle",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
+      ],
+    ]);
+    const shards = createNodeTestShards();
+
+    for (const [shardName, entrypoint] of dispatchEntrypoints) {
+      expect(shards.find((shard) => shard.shardName === shardName)?.includePatterns).toEqual([
+        entrypoint,
+      ]);
+    }
   });
 });

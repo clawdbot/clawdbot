@@ -30,6 +30,7 @@ import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import {
   isCodexAppServerBrokenPipeError,
   isCodexAppServerConnectionClosedError,
+  isCodexAppServerOverloadError,
   isCodexAppServerRequestTimeoutError,
   type CodexAppServerClient,
 } from "./client.js";
@@ -689,7 +690,7 @@ export async function startCodexAttemptThread(params: {
       releaseSharedClientLease,
     };
   } catch (error) {
-    if (params.signal.aborted || shouldClearSharedClientAfterStartupAbandon(error)) {
+    if (params.signal.aborted || isCodexAppServerStartupError(error)) {
       releaseSharedClientLease?.();
       releaseSharedClientLease = undefined;
       await closeCodexStartupClientBestEffort(startupClientForAbandonedRequestCleanup);
@@ -713,19 +714,16 @@ export async function startCodexAttemptThread(params: {
   }
 }
 
-function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
-  return isCodexAppServerStartupError(error);
-}
-
 function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
-  return (
-    shouldClearSharedClientAfterStartupAbandon(error) || isCodexAppServerRequestTimeoutError(error)
-  );
+  return isCodexAppServerStartupError(error) || isCodexAppServerRequestTimeoutError(error);
 }
 
 function shouldClearSharedClientAfterStartupFailure(params: {
   error: unknown;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
 }): boolean {
+  if (isCodexAppServerOverloadError(params.error)) {
+    return false;
+  }
   return isCodexAppServerBrokenPipeError(params.error) || !params.spawnedBy;
 }

@@ -755,14 +755,17 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../sessions/index.js", () => ({
-    AuthStorage: function AuthStorage() {},
-    ModelRegistry: function ModelRegistry() {},
+  vi.doMock("../sessions/resource-loader.js", () => ({
     DefaultResourceLoader: function DefaultResourceLoader() {
       return {
         reload: vi.fn(async () => undefined),
       };
     },
+  }));
+
+  vi.doMock("../sessions/index.js", () => ({
+    AuthStorage: function AuthStorage() {},
+    ModelRegistry: function ModelRegistry() {},
     SessionManager: {
       open: vi.fn(() => ({
         buildSessionContext: vi.fn(() => ({ messages: sessionMessages })),

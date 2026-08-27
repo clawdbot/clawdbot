@@ -701,7 +701,6 @@ function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onDraftChange: () => undefined,
     onRequestUpdate: () => undefined,
     onSend: () => undefined,
-    onCompact: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
     onDismissError: () => undefined,
@@ -933,19 +932,30 @@ describe("inline approval card", () => {
 });
 
 describe("chat run error", () => {
-  it("renders a non-interactive alert in the composer overlay", () => {
-    const container = renderChatView({
-      runError: { summary: "Error: gateway disconnected" },
-    });
+  it.each(["run", "request"])(
+    "exposes the complete %s error as selectable text and a copy action",
+    (source) => {
+      const diagnostic =
+        "Error: gateway disconnected\n<img src=x onerror=alert(1)>\nFinal diagnostic line";
+      const container = renderChatView(
+        source === "run" ? { runError: { summary: diagnostic } } : { error: diagnostic },
+      );
 
-    const alert = requireElement(container, ".chat-error", "chat run error");
-    const summary = requireElement(alert, ".chat-error__content", "chat run error summary");
-    expect(alert.getAttribute("role")).toBe("alert");
-    expect(summary.textContent?.trim()).toBe("Error: gateway disconnected");
-    expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')).toBeNull();
-    expect(alert.closest(".agent-chat__composer-overlay")).not.toBeNull();
-    expect(alert.closest(".agent-chat__composer-shell")).not.toBeNull();
-  });
+      const alert = requireElement(container, ".chat-error", "chat run error");
+      expect(alert.getAttribute("role")).toBe("alert");
+      const details = requireElement(alert, "details", "error disclosure");
+      expect(details.hasAttribute("open")).toBe(false);
+      expect(requireElement(details, "pre", "full diagnostic").textContent).toBe(diagnostic);
+      expect(alert.querySelector("img")).toBeNull();
+      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Copy error"]')).not.toBeNull();
+      expect(alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]') !== null).toBe(
+        source === "request",
+      );
+      expect(
+        alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+      ).not.toBeNull();
+    },
+  );
 
   it("keeps dismiss on the error state owned by its callback", () => {
     const onDismissError = vi.fn();
@@ -955,6 +965,32 @@ describe("chat run error", () => {
 
     expect(onDismissError).toHaveBeenCalledOnce();
     expect(container.querySelector(".chat-error")?.closest(".chat-topbar-notices")).not.toBeNull();
+  });
+
+  it.each([false, true])("keeps startup Retry owned by retryable=%s", (retryable) => {
+    const onRetrySessionPlacementStartup = vi.fn();
+    const container = renderChatView({
+      placementStartup: {
+        sessionKey: "agent:main:startup",
+        phase: "failed",
+        startedAt: 1,
+        error: "Provisioning failed\nFinal diagnostic line",
+        retryable,
+      },
+      onRetrySessionPlacementStartup,
+    });
+    const alert = requireElement(container, ".chat-error", "startup error");
+    expect(requireElement(alert, "pre", "startup diagnostic").textContent).toContain(
+      "Provisioning failed\nFinal diagnostic line",
+    );
+    alert.querySelector<HTMLElement>("summary")?.click();
+    expect(onRetrySessionPlacementStartup).not.toHaveBeenCalled();
+    const retry = Array.from(alert.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(Boolean(retry)).toBe(retryable);
+    retry?.click();
+    expect(onRetrySessionPlacementStartup).toHaveBeenCalledTimes(retryable ? 1 : 0);
   });
 });
 
@@ -3130,7 +3166,6 @@ describe("chat loading skeleton", () => {
             },
           ],
         },
-        onCompact: () => undefined,
       });
 
       expect(
@@ -7386,7 +7421,7 @@ describe("chat model controls", () => {
     ).not.toBeNull();
   });
 
-  it("labels the mobile secondary setting as Fast mode when reasoning is unavailable", () => {
+  it("keeps fast-only controls separately named and out of the model picker", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -7416,12 +7451,14 @@ describe("chat model controls", () => {
     };
 
     const container = renderModelControls(state);
-    const mobileSecondary = container.querySelector(".chat-controls__mobile-effort-option");
+    const effortTrigger = container.querySelector('[data-chat-thinking-select="true"]');
     const modelTrigger = container.querySelector('[data-chat-model-select="true"]');
 
-    expect(mobileSecondary?.textContent).toContain("Fast mode");
-    expect(mobileSecondary?.textContent).toContain("Standard");
-    expect(modelTrigger?.getAttribute("aria-label")).toContain("Fast mode: Standard");
+    expect(effortTrigger?.getAttribute("aria-label")).toBe("Fast mode: Standard");
+    expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Fast mode");
+    expect(container.querySelector(".chat-controls__model-menu")?.textContent).not.toMatch(
+      /Effort|Fast mode/,
+    );
     expect(modelTrigger?.getAttribute("aria-label")).not.toContain("Thinking level");
     expect(getThinkingSlider(container)).toBeNull();
     expect(container.querySelector("[data-chat-speed-toggle]")).not.toBeNull();
@@ -8051,6 +8088,19 @@ describe("right-click Reply", () => {
     return event;
   }
 
+  function getContextMenuAction(name: string): HTMLButtonElement {
+    const matches = [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        '.chat-reply-context-menu button[role="menuitem"]',
+      ),
+    ].filter((button) => button.textContent?.trim() === name);
+    expect(matches).toHaveLength(1);
+    const button = expectDefined(matches[0], `${name} context-menu action`);
+    expect(button.getAttribute("aria-label")).toBeNull();
+    expect(button.getAttribute("aria-labelledby")).toBeNull();
+    return button;
+  }
+
   function renderChatBubble(
     chatOverrides: Partial<ChatProps> = {},
     bubbleOverrides: Parameters<typeof appendChatBubble>[1] = {},
@@ -8080,7 +8130,7 @@ describe("right-click Reply", () => {
       button.textContent?.trim(),
     );
     expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
-    document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
+    getContextMenuAction("Fork from here").click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
@@ -8104,7 +8154,7 @@ describe("right-click Reply", () => {
     ).toBeNull();
 
     dispatchContextMenu(bubble);
-    document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
+    getContextMenuAction("Copy as markdown").click();
     expect(onCopy).toHaveBeenCalledOnce();
   });
 
@@ -8160,17 +8210,11 @@ describe("right-click Reply", () => {
 
     dispatchContextMenu(bubble);
 
-    expect(
-      document.querySelector<HTMLButtonElement>('[aria-label="Rewind to here"]')?.disabled,
-    ).toBe(true);
-    expect(
-      document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')?.disabled,
-    ).toBe(true);
-    expect(
-      document
-        .querySelector<HTMLElement>('[aria-label="Rewind to here"]')
-        ?.closest("openclaw-tooltip")?.content,
-    ).toBe("Rewind is unavailable while the agent is working");
+    expect(getContextMenuAction("Rewind to here").disabled).toBe(true);
+    expect(getContextMenuAction("Fork from here").disabled).toBe(true);
+    expect(getContextMenuAction("Rewind to here").closest("openclaw-tooltip")?.content).toBe(
+      "Rewind is unavailable while the agent is working",
+    );
   });
 
   it("opens context menu and calls onSetReply when Reply is selected", () => {
@@ -8271,11 +8315,9 @@ describe("right-click Reply", () => {
 
     dispatchContextMenu(bubble);
     flushFrames();
-    const rewindButton = document.querySelector<HTMLButtonElement>(
-      '.chat-reply-context-menu [aria-label="Rewind to here"]',
-    );
+    const rewindButton = getContextMenuAction("Rewind to here");
     expect(rewindButton).toBeInstanceOf(HTMLButtonElement);
-    rewindButton!.click();
+    rewindButton.click();
     flushFrames();
 
     const cancel = document.querySelector<HTMLButtonElement>(".chat-confirm-popover__cancel");
@@ -8311,9 +8353,7 @@ describe("right-click Reply", () => {
 
     dispatchContextMenu(bubble);
     flushFrames();
-    document
-      .querySelector<HTMLButtonElement>('.chat-reply-context-menu [aria-label="Rewind to here"]')!
-      .click();
+    getContextMenuAction("Rewind to here").click();
     flushFrames();
 
     resetThreadPresentation("pane-b");
@@ -8457,7 +8497,7 @@ describe("right-click Reply", () => {
         button.textContent?.trim(),
       ),
     ).toEqual(["Copy", "Reply"]);
-    document.querySelector<HTMLButtonElement>('[aria-label="Copy"]')!.click();
+    getContextMenuAction("Copy").click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("selectable"));
 
     selectedRange = document.createRange();

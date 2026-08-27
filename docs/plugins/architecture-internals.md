@@ -736,6 +736,11 @@ instead of provider-native button, component, block, or card fields.
 See [Message Presentation](/plugins/message-presentation) for the contract,
 fallback rules, provider mapping, and plugin author checklist.
 
+Provider-native schema extensions require explicit maintainer approval,
+channel-owned parsing, documented cross-channel behavior, and capabilities that
+`MessagePresentation` cannot express. Discord `components` is the approved
+built-in exception for its advanced Components V2 layouts.
+
 Send-capable plugins declare what they can render through message capabilities:
 
 - `presentation` for semantic presentation blocks (`text`, `context`,
@@ -743,9 +748,9 @@ Send-capable plugins declare what they can render through message capabilities:
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
-Do not expose provider-native UI escape hatches from the generic message tool.
-Deprecated SDK helpers for legacy native schemas remain exported for existing
-third-party plugins, but new plugins should not use them.
+Do not expose unapproved provider-native UI escape hatches from the generic
+message tool. Deprecated SDK helpers for legacy native schemas remain exported
+for existing third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 
@@ -1017,10 +1022,11 @@ plugin index entry with `source: "path"` and a workspace-relative
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `installed_plugin_index` SQLite table is the install
-source of truth and can be refreshed without loading plugin runtime modules.
-Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` payload is a rebuildable manifest view.
+surface. The persisted `config_machine_state` value under
+`plugins.installedIndex` is the install source of truth and can be refreshed
+without loading plugin runtime modules. Its `installRecords` map is durable
+even when a plugin manifest is missing or invalid; its `plugins` payload is a
+rebuildable manifest view.
 
 ## Context engine plugins
 

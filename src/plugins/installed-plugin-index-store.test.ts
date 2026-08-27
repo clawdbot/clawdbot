@@ -195,31 +195,27 @@ function insertPersistedIndexRow(
     pluginsJson?: string;
     diagnosticsJson?: string;
   },
-) {
+): string {
+  // Built by string concatenation so raw JSON fixtures (including "__proto__"
+  // keys) land in value_json verbatim instead of round-tripping JS objects.
+  const valueJson =
+    `{"revision":123,"index":{"version":${values.version ?? 1},` +
+    '"hostContractVersion":"2026.4.25","compatRegistryVersion":"compat-v1",' +
+    `"migrationVersion":${values.migrationVersion ?? 1},"policyHash":"policy-hash",` +
+    `"generatedAtMs":123,"installRecords":${values.installRecordsJson ?? "{}"},` +
+    `"plugins":${values.pluginsJson ?? "[]"},"diagnostics":${values.diagnosticsJson ?? "[]"}}}`;
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       db.prepare(
         `
-          INSERT OR REPLACE INTO installed_plugin_index (
-            index_key, version, host_contract_version, compat_registry_version,
-            migration_version, policy_hash, generated_at_ms, refresh_reason,
-            install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-          ) VALUES (
-            'installed-plugin-index', @version, '2026.4.25', 'compat-v1',
-            @migration_version, 'policy-hash', 123, NULL,
-            @install_records_json, @plugins_json, @diagnostics_json, NULL, 123
-          )
+          INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms)
+          VALUES ('plugins.installedIndex', ?, 123)
         `,
-      ).run({
-        version: values.version ?? 1,
-        migration_version: values.migrationVersion ?? 1,
-        install_records_json: values.installRecordsJson ?? "{}",
-        plugins_json: values.pluginsJson ?? "[]",
-        diagnostics_json: values.diagnosticsJson ?? "[]",
-      });
+      ).run(valueJson);
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
+  return valueJson;
 }
 
 function readPersistedIndexRevision(stateDir: string): number | null {
@@ -228,13 +224,17 @@ function readPersistedIndexRevision(stateDir: string): number | null {
       const row = db
         .prepare(
           `
-            SELECT updated_at_ms
-              FROM installed_plugin_index
-             WHERE index_key = 'installed-plugin-index'
+            SELECT value_json
+              FROM config_machine_state
+             WHERE state_key = 'plugins.installedIndex'
           `,
         )
-        .get() as { updated_at_ms: number | bigint } | undefined;
-      return row ? Number(row.updated_at_ms) : null;
+        .get() as { value_json: string } | undefined;
+      if (!row) {
+        return null;
+      }
+      const revision = (JSON.parse(row.value_json) as { revision?: unknown }).revision;
+      return typeof revision === "number" ? revision : null;
     },
     { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
   );
@@ -691,7 +691,7 @@ describe("installed plugin index persistence", () => {
   it("does not allocate a revision or rewrite an invalid predecessor", async () => {
     const stateDir = makeTempDir();
     const installRecordsJson = '{"__proto__":{"source":"bogus"}}';
-    insertPersistedIndexRow(stateDir, { installRecordsJson });
+    const persistedValueJson = insertPersistedIndexRow(stateDir, { installRecordsJson });
 
     await expect(writePersistedInstalledPluginIndex(createIndex(), { stateDir })).rejects.toThrow(
       "Persisted plugin install records are invalid",
@@ -700,14 +700,14 @@ describe("installed plugin index persistence", () => {
       ({ db }) =>
         db
           .prepare(
-            `SELECT install_records_json, updated_at_ms
-               FROM installed_plugin_index
-              WHERE index_key = 'installed-plugin-index'`,
+            `SELECT value_json, updated_at_ms
+               FROM config_machine_state
+              WHERE state_key = 'plugins.installedIndex'`,
           )
-          .get() as { install_records_json: string; updated_at_ms: number | bigint },
+          .get() as { value_json: string; updated_at_ms: number | bigint },
       { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
     );
-    expect(row).toEqual({ install_records_json: installRecordsJson, updated_at_ms: 123 });
+    expect(row).toEqual({ value_json: persistedValueJson, updated_at_ms: 123 });
   });
 
   it("returns null for missing or invalid persisted indexes", async () => {

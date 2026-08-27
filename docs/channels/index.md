@@ -59,6 +59,53 @@ install. Channels marked "official plugin" install with one command
 
 - [Voice Call](/plugins/voice-call) - Telephony via Plivo, Telnyx, or Twilio (official plugin).
 
+## Group join introductions
+
+Discord, Slack, and Telegram post one room-specific introduction when the bot
+joins an allowed group, instead of joining silently. The introduction says what
+the room appears to be for and names a few concrete jobs the bot could take on
+there, grounded in what that platform can actually show it.
+
+**Disabling.** Introductions are on by default. Turn them off per channel with
+`channels.<channel>.joinIntro: false`, or override a single account with
+`channels.<channel>.accounts.<accountId>.joinIntro`. Resolution order is the
+account value, then the channel value, then the default of `true`. There is no
+per-room switch, because a room is only configurable after the bot has already
+joined it. Only Discord, Slack, and Telegram accept this option; other channels
+reject it rather than accepting a setting they never read.
+
+**What it reads.** Core requests up to 100 recent messages plus room metadata,
+then truncates the whole snapshot to 12,000 characters, dropping the oldest
+messages first. What each platform can supply differs:
+
+| Channel  | Room metadata                            | Prior messages                                  |
+| -------- | ---------------------------------------- | ----------------------------------------------- |
+| Slack    | Channel name, purpose, topic             | Up to 100 via conversation history              |
+| Discord  | Channel name, topic                      | Up to 100, only with `Read Message History`     |
+| Telegram | Group title, description, pinned message | None - the Bot API cannot read pre-join history |
+
+When history is unavailable or unreadable, the introduction is still posted from
+room metadata alone and says what it can see rather than inventing activity.
+
+**Where it posts.** Slack and Telegram introduce in the room that was joined.
+Discord joins a server rather than a channel, so it uses the system channel when
+it can both view and send there, otherwise the first text channel that qualifies;
+if no channel qualifies, it records a skip instead of posting.
+
+**How often.** Once per room. A durable claim is recorded per channel, account,
+and room with a 90-day lifetime, so reconnects and gateway restarts do not repeat
+an introduction. Discord additionally ignores server-available events older than
+five minutes, so restarting never mass-introduces into servers the bot already
+belonged to. A re-invite after the claim expires introduces again.
+
+**Safety.** Room titles, topics, pinned text, and message history are third-party
+content, so they are wrapped as untrusted external content and the introduction
+turn runs with no tools available at all. Instructions embedded in a room cannot
+reach a tool. The turn is bounded to 60 seconds, never runs in direct messages,
+and never bypasses channel access policy - a room the bot is not allowed to act
+in gets no introduction. Mention requirements do not apply, since a join event
+carries no message to mention the bot in.
+
 ## Delivery notes
 
 - Telegram replies that contain markdown image syntax, such as `![alt](url)`,

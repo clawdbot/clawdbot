@@ -296,6 +296,8 @@ describe("gateway config reload channel ownership escalation", () => {
         logSuppressedChannelRestart: () => {},
         scheduleRecoveryRestart: () => {},
       });
+      // Upstream reports how far the hot reload got; these tests exercise the fully applied path.
+      return "applied" as const;
     });
 
     let nextSnapshot = makeSnapshot(params.nextConfig, "next-hash");

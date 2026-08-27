@@ -335,19 +335,17 @@ async function hydrateSendBufferMediaParams(params: {
   }
   const normalized = normalizeBase64Payload({
     base64: rawBuffer,
-    contentType: readToolStringParam(params.args, "contentType") ?? undefined,
+    contentType:
+      readToolStringParam(params.args, "contentType") ??
+      readToolStringParam(params.args, "mimeType"),
   });
   if (!normalized.base64) {
     return;
   }
-  const contentType =
-    readToolStringParam(params.args, "contentType") ??
-    readToolStringParam(params.args, "mimeType") ??
-    normalized.contentType;
   const filename =
     readToolStringParam(params.args, "filename") ??
     inferAttachmentFilename({
-      contentType: contentType ?? undefined,
+      contentType: normalized.contentType,
     });
   const maxBytes = resolveSendBufferMaxBytes(params);
   if (params.dryRun || params.preserveBuffer) {
@@ -376,7 +374,7 @@ async function hydrateSendBufferMediaParams(params: {
     }),
     maxBytes,
     {
-      contentType: contentType ?? undefined,
+      contentType: normalized.contentType,
       filename,
     },
   );
@@ -503,9 +501,9 @@ async function hydrateAttachmentPayload(params: {
   });
   if (normalized.base64 !== rawBuffer && normalized.base64) {
     params.args.buffer = normalized.base64;
-    if (normalized.contentType && !contentTypeParam) {
-      params.args.contentType = normalized.contentType;
-    }
+  }
+  if (normalized.contentType && !readToolStringParam(params.args, "contentType")) {
+    params.args.contentType = normalized.contentType;
   }
 
   const filename = readToolStringParam(params.args, "filename");
@@ -538,7 +536,7 @@ async function hydrateAttachmentPayload(params: {
   } else if (!filename) {
     params.args.filename = inferAttachmentFilename({
       mediaHint: mediaSource,
-      contentType: contentTypeParam ?? undefined,
+      contentType: normalized.contentType,
     });
   }
 }
@@ -647,9 +645,6 @@ async function hydrateAttachmentActionPayload(params: {
     attachmentSource?.contentType;
   if (attachmentSource?.filename && !readToolStringParam(params.args, "filename")) {
     params.args.filename = attachmentSource.filename;
-  }
-  if (attachmentSource?.contentType && !readToolStringParam(params.args, "contentType")) {
-    params.args.contentType = attachmentSource.contentType;
   }
 
   if (params.allowMessageCaptionFallback) {

@@ -20,6 +20,7 @@ export {
   resolveChannelMessageIngress,
   resolveStableChannelMessageIngress,
 } from "../channels/message-access/runtime.js";
+export type { IdentifierAuthentication } from "../channels/message-access/identifier-authentication.js";
 export { defineStableChannelIngressIdentity } from "../channels/message-access/runtime-identity.js";
 export { readChannelIngressStoreAllowFromForDmPolicy } from "../channels/message-access/store-allow-from.js";
 export { resolveChannelImplicitMentions } from "../config/implicit-mentions.js";

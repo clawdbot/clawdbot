@@ -3306,24 +3306,42 @@ class ChatController internal constructor(
     }
   }
 
-  fun resolveQuestion(
-    id: String,
-    answers: Map<String, List<String>>,
-  ) = resolveQuestion(id = id, answers = answers, cancel = false)
+  fun updateQuestionDraft(
+    expected: ChatQuestionPrompt,
+    update: (ChatQuestionDraft) -> ChatQuestionDraft,
+  ) {
+    synchronized(questionStateLock) {
+      // Draft edits use the current value, but only the same live question may receive them.
+      // They do not invalidate an in-flight question.list reconciliation.
+      _questions.value =
+        _questions.value.map { prompt ->
+          if (prompt.promptOwner === expected.promptOwner && prompt.record == expected.record && prompt.status() == ChatQuestionStatus.Pending) {
+            prompt.copy(draft = update(prompt.draft))
+          } else {
+            prompt
+          }
+        }
+    }
+  }
 
-  fun skipQuestion(id: String) = resolveQuestion(id = id, answers = null, cancel = true)
+  fun resolveQuestion(
+    expected: ChatQuestionPrompt,
+    answers: Map<String, List<String>>,
+  ) = resolveQuestion(expected = expected, answers = answers, cancel = false)
+
+  fun skipQuestion(expected: ChatQuestionPrompt) = resolveQuestion(expected = expected, answers = null, cancel = true)
 
   private fun resolveQuestion(
-    id: String,
+    expected: ChatQuestionPrompt,
     answers: Map<String, List<String>>?,
     cancel: Boolean,
   ) {
     val gatewayId = currentCacheScope()?.gatewayId
-    var claimed = false
+    var claimedOwner: Any? = null
     updateQuestions { prompts ->
       prompts.map { prompt ->
-        if (prompt.record.id == id && prompt.status() == ChatQuestionStatus.Pending) {
-          claimed = true
+        if (prompt.promptOwner === expected.promptOwner && prompt.status() == ChatQuestionStatus.Pending) {
+          claimedOwner = prompt.promptOwner
           prompt.copy(submitting = true, skipping = cancel, errorText = null)
         } else {
           prompt
@@ -3332,12 +3350,13 @@ class ChatController internal constructor(
     }
     // updateQuestions owns the question-state lock, so competing answer/skip callbacks
     // observe the first claim as Submitting and cannot launch a second mutation.
-    if (!claimed) return
+    // Terminal fanout preserves this owner; replacement or gateway retirement does not.
+    val owner = claimedOwner ?: return
     scope.launch {
       try {
         val params =
           buildJsonObject {
-            put("id", JsonPrimitive(id))
+            put("id", JsonPrimitive(expected.record.id))
             if (cancel) {
               put("cancel", JsonPrimitive(true))
             } else {
@@ -3356,15 +3375,19 @@ class ChatController internal constructor(
               )
             }
           }
-        requestGatewayBound(gatewayId, "question.resolve", params.toString())
+        val result = json.parseToJsonElement(requestGatewayBound(gatewayId, "question.resolve", params.toString())).jsonObject
+        val status = if (cancel) "cancelled" else "answered"
+        check(result["status"].asStringOrNull() == status) { "Invalid question.resolve response" }
+        // The Gateway owns normalized answers, including secret-store markers; never retain submitted values as the outcome.
+        val resolvedAnswers = if (cancel) null else json.decodeFromJsonElement<QuestionAnswers>(result.getValue("answers"))
         updateQuestions { prompts ->
           prompts.map { prompt ->
-            if (prompt.record.id == id) {
+            if (prompt.promptOwner === owner) {
               prompt.copy(
                 record =
                   prompt.record.copy(
-                    status = if (cancel) "cancelled" else "answered",
-                    answers = answers?.let(::QuestionAnswers),
+                    status = status,
+                    answers = resolvedAnswers,
                   ),
                 submitting = false,
                 skipping = false,
@@ -3380,7 +3403,7 @@ class ChatController internal constructor(
       } catch (error: Throwable) {
         updateQuestions { prompts ->
           prompts.map { prompt ->
-            if (prompt.record.id == id) {
+            if (prompt.promptOwner === owner) {
               prompt.copy(submitting = false, skipping = false, errorText = error.message ?: "Question failed")
             } else {
               prompt
@@ -3452,11 +3475,7 @@ class ChatController internal constructor(
       if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
       return synchronized(questionStateLock) {
         if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
-        if (_questions.value.isNotEmpty()) {
-          _questions.value = emptyList()
-          questionStateRevision += 1
-        }
-        syncQuestionEvictionsLocked()
+        publishQuestionsLocked(emptyList())
         true
       }
     }
@@ -3539,11 +3558,7 @@ class ChatController internal constructor(
             terminalObservedAtMs = nowMs.takeIf { record.status != "pending" || nowMs >= record.expiresAtMs },
           )
         } + retainedPrompts
-      if (next != current) {
-        _questions.value = next
-        questionStateRevision += 1
-      }
-      syncQuestionEvictionsLocked()
+      publishQuestionsLocked(next)
       unresolvedIds.isEmpty()
     }
   }
@@ -3597,6 +3612,11 @@ class ChatController internal constructor(
     // Gateway terminal state is monotonic. A delayed requested/list replay must not
     // make an already resolved question actionable again.
     if ((prompt.record.status != "pending" || prompt.recoveryUnavailable) && record.status == "pending") return prompt
+    // Outcome fields can change within one request; a replaced definition or lifetime owns new input.
+    val sameQuestion = record.copy(status = prompt.record.status, answers = prompt.record.answers, resolvedBy = prompt.record.resolvedBy) == prompt.record
+    if (!sameQuestion) {
+      return ChatQuestionPrompt(record = record, terminalObservedAtMs = nowMs.takeIf { record.status != "pending" || nowMs >= record.expiresAtMs })
+    }
     return prompt.copy(
       record = record.copy(answers = record.answers ?: prompt.record.answers),
       submitting = prompt.submitting && record.status == "pending",
@@ -3638,13 +3658,26 @@ class ChatController internal constructor(
 
   private fun updateQuestions(transform: (List<ChatQuestionPrompt>) -> List<ChatQuestionPrompt>) {
     synchronized(questionStateLock) {
-      val current = _questions.value
-      val next = transform(current)
-      if (next == current) return
+      publishQuestionsLocked(transform(_questions.value))
+    }
+  }
+
+  private fun publishQuestionsLocked(prompts: List<ChatQuestionPrompt>): Boolean {
+    // Terminal cards remain in history, but must not retain unsent (possibly secret) input.
+    val next =
+      prompts.map { prompt ->
+        when (prompt.status()) {
+          ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting -> prompt
+          else -> prompt.copy(draft = ChatQuestionDraft())
+        }
+      }
+    val changed = next != _questions.value
+    if (changed) {
       _questions.value = next
       questionStateRevision += 1
-      syncQuestionEvictionsLocked()
     }
+    syncQuestionEvictionsLocked()
+    return changed
   }
 
   private fun syncQuestionEvictionsLocked(nowMs: Long = System.currentTimeMillis()) {
@@ -3679,12 +3712,7 @@ class ChatController internal constructor(
                   it
                 }
               }
-            if (next != current) {
-              _questions.value = next
-              questionStateRevision += 1
-              shouldRefresh = true
-            }
-            syncQuestionEvictionsLocked()
+            shouldRefresh = publishQuestionsLocked(next)
           }
           // The local deadline is only a presentation fallback. Reconcile outside
           // the state lock in case another surface supplied the terminal outcome.
@@ -3698,10 +3726,7 @@ class ChatController internal constructor(
   private fun clearQuestions() {
     synchronized(questionStateLock) {
       questionRefreshGeneration += 1
-      if (_questions.value.isEmpty()) return
-      _questions.value = emptyList()
-      questionStateRevision += 1
-      syncQuestionEvictionsLocked()
+      publishQuestionsLocked(emptyList())
     }
   }
 

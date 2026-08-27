@@ -600,7 +600,7 @@ export async function maybeResolveSignalApprovalReaction(params: {
     params.logVerboseMessage?.(
       `signal: approval reaction failed id=${target.approvalId} sender=${actorId}: ${String(error)}`,
     );
-    return true;
+    throw error;
   }
 }
 

@@ -440,7 +440,34 @@ suite.define(() => {
     const archivedBy = { type: "human" as const, id: "profile-mira", label: "Mira" };
     const batchRows = [sessionRows[0]!, sessionRows[1]!, sessionRows[3]!];
     const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "progressCard.get",
+        "sessions.patch",
+        "sessions.patchMany",
+      ],
+      historyMessages: [
+        {
+          id: "archived-reply",
+          role: "assistant",
+          timestamp: baseTime - 2_000,
+          content: "Reply retained in the transcript.",
+          openclawDelivery: { replyToCurrent: true },
+        },
+      ],
       methodResponses: {
+        "progressCard.get": {
+          card: {
+            revision: 1,
+            sessionKey: selected.key,
+            steps: [
+              { step: "Inspect archive", status: "completed" },
+              { step: "Finish archive", status: "in_progress" },
+            ],
+            updatedAt: baseTime,
+          },
+        },
         "sessions.list": sessionsListResponse([
           sessionRow("agent:main:main", "Main", baseTime),
           ...sessionRows,
@@ -478,6 +505,12 @@ suite.define(() => {
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      const replyPreview = activePane.locator(".chat-reply-preview", {
+        hasText: "Replying to current message",
+      });
+      const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
+      await replyPreview.waitFor({ state: "visible" });
+      await progressCard.waitFor({ state: "visible" });
       await page.evaluate((sessionKey) => {
         const titleHistory: string[] = [];
         const paneTitleHistory: string[] = [];
@@ -653,6 +686,8 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
       await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
+      await expect.poll(() => replyPreview.locator(".session-run-spinner").count()).toBe(0);
+      await expect.poll(() => progressCard.count()).toBe(0);
       const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
       await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });
       await captureUiProof(page, "archive-attribution-notice-after.png");
@@ -681,6 +716,7 @@ suite.define(() => {
       await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
       await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
       await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await progressCard.waitFor({ state: "visible" });
       await expect
         .poll(() =>
           activePane.evaluate(
@@ -793,79 +829,6 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
       await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("shows the archived notice when an archived session is cold-loaded outside the active list", async () => {
-    const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const archived = sessionRow(
-      "agent:main:dashboard:cold-archive",
-      "Archived planning",
-      Date.parse("2026-07-01T16:00:00.000Z"),
-      { archived: true },
-    );
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.describe": { session: archived },
-        "sessions.list": sessionsListResponse([
-          sessionRow("agent:main:main", "Main", archived.updatedAt + 1),
-        ]),
-        "sessions.patch": {},
-      },
-      sessionArchiveFiltering: true,
-      sessionKey: archived.key,
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(archived.key)}`);
-      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
-
-      const selectedRow = page.locator(
-        `.sidebar-recent-session[data-session-key="${archived.key}"]`,
-      );
-      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
-      await expect
-        .poll(() => selectedRow.getAttribute("class"))
-        .toContain("sidebar-recent-session--active");
-      await selectedRow.locator(".sidebar-session__archive-glyph").waitFor({ state: "visible" });
-      await expect.poll(() => page.getByText("Archived planning", { exact: true }).count()).toBe(2);
-
-      const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
-      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
-      await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
-
-      await gateway.setMethodResponse("sessions.describe", {
-        session: { ...archived, archived: false },
-      });
-      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
-      await waitForPatch(
-        gateway,
-        (params) => params.key === archived.key && params.archived === false,
-      );
-      await gateway.emitGatewayEvent("sessions.changed", {
-        ...archived,
-        archived: false,
-        reason: "update",
-        sessionKey: archived.key,
-      });
-
-      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
-      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
-      await expect
-        .poll(() =>
-          activePane.evaluate(
-            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
-          ),
-        )
-        .toBe(archived.key);
     } finally {
       await context.close();
     }

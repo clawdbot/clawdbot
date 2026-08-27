@@ -75,7 +75,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
   },
 
-  // Auth profile metadata (secrets live in auth-profiles.json)
+  // Auth profile metadata (secrets live in SQLite auth stores)
   auth: {
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },

@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
@@ -47,21 +48,29 @@ import {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { listRunningSessions } from "../agents/bash-process-registry.js";
+import {
+  deleteSession,
+  listRunningSessions,
+  markBackgrounded,
+} from "../agents/bash-process-registry.js";
+import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { buildWorkerConnectParams, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
+import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
+import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
 import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
-import { runWorkerDescriptor } from "./worker.runtime.js";
+import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
   createWorkerBrowserToolRuntime: vi.fn(),
@@ -111,6 +120,8 @@ type InferencePlan =
   | "tool"
   | "safe-tool"
   | "background-tool"
+  | "process-poll"
+  | "process-kill"
   | "session-tool"
   | "hold"
   | "fence"
@@ -125,6 +136,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
+  backgroundCommand?: string;
   execApprovals?: ExecApprovalsFile;
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
@@ -569,6 +581,21 @@ class FakeWorkerGateway {
       });
       return;
     }
+    if (plan === "process-poll" || plan === "process-kill") {
+      const processResult = this.acceptedTranscriptRequests
+        .flatMap((request) => request.messages)
+        .find((message) => message.role === "toolResult" && message.toolName === "exec");
+      const details = processResult?.role === "toolResult" ? processResult.details : undefined;
+      this.sendToolCallTurn(socket, frame.params, {
+        args: {
+          action: plan === "process-poll" ? "poll" : "kill",
+          sessionId: isRecord(details) ? details.sessionId : undefined,
+        },
+        toolCallId: plan,
+        toolName: "process",
+      });
+      return;
+    }
     if (plan === "session-tool") {
       this.sendSessionToolTurn(socket, frame.params);
       return;
@@ -752,11 +779,12 @@ class FakeWorkerGateway {
       ? {
           // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
           command:
-            process.platform === "win32"
+            this.options.backgroundCommand ??
+            (process.platform === "win32"
               ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
                   "setInterval(() => undefined, 1000)",
                 )}`
-              : "exec sleep 60",
+              : "exec sleep 60"),
           background: true,
         }
       : {
@@ -994,6 +1022,32 @@ describe("worker runtime", () => {
       transcriptLeafId: `leaf-${lastTranscript?.seq}`,
       transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
     });
+  });
+
+  it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
+    const { gateway, workspaceDir, launch } = await setup();
+    const promptDir = path.join(workspaceDir, ".openclaw");
+    const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
+    await mkdir(promptDir);
+    await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
+    await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
+    await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
+    await writeFile(literalPrompt, "unrequested-file-contents");
+    if (extra) {
+      launch.assignment.systemPrompt = literalPrompt;
+    }
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+
+    const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
+    expect(prompt).toContain("prepared-worker-context");
+    expect.soft(prompt).toContain("Available tools:");
+    expect.soft(prompt).not.toContain("ambient-system-marker");
+    expect.soft(prompt).not.toContain("ambient-append-marker");
+    expect.soft(prompt).not.toContain("unrequested-file-contents");
+    if (extra) {
+      expect.soft(prompt).toContain(literalPrompt);
+    }
   });
 
   it("exposes exactly the Gateway-authorized worker tools", async () => {
@@ -1505,6 +1559,264 @@ describe("worker runtime", () => {
       kind: "assistant",
       payload: { text: "", delta: "", replace: true },
     });
+  });
+
+  it.each(["running", "completed", "cancelled"] as const)(
+    "keeps completed-turn background processes controllable in the managed environment (%s)",
+    async (processState) => {
+      const { gateway, launch, workspaceDir } = await setup({
+        inferencePlans: [
+          "background-tool",
+          "text",
+          ...(processState === "cancelled" ? ["hold" as const] : []),
+          "process-poll",
+          ...(processState === "completed" ? [] : ["process-kill" as const]),
+          "text",
+        ],
+        ...(processState === "completed"
+          ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-file.cjs` }
+          : {}),
+      });
+      if (processState === "completed") {
+        await writeFile(
+          path.join(workspaceDir, "finish-on-file.cjs"),
+          "const fs = require('node:fs'); const finish = () => { if (fs.existsSync('finish-marker')) { process.stdout.write('background-finished'); watcher.close(); } }; const watcher = fs.watch('.', finish); finish();",
+        );
+      }
+      const scopeKey = `worker:${SESSION_ID}`;
+      const supervisor = getProcessSupervisor();
+      const input = new PassThrough();
+      const output = new PassThrough();
+      const results: WorkerProcessResult[] = [];
+      output.on("data", (chunk: Buffer) => {
+        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
+        if (result) {
+          results.push(result);
+        }
+      });
+      const command = runWorkerCommand({ managed: true, input, output });
+      const settled = vi.fn();
+      void command.then(settled, settled);
+
+      try {
+        input.write(
+          JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch }) +
+            "\n",
+        );
+        await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
+        expect(results[0]).toMatchObject({
+          turnId: launch.assignment.turnId,
+          result: { status: "completed" },
+          retainWorker: true,
+        });
+        const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
+        expect(running).toHaveLength(1);
+        const sessionId = running[0]!.id;
+        expect(settled).not.toHaveBeenCalled();
+        if (processState === "completed") {
+          await writeFile(path.join(workspaceDir, "finish-marker"), "finish");
+          await supervisor.waitForScope?.(scopeKey);
+          await waitForFast(() =>
+            expect(
+              listRunningSessions().filter((session) => session.scopeKey === scopeKey),
+            ).toHaveLength(0),
+          );
+          expect(settled).not.toHaveBeenCalled();
+        }
+
+        const sendNextTurn = (index: number) => {
+          const next = structuredClone(launch);
+          next.assignment.runId = `worker-next-run-${index}`;
+          next.assignment.turnId = `worker-next-turn-${index}`;
+          next.assignment.operationalRunInstance = createOperationalRunInstanceRef(
+            next.assignment.runId,
+          );
+          next.assignment.agentRuntimeIdentityToken = `next-test-runtime-token-${index}`;
+          next.admission.credential = `next-test-worker-credential-${index}`;
+          next.assignment.initialMessages = gateway.acceptedTranscriptRequests.flatMap(
+            (request) => request.messages,
+          );
+          input.write(
+            `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
+          );
+          return next.assignment.turnId;
+        };
+        const nextTurnId = sendNextTurn(2);
+        if (processState === "cancelled") {
+          await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(3), {
+            timeout: 30_000,
+          });
+          input.write(`${JSON.stringify({ type: "cancel", turnId: nextTurnId })}\n`);
+          await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
+          expect(results[1]).toMatchObject({
+            result: { status: "failed", reason: "turn-failed" },
+            retainWorker: true,
+          });
+          sendNextTurn(3);
+        }
+        const turnCount = processState === "cancelled" ? 3 : 2;
+        await waitForFast(() => expect(results).toHaveLength(turnCount), { timeout: 30_000 });
+        expect(gateway.connectionCount).toBe(turnCount);
+        const processResults = gateway.acceptedTranscriptRequests
+          .flatMap((request) => request.messages)
+          .filter((message) => message.role === "toolResult" && message.toolName === "process");
+        if (processState !== "completed") {
+          expect(processResults).toMatchObject([
+            { details: { status: "running", sessionId } },
+            { details: { status: "completed" } },
+          ]);
+        } else {
+          expect(processResults).toMatchObject([
+            {
+              content: [{ type: "text", text: expect.stringContaining("background-finished") }],
+              details: { status: "completed", exitCode: 0 },
+            },
+          ]);
+          expect(results[1]?.retainWorker).toBe(false);
+        }
+      } finally {
+        input.end();
+        try {
+          await command;
+        } finally {
+          supervisor.cancelScope(scopeKey, "manual-cancel");
+          await supervisor.waitForScope?.(scopeKey);
+        }
+      }
+      expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
+        0,
+      );
+    },
+  );
+
+  it("joins retained background processes before closing the managed owner on EOF", async () => {
+    const { launch } = await setup({ inferencePlans: ["background-tool", "text"] });
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const result = createDeferred<WorkerProcessResult>();
+    output.on("data", (chunk: Buffer) => {
+      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
+      if (parsed) {
+        result.resolve(parsed);
+      }
+    });
+    const command = runWorkerCommand({ managed: true, input, output });
+    const scopeKey = `worker:${SESSION_ID}`;
+    const supervisor = getProcessSupervisor();
+    try {
+      input.write(
+        `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
+      );
+      await expect(result.promise).resolves.toMatchObject({ retainWorker: true });
+      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
+      expect(running).toHaveLength(1);
+      const pid = running[0]!.pid!;
+      expect(pid).toBeGreaterThan(0);
+      input.end();
+      await command;
+      expect(() => process.kill(pid, 0)).toThrow();
+      expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
+        0,
+      );
+    } finally {
+      input.end();
+      try {
+        await command;
+      } finally {
+        supervisor.cancelScope(scopeKey, "manual-cancel");
+        await supervisor.waitForScope?.(scopeKey);
+      }
+    }
+  });
+
+  it.each(["foreground", "hidden-background"] as const)(
+    "keeps environment state until %s exec finalization settles",
+    async (visibility) => {
+      const sessionId = `worker-finalizer-${visibility}`;
+      const scopeKey = `worker:${sessionId}`;
+      const environment = await createWorkerRuntimeEnvironment(sessionId);
+      const finalizing = createDeferred();
+      const releaseFinalizer = createDeferred();
+      const settledStateDirs: Array<string | undefined> = [];
+      let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
+      try {
+        run = await runExecProcess({
+          command: "worker-finalizer-fixture",
+          workdir: environment.stateDir,
+          env: {},
+          sandbox: {
+            containerName: "worker-finalizer-fixture",
+            workspaceDir: environment.stateDir,
+            containerWorkdir: environment.stateDir,
+            buildExecSpec: async () => ({
+              argv: [process.execPath, "-e", "process.stdout.write('worker-finalizer-output')"],
+              env: {},
+              stdinMode: "pipe-closed",
+            }),
+            finalizeExec: async () => {
+              finalizing.resolve();
+              await releaseFinalizer.promise;
+            },
+          },
+          usePty: false,
+          warnings: [],
+          maxOutput: 1000,
+          pendingMaxOutput: 1000,
+          notifyOnExit: false,
+          scopeKey,
+          timeoutSec: null,
+          onSettledBeforeNotify: () => {
+            settledStateDirs.push(process.env.OPENCLAW_STATE_DIR);
+          },
+        });
+        if (visibility === "hidden-background") {
+          markBackgrounded(run.session);
+          deleteSession(run.session.id);
+        }
+        await finalizing.promise;
+        await getProcessSupervisor().waitForScope?.(scopeKey);
+        const closing = environment.close();
+        await Promise.resolve();
+
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(environment.stateDir);
+        await expect(stat(environment.stateDir)).resolves.toBeDefined();
+        releaseFinalizer.resolve();
+        await run.promise;
+        await closing;
+        expect(settledStateDirs).toEqual([environment.stateDir]);
+        await expect(stat(environment.stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        releaseFinalizer.resolve();
+        await run?.promise;
+        await environment.close();
+      }
+    },
+  );
+
+  it("revokes local tool handles when their worker turn closes", async () => {
+    const { launch } = await setup();
+    const toolFactory = await import("../agents/agent-tools.finalize.js");
+    const finalize = vi.spyOn(toolFactory, "finalizeAgentTools");
+    try {
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+      const tools = finalize.mock.results[0]?.value as ReturnType<
+        typeof toolFactory.finalizeAgentTools
+      >;
+      const processTool = tools.find((tool) => tool.name === "process")!;
+      await expect(
+        processTool.execute("retained-process", { action: "list" }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+      });
+      const execTool = tools.find((tool) => tool.name === "exec")!;
+      await expect(
+        execTool.execute("retained-exec", { command: "echo stale-worker" }),
+      ).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    } finally {
+      finalize.mockRestore();
+    }
   });
 
   it("stops worker-scoped background processes when fenced", async () => {

@@ -2195,6 +2195,37 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("marks server-transcribed audio at the reply boundary without local transcription", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      saved: { path: "/tmp/server-voice.ogg", contentType: "audio/ogg" },
+    });
+
+    await dispatchMessage({
+      cfg: createFeishuTestConfig({ dmPolicy: "open" }),
+      event: createFeishuTestEvent({
+        messageId: "msg-audio-server-transcript",
+        senderOpenId: "ou-voice",
+        messageType: "audio",
+        content: JSON.stringify({
+          file_key: "file_audio_payload",
+          duration: 1200,
+          speech_to_text: " supplied transcript ",
+        }),
+      }),
+    });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockTranscribeFirstAudio).not.toHaveBeenCalled();
+    const { ctx } = mockCallArg<{
+      ctx: { RawBody: string; media: Array<{ kind: string; transcribed: boolean }> };
+    }>(mockDispatchReplyFromConfig, 0, 0);
+    expect(ctx.RawBody).toBe("supplied transcript");
+    expect(ctx.media).toEqual([
+      expect.objectContaining({ path: "/tmp/server-voice.ogg", kind: "audio", transcribed: true }),
+    ]);
+  });
+
   it("transcribes inbound audio before building the agent turn", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockDownloadMessageResourceFeishu.mockResolvedValueOnce({

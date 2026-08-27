@@ -294,6 +294,8 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -309,6 +311,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/agents/system-prompt.test.ts",
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -323,6 +327,8 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -338,6 +344,8 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
@@ -483,7 +491,111 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/plugin-contract-test-plan.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/verify-pr-hosted-gates.test.ts",
+        "src/scripts/ci-changed-scope.control-ui.test.ts",
+        "src/scripts/ci-changed-scope.test.ts",
+        "test/scripts/authorized-beta-focused-evidence.test.ts",
+        "test/scripts/changed-path-facts.test.ts",
+        "test/scripts/ci-changed-node-test-plan.test.ts",
+        "test/scripts/openclaw-npm-resume-run.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/run-additional-boundary-checks.test.ts",
       ],
+    );
+  });
+
+  it("keeps full release validation workflow edits on FRV contract tests", () => {
+    expectChangedTargets(
+      [".github/workflows/full-release-validation.yml"],
+      [
+        "src/dockerfile.test.ts",
+        "test/scripts/full-release-validation-state.test.ts",
+        "test/scripts/full-release-validation-at-sha.test.ts",
+        "test/scripts/find-reusable-release-validation.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-full-validation-workflow.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/release-ci-summary.test.ts",
+        "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/plugin-prerelease-test-plan.test.ts",
+        "test/scripts/check-workflows.test.ts",
+        "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/frv-proof-broker.test.ts",
+        "test/scripts/openclaw-performance-workflow.test.ts",
+        "test/scripts/release-plan-producer.test.ts",
+        "test/scripts/validate-full-release-validation-evidence.test.ts",
+      ],
+    );
+  });
+
+  it("unions semantic workflow owners with bounded direct references", () => {
+    withTinyGitRepo(
+      {
+        ".github/workflows/full-release-validation.yml": "name: FRV\n",
+        "test/scripts/full-release-validation-state.test.ts":
+          'const workflow = ".github/workflows/full-release-validation.yml";\n',
+        "test/scripts/unknown-frv-contract.test.ts":
+          'const workflow = ".github/workflows/full-release-validation.yml";\n',
+        "test/scripts/unknown-frv-contract.live.test.ts":
+          'const workflow = ".github/workflows/full-release-validation.yml";\n',
+        "test/scripts/test-projects.test.ts":
+          'const workflow = ".github/workflows/full-release-validation.yml";\n',
+        "test/scripts/workflow-substring.test.ts":
+          'const workflow = ".github/workflows/full-release-validation.yml.bak";\n',
+      },
+      (cwd) => {
+        const targets = resolveChangedTestTargetPlan(
+          [".github/workflows/full-release-validation.yml"],
+          { cwd },
+        ).targets;
+
+        expect(targets).toContain("test/scripts/unknown-frv-contract.test.ts");
+        expect(
+          targets.filter(
+            (target) => target === "test/scripts/full-release-validation-state.test.ts",
+          ),
+        ).toHaveLength(1);
+        expect(targets).not.toContain("test/scripts/unknown-frv-contract.live.test.ts");
+        expect(targets).not.toContain("test/scripts/test-projects.test.ts");
+        expect(targets).not.toContain("test/scripts/workflow-substring.test.ts");
+      },
+    );
+  });
+
+  it.each([
+    {
+      changedPath: ".github/workflows/plugin-npm-release.yml",
+      exactTarget: "test/scripts/plugin-npm-extended-stable-workflow.test.ts",
+    },
+    {
+      changedPath: ".github/actions/setup-node-env/action.yml",
+      exactTarget: "test/scripts/install-trufflehog.test.ts",
+    },
+  ])("unions exact owners and references for $changedPath", ({ changedPath, exactTarget }) => {
+    withTinyGitRepo(
+      {
+        [changedPath]: "name: fixture\n",
+        "test/scripts/direct-workflow-reference.test.ts": `const target = "${changedPath}";\n`,
+      },
+      (cwd) => {
+        const targets = resolveChangedTestTargetPlan([changedPath], { cwd }).targets;
+
+        expect(targets).toContain(exactTarget);
+        expect(targets).toContain("test/scripts/direct-workflow-reference.test.ts");
+        expect(targets).toContain("test/scripts/ci-workflow-guards.test.ts");
+      },
+    );
+  });
+
+  it("does not scan direct references for semantic non-YAML tooling", () => {
+    withTinyGitRepo(
+      {
+        "scripts/pr": "#!/bin/sh\n",
+        "test/scripts/direct-tooling-reference.test.ts": 'const target = "scripts/pr";\n',
+      },
+      (cwd) => {
+        const targets = resolveChangedTestTargetPlan(["scripts/pr"], { cwd }).targets;
+
+        expect(targets).not.toContain("test/scripts/direct-tooling-reference.test.ts");
+      },
     );
   });
 
@@ -494,7 +606,11 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/openclaw-npm-postpublish-verify.test.ts",
         "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
         "test/scripts/package-acceptance-workflow.test.ts",
+        "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/openclaw-npm-resume-run.test.ts",
+        "test/scripts/package-source-preflight.test.ts",
+        "test/scripts/release-plan-producer.test.ts",
       ],
     );
   });
@@ -506,7 +622,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "src/dockerfile.test.ts",
         "test/scripts/docker-channel-promote.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
+        "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/release-plan-producer.test.ts",
       ],
     },
     {
@@ -514,6 +633,10 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: [
         "test/scripts/package-acceptance-workflow.test.ts",
         "test/scripts/vercel-container-registry-publish.test.ts",
+        "test/scripts/authorized-beta-focused-evidence.test.ts",
+        "test/scripts/release-candidate-checklist.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
+        "test/scripts/release-plan-producer.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
       ],
     },
@@ -554,7 +677,15 @@ describe("scripts/test-projects changed-target routing", () => {
       ".github/workflows/real-behavior-proof.yml",
       ".github/workflows/stale.yml",
     ]) {
-      expectChangedTargets([workflowPath], ["test/scripts/ci-workflow-guards.test.ts"]);
+      expectChangedTargets(
+        [workflowPath],
+        workflowPath === ".github/workflows/labeler.yml"
+          ? [
+              "test/scripts/ci-workflow-guards.test.ts",
+              "test/scripts/ci-changed-node-test-plan.test.ts",
+            ]
+          : ["test/scripts/ci-workflow-guards.test.ts"],
+      );
     }
   });
 
@@ -577,6 +708,8 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
           "test/scripts/install-trufflehog.test.ts",
+          "test/scripts/pr-prepare-gates.test.ts",
+          "test/scripts/testbox-lease-freshness.test.ts",
         ],
       ],
       [
@@ -691,7 +824,15 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/openclaw-cross-os-release-checks.test.ts",
         "test/scripts/plugin-prerelease-test-plan.test.ts",
         "test/scripts/test-install-sh-docker.test.ts",
+        "test/scripts/authorized-beta-focused-evidence.test.ts",
         "test/scripts/ci-workflow-guards.test.ts",
+        "test/scripts/install-smoke-no-push-workflow.test.ts",
+        "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+        "test/scripts/openclaw-npm-extended-stable-full-validation-workflow.test.ts",
+        "test/scripts/openclaw-release-telegram-qa-workflow.test.ts",
+        "test/scripts/package-source-preflight.test.ts",
+        "test/scripts/release-ci-summary.test.ts",
+        "test/scripts/release-no-push-workflow.test.ts",
       ],
     );
   });
@@ -1033,6 +1174,14 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
     [
+      "src/agents/agent-command.compaction-rotation.test.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+    ],
+    [
+      "src/agents/agent-command.embedded-maintenance.test.ts",
+      "test/vitest/vitest.agents-core.config.ts",
+    ],
+    [
       "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
     ],
@@ -1067,6 +1216,18 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("keeps split command compaction and model-switch tests in the runtime owner shard", () => {
+    const targets = [
+      "src/agents/agent-command.compaction-rotation.test.ts",
+      "src/agents/agent-command.embedded-maintenance.test.ts",
+      "src/agents/agent-command.live-model-switch.test.ts",
+    ];
+    expectSingleVitestRunPlan(buildVitestRunPlans(targets), {
+      config: "test/vitest/vitest.agents-core.config.ts",
+      includePatterns: targets,
+    });
   });
 
   it("routes every split incomplete-turn test to its dedicated serial shard", () => {
@@ -1669,18 +1830,22 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("prints wrapper help without starting a broad local suite", () => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/test-projects.mts", "--help"],
-      {
-        encoding: "utf8",
-        timeout: 5_000,
-      },
-    );
+    withTinyFileTree({}, (tempDir) => {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/test-projects.mts", "--help"],
+        {
+          encoding: "utf8",
+          // Own the child's tsx cache so unrelated host transforms cannot delay help.
+          env: { ...process.env, TMPDIR: tempDir, TMP: tempDir, TEMP: tempDir },
+          timeout: 5_000,
+        },
+      );
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
-    expect(result.stderr).not.toContain("[test] starting");
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("Usage: node --import tsx scripts/test-projects.mts");
+      expect(result.stderr).not.toContain("[test] starting");
+    });
   });
 
   it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
@@ -2525,11 +2690,30 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "src/auto-reply/reply/dispatch-acp.test.ts",
         "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
         "src/auto-reply/reply/followup-runner.test.ts",
         "src/auto-reply/reply/groups.test.ts",
         "extensions/discord/src/monitor/message-handler.process.test.ts",
         "extensions/slack/src/monitor.tool-result.test.ts",
         "src/auto-reply/reply/effective-reply-route.test.ts",
+      ],
+    );
+  });
+
+  it("routes effective reply changes through every dispatch entrypoint", () => {
+    expectChangedTargets(
+      ["src/auto-reply/reply/effective-reply-route.ts"],
+      [
+        "src/auto-reply/reply/effective-reply-route.test.ts",
+        "src/auto-reply/reply/dispatch-acp.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.delivery.test.ts",
+        "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
+        "src/auto-reply/reply/followup-runner.test.ts",
+        "src/auto-reply/reply/groups.test.ts",
+        "extensions/discord/src/monitor/message-handler.process.test.ts",
+        "extensions/slack/src/monitor.tool-result.test.ts",
       ],
     );
   });

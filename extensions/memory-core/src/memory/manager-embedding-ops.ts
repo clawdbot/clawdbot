@@ -1069,11 +1069,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         this.markVectorRebuildRequired();
       }
     });
-    this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
+    this.database.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
       vectorEnabled: this.vector.enabled,
       vectorReady,
       chunkCount: chunks.length,
-      warningShown: this.vectorDegradedWriteWarningShown,
+      warningShown: this.database.vectorDegradedWriteWarningShown,
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });

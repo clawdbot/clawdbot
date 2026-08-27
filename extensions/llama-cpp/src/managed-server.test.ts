@@ -123,10 +123,13 @@ describe("managed llama-server", () => {
 
     try {
       await prepareManagedLlamaServer({
-        chatModelId: "chat-model",
-        chatModelPath: "/models/chat.gguf",
-        contextSize: 8192,
-        maxTokens: 2048,
+        chatModel: {
+          mode: "configure",
+          id: "chat-model",
+          path: "/models/chat.gguf",
+          contextSize: 8192,
+          maxTokens: 2048,
+        },
         embeddingModelIsDefault: true,
         embeddingModelPath: "/models/embedding.gguf",
         port: 19_432,
@@ -157,7 +160,13 @@ describe("managed llama-server", () => {
     });
 
     try {
+      await fs.writeFile(
+        presetPath,
+        "version = 1\n\n[stale-chat]\nmodel = /models/stale-chat.gguf\n\n" +
+          "[embeddinggemma-300m-qat-q8_0]\nmodel = /models/old-embedding.gguf\nembedding = true\n",
+      );
       await prepareManagedLlamaServer({
+        chatModel: { mode: "remove" },
         embeddingModelPath: "/models/custom-embedding.gguf",
         port: 19_432,
       });
@@ -194,6 +203,7 @@ describe("managed llama-server", () => {
       ]);
       await Promise.all([
         prepareManagedLlamaServer({
+          chatModel: { mode: "preserve" },
           embeddingModelPath,
           port: 19_434,
         }),

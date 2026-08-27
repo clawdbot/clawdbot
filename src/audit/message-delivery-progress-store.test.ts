@@ -12,6 +12,7 @@ import {
 import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v10-retirement.test-support.js";
 import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema-v11-retirement.test-support.js";
 import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
+import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
 import { recordAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
 import {
@@ -146,7 +147,7 @@ describe("outbound message progress companion", () => {
     expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(12);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
@@ -277,10 +278,11 @@ describe("outbound message progress companion", () => {
     ).toBe(true);
     // This pinned reader predates the Workshop's first-use column and requires present lazy tables
     // to retain its exact shape; project that unrelated table to the reader's historical contract.
-    // The v9-era reader needs the v12 singleton fold-in, v11 curator retirement,
-    // and v10 dead-table retirement projected backward in migration order.
+    // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
+    // v11 curator retirement, and v10 dead-table retirement reversed in order.
     const projectedDatabase = openOpenClawStateDatabase(database).db;
     projectedDatabase.exec("ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;");
+    projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
     projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
     projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
     projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);

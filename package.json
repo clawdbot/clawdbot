@@ -3,7 +3,7 @@
   "version": "2026.8.1",
   "openclaw": {
     "schemaVersions": {
-      "state": 12,
+      "state": 13,
       "agent": 17
     }
   },
@@ -65,6 +65,7 @@
     "!dist/plugin-sdk/channel-contract-testing.d.ts",
     "!dist/plugin-sdk/channel-ingress-test-runtime.js",
     "!dist/plugin-sdk/channel-ingress-test-runtime.d.ts",
+    "!dist/plugin-sdk/channel-join-intro-runtime.d.ts",
     "!dist/plugin-sdk/channel-mention-gating.d.ts",
     "!dist/plugin-sdk/channel-route.d.ts",
     "!dist/plugin-sdk/channel-secret-owner-runtime.d.ts",
@@ -275,6 +276,7 @@
     "!dist/extensions/cloudflare-ai-gateway/**",
     "!dist/extensions/codex/**",
     "!dist/extensions/copilot/**",
+    "!dist/extensions/daytona/**",
     "!dist/extensions/deepinfra/**",
     "!dist/extensions/deepseek/**",
     "!dist/extensions/diagnostics-otel/**",
@@ -609,6 +611,9 @@
     },
     "./plugin-sdk/channel-activity-runtime": {
       "default": "./dist/plugin-sdk/channel-activity-runtime.js"
+    },
+    "./plugin-sdk/channel-join-intro-runtime": {
+      "default": "./dist/plugin-sdk/channel-join-intro-runtime.js"
     },
     "./plugin-sdk/concurrency-runtime": {
       "default": "./dist/plugin-sdk/concurrency-runtime.js"
@@ -2028,11 +2033,12 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.3.0",
-    "@anthropic-ai/sdk": "0.118.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.236",
+    "@anthropic-ai/sdk": "0.120.0",
     "@clack/core": "1.4.3",
     "@clack/prompts": "1.7.0",
     "@earendil-works/pi-tui": "0.84.2",
-    "@google/genai": "2.17.1",
+    "@google/genai": "2.18.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.12",
@@ -2044,7 +2050,7 @@
     "@openclaw/fs-safe": "0.5.6",
     "@openclaw/proxyline": "0.3.7",
     "@silvia-odwyer/photon-node": "0.3.4",
-    "@trycua/cua-driver": "0.20.0",
+    "@trycua/cua-driver": "0.21.0",
     "acorn": "8.18.0",
     "chalk": "6.0.0",
     "chokidar": "5.0.0",

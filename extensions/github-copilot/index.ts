@@ -26,7 +26,7 @@ import {
 } from "./domain.js";
 import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { DEFAULT_COPILOT_MODEL } from "./model-metadata.js";
 import { PROVIDER_ID } from "./models.js";
 import {
   buildGithubCopilotAuthDoctorHint,
@@ -35,6 +35,7 @@ import {
   parseGithubCopilotApiKey,
   refreshGithubCopilotOAuth,
 } from "./oauth.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
@@ -701,19 +702,7 @@ export default definePluginEntry({
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: buildGithubCopilotReplayPolicy,
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
-      resolveThinkingProfile: ({ modelId, compat }) => {
-        const extendedLevels = resolveCopilotExtendedThinkingLevels(modelId, compat);
-        return {
-          levels: [
-            { id: "off" },
-            { id: "minimal" },
-            { id: "low" },
-            { id: "medium" },
-            { id: "high" },
-            ...extendedLevels.map((id) => ({ id })),
-          ],
-        };
-      },
+      resolveThinkingProfile,
       prepareRuntimeAuth: async (ctx) => {
         const source = parseGithubCopilotApiKey(ctx.apiKey);
         const { resolveCopilotRuntimeAuth } = await loadGithubCopilotRuntime();
@@ -729,7 +718,9 @@ export default definePluginEntry({
         return {
           apiKey: auth.apiKey,
           baseUrl: auth.baseUrl,
-          request: { headers: buildCopilotRuntimeHeaders() },
+          request: {
+            headers: buildCopilotRuntimeHeaders({ config: ctx.config, headers: ctx.model.headers }),
+          },
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

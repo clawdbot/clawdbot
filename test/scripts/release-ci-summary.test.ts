@@ -1376,7 +1376,55 @@ describe("release CI summary child correlation", () => {
     });
   });
 
-  it("rejects protected-tag evidence from a same-name branch or older ancestor", () => {
+  it("accepts protected-tag evidence from an older trusted tooling ancestor", () => {
+    const trustedWorkflowSha = "7".repeat(40);
+    const trustedWorkflowRef = `release-publish/${trustedWorkflowSha.slice(0, 12)}-123`;
+    const olderWorkflowSha = "6".repeat(40);
+    const olderWorkflowRef = `release-ci/${olderWorkflowSha.slice(0, 12)}-1783705000000`;
+    const olderFixture = trustedMainPackageFixture({
+      manifestVersion: 3,
+      targetSha: "8".repeat(40),
+      workflowFullRef: `refs/heads/${olderWorkflowRef}`,
+      workflowRef: olderWorkflowRef,
+      workflowSha: olderWorkflowSha,
+    });
+    olderFixture.manifest.targetRef = olderFixture.targetSha;
+    olderFixture.client.getRef = (fullRef: string) => ({
+      object: { sha: trustedWorkflowSha },
+      ref: fullRef,
+    });
+    olderFixture.client.compareCommitLineage = (base: string, head: string) => {
+      expect(base).toBe(olderWorkflowSha);
+      expect(head).toBe(trustedWorkflowSha);
+      return {
+        merge_base_commit: { sha: olderWorkflowSha },
+        status: "ahead",
+      };
+    };
+
+    expect(
+      validateReleaseRunEvidence(
+        {
+          repository: "openclaw/openclaw",
+          runId: olderFixture.runId,
+          trustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
+          trustedWorkflowRef,
+          trustedWorkflowSha,
+          verifierSourceContent: readFileSync(SCRIPT),
+          verifierSourceSha: "c".repeat(40),
+        },
+        olderFixture.client,
+      ),
+    ).toMatchObject({
+      root: {
+        workflowRef: olderWorkflowRef,
+        workflowRefProof: "manifest-v3-protected-tag-tooling-lineage",
+        workflowSha: olderWorkflowSha,
+      },
+    });
+  });
+
+  it("rejects protected-tag evidence from a same-name branch or unrelated producer", () => {
     const trustedWorkflowSha = "7".repeat(40);
     const trustedWorkflowRef = `release-publish/${trustedWorkflowSha.slice(0, 12)}-123`;
     const validFixture = trustedMainPackageFixture({
@@ -1399,34 +1447,38 @@ describe("release CI summary child correlation", () => {
       ),
     ).toThrow("must be a protected tag");
 
-    const olderWorkflowSha = "6".repeat(40);
-    const olderWorkflowRef = `release-ci/${olderWorkflowSha.slice(0, 12)}-1783705000000`;
-    const olderFixture = trustedMainPackageFixture({
+    const unrelatedWorkflowSha = "6".repeat(40);
+    const unrelatedWorkflowRef = `release-ci/${unrelatedWorkflowSha.slice(0, 12)}-1783705000000`;
+    const unrelatedFixture = trustedMainPackageFixture({
       manifestVersion: 3,
       targetSha: "8".repeat(40),
-      workflowFullRef: `refs/heads/${olderWorkflowRef}`,
-      workflowRef: olderWorkflowRef,
-      workflowSha: olderWorkflowSha,
+      workflowFullRef: `refs/heads/${unrelatedWorkflowRef}`,
+      workflowRef: unrelatedWorkflowRef,
+      workflowSha: unrelatedWorkflowSha,
     });
-    olderFixture.manifest.targetRef = olderFixture.targetSha;
-    olderFixture.client.getRef = (fullRef: string) => ({
+    unrelatedFixture.manifest.targetRef = unrelatedFixture.targetSha;
+    unrelatedFixture.client.getRef = (fullRef: string) => ({
       object: { sha: trustedWorkflowSha },
       ref: fullRef,
+    });
+    unrelatedFixture.client.compareCommitLineage = () => ({
+      merge_base_commit: { sha: "5".repeat(40) },
+      status: "diverged",
     });
     expect(() =>
       validateReleaseRunEvidence(
         {
           repository: "openclaw/openclaw",
-          runId: olderFixture.runId,
+          runId: unrelatedFixture.runId,
           trustedWorkflowFullRef: `refs/tags/${trustedWorkflowRef}`,
           trustedWorkflowRef,
           trustedWorkflowSha,
           verifierSourceContent: readFileSync(SCRIPT),
           verifierSourceSha: "c".repeat(40),
         },
-        olderFixture.client,
+        unrelatedFixture.client,
       ),
-    ).toThrow("does not match trusted tooling");
+    ).toThrow("not on the trusted tooling lineage");
 
     const sameNameFixture = trustedMainPackageFixture({
       manifestVersion: 3,

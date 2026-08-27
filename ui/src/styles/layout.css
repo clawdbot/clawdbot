@@ -10,6 +10,8 @@
   --shell-chrome-controls-inset: 10px;
   --shell-chrome-control-size: 32px;
   --shell-chrome-controls-gap: 4px;
+  /* Settings takeover and the main sidebar share the same bottom divider geometry. */
+  --shell-sidebar-footer-height: 53px;
   --shell-native-titlebar-controls-inset: 92px;
   --shell-native-titlebar-controls-width: 156px;
   /* Collapsed navigation adds new-thread to the two persistent controls.
@@ -658,6 +660,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
+  min-height: var(--shell-sidebar-footer-height);
   padding: 12px 21px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
   font-size: calc(11.5px * var(--control-ui-text-scale));
@@ -932,6 +935,10 @@ openclaw-settings-save-indicator:empty {
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+.shell-nav-backdrop {
+  display: none;
+}
+
 /* The shell owns the resting boundary. The wider resize target takes over
    that same edge during interaction, avoiding a doubled divider. */
 .sidebar-resizer {
@@ -1089,6 +1096,7 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-shell__footer {
   flex-shrink: 0;
+  min-height: var(--shell-sidebar-footer-height);
   margin-inline: calc(-1 * var(--sidebar-pad-x));
   padding: 4px var(--sidebar-pad-x) 0;
   border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
@@ -2157,6 +2165,7 @@ openclaw-settings-save-indicator:empty {
   padding-top: 12px;
   margin: 12px 0 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-radius: 0;
 }
 
 .sidebar-online__list {
@@ -2172,7 +2181,15 @@ openclaw-settings-save-indicator:empty {
   overflow: hidden;
 }
 
+.sidebar-online__row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  border-radius: var(--radius-md);
+}
+
 .sidebar-online__person {
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2213,25 +2230,61 @@ openclaw-settings-save-indicator:empty {
   white-space: nowrap;
 }
 
-.sidebar-online__person-action {
+.sidebar-online__details {
   display: inline-flex;
-  margin-left: auto;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
   opacity: 0;
   transition: opacity var(--duration-fast) ease;
 }
 
-.sidebar-online__person:hover .sidebar-online__person-action,
-.sidebar-online__person:focus-visible .sidebar-online__person-action {
+.sidebar-online__row:hover .sidebar-online__details,
+.sidebar-online__row:focus-within .sidebar-online__details,
+.sidebar-online__details[aria-expanded="true"] {
   opacity: 1;
 }
 
-.sidebar-online__person-action svg {
+.sidebar-online__details:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-online__details:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.sidebar-online__details svg {
+  display: block;
   width: 13px;
   height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.6px;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__details {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+  }
+
+  .sidebar-online__person {
+    min-height: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-online__person,
+  .sidebar-online__details {
+    transition: none;
+  }
 }
 
 .sidebar-zone-entry {

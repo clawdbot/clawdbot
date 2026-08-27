@@ -334,17 +334,10 @@ export async function prepareGatewayLifecycle(params: {
     isConnectionActive,
   });
   runtimeState.sessionViewerPresence = createSessionViewerPresenceDeclarations({
-    isConnectionActive,
-    onReplace: (connId, sessionKeys) => {
-      const client = clients.getByConnectionId(connId);
-      if (!client?.presenceKey) {
-        return;
-      }
-      upsertPresence(client.presenceKey, {
-        watchedSessions: sessionKeys.length > 0 ? [...sessionKeys] : undefined,
-      });
-      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
-    },
+    clients,
+    broadcast,
+    incrementPresenceVersion,
+    getHealthVersion,
   });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
@@ -528,23 +521,10 @@ export async function prepareGatewayLifecycle(params: {
       agentRunSeq,
       nodeSendToSession,
       resolveActiveSessionIdForKey: resolveActiveEmbeddedRunSessionId,
-      markMainSessionsAbortedForRestart: async ({
-        sessionKeys,
-        sessionIds,
-        activeRuns,
-        reason,
-        isActiveRun,
-      }) => {
-        if (sessionKeys.size === 0 && sessionIds.size === 0) {
-          return;
-        }
+      markMainSessionsAbortedForRestart: async (restart) => {
         await shutdownRuntime.markRestartAbortedMainSessions({
           cfg: getRuntimeConfig(),
-          sessionKeys,
-          sessionIds,
-          activeRuns,
-          isActiveRun,
-          reason,
+          ...restart,
         });
       },
       getPendingReplyCount: getTotalPendingReplies,

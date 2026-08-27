@@ -458,10 +458,10 @@ describe("secrets apply", () => {
       .run(JSON.stringify({ location: "state-db" }));
     stateDatabase
       .prepare(
-        "INSERT INTO auth_profile_stores (store_key, store_json, updated_at) VALUES (?, ?, 1)",
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, 1)",
       )
       .run(
-        "shared",
+        "authProfiles.store",
         JSON.stringify({
           version: 1,
           profiles: {

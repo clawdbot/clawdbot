@@ -16,6 +16,7 @@ export type ChatRunProgressSnapshot = {
 export function updateChatRunProgressSnapshot(
   snapshot: ChatRunProgressSnapshot | undefined,
   event: AgentEventPayload,
+  mode: "full" | "summary" = "full",
 ): ChatRunProgressSnapshot | undefined {
   const data = event.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
@@ -40,7 +41,7 @@ export function updateChatRunProgressSnapshot(
     event.stream === "tool" &&
     Boolean(toolCallId) &&
     ["start", "input_delta", "update", "review", "result"].includes(phase) &&
-    (phase !== "review" || Boolean(reviewId));
+    (phase !== "review" || (mode === "full" && Boolean(reviewId)));
   const isPreamble = event.stream === "item" && data.kind === "preamble";
   const isNotice = event.stream === "notice" && phase === "warning";
   const guardianTargetItemId =
@@ -61,6 +62,9 @@ export function updateChatRunProgressSnapshot(
         candidate.data.phase === "strict_review_required" &&
         candidate.data.reviewId === data.reviewId,
     );
+  if (mode === "summary" && !isTool && !isPreamble) {
+    return snapshot;
+  }
   if (
     !isTool &&
     !isPreamble &&
@@ -136,19 +140,25 @@ export function updateChatRunProgressSnapshot(
   }
 
   const storedData: Record<string, unknown> = isTool
-    ? {
-        phase,
-        name: typeof data.name === "string" ? data.name : undefined,
-        toolCallId,
-        args: phase === "start" ? data.args : undefined,
-        partialResult: phase === "update" ? data.partialResult : undefined,
-        diff: phase === "input_delta" ? data.diff : undefined,
-        review: phase === "review" ? data.review : undefined,
-        approvalReviewOutcome:
-          phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
-        isError: phase === "result" ? data.isError : undefined,
-        result: phase === "result" ? data.result : undefined,
-      }
+    ? mode === "summary"
+      ? {
+          phase,
+          name: typeof data.name === "string" ? data.name : undefined,
+          toolCallId,
+        }
+      : {
+          phase,
+          name: typeof data.name === "string" ? data.name : undefined,
+          toolCallId,
+          args: phase === "start" ? data.args : undefined,
+          partialResult: phase === "update" ? data.partialResult : undefined,
+          diff: phase === "input_delta" ? data.diff : undefined,
+          review: phase === "review" ? data.review : undefined,
+          approvalReviewOutcome:
+            phase === "review" || phase === "result" ? data.approvalReviewOutcome : undefined,
+          isError: phase === "result" ? data.isError : undefined,
+          result: phase === "result" ? data.result : undefined,
+        }
     : isPreamble
       ? {
           kind: "preamble",

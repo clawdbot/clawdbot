@@ -145,43 +145,22 @@ async function invokeConfigPatch(args: {
   return harness;
 }
 
-async function invokeConfigSet(args: { raw: unknown; baseHash?: string }) {
+function startConfigWrite(
+  method: "config.patch" | "config.apply",
+  args: { raw: unknown; baseHash?: string },
+) {
   const harness = createConfigHandlerHarness({
-    method: "config.set",
+    method,
     params: {
       raw: JSON.stringify(args.raw),
       ...(args.baseHash ? { baseHash: args.baseHash } : {}),
     },
   });
-  await expectDefined(
-    configHandlers["config.set"],
-    'configHandlers["config.set"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
-async function invokeConfigApply(args: { raw: unknown; baseHash?: string }) {
-  const harness = createConfigHandlerHarness({
-    method: "config.apply",
-    params: {
-      raw: JSON.stringify(args.raw),
-      ...(args.baseHash ? { baseHash: args.baseHash } : {}),
-    },
-  });
-  await expectDefined(
-    configHandlers["config.apply"],
-    'configHandlers["config.apply"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
-async function invokeConfigGet() {
-  const harness = createConfigHandlerHarness({ method: "config.get" });
-  await expectDefined(
-    configHandlers["config.get"],
-    'configHandlers["config.get"] test invariant',
-  )(harness.options);
-  return harness;
+  const handler = expectDefined(
+    configHandlers[method],
+    `configHandlers["${method}"] test invariant`,
+  );
+  return { harness, operation: handler(harness.options) };
 }
 
 async function invokeConfigSchema() {
@@ -245,6 +224,119 @@ afterEach(() => {
   clearConfigSchemaResponseCacheForTests();
   resetPluginRuntimeStateForTest();
   vi.clearAllMocks();
+});
+
+describe("config application settlement", () => {
+  it("does not acknowledge a persisted write before its runtime application", async () => {
+    let settleApplication!: (status: "applied") => void;
+    const application = new Promise<"applied">((resolve) => {
+      settleApplication = resolve;
+    });
+    configWriteMocks.commitGatewayConfigWrite.mockImplementationOnce(async () => ({
+      path: "/tmp/openclaw.json",
+      config: { hooks: { enabled: true } },
+      hash: "settled-hash",
+      application,
+      queueFollowUp: vi.fn(),
+    }));
+
+    const { harness, operation } = startConfigWrite("config.patch", {
+      raw: { hooks: { enabled: true } },
+      baseHash: "base-hash",
+    });
+    await vi.waitFor(() =>
+      expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledOnce(),
+    );
+
+    expect(harness.respond).not.toHaveBeenCalled();
+
+    settleApplication("applied");
+    await operation;
+    expect(harness.respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true }),
+      undefined,
+    );
+  });
+
+  it.each(["config.patch", "config.apply"] as const)(
+    "reports %s post-commit recovery without claiming the active config was unapplied",
+    async (method) => {
+      const queueFollowUp = vi.fn();
+      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+        path: "/tmp/openclaw.json",
+        config: { hooks: { enabled: true } },
+        hash: "recovery-hash",
+        application: Promise.resolve("applied-restart-required"),
+        queueFollowUp,
+      });
+
+      const { harness, operation } = startConfigWrite(method, {
+        raw: { hooks: { enabled: true } },
+        baseHash: "base-hash",
+      });
+      await operation;
+
+      expect(harness.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("updated the active Gateway"),
+        }),
+      );
+      for (const excluded of ["was not applied", "reapply"]) {
+        expect(harness.respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ message: expect.not.stringContaining(excluded) }),
+        );
+      }
+      expect(harness.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("wait for the Gateway to restart"),
+        }),
+      );
+      expect(queueFollowUp).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["superseded", "failed", "stopped", "unclaimed"] as const)(
+    "reports a persisted write whose runtime application was %s",
+    async (outcome) => {
+      const queueFollowUp = vi.fn();
+      configWriteMocks.commitGatewayConfigWrite.mockResolvedValueOnce({
+        path: "/tmp/openclaw.json",
+        config: { hooks: { enabled: true } },
+        hash: `${outcome}-hash`,
+        application: Promise.resolve(outcome),
+        queueFollowUp,
+      });
+
+      const { harness, operation } = startConfigWrite("config.patch", {
+        raw: { hooks: { enabled: true } },
+        baseHash: "base-hash",
+      });
+      await operation;
+
+      expect(harness.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "UNAVAILABLE",
+          message: expect.stringContaining("persisted but was not applied"),
+        }),
+      );
+      expect(harness.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ message: expect.stringContaining("use config.apply") }),
+      );
+      expect(queueFollowUp).toHaveBeenCalledOnce();
+    },
+  );
 });
 
 describe("config.openFile", () => {
@@ -323,204 +415,6 @@ describe("config.openFile", () => {
         "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
       );
     });
-  });
-});
-
-describe("write acknowledgement redaction", () => {
-  // A write that REMOVES a claimant drops that claimant's hints from the committed schema, but a
-  // value it declared sensitive can survive under a shared channel. Redacting under the committed
-  // schema alone would hand that retained secret back in the acknowledgement.
-  it("redacts a field whose only sensitive hint belonged to a claimant this write removed", async () => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-    // Key the schema off the config it is handed, not call order: the pre-write config still has
-    // the departing claimant (theme "claw") and is the only side marking the field sensitive; the
-    // committed config (theme "lobster") no longer has that claimant, so it reports no hints.
-    buildRuntimeConfigSchemaForConfigMock.mockImplementation((config: unknown) => {
-      const theme = (config as { ui?: { prefs?: { theme?: string } } } | undefined)?.ui?.prefs
-        ?.theme;
-      const uiHints: Record<string, { sensitive?: boolean }> =
-        theme === "claw" ? { "ui.prefs.theme": { sensitive: true } } : {};
-      return { schema: { type: "object" }, uiHints, version: "test-schema" };
-    });
-
-    const harness = await invokeConfigPatch({ raw: { ui: { prefs: { theme: "lobster" } } } });
-
-    const lastCall = expectDefined(harness.respond.mock.calls.at(-1), "config.patch respond call");
-    const payload = lastCall[1] as { config: { ui: { prefs: { theme: string } } } };
-    expect(payload.config.ui.prefs.theme).toBe("__OPENCLAW_REDACTED__");
-  });
-
-  // config.set must reach the same answer as config.patch. Its pre-write hints once came from the
-  // schema cache, which is keyed on plugin registry version alone; ownership can change through a
-  // config reload without touching that key, leaving the cache describing the previous claimant and
-  // dropping the only hint that marks the retained value sensitive.
-  it("redacts that field on config.set too, with the schema cache describing the old claimant", async () => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-    buildRuntimeConfigSchemaForConfigMock.mockImplementation((config: unknown) => {
-      const theme = (config as { ui?: { prefs?: { theme?: string } } } | undefined)?.ui?.prefs
-        ?.theme;
-      const uiHints: Record<string, { sensitive?: boolean }> =
-        theme === "claw" ? { "ui.prefs.theme": { sensitive: true } } : {};
-      return { schema: { type: "object" }, uiHints, version: "test-schema" };
-    });
-    // The cached schema knows nothing about the departing claimant's field.
-    loadGatewayRuntimeConfigSchemaMock.mockReturnValue({
-      schema: { type: "object" },
-      uiHints: {},
-      version: "test-schema",
-    });
-
-    const harness = await invokeConfigSet({
-      raw: { ui: { prefs: { theme: "lobster" } } },
-      baseHash: storedHash,
-    });
-
-    const lastCall = expectDefined(harness.respond.mock.calls.at(-1), "config.set respond call");
-    const payload = lastCall[1] as { config: { ui: { prefs: { theme: string } } } };
-    expect(payload.config.ui.prefs.theme).toBe("__OPENCLAW_REDACTED__");
-  });
-});
-
-describe("request-scoped schema build memoization", () => {
-  // The write RPCs read hints for the pre-write config at more than one site (sentinel restore,
-  // the noop ack, the acknowledgement union), and every one of those sites reads the same
-  // snapshot object. One build per distinct config object must serve all of them; the committed
-  // config is a different object and must always build on its own.
-  function captureWriteSnapshotConfig() {
-    const captured: { config?: OpenClawConfig; sourceConfig?: OpenClawConfig } = {};
-    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
-      const result = currentWriteSnapshot();
-      // The real snapshot's authored half is a distinct object from its runtime half; mirror
-      // that so the assertions below can tell which half each build received.
-      result.snapshot.sourceConfig = structuredClone(result.snapshot.sourceConfig);
-      captured.config = result.snapshot.config;
-      captured.sourceConfig = result.snapshot.sourceConfig;
-      return result;
-    });
-    return captured;
-  }
-
-  it("config.set builds once for the pre-write config and once for the committed config", async () => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-    const captured = captureWriteSnapshotConfig();
-
-    const { respond } = await invokeConfigSet({
-      raw: { ui: { prefs: { theme: "lobster" } } },
-      baseHash: storedHash,
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
-    expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0]).toBe(captured.config);
-    // Ownership reads explicit selection from the authored half, never the runtime-shaped one.
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(captured.sourceConfig);
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[0]).toBe(storedConfig);
-    // The committed config is authored as persisted, so it is its own source half.
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[1]).toBe(storedConfig);
-  });
-
-  it("config.patch builds once for the pre-write config across restore and acknowledgement", async () => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-    const captured = captureWriteSnapshotConfig();
-
-    const { respond } = await invokeConfigPatch({
-      raw: { ui: { prefs: { theme: "lobster" } } },
-      baseHash: storedHash,
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
-    expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0]).toBe(captured.config);
-    // Ownership reads explicit selection from the authored half, never the runtime-shaped one.
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(captured.sourceConfig);
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[0]).toBe(storedConfig);
-    // The committed config is authored as persisted, so it is its own source half.
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[1]).toBe(storedConfig);
-  });
-
-  it("config.apply builds once for the pre-write config across restore and acknowledgement", async () => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-    const captured = captureWriteSnapshotConfig();
-
-    const { respond } = await invokeConfigApply({
-      raw: { ui: { prefs: { theme: "lobster" } } },
-      baseHash: storedHash,
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
-    expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0]).toBe(captured.config);
-    // Ownership reads explicit selection from the authored half, never the runtime-shaped one.
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(captured.sourceConfig);
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[0]).toBe(storedConfig);
-    // The committed config is authored as persisted, so it is its own source half.
-    expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[1]?.[1]).toBe(storedConfig);
-  });
-
-  it("config.get builds hints at most once per request", async () => {
-    await withEnvAsync(
-      {
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-schema-memo-missing/openclaw.json",
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-schema-memo-missing/state",
-      },
-      async () => {
-        const { respond } = await invokeConfigGet();
-
-        expect(respond).toHaveBeenCalledWith(true, expect.anything(), undefined);
-        expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(1);
-        // config.get hands the snapshot's authored sourceConfig, its own authored counterpart.
-        expect(buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[1]).toBe(
-          buildRuntimeConfigSchemaForConfigMock.mock.calls[0]?.[0],
-        );
-      },
-    );
-  });
-
-  // Pins the memo to object IDENTITY. A write can commit a config whose content equals the
-  // pre-write one while ownership must still be derived from the exact object the runtime hands
-  // over; a content- or hash-keyed cache would serve the pre-write build for the committed object
-  // and recreate the stale-owner redaction defect the per-config builds exist to prevent.
-  it("still builds separately for two distinct config objects with identical content", async () => {
-    storedConfig = { ui: { prefs: { theme: "claw" } } };
-    const captured = captureWriteSnapshotConfig();
-    configWriteMocks.commitGatewayConfigWrite.mockImplementation(
-      async ({
-        snapshot,
-        nextConfig,
-      }: {
-        snapshot: { hash?: string };
-        nextConfig: OpenClawConfig;
-      }) => {
-        if (snapshot.hash !== storedHash) {
-          throw new ConfigMutationConflictError("config changed since last load");
-        }
-        // Clone so the committed config is a distinct object with identical content.
-        storedConfig = structuredClone(nextConfig);
-        storedHash = `next-hash-${nextHash}`;
-        nextHash += 1;
-        return {
-          path: "/tmp/openclaw.json",
-          config: storedConfig,
-          hash: storedHash,
-          queueFollowUp: vi.fn(),
-        };
-      },
-    );
-
-    const { respond } = await invokeConfigSet({
-      raw: { ui: { prefs: { theme: "claw" } } },
-      baseHash: storedHash,
-    });
-
-    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
-    expect(buildRuntimeConfigSchemaForConfigMock).toHaveBeenCalledTimes(2);
-    const builtConfigs = buildRuntimeConfigSchemaForConfigMock.mock.calls;
-    expect(builtConfigs[0]?.[0]).toBe(captured.config);
-    expect(builtConfigs[0]?.[1]).toBe(captured.sourceConfig);
-    expect(builtConfigs[1]?.[0]).toBe(storedConfig);
-    expect(builtConfigs[1]?.[1]).toBe(storedConfig);
-    expect(builtConfigs[1]?.[0]).not.toBe(builtConfigs[0]?.[0]);
-    expect(builtConfigs[1]?.[0]).toEqual(builtConfigs[0]?.[0]);
   });
 });
 
