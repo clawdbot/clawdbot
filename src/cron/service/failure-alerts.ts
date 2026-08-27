@@ -6,6 +6,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
+import { buildCodexLoginRecovery } from "../../auto-reply/codex-login-recovery.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
@@ -270,27 +271,16 @@ function emitFailureAlert(
     ...detailLines,
   ].join("\n");
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
+  const codexLoginRecovery =
+    params.status === "error" && (errorReason === "auth" || errorReason === "auth_permanent")
+      ? buildCodexLoginRecovery({
+          provider: oauthRefreshFailure?.provider,
+          oauthReason: oauthRefreshFailure?.reason,
+        })
+      : undefined;
   const payload: ReplyPayload = {
-    text,
-    ...(params.status === "error" &&
-    (errorReason === "auth" || errorReason === "auth_permanent") &&
-    oauthRefreshFailure?.provider === "openai"
-      ? {
-          presentation: {
-            blocks: [
-              {
-                type: "buttons" as const,
-                buttons: [
-                  {
-                    label: "Log in to Codex",
-                    action: { type: "command" as const, command: "/login codex" },
-                  },
-                ],
-              },
-            ],
-          },
-        }
-      : {}),
+    text: codexLoginRecovery ? `${text}\n${codexLoginRecovery.hint}` : text,
+    ...(codexLoginRecovery ? { presentation: codexLoginRecovery.presentation } : {}),
   };
 
   transportFailureAlert(state, {

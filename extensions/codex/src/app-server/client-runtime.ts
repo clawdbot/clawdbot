@@ -311,14 +311,9 @@ export async function retainCodexAppServerLiveThread(
   const pendingRelease = runtime.releasingThreads.get(threadId);
   if (pendingRelease) {
     await pendingRelease.completion;
-    if (
-      runtime.closed ||
-      (claimed !== undefined && runtime.claimedThreads.get(threadId) !== claimed)
-    ) {
-      // The pending operation unsubscribed this exact active generation;
-      // publishing it again without thread/resume would invent ownership.
-      return false;
-    }
+    // The pending operation released this subscription. Publishing it again
+    // without a subsequent thread/resume would invent native ownership.
+    return false;
   }
   runtime.retainedThreads.delete(threadId);
   const retained: RetainedLiveThread = {
@@ -492,7 +487,7 @@ export function isCodexAppServerLiveThreadClaimed(
   return runtime !== undefined && !runtime.closed && runtime.claimedThreads.has(threadId);
 }
 
-/** Release the exact physical subscription and finish only its observed claim generation. */
+/** Release the exact physical subscription and finish only its observed ownership generation. */
 export async function unsubscribeCodexAppServerLiveThread(
   client: CodexAppServerClient,
   threadId: string,
@@ -501,6 +496,7 @@ export async function unsubscribeCodexAppServerLiveThread(
 ): Promise<void> {
   const runtime = configuredClients.get(client);
   const claimed = runtime?.claimedThreads.get(threadId);
+  const retained = runtime?.retainedThreads.get(threadId);
   let transition = runtime?.releasingThreads.get(threadId);
   if (transition?.physicalRelease) {
     await transition.physicalRelease;
@@ -508,7 +504,10 @@ export async function unsubscribeCodexAppServerLiveThread(
     return;
   }
   const physicalRelease = Promise.resolve().then(async () => {
-    if (claimed !== undefined && runtime?.claimedThreads.get(threadId) !== claimed) {
+    if (
+      (claimed !== undefined && runtime?.claimedThreads.get(threadId) !== claimed) ||
+      (retained !== undefined && runtime?.retainedThreads.get(threadId) !== retained)
+    ) {
       return;
     }
     assertCurrent?.();
@@ -525,8 +524,12 @@ export async function unsubscribeCodexAppServerLiveThread(
   }
   try {
     await physicalRelease;
-    // Warm/compaction/native-child cleanup can release directly. Their exact
-    // successful RPC ends only the claim generation observed before it began.
+    // Direct cleanup also owns idle entries; a successful RPC ends only the
+    // retained or claimed generation observed before it began.
+    if (retained !== undefined && runtime?.retainedThreads.get(threadId) === retained) {
+      runtime.retainedThreads.delete(threadId);
+      scheduleRetainedThreadEviction(client, runtime);
+    }
     if (claimed !== undefined && runtime?.claimedThreads.get(threadId) === claimed) {
       runtime.claimedThreads.delete(threadId);
     }
@@ -574,11 +577,9 @@ export function protectCodexAppServerLiveThread(
       if (retained) {
         // A detached child is live activity, not parent idleness. Its terminal
         // delivery starts the parent's normal warm-session retention window.
+        retained.expiresAt = Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS;
         runtime.retainedThreads.delete(threadId);
-        runtime.retainedThreads.set(threadId, {
-          ...retained,
-          expiresAt: Date.now() + CODEX_APP_SERVER_LIVE_THREAD_IDLE_TIMEOUT_MS,
-        });
+        runtime.retainedThreads.set(threadId, retained);
       }
     } else {
       runtime.protectedThreads.set(threadId, count - 1);

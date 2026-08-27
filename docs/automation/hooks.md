@@ -348,27 +348,41 @@ Directory discovery merges hooks by **name** using these rules:
 | Extra directories | `hooks.internal.load.extraDirs`; same source policy as managed hooks. Later extra directories win over earlier ones; the managed directory wins over extra directories. |
 | Workspace         | `<workspace>/hooks/`; can add names but cannot replace bundled, plugin, or managed names. Explicit opt-in required.                                                     |
 
-Each scanned directory contains child hook directories or child packages whose
-`package.json` declares `openclaw.hooks`. The scanner does not treat the scan
-root itself as a hook. For example, with
-`/opt/openclaw-hook-library/my-hook/HOOK.md`, add the parent directory:
+Bundled, managed, workspace, and plugin hook locations are collection
+directories: discovery inspects their immediate children for hooks or packages
+whose `package.json` declares `openclaw.hooks`.
+
+Each explicit `hooks.internal.load.extraDirs` path can instead be a pack root,
+a single-hook root, or a collection directory. A pack root loads only its
+declared hook paths, including nested paths such as `./hooks/my-hook`. Each
+path must point directly to a hook; discovery does not recurse into another
+pack or collection. A recognized pack with no valid hooks stays empty rather
+than scanning unlisted children. A single-hook root loads its own `HOOK.md`
+and handler. Only an ordinary collection root gets the immediate-child scan.
+
+For example, to select `/opt/openclaw-hook-library/my-hook/HOOK.md` directly,
+add that hook's directory:
 
 ```json
 {
   "hooks": {
     "internal": {
       "load": {
-        "extraDirs": ["/opt/openclaw-hook-library"]
+        "extraDirs": ["/opt/openclaw-hook-library/my-hook"]
       }
     }
   }
 }
 ```
 
-Only add trusted directories: this also opens selection beyond named entries.
+To scan the library's immediate children instead, add
+`/opt/openclaw-hook-library`. Only add trusted directories: any extra path
+opens hook-name selection across discovery sources beyond named entries,
+even when that path selects a single hook or pack.
 Handler files must stay within their hook directory; package and plugin hook
 paths must stay within their package root. Symlinks escaping those boundaries
-are rejected. Restart after changing hook files, metadata, or configuration.
+are rejected. Restart after changing hook files, metadata, or configuration,
+then verify the handler's actual side effect; inventory alone does not prove execution.
 
 ### Hook packs
 
@@ -380,7 +394,7 @@ unified installer:
 openclaw plugins install <path-or-spec>
 ```
 
-Installation and update flags, npm restrictions, linked-directory caveats, and
+Installation and update flags, npm restrictions, linked-root behavior and trust, and
 the deprecated `hooks install` / `hooks update` aliases are documented in
 [Install and update hook packs](/cli/hooks#install-and-update-hook-packs).
 
@@ -720,12 +734,16 @@ JSON output fields, exit behavior, and install/update aliases.
 
 Check the report's `workspaceDir` and `managedHooksDir` with
 `openclaw hooks list --json`. Confirm you are inspecting the intended host,
-profile, and agent. The hook must be a child directory containing `HOOK.md` and
-one supported handler file; a metadata file alone is insufficient.
+profile, and agent. Each hook needs `HOOK.md` and one supported handler file;
+a metadata file alone is insufficient. Collection locations inspect immediate
+children. An explicit extra path or linked root can itself be a hook or pack.
+For a pack, verify that `openclaw.hooks` lists the intended hook directories
+directly: nested packs and collections are not followed, and rejected entries
+do not cause unlisted children to be scanned.
 
 Check duplicate names and containment warnings in Gateway logs. A workspace
 hook cannot override a bundled or managed hook. For extra directories and
-linked packs, verify the scan-root layout described under
+linked packs, verify the root layout described under
 [Hook discovery](/automation/hooks#hook-discovery).
 
 ### Hook not eligible

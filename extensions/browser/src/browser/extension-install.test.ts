@@ -1047,7 +1047,20 @@ describe("installer option bounds", () => {
   it("accepts bounded waits and rejects unbounded waits", () => {
     expect(normalizeExtensionInstallWaitMs(undefined)).toBe(30_000);
     expect(normalizeExtensionInstallWaitMs("1000")).toBe(1_000);
+    expect(normalizeExtensionInstallWaitMs(10_000)).toBe(10_000);
+    expect(normalizeExtensionInstallWaitMs("120000")).toBe(120_000);
     expect(() => normalizeExtensionInstallWaitMs(999)).toThrow("--wait-ms");
     expect(() => normalizeExtensionInstallWaitMs(120_001)).toThrow("--wait-ms");
+  });
+
+  it.each(["0x1000", "1e4", "+50000", " 50000", "50000 ", "50000\t"])(
+    "rejects non-decimal --wait-ms string %j",
+    (value) => {
+      expect(() => normalizeExtensionInstallWaitMs(value)).toThrow("--wait-ms");
+    },
+  );
+
+  it("accepts ordinary decimal strings", () => {
+    expect(normalizeExtensionInstallWaitMs("10000")).toBe(10_000);
   });
 });

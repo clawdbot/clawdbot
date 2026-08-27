@@ -718,7 +718,9 @@ export default definePluginEntry({
         return {
           apiKey: auth.apiKey,
           baseUrl: auth.baseUrl,
-          request: { headers: buildCopilotRuntimeHeaders() },
+          request: {
+            headers: buildCopilotRuntimeHeaders({ config: ctx.config, headers: ctx.model.headers }),
+          },
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

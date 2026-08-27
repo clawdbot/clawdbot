@@ -10,9 +10,9 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { sleep } from "../../utils/sleep.js";
+import { createChannelIngressError } from "./ingress-errors.js";
 import {
   CHANNEL_INGRESS_RETENTION_DEFAULTS,
-  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
@@ -107,6 +107,15 @@ function createMonitor(
     ...(onActivityChange ? { onActivityChange } : {}),
     ...(onError ? { onError } : {}),
     ...(abortSignal ? { abortSignal } : {}),
+  });
+}
+
+async function waitForAbort(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
   });
 }
 
@@ -635,13 +644,7 @@ describe("channel ingress monitor", () => {
   it("releases a pre-adoption delivery for retry before disposing on stop", async () => {
     await withQueue(async (queue) => {
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
-        await new Promise<void>((resolve) => {
-          if (lifecycle.abortSignal.aborted) {
-            resolve();
-            return;
-          }
-          lifecycle.abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
+        await waitForAbort(lifecycle.abortSignal);
       });
       const monitor = createMonitor(queue, deliver);
       monitor.start();
@@ -799,6 +802,68 @@ describe("channel ingress monitor", () => {
         releaseSettlement();
         await stopping;
       }
+    });
+  });
+
+  it("completes deliveries whose terminal result races a stop abort", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        await waitForAbort(lifecycle.abortSignal);
+        return { kind: "completed" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-completed", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // Side effects finished and the channel reported completed; settling the
+      // claim for retry would replay already-delivered work on restart.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toEqual([]);
+    });
+  });
+
+  it("keeps deferred handoffs with their owner when a stop abort races the return", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        lifecycle.onDeferred();
+        await waitForAbort(lifecycle.abortSignal);
+        return { kind: "deferred" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-stop-deferred-race", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // The deferred owner still owns the claim; releasing it for retry would
+      // replay work the owner is completing.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toHaveLength(1);
+    });
+  });
+
+  it("keeps a deferred handoff when stop abort races a conflicting completed return", async () => {
+    await withQueue(async (queue) => {
+      const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+        lifecycle.onDeferred();
+        await waitForAbort(lifecycle.abortSignal);
+        return { kind: "completed" as const };
+      });
+      const monitor = createMonitor(queue, deliver);
+      monitor.start();
+      await monitor.admit({ id: "event-deferred-then-completed", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deliver).toHaveBeenCalledOnce());
+
+      await monitor.stop();
+
+      // A recorded handoff owns the claim, so stop cannot rewrite the
+      // conflicting terminal return and release the row for replay.
+      await expect(queue.listPending()).resolves.toEqual([]);
+      await expect(queue.listClaims()).resolves.toHaveLength(1);
     });
   });
 

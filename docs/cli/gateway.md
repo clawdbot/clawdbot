@@ -344,10 +344,14 @@ Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivi
 openclaw gateway status
 openclaw gateway status --json
 openclaw gateway status --require-rpc
+openclaw gateway status --port 19001
 ```
 
 <ParamField path="--url <url>" type="string">
-  Add an explicit probe target. Configured remote + localhost are still probed.
+  Probe this explicit WebSocket URL instead of the service-derived target. Cannot combine with `--port`.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Select a local Gateway port using the invoking CLI config for auth and TLS. Accepts `gateway --port 19001 status` and `gateway status --port 19001`; an explicit status port wins. Native service details remain visible as diagnostics but do not select the probe target.
 </ParamField>
 <ParamField path="--token <token>" type="string">
   Token auth for the probe.
@@ -592,7 +596,7 @@ openclaw gateway restart
 
 <AccordionGroup>
   <Accordion title="Command options">
-    - `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
+    - `gateway status`: `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
     - `gateway install`: `--port`, `--runtime <node|bun>` (default: `node`), `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
     - `gateway uninstall|start`: `--json`

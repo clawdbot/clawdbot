@@ -7,7 +7,6 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
@@ -19,7 +18,7 @@ import { resolveGithubCopilotDomain } from "./domain.js";
 import { COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS } from "./models.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } from "./runtime-auth.js";
-import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 const COPILOT_EMBEDDING_PROVIDER_ID = "github-copilot";
 
@@ -32,11 +31,6 @@ const PREFERRED_MODELS = [
   "text-embedding-ada-002",
 ] as const;
 
-const COPILOT_HEADERS_STATIC: Record<string, string> = {
-  "Content-Type": "application/json",
-  ...buildCopilotIdeHeaders(),
-  "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
-};
 const COPILOT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 const COPILOT_EMBEDDINGS_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -89,7 +83,7 @@ function isCopilotSetupError(err: unknown): boolean {
 async function discoverEmbeddingModels(params: {
   baseUrl: string;
   copilotToken: string;
-  headers?: Record<string, string>;
+  headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<string[]> {
   const url = `${params.baseUrl.replace(/\/$/, "")}/models`;
@@ -98,7 +92,6 @@ async function discoverEmbeddingModels(params: {
     init: {
       method: "GET",
       headers: {
-        ...COPILOT_HEADERS_STATIC,
         ...params.headers,
         Authorization: `Bearer ${params.copilotToken}`,
       },
@@ -326,6 +319,10 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       }));
     const baseUrl = runtimeAuth.baseUrl || DEFAULT_COPILOT_API_BASE_URL;
     const ssrfPolicy = buildSsrfPolicy(baseUrl);
+    const headers = buildCopilotRuntimeHeaders({
+      config: options.config,
+      headers: { "Content-Type": "application/json", ...options.remote?.headers },
+    });
 
     // Always discover models even when the user pins one: this validates
     // the Copilot token and confirms the plan supports embeddings before
@@ -333,7 +330,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
     const availableModels = await discoverEmbeddingModels({
       baseUrl,
       copilotToken: runtimeAuth.apiKey,
-      headers: options.remote?.headers,
+      headers,
       ssrfPolicy,
     });
 
@@ -344,8 +341,7 @@ export const githubCopilotMemoryEmbeddingProviderAdapter: MemoryEmbeddingProvide
       baseUrl,
       fetchImpl: fetch,
       headers: {
-        ...COPILOT_HEADERS_STATIC,
-        ...options.remote?.headers,
+        ...headers,
         Authorization: `Bearer ${runtimeAuth.apiKey}`,
       },
       model,

@@ -853,8 +853,6 @@ describe("createGatewayCloseHandler", () => {
     expect(result.warnings).toContain("restart-reply-drain");
     expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKeys: new Set(),
-        sessionIds: new Set(),
         activeRuns: [],
         reason: "gateway restart shutdown",
       }),
@@ -1222,12 +1220,6 @@ describe("createGatewayCloseHandler", () => {
     expect(events[0]).toBe("marker");
     const markerCall = firstMockCall(markMainSessionsAbortedForRestart);
     expect(markerCall?.[0]?.reason).toBe("gateway restart shutdown");
-    expect(markerCall?.[0]?.sessionKeys).toStrictEqual(
-      new Set(["agent:main:main", "agent:main:test:direct:source"]),
-    );
-    expect(markerCall?.[0]?.sessionIds).toStrictEqual(
-      new Set(["current-session-id-1", "session-id-2"]),
-    );
     expect(markerCall?.[0]?.activeRuns).toEqual([
       {
         runId: "run-1",
@@ -1402,8 +1394,6 @@ describe("createGatewayCloseHandler", () => {
 
     expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionKeys: new Set(),
-        sessionIds: new Set(),
         activeRuns: [],
       }),
     );
@@ -1557,6 +1547,7 @@ describe("createGatewayCloseHandler", () => {
           controller,
           sessionId: "session-id-1",
           sessionKey: "agent:main:main",
+          lifecycleGeneration: "generation-1",
           startedAtMs: Date.now(),
           expiresAtMs: Date.now() + 60_000,
         },

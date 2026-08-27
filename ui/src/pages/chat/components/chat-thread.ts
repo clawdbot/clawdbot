@@ -29,8 +29,8 @@ import {
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import {
-  type ChatTranscriptSession,
   ChatTranscriptController,
+  type ChatTranscriptSession,
 } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
@@ -136,7 +136,7 @@ function renderTranscriptShell(
   const transcriptContents =
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
-          <div class="chat-thread-inner">
+          <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
             ${historySentinel} ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
             ${projection.isEmpty && projection.searchOpen

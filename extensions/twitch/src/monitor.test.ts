@@ -15,8 +15,9 @@ const mocks = vi.hoisted(() => ({
   createIngress: vi.fn(),
   getClient: vi.fn(async () => ({})),
   getRuntime: vi.fn(),
+  ingressAccept: vi.fn<(message: TwitchChatMessage) => Promise<void>>(),
   ingressStart: vi.fn(),
-  ingressStop: vi.fn(async () => undefined),
+  ingressStop: vi.fn<() => Promise<void>>(),
   onMessage: vi.fn(),
   runInbound: vi.fn(),
   sendMessage: vi.fn(),
@@ -80,8 +81,8 @@ describe("monitorTwitchProvider", () => {
             onAbandoned: () => Promise<void>;
           },
         ) => Promise<void>;
-      }) => ({
-        accept: async (message: TwitchChatMessage) => {
+      }) => {
+        mocks.ingressAccept.mockImplementation(async (message: TwitchChatMessage) => {
           await options.deliver(message, {
             admission: "exclusive",
             abortSignal: new AbortController().signal,
@@ -89,10 +90,17 @@ describe("monitorTwitchProvider", () => {
             onDeferred: () => undefined,
             onAbandoned: async () => undefined,
           });
-        },
-        start: mocks.ingressStart,
-        stop: mocks.ingressStop,
-      }),
+        });
+        // Real ingress stop drains accepted deliveries before the next monitor starts.
+        mocks.ingressStop.mockImplementation(async () => {
+          await Promise.all(mocks.ingressAccept.mock.results.map((result) => result.value));
+        });
+        return {
+          accept: mocks.ingressAccept,
+          start: mocks.ingressStart,
+          stop: mocks.ingressStop,
+        };
+      },
     );
     mocks.getRuntime.mockReturnValue({
       logging: {
@@ -203,7 +211,9 @@ describe("monitorTwitchProvider", () => {
           message: "hello bot",
           channel: "testchannel",
         });
-        await vi.waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledOnce());
+        expect(mocks.ingressAccept).toHaveBeenCalledOnce();
+        await mocks.ingressAccept.mock.results[0]?.value;
+        expect(mocks.sendMessage).toHaveBeenCalledOnce();
         expect(mocks.sendMessage).toHaveBeenCalledWith(
           account,
           "testchannel",
@@ -307,7 +317,9 @@ describe("monitorTwitchProvider", () => {
         channel: "testchannel",
       });
 
-      await vi.waitFor(() => expect(settled).toHaveBeenCalledOnce());
+      expect(mocks.ingressAccept).toHaveBeenCalledOnce();
+      await mocks.ingressAccept.mock.results[0]?.value;
+      expect(settled).toHaveBeenCalledOnce();
       expect(settled).toHaveBeenCalledWith({ visibleReplySent: expectedVisible });
       if (expectedText) {
         expect(mocks.sendMessage).toHaveBeenCalledWith(

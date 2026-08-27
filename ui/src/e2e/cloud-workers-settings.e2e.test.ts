@@ -76,7 +76,16 @@ suite.define(() => {
         "config.get": configResponse({}, "cloud-workers-1"),
         "environments.list": {
           environments: [],
-          profiles: [{ id: "build-fleet", providerId: "crabbox" }],
+          profiles: [
+            {
+              id: "build-fleet",
+              providerId: "crabbox",
+              machines: [
+                { id: "standard", label: "Standard", default: true },
+                { id: "fast", label: "Fast" },
+              ],
+            },
+          ],
         },
       },
     });
@@ -89,12 +98,34 @@ suite.define(() => {
       await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
+      expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
+        0,
+      );
       await page.getByLabel("Profile ID").fill("build-fleet");
       await page.getByLabel("Crabbox backend").fill("hetzner");
       await waitForSettledFormControls(page, [
         { locator: page.getByLabel("Profile ID"), value: "build-fleet" },
         { locator: page.getByLabel("Crabbox backend"), value: "hetzner" },
       ]);
+      const machineClass = page.getByRole("textbox", { name: "Machine class", exact: true });
+      await expect.poll(() => machineClass.inputValue()).toBe("");
+      expect(await machineClass.getAttribute("list")).toBeNull();
+      expect(
+        await page
+          .locator("openclaw-cloud-workers-page datalist, openclaw-cloud-workers-page option")
+          .count(),
+      ).toBe(0);
+      for (const invalidClass of ["", " ", "x".repeat(129)]) {
+        await machineClass.fill(invalidClass);
+        await waitForSettledFormControls(page, [{ locator: machineClass, value: invalidClass }]);
+        await page.getByRole("button", { name: "Save" }).click();
+        await expect
+          .poll(() => page.getByRole("alert").textContent())
+          .toBe("Enter a machine class of 1 to 128 characters.");
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+      }
+      await machineClass.fill("standard");
+      await waitForSettledFormControls(page, [{ locator: machineClass, value: "standard" }]);
       await gateway.deferNext("config.patch");
       const addRequestCount = (await gateway.getRequests("config.patch")).length;
       await page.getByRole("button", { name: "Save" }).click();
@@ -118,14 +149,19 @@ suite.define(() => {
           },
         },
       });
+      // The saved snapshot includes provider-owned fields absent from this editor.
       const buildFleet = {
         provider: "crabbox",
         install: "bundle",
+        label: "Build fleet",
         settings: {
           provider: "hetzner",
           class: "standard",
           ttl: "8h",
           idleTimeout: "45m",
+          region: "eu-west-1",
+          resources: { cpu: 6, memoryGiB: 12 },
+          providerOptions: { image: "qa-base" },
         },
       };
       // Keep the mocked config.get consistent with the patch response: the
@@ -148,26 +184,36 @@ suite.define(() => {
       await page.getByText("Gateway restart required.", { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Edit" }).click();
-      await page.getByLabel("Machine class").selectOption("custom");
-      await page.getByLabel("Custom machine class").fill("ccx53");
+      await expect.poll(() => machineClass.inputValue()).toBe("standard");
+      await machineClass.fill("batch/ARM64.v2");
+      await page.getByLabel("Crabbox backend").fill("daytona");
       await page.getByLabel("Max lifetime").fill("12h");
       await page
         .locator(".settings-row")
         .filter({ hasText: "Desktop" })
         .locator("wa-switch")
         .click();
-      await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox");
+      await page.getByLabel("Crabbox binary").fill("/opt/bin/crabbox-draft");
       await waitForSettledFormControls(page, [
-        { locator: page.getByLabel("Machine class", { exact: true }), value: "custom" },
-        { locator: page.getByLabel("Custom machine class"), value: "ccx53" },
+        { locator: machineClass, value: "batch/ARM64.v2" },
+        { locator: page.getByLabel("Crabbox backend"), value: "daytona" },
         { locator: page.getByLabel("Max lifetime"), value: "12h" },
         {
           locator: page.getByRole("switch", { name: "Desktop", exact: true }),
           checked: true,
         },
-        { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox" },
+        { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox-draft" },
       ]);
+      expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
+        0,
+      );
+      expect(await machineClass.getAttribute("list")).toBeNull();
       const saveButton = page.getByRole("button", { name: "Save" });
+      // The patch schedules an applied-revision poll. Let it settle before
+      // deferring config.get so the background read cannot consume the gate.
+      await expect
+        .poll(() => page.getByRole("button", { name: "Apply changes", exact: true }).count())
+        .toBe(0);
       const configGetCount = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
       await gateway.emitGatewayEvent("config.changed", {
@@ -193,31 +239,31 @@ suite.define(() => {
         cloudWorkers: {
           profiles: {
             "build-fleet": {
-              provider: "crabbox",
-              install: "bundle",
+              ...buildFleet,
               settings: {
-                provider: "hetzner",
-                class: "ccx53",
+                ...buildFleet.settings,
+                provider: "daytona",
+                class: "batch/ARM64.v2",
                 ttl: "12h",
                 idleTimeout: "45m",
                 setup: null,
                 desktop: true,
-                binary: "/opt/bin/crabbox",
+                binary: "/opt/bin/crabbox-draft",
               },
             },
           },
         },
       });
       const editedFleet = {
-        provider: "crabbox",
-        install: "bundle",
+        ...buildFleet,
         settings: {
-          provider: "hetzner",
-          class: "ccx53",
+          ...buildFleet.settings,
+          provider: "daytona",
+          class: "batch/ARM64.v2",
           ttl: "12h",
           idleTimeout: "45m",
           desktop: true,
-          binary: "/opt/bin/crabbox",
+          binary: "/opt/bin/crabbox-draft",
         },
       };
       // Keep the mocked config.get consistent with the patch response: the
@@ -236,14 +282,23 @@ suite.define(() => {
         config: { cloudWorkers: { profiles: { "build-fleet": editedFleet } } },
       });
 
-      await page.getByText(/Class: ccx53/).waitFor();
+      await page.getByText("Class: batch/ARM64.v2", { exact: false }).waitFor();
+      await page.getByRole("button", { name: "Edit", exact: true }).click();
+      await waitForSettledFormControls(page, [
+        { locator: machineClass, value: "batch/ARM64.v2" },
+        { locator: page.getByLabel("Crabbox backend"), value: "daytona" },
+        { locator: page.getByLabel("Crabbox binary"), value: "/opt/bin/crabbox-draft" },
+      ]);
+      await page.getByRole("button", { name: "Cancel" }).click();
 
       await page.getByRole("button", { name: "Add profile" }).click();
       await page.getByLabel("Profile ID").fill("pending");
       await page.getByLabel("Crabbox backend").fill("aws");
+      await machineClass.fill("custom");
       await waitForSettledFormControls(page, [
         { locator: page.getByLabel("Profile ID"), value: "pending" },
         { locator: page.getByLabel("Crabbox backend"), value: "aws" },
+        { locator: machineClass, value: "custom" },
       ]);
       await gateway.deferNext("config.patch");
       const pendingRequestCount = (await gateway.getRequests("config.patch")).length;
@@ -256,7 +311,7 @@ suite.define(() => {
             pending: {
               provider: "crabbox",
               install: "bundle",
-              settings: { provider: "aws", class: "standard" },
+              settings: { provider: "aws", class: "custom" },
             },
           },
         },
@@ -266,7 +321,7 @@ suite.define(() => {
         install: "bundle",
         settings: {
           provider: "aws",
-          class: "standard",
+          class: "custom",
           ttl: "8h",
           idleTimeout: "45m",
         },
@@ -286,6 +341,14 @@ suite.define(() => {
         },
       });
       await page.getByText("Restart required", { exact: true }).waitFor();
+      await page
+        .locator(".settings-row")
+        .filter({
+          has: page.locator("code", { hasText: /^pending$/ }),
+        })
+        .getByRole("button", { name: "Edit", exact: true })
+        .click();
+      await expect.poll(() => machineClass.inputValue()).toBe("custom");
     } finally {
       await context.close();
     }
@@ -316,9 +379,11 @@ suite.define(() => {
       const backend = page.getByLabel("Crabbox backend");
       await profileId.fill("reconnect-proof");
       await backend.fill("hetzner");
+      await page.getByLabel("Machine class", { exact: true }).fill("standard");
       await waitForSettledFormControls(page, [
         { locator: profileId, value: "reconnect-proof" },
         { locator: backend, value: "hetzner" },
+        { locator: page.getByLabel("Machine class", { exact: true }), value: "standard" },
       ]);
 
       await gateway.deferNext("config.patch");

@@ -337,6 +337,26 @@ export function isSessionWorkAdmissionActive(
   );
 }
 
+export function isSessionWorkAdmissionTargetActive(params: {
+  scope: string;
+  sessionKey: string;
+  sessionId: string;
+}): boolean {
+  const identities = normalizeSessionIdentities(params.scope, [
+    params.sessionKey,
+    params.sessionId,
+  ]);
+  // Singleton leases intentionally own one identity. Multi-identity leases must
+  // cover the pair together; pooling owners would manufacture a false pair.
+  return identities.some((identity) =>
+    Array.from(ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []).some(
+      (admission) =>
+        admission.identities.size === 1 ||
+        identities.every((target) => admission.identities.has(target)),
+    ),
+  );
+}
+
 /** Whether another admitted turn currently owns any of these session identities. */
 export function isCompetingSessionWorkAdmissionActive(
   scope: string,

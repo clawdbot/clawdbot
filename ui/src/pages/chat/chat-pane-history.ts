@@ -105,7 +105,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       this.clearHistoryObserver();
       return;
     }
-    const root = this.querySelector<HTMLElement>(".chat-thread");
+    const root = this.transcript.scrollElement;
     const sentinel = root?.querySelector<HTMLElement>(".chat-history-sentinel") ?? null;
     if (!root || !sentinel) {
       this.clearHistoryObserver();
@@ -255,7 +255,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
 
   protected async showEarlierMessages(): Promise<void> {
     const state = this.state;
-    const root = this.querySelector<HTMLElement>(".chat-thread");
+    const root = this.transcript.scrollElement;
     if (!state || !root) {
       return;
     }
@@ -365,8 +365,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         state.lastError = formatUiError(error);
         // Loading-row removal can emit a layout scroll. Align the tracker so it
         // cannot masquerade as renewed user intent and consume the manual retry.
-        this.transcriptScrollTop =
-          this.querySelector<HTMLElement>(".chat-thread")?.scrollTop ?? null;
+        this.transcriptScrollTop = this.transcript.scrollElement?.scrollTop ?? null;
       }
     } finally {
       if (generation === this.olderLoadGeneration) {

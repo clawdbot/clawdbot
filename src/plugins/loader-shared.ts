@@ -334,6 +334,8 @@ export function applyPluginManifestRecordDetails(
   record.kind = manifestRecord.kind;
   record.configUiHints = manifestRecord.configUiHints;
   record.configJsonSchema = manifestRecord.configSchema;
+  // Manifest ownership survives rollback of executable registrations.
+  record.commandAliases = manifestRecord.commandAliases;
 }
 
 export function applyManifestSnapshotMetadata(

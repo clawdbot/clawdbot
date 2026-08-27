@@ -114,6 +114,28 @@ describe("browser extension pairing Gateway URL", () => {
     expect(output.at(-1)).toContain("extension identity verified");
   });
 
+  it.each(["0x1000", "1e4", "+50000", " 50000", "50000 ", "50000\t"])(
+    "rejects invalid install --wait-ms value %j before installation",
+    async (value) => {
+      const errorSpy = vi
+        .spyOn(cliCoreApiModule.defaultRuntime, "error")
+        .mockImplementation(runtime.error);
+      vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(runtime.exit);
+      const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
+      const program = new Command();
+      registerBrowserExtensionCommands(program.command("browser"), () => ({}));
+
+      await expect(
+        program.parseAsync(["browser", "extension", "install", "--wait-ms", value], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("--wait-ms"));
+      expect(installMocks.installChromeExtensionBootstrap).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {
     vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
     const errorSpy = vi

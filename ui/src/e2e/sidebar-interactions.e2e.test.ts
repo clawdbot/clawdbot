@@ -27,33 +27,53 @@ suite.define(() => {
       .click();
 
     const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-    await expect.poll(() => textarea.inputValue()).toBe("What can you do?");
-    await expect
-      .poll(() => textarea.evaluate((element) => element === document.activeElement))
-      .toBe(true);
     const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
+    let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
     await expect
-      .poll(() => input.getAttribute("class"))
-      .toContain("agent-chat__input--prefill-attention");
-    return { context, input, page };
+      .poll(async () => {
+        const state = await textarea.evaluate((element) => {
+          if (!(element instanceof HTMLTextAreaElement)) {
+            throw new TypeError("capabilities prompt target must be a textarea");
+          }
+          const inputElement = element.closest<HTMLElement>(".agent-chat__input");
+          const style = inputElement ? getComputedStyle(inputElement) : null;
+          return {
+            active:
+              inputElement?.classList.contains("agent-chat__input--prefill-attention") ?? false,
+            background: style?.backgroundColor ?? "",
+            boxShadow: style?.boxShadow ?? "",
+            duration: style?.animationDuration ?? "",
+            focused: element === document.activeElement,
+            name: style?.animationName ?? "",
+            value: element.value,
+          };
+        });
+        cueStyle = {
+          background: state.background,
+          boxShadow: state.boxShadow,
+          duration: state.duration,
+          name: state.name,
+        };
+        return { active: state.active, focused: state.focused, value: state.value };
+      })
+      .toEqual({ active: true, focused: true, value: "What can you do?" });
+    return { context, cueStyle, input, page };
   }
 
   it("focuses and highlights the composer from the agent capabilities action", async () => {
-    const { context, input, page } = await openCapabilitiesPrompt("no-preference");
+    const { context, cueStyle, input, page } = await openCapabilitiesPrompt("no-preference");
 
     try {
-      await expect
-        .poll(() => input.evaluate((element) => getComputedStyle(element).animationName))
-        .toBe("chat-composer-prefill-attention");
-      const highlightedBackground = await input.evaluate(
-        (element) => getComputedStyle(element).backgroundColor,
-      );
+      expect(cueStyle).toMatchObject({
+        duration: "0.6s",
+        name: "chat-composer-prefill-attention",
+      });
       await captureSidebarUiProof(page, "capabilities-composer-focus.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
       expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        highlightedBackground,
+        cueStyle.background,
       );
     } finally {
       await suite.closeBrowserContext(context);
@@ -61,29 +81,17 @@ suite.define(() => {
   });
 
   it("keeps a static composer cue when reduced motion is requested", async () => {
-    const { context, input, page } = await openCapabilitiesPrompt("reduce");
+    const { context, cueStyle, input, page } = await openCapabilitiesPrompt("reduce");
 
     try {
-      await expect
-        .poll(() =>
-          input.evaluate((element) => {
-            const style = getComputedStyle(element);
-            return { animationName: style.animationName, boxShadow: style.boxShadow };
-          }),
-        )
-        .toEqual(expect.objectContaining({ animationName: "none" }));
-      await expect
-        .poll(() => input.evaluate((element) => getComputedStyle(element).boxShadow))
-        .not.toBe("none");
-      const highlightedBackground = await input.evaluate(
-        (element) => getComputedStyle(element).backgroundColor,
-      );
+      expect(cueStyle.name).toBe("none");
+      expect(cueStyle.boxShadow).not.toBe("none");
       await captureSidebarUiProof(page, "capabilities-composer-reduced-motion.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
       expect(await input.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe(
-        highlightedBackground,
+        cueStyle.background,
       );
     } finally {
       await suite.closeBrowserContext(context);

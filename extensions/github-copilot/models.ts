@@ -3,7 +3,6 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
-import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
@@ -17,7 +16,7 @@ import {
   resolveCopilotTransportApi,
   resolveStaticCopilotModelOverride,
 } from "./model-metadata.js";
-import { COPILOT_RUNTIME_INTEGRATION_ID } from "./runtime-identity.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 export const PROVIDER_ID = "github-copilot";
 
@@ -310,6 +309,7 @@ type FetchCopilotModelCatalogParams = {
   copilotApiToken: string;
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
+  headers?: Record<string, string>;
   /** Optional fetch override for testing. */
   fetchImpl?: typeof fetch;
   /** Optional AbortSignal; defaults to a 10s timeout. */
@@ -347,9 +347,8 @@ export async function fetchCopilotModelCatalog(
       method: "GET",
       headers: {
         Accept: "application/json",
+        ...buildCopilotRuntimeHeaders({ headers: params.headers }),
         Authorization: `Bearer ${params.copilotApiToken}`,
-        ...buildCopilotIdeHeaders(),
-        "Copilot-Integration-Id": COPILOT_RUNTIME_INTEGRATION_ID,
       },
       signal: params.signal ?? controller?.signal,
     });

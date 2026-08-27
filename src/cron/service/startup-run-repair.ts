@@ -71,6 +71,7 @@ export function markInterruptedStartupRun(params: {
   job.state.lastDelivered = false;
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
+  job.state.deliverySuppressionReason = undefined;
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
@@ -180,6 +181,7 @@ export function restoreFinalizedStartupRun(params: {
   job.state.lastDelivered = entry.delivered;
   job.state.lastDeliveryStatus = entry.deliveryStatus;
   job.state.lastDeliveryError = entry.deliveryError;
+  job.state.deliverySuppressionReason = entry.deliverySuppressionReason;
   if (entry.failureNotificationDelivery) {
     job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery.delivered;
     job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery.status;

@@ -935,6 +935,10 @@ openclaw-settings-save-indicator:empty {
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+.shell-nav-backdrop {
+  display: none;
+}
+
 /* The shell owns the resting boundary. The wider resize target takes over
    that same edge during interaction, avoiding a doubled divider. */
 .sidebar-resizer {

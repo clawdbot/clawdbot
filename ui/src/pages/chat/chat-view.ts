@@ -227,7 +227,6 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onSlashIntent?: () => void | Promise<void>;
     onSlashCommand?: (command: string) => void;
     onSend: ChatComposerProps["onSend"];
-    onCompact?: () => void | Promise<void>;
     onOpenSessionCheckpoints?: () => void | Promise<void>;
     onToggleRealtimeTalk?: () => void;
     onToggleRealtimeCamera?: () => void;
@@ -485,7 +484,6 @@ export function renderChat(props: ChatProps) {
     onSlashIntent: props.onSlashIntent,
     onSlashCommand: props.onSlashCommand,
     onSend: props.onSend,
-    onCompact: props.suggestionComposer ? undefined : props.onCompact,
     onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,

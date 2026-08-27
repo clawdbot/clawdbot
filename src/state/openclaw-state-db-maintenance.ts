@@ -20,6 +20,8 @@ import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-stat
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const STATE_V6_ADDITIVE_TABLES = [
+  // v6-v12 databases may predate this former same-version lazy table.
+  "gateway_origin_device_tokens",
   ...LAZY_ADDITIVE_STATE_TABLES,
   "worker_session_tool_operations",
   "worker_turn_tool_authorities",
@@ -51,6 +53,7 @@ const STATE_MIGRATION_ALLOWED_MISSING_TABLES = {
   9: STATE_V6_ADDITIVE_TABLES,
   10: STATE_V6_ADDITIVE_TABLES,
   11: STATE_V6_ADDITIVE_TABLES,
+  12: STATE_V6_ADDITIVE_TABLES,
 } as const satisfies Record<number, readonly string[]>;
 type OpenClawStateMigrationVersion = keyof typeof STATE_MIGRATION_ALLOWED_MISSING_TABLES;
 
@@ -169,7 +172,7 @@ function assertOpenClawStateDatabaseVersionForMigration(
 }
 
 /** Require every stable v5 table before the v6 additive migration can run. */
-export function assertOpenClawStateDatabaseV5ForMigration(
+function assertOpenClawStateDatabaseV5ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -177,7 +180,7 @@ export function assertOpenClawStateDatabaseV5ForMigration(
 }
 
 /** Require every stable v6 table before the v7 retirement migration can run. */
-export function assertOpenClawStateDatabaseV6ForMigration(
+function assertOpenClawStateDatabaseV6ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -185,7 +188,7 @@ export function assertOpenClawStateDatabaseV6ForMigration(
 }
 
 /** Require every stable v7 table before the v8 placement migration can run. */
-export function assertOpenClawStateDatabaseV7ForMigration(
+function assertOpenClawStateDatabaseV7ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -193,7 +196,7 @@ export function assertOpenClawStateDatabaseV7ForMigration(
 }
 
 /** Require every stable v8 table before the v9 registry migration can run. */
-export function assertOpenClawStateDatabaseV8ForMigration(
+function assertOpenClawStateDatabaseV8ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -201,7 +204,7 @@ export function assertOpenClawStateDatabaseV8ForMigration(
 }
 
 /** Require every stable v9 table before the v10 retirement migration can run. */
-export function assertOpenClawStateDatabaseV9ForMigration(
+function assertOpenClawStateDatabaseV9ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -209,7 +212,7 @@ export function assertOpenClawStateDatabaseV9ForMigration(
 }
 
 /** Require every stable v10 table before the v11 curator retirement can run. */
-export function assertOpenClawStateDatabaseV10ForMigration(
+function assertOpenClawStateDatabaseV10ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
@@ -217,12 +220,32 @@ export function assertOpenClawStateDatabaseV10ForMigration(
 }
 
 /** Require every stable v11 table before singleton state folds into the v12 store. */
-export function assertOpenClawStateDatabaseV11ForMigration(
+function assertOpenClawStateDatabaseV11ForMigration(
   database: DatabaseSync,
   options: { pathname: string },
 ): void {
   assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 11 });
 }
+
+/** Require every stable v12 table before wide rows become JSON-canonical. */
+function assertOpenClawStateDatabaseV12ForMigration(
+  database: DatabaseSync,
+  options: { pathname: string },
+): void {
+  assertOpenClawStateDatabaseVersionForMigration(database, { ...options, version: 12 });
+}
+
+/** Keep historical migration gates beside their version-specific ownership assertions. */
+export const openClawStateMigrationAssertions = new Map([
+  [5, assertOpenClawStateDatabaseV5ForMigration],
+  [6, assertOpenClawStateDatabaseV6ForMigration],
+  [7, assertOpenClawStateDatabaseV7ForMigration],
+  [8, assertOpenClawStateDatabaseV8ForMigration],
+  [9, assertOpenClawStateDatabaseV9ForMigration],
+  [10, assertOpenClawStateDatabaseV10ForMigration],
+  [11, assertOpenClawStateDatabaseV11ForMigration],
+  [12, assertOpenClawStateDatabaseV12ForMigration],
+]);
 
 export function markCurrentStateSchemaVersion(
   db: DatabaseSync,

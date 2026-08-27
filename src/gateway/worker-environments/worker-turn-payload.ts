@@ -35,7 +35,7 @@ import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
-import { parseWorkerAdmissionDeadlineResult } from "../../worker/worker-connection-contract.js";
+import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
@@ -248,47 +248,14 @@ export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   } catch (error) {
     throw new Error("Worker process returned invalid output", { cause: error });
   }
-  const admissionFailure = parseWorkerAdmissionDeadlineResult(value);
-  if (admissionFailure) {
-    throw new Error(admissionFailure.errorText);
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const result = parseWorkerRuntimeResult(value);
+  if (!result) {
     throw new Error("Worker process returned invalid output");
   }
-  const result = value as Record<string, unknown>;
-  if (
-    result.status === "failed" &&
-    result.reason === "turn-failed" &&
-    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
-    typeof result.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(result.transcriptNextSeq) &&
-    result.transcriptNextSeq >= 1 &&
-    Object.keys(result).every((key) =>
-      ["status", "reason", "transcriptLeafId", "transcriptNextSeq"].includes(key),
-    )
-  ) {
-    return result as StartedWorkerRuntimeResult;
+  if (result.status === "not-started") {
+    throw new Error(result.errorText);
   }
-  if (
-    result.status === "completed" &&
-    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
-    typeof result.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(result.transcriptNextSeq) &&
-    result.transcriptNextSeq >= 1 &&
-    Object.keys(result).every((key) =>
-      ["status", "transcriptLeafId", "transcriptNextSeq"].includes(key),
-    )
-  ) {
-    return result as StartedWorkerRuntimeResult;
-  }
-  if (
-    result.status === "fenced" &&
-    (result.reason === "credential-replaced" || result.reason === "owner-epoch-mismatch") &&
-    Object.keys(result).every((key) => ["status", "reason"].includes(key))
-  ) {
-    return result as StartedWorkerRuntimeResult;
-  }
-  throw new Error("Worker process returned invalid output");
+  return result;
 }
 
 export function assistantText(message: AgentMessage): string {

@@ -185,7 +185,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     legacyRunLogDetected,
     legacyQuarantine,
     legacyImportCount,
-    sqliteProjectionBackfillCount,
     rawJobs,
   } = state;
   const sqliteStorePath = resolveOpenClawStateSqlitePath();
@@ -305,16 +304,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     }
   }
 
-  if (sqliteProjectionBackfillCount > 0) {
-    findings.push(
-      legacyCronStoreFinding({
-        message: `${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns.`,
-        path: sqliteStorePath,
-        requirement: "sqlite-projection-backfill",
-      }),
-    );
-  }
-
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   if (notifyCount > 0) {
     findings.push(
@@ -381,7 +370,6 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyRunLogDetected,
     legacyQuarantine,
     legacyImportCount,
-    sqliteProjectionBackfillCount,
     invalidConfigRows,
     rawJobs,
   } = state;
@@ -598,11 +586,6 @@ export async function maybeRepairLegacyCronStore(params: {
   if (invalidConfigRows.length > 0) {
     previewLines.push(
       `- ${pluralize(invalidConfigRows.length, "malformed cron row")} will be quarantined in SQLite`,
-    );
-  }
-  if (sqliteProjectionBackfillCount > 0) {
-    previewLines.push(
-      `- ${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns`,
     );
   }
   if (notifyCount > 0) {

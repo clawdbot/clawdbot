@@ -255,6 +255,12 @@ sent through the Gateway so it shares the same session-store writer as runtime
 traffic. Use `--store <path>` for explicit offline repair of a legacy store
 selector.
 
+Offline cleanup loads trusted, permitted harness plugins so their session-owned
+resources are reclaimed with the deleted rows, even if the agent now uses a
+different model. Explicitly disabled or untrusted plugins are not run. If their
+resources may remain, cleanup prints a warning on stderr without changing the
+JSON result. Dry runs do not load harness plugins.
+
 `openclaw sessions cleanup --all-agents --dry-run --json`:
 
 ```json

@@ -45,7 +45,7 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
   clawhubPackage?: string;
   dryRun: boolean;
   run: () => Promise<T>;
-}): Promise<T | { kind: "exception"; message: string }> {
+}): Promise<T | { kind: "exception"; message: string; error: unknown }> {
   try {
     if (!params.clawhubPackage || params.dryRun) {
       return await params.run();
@@ -66,6 +66,7 @@ export async function runPluginUpdateWithClawHubLease<T>(params: {
     return {
       kind: "exception",
       message: `Failed to update ${params.pluginId}: ${error instanceof Error ? error.message : String(error)}`,
+      error,
     };
   }
 }

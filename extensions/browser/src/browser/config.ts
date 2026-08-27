@@ -36,7 +36,6 @@ import {
   DEFAULT_OPENCLAW_BROWSER_ENABLED,
   DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME,
 } from "./constants.js";
-import { resolveExtensionRelayToken } from "./extension-relay/relay-auth.js";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 
 export {
@@ -97,7 +96,7 @@ export type ResolvedBrowserConfig = {
   };
   /** Per-profile process-only Basic credentials for internal browser clients. */
   extensionRelayInternalTokens: Record<string, string>;
-  /** Persistent relay HMAC key (absent until pairing or relay startup creates it). */
+  /** Host-local HMAC key last adopted by the relay lifecycle, not raw config resolution. */
   extensionRelayToken?: string;
 };
 
@@ -417,9 +416,6 @@ export function resolveBrowserConfig(
 
   const headless = cfg?.headless === true;
   const headlessSource = typeof cfg?.headless === "boolean" ? "config" : "default";
-  // Host-local HMAC key (created lazily by relay startup / pairing). Null
-  // here just means the extension driver has not been used on this host yet.
-  const extensionRelayToken = resolveExtensionRelayToken() ?? undefined;
   const noSandbox = cfg?.noSandbox === true;
   const attachOnly = cfg?.attachOnly === true;
   const executablePath = normalizeExecutablePath(cfg?.executablePath);
@@ -488,7 +484,6 @@ export function resolveBrowserConfig(
       allowLegacyAuth: cfg?.extensionRelay?.allowLegacyAuth ?? true,
     },
     extensionRelayInternalTokens: {},
-    ...(extensionRelayToken ? { extensionRelayToken } : {}),
   };
 }
 

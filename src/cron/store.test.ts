@@ -138,6 +138,75 @@ describe("cron store", () => {
     expect(loaded).toEqual({ version: 1, jobs: [] });
   });
 
+  it.each([
+    {
+      name: "one-shot schedule without delivery",
+      schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+      delivery: { mode: "none" },
+      failureAlert: false,
+    },
+    {
+      name: "interval schedule with an explicitly empty failure alert",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+      delivery: { mode: "announce", channel: "telegram", threadId: 42 },
+      failureAlert: {},
+    },
+    {
+      name: "cron schedule with webhook delivery and populated failure alert",
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC", staggerMs: 0 },
+      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+      failureAlert: { after: 3, cooldownMs: 60_000, includeSkipped: true },
+    },
+    {
+      name: "process-exit schedule with explicit failure destination clears",
+      schedule: { kind: "on-exit", command: "./watch.sh", cwd: "/repo" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        failureDestination: { channel: undefined, to: "slack:C123", accountId: undefined },
+      },
+      failureAlert: { channel: "slack", to: "slack:C123", mode: "announce" },
+    },
+    {
+      name: "stream schedule with completion webhook",
+      schedule: {
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+      },
+      delivery: {
+        mode: "announce",
+        to: "telegram:chat",
+        completionDestination: { mode: "webhook", to: "https://example.invalid/complete" },
+      },
+      failureAlert: { accountId: "bot-1", mode: "webhook" },
+    },
+  ] satisfies Array<{
+    name: string;
+    schedule: CronStoreFile["jobs"][number]["schedule"];
+    delivery: NonNullable<CronStoreFile["jobs"][number]["delivery"]>;
+    failureAlert: NonNullable<CronStoreFile["jobs"][number]["failureAlert"]>;
+  }>)(
+    "preserves the complete job for $name",
+    async ({ name, schedule, delivery, failureAlert }) => {
+      const { storePath } = await makeStorePath();
+      const job = expectDefined(makeStore(name, true).jobs[0], "cron round-trip fixture");
+      Object.assign(job, {
+        schedule,
+        delivery,
+        failureAlert,
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "run" },
+      });
+
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+      expect((await loadCronStore(storePath)).jobs[0]).toStrictEqual(job);
+    },
+  );
+
   it("throws when doctor migration reads invalid legacy JSON", async () => {
     const store = await makeStorePath();
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
@@ -416,7 +485,9 @@ describe("cron store", () => {
     surviving.state = { nextRunAtMs: 987_654 };
     await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
     openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET schedule_kind = ? WHERE store_key = ? AND job_id = ?")
+      .db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.kind', ?) WHERE store_key = ? AND job_id = ?",
+      )
       .run("unsupported", path.resolve(storePath), malformed.id);
 
     const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
@@ -621,6 +692,26 @@ describe("cron store", () => {
     expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject(job.state);
   });
 
+  it("normalizes legacy run-status aliases into canonical runtime state JSON", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("legacy-run-status", true);
+    const job = expectDefined(payload.jobs[0], "legacy run-status fixture");
+    job.state = { lastStatus: "ok" };
+
+    await saveCronStore(store.storePath, payload);
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toEqual({
+      lastStatus: "ok",
+      lastRunStatus: "ok",
+    });
+
+    job.state = { lastStatus: "error" };
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toEqual({
+      lastStatus: "error",
+      lastRunStatus: "error",
+    });
+  });
+
   it("stores queued reservations separately from active run markers", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-queued-phase", true);
@@ -635,10 +726,11 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
 
     const queuedRow = openOpenClawStateDatabase()
-      .db.prepare("SELECT running_at_ms, state_json FROM cron_jobs WHERE job_id = ?")
-      .get(job.id) as { running_at_ms: number | null; state_json: string };
-    expect(queuedRow.running_at_ms).toBeNull();
-    expect(JSON.parse(queuedRow.state_json)).toMatchObject({
+      .db.prepare("SELECT state_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { state_json: string };
+    const queuedState = JSON.parse(queuedRow.state_json) as Record<string, unknown>;
+    expect(queuedState.runningAtMs).toBeUndefined();
+    expect(queuedState).toMatchObject({
       queuedAtMs: job.createdAtMs + 1,
       startupCatchupAtMs: job.createdAtMs,
       pacedNextRunAtMs: job.createdAtMs,
@@ -805,7 +897,7 @@ describe("cron store", () => {
     const database = openOpenClawStateDatabase().db;
     database
       .prepare(
-        "UPDATE cron_jobs SET payload_tools_allow_json = ?, payload_tools_allow_is_default = 0 WHERE job_id = ?",
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.payload.toolsAllow', json(?), '$.payload.toolsAllowIsDefault', json('false')) WHERE job_id = ?",
       )
       .run(JSON.stringify(["read"]), job.id);
 
@@ -821,7 +913,7 @@ describe("cron store", () => {
     // Reverting the visible cap cannot revive the retired envelope.
     database
       .prepare(
-        "UPDATE cron_jobs SET payload_tools_allow_json = ?, payload_tools_allow_is_default = 1 WHERE job_id = ?",
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.payload.toolsAllow', json(?), '$.payload.toolsAllowIsDefault', json('true')) WHERE job_id = ?",
       )
       .run(JSON.stringify(["read", "cron"]), job.id);
     const reverted = (await loadCronStore(storePath)).jobs[0];
@@ -1017,7 +1109,7 @@ describe("cron store", () => {
     });
   });
 
-  it("round-trips completion destinations through SQLite delivery columns", async () => {
+  it("round-trips completion destinations through canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
       makeStore("sqlite-webhook-delivery-job", true).jobs[0],
@@ -1052,7 +1144,7 @@ describe("cron store", () => {
     });
   });
 
-  it("round-trips a numeric delivery thread id through SQLite delivery columns", async () => {
+  it("round-trips a numeric delivery thread id through canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
       makeStore("sqlite-numeric-thread-id-job", true).jobs[0],
@@ -1073,7 +1165,7 @@ describe("cron store", () => {
   });
 
   it.each(["42", "1737500000.123456", "007"])(
-    "keeps a numeric-looking delivery thread id %s as a string through SQLite delivery columns",
+    "keeps a numeric-looking delivery thread id %s as a string through canonical cron job JSON",
     async (threadId) => {
       const { storePath } = await makeStorePath();
       const job = expectDefined(
@@ -1095,51 +1187,7 @@ describe("cron store", () => {
     },
   );
 
-  it("does not resurrect a cleared thread id from the stored config copy", async () => {
-    const { storePath } = await makeStorePath();
-    const job = expectDefined(
-      makeStore("sqlite-early-row-thread-id-job", true).jobs[0],
-      'makeStore("sqlite-early-row-thread-id-job", true).jobs[0] test invariant',
-    );
-    job.delivery = {
-      mode: "announce",
-      channel: "telegram",
-      to: "telegram:chat-1",
-      threadId: 1008013,
-    };
-
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = NULL WHERE job_id = ?")
-      .run(job.id);
-
-    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
-    expect(loadedThreadId).toBeUndefined();
-  });
-
-  it("uses the normalized thread id when the stored config copy is stale", async () => {
-    const { storePath } = await makeStorePath();
-    const job = expectDefined(
-      makeStore("sqlite-stale-thread-id-job", true).jobs[0],
-      'makeStore("sqlite-stale-thread-id-job", true).jobs[0] test invariant',
-    );
-    job.delivery = {
-      mode: "announce",
-      channel: "telegram",
-      to: "telegram:chat-1",
-      threadId: 1008013,
-    };
-
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = ? WHERE job_id = ?")
-      .run("replacement", job.id);
-
-    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
-    expect(loadedThreadId).toBe("replacement");
-  });
-
-  it("disambiguates identical thread id text using the normalized type marker", async () => {
+  it("preserves distinct numeric and string thread identities in canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const numberJob = expectDefined(
       makeStore("sqlite-thread-id-number", true).jobs[0],
@@ -1166,7 +1214,7 @@ describe("cron store", () => {
     expect(typeof jobs[1]?.delivery?.threadId).toBe("string");
   });
 
-  it("round-trips explicit failure destination field clears through SQLite delivery columns", async () => {
+  it("round-trips explicit failure destination field clears through canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
       makeStore("sqlite-failure-destination-clear-job", true).jobs[0],
@@ -1187,6 +1235,16 @@ describe("cron store", () => {
     };
 
     await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const row = openOpenClawStateDatabase()
+      .db.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { job_json: string };
+    expect(JSON.parse(row.job_json).delivery.failureDestination).toEqual({
+      channel: null,
+      to: "slack:C123",
+      accountId: null,
+      mode: null,
+    });
 
     const delivery = (await loadCronStore(storePath)).jobs[0]?.delivery;
     expect(delivery?.failureDestination).toEqual({

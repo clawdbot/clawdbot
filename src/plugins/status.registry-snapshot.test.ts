@@ -3,12 +3,16 @@ import path from "node:path";
 // Covers plugin status snapshots built from registry state.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { computeDeclaredSurfaceHash } from "./capability-consent.js";
+import { buildPluginCapabilitySummary } from "./capability-summary.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
+import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
   buildPluginDiagnosticsReport,
   buildPluginRegistrySnapshotReport,
@@ -324,6 +328,79 @@ describe("buildPluginRegistrySnapshotReport", () => {
     expect(plugin.dependencyStatus).toBeUndefined();
     expect(report.diagnostics).toEqual([]);
   });
+
+  it.each([
+    { consent: "missing", enabled: true, tracked: true, warns: true },
+    { consent: "stale", enabled: true, tracked: true, warns: true },
+    { consent: "current", enabled: true, tracked: true, warns: false },
+    { consent: "missing", enabled: false, tracked: true, warns: false },
+    { consent: "missing", enabled: true, tracked: false, warns: false },
+  ] as const)(
+    "projects capability-consent diagnostics for $consent acceptance, enabled=$enabled, tracked=$tracked",
+    ({ consent, enabled, tracked, warns }) => {
+      const tempRoot = makeTempDir();
+      const stateDir = path.join(tempRoot, "state");
+      const fixture = createGlobalPluginFixture(stateDir, "consent-demo");
+      const env = {
+        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      };
+      const config = {
+        plugins: { entries: { [fixture.pluginId]: { enabled } } },
+      };
+      const { declared } = buildPluginCapabilitySummary({
+        manifest: { channels: [fixture.channelId], providers: [fixture.providerId] },
+        origin: "global",
+      });
+      const acceptedSurface = consent === "stale" ? { ...declared, providers: [] } : declared;
+      const installRecord: PluginInstallRecord = {
+        source: "path",
+        installPath: fixture.rootDir,
+        integrity: "sha256-consent-fixture",
+        ...(consent !== "missing"
+          ? {
+              acceptedSurface,
+              acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
+              acceptedSurfaceIntegrity: "sha256-consent-fixture",
+            }
+          : {}),
+      };
+      const index = loadInstalledPluginIndex({
+        config,
+        env,
+        installRecords: tracked ? { [fixture.pluginId]: installRecord } : {},
+      });
+      writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+      for (const buildReport of [buildPluginRegistrySnapshotReport, buildPluginSnapshotReport]) {
+        const diagnostics = buildReport({ config, env }).diagnostics.filter(
+          (diagnostic) =>
+            diagnostic.pluginId === fixture.pluginId &&
+            diagnostic.message.includes("requires capability consent"),
+        );
+        expect(diagnostics).toHaveLength(warns ? 1 : 0);
+        if (warns) {
+          expect(diagnostics[0]).toEqual({
+            level: "warn",
+            pluginId: fixture.pluginId,
+            message: expect.stringContaining("--accept-capabilities"),
+          });
+        }
+      }
+      if (consent === "current") {
+        expect(
+          collectPluginCapabilityConsentDiagnostics({ index, manifests: new Map() }),
+        ).toContainEqual(
+          expect.objectContaining({
+            level: "warn",
+            pluginId: fixture.pluginId,
+          }),
+        );
+      }
+      expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
+    },
+  );
 
   it("keeps recovered managed npm plugins visible when the persisted registry is stale", () => {
     const tempRoot = makeTempDir();

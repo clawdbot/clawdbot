@@ -8,10 +8,13 @@ import {
 } from "../../config/sessions.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
+import type { RestartRecoveryCandidate } from "../../gateway/chat-abort.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../infra/agent-run-registry.js";
-import { collectActiveSessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import {
+  collectActiveSessionWorkAdmissions,
+  isSessionWorkAdmissionTargetActive,
+} from "../../sessions/session-lifecycle-admission.js";
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
@@ -99,47 +102,17 @@ export async function markRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   additionalCfgs?: Iterable<OpenClawConfig | undefined>;
   stateDir?: string;
-  sessionKeys?: Iterable<string>;
-  sessionIds?: Iterable<string>;
-  activeRuns?: Iterable<
-    RestartRecoveryRun & {
-      sessionKey: string;
-      sessionId: string;
-      observedAt?: number;
-    }
-  >;
-  isActiveRun?: (
-    run: RestartRecoveryRun & {
-      sessionKey: string;
-      sessionId: string;
-      observedAt?: number;
-    },
-  ) => boolean;
+  activeRuns: Iterable<RestartRecoveryCandidate>;
+  isActiveRun?: (run: RestartRecoveryCandidate) => boolean;
   reason?: string;
 }): Promise<{ marked: number; skipped: number }> {
-  const sessionKeys = normalizeStringSet(params.sessionKeys);
-  const sessionIds = normalizeStringSet(params.sessionIds);
-  const preferSessionIdMatch = sessionIds.size > 0;
-  const activeRuns = [...(params.activeRuns ?? [])]
-    .map((run) => ({
-      runId: run.runId.trim(),
-      lifecycleGeneration: run.lifecycleGeneration.trim(),
-      sessionKey: run.sessionKey.trim(),
-      sessionId: run.sessionId.trim(),
-      observedAt: normalizeFiniteTimestamp(run.observedAt),
-    }))
-    .filter((run) => run.runId && run.lifecycleGeneration && (run.sessionKey || run.sessionId));
+  const activeRuns = [...params.activeRuns];
   const currentLifecycleGeneration = getAgentEventLifecycleGeneration();
   const result = { marked: 0, skipped: 0 };
   // Channel work can outlive its chat-run registration. The admission owner
   // retains the authoritative store and session identities until the turn releases.
   const activeAdmissions = collectActiveSessionWorkAdmissions();
-  if (
-    sessionKeys.size === 0 &&
-    sessionIds.size === 0 &&
-    activeRuns.length === 0 &&
-    activeAdmissions.size === 0
-  ) {
+  if (activeRuns.length === 0 && activeAdmissions.size === 0) {
     return result;
   }
 
@@ -162,25 +135,6 @@ export async function markRestartAbortedMainSessions(params: {
         `failed to resolve configured session stores for restart marker: ${String(err)}`,
       );
     }
-    for (const sessionKey of preferSessionIdMatch ? [] : sessionKeys) {
-      try {
-        const target = resolveGatewaySessionStoreTarget({
-          cfg,
-          key: sessionKey,
-        });
-        storePaths.add(path.resolve(target.storePath));
-        for (const storeKey of target.storeKeys) {
-          const trimmed = storeKey.trim();
-          if (trimmed) {
-            sessionKeys.add(trimmed);
-          }
-        }
-      } catch (err) {
-        mainSessionRecoveryLog.warn(
-          `failed to resolve session store for restart marker ${sessionKey}: ${String(err)}`,
-        );
-      }
-    }
   }
 
   for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
@@ -191,17 +145,15 @@ export async function markRestartAbortedMainSessions(params: {
     storePaths.add(storePath);
   }
   for (const storePath of storePaths) {
-    const activeAdmissionIdentities = activeAdmissions.get(storePath) ?? new Set<string>();
     const storeResult = await markRecoveryStore({
       storePath,
       plan: (entry, sessionKey) => {
-        const registeredActiveRuns = listAgentRunsForSession({
-          sessionKey,
-          sessionId: entry.sessionId,
-        });
+        // The shutdown owner supplies paired identities. Recheck ownership after
+        // store discovery; an ID collision must not select a row or attach its fences.
         const matchingActiveRuns = activeRuns.filter(
           (run) =>
-            (run.sessionId ? run.sessionId === entry.sessionId : run.sessionKey === sessionKey) &&
+            run.sessionKey === sessionKey &&
+            run.sessionId === entry.sessionId &&
             (entry.status === "running" ||
               run.observedAt === undefined ||
               normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
@@ -209,24 +161,12 @@ export async function markRestartAbortedMainSessions(params: {
                 run.lifecycleGeneration !== currentLifecycleGeneration)) &&
             params.isActiveRun?.(run) !== false,
         );
-        if (
-          entry.status !== "running" &&
-          matchingActiveRuns.length === 0 &&
-          registeredActiveRuns.length === 0 &&
-          !activeAdmissionIdentities.has(sessionKey) &&
-          !activeAdmissionIdentities.has(entry.sessionId)
-        ) {
-          return undefined;
-        }
-        const matchedActiveAdmission =
-          activeAdmissionIdentities.has(sessionKey) ||
-          activeAdmissionIdentities.has(entry.sessionId);
-        const matches =
-          matchedActiveAdmission ||
-          (typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
-            ? true
-            : !preferSessionIdMatch && sessionKeys.has(sessionKey));
-        if (!matches) {
+        const matchedActiveAdmission = isSessionWorkAdmissionTargetActive({
+          scope: storePath,
+          sessionKey,
+          sessionId: entry.sessionId,
+        });
+        if (matchingActiveRuns.length === 0 && !matchedActiveAdmission) {
           return undefined;
         }
         const wasRunning = entry.status === "running";
@@ -234,7 +174,7 @@ export async function markRestartAbortedMainSessions(params: {
           ...(entry.restartRecoveryRuns ?? []).filter(
             (run) => run.lifecycleGeneration === currentLifecycleGeneration,
           ),
-          ...registeredActiveRuns,
+          ...listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }),
           ...matchingActiveRuns.map(({ runId, lifecycleGeneration }) => ({
             runId,
             lifecycleGeneration,

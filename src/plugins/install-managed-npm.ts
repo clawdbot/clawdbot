@@ -64,6 +64,7 @@ import {
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
+  PluginInstallArtifactConsentHandler,
   PluginInstallLogger,
   PluginInstallPolicyRequest,
 } from "./install-types.js";
@@ -94,6 +95,7 @@ export async function installPluginFromManagedNpmRoot(
     expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -586,6 +588,20 @@ export async function installPluginFromManagedNpmRoot(
     });
     if (!result.ok) {
       return await rollbackFailedManagedNpmInstall(result);
+    }
+    try {
+      await params.onBeforePluginArtifactCommit?.({
+        pluginId: result.pluginId,
+        ...(policyMode === "update" ? { currentArtifactDir: installRoot } : {}),
+        stagedArtifactDir: installRoot,
+        mode: policyMode,
+      });
+    } catch (error) {
+      await rollbackFailedManagedNpmInstall({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      throw error;
     }
     return {
       ...result,
