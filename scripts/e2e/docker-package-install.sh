@@ -66,15 +66,17 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
   bash -lc '
     set -euo pipefail
     export PNPM_HOME=/tmp/pnpm-home
-    export PATH="$PNPM_HOME:$PATH"
+    # pnpm stores global executables in the bin subdirectory of PNPM_HOME.
+    export PATH="$PNPM_HOME/bin:$PATH"
     corepack prepare "$1" --activate
-    pnpm config set global-bin-dir "$PNPM_HOME"
-    pnpm config set global-dir /tmp/pnpm-global
-    pnpm add --global --allow-build=openclaw /tmp/openclaw-current.tgz
-    test "$(command -v openclaw)" = "$PNPM_HOME/openclaw"
+    pnpm add --global openclaw@file:/tmp/openclaw-current.tgz
+    test "$(command -v openclaw)" = "$PNPM_HOME/bin/openclaw"
     pnpm list --global --json > /tmp/pnpm-packages.json
     package_root="$(node -p "require(\"/tmp/pnpm-packages.json\")[0].dependencies.openclaw.path")"
     test -f "$package_root/package.json"
+    # Tarball builds require their dependency path, relative to the install group.
+    artifact_build="$(node -p "const path = require(\"node:path\"); \"openclaw@file:\" + path.relative(path.resolve(process.argv[1], \"../..\"), \"/tmp/openclaw-current.tgz\")" "$package_root")"
+    pnpm approve-builds --global "$artifact_build"
     printf "%s\n" "$package_root" > /tmp/openclaw-package-root
     openclaw --version > /tmp/openclaw-version
     openclaw --help > /tmp/openclaw-help
@@ -161,7 +163,7 @@ node --import tsx "$ROOT_DIR/scripts/e2e/lib/docker-artifact-proof/write-identit
   --detail "pnpm:installedPackageRoot=$PNPM_PACKAGE_ROOT" \
   --detail "pnpm:installedPackageVersion=$PNPM_PACKAGE_VERSION" \
   --detail "pnpm:openclawVersion=$PNPM_INSTALLED_VERSION" \
-  --detail "pnpm:openclawPath=/tmp/pnpm-home/openclaw" \
+  --detail "pnpm:openclawPath=/tmp/pnpm-home/bin/openclaw" \
   --detail "pnpm:helpCommand=passed" \
   --detail "bun:installedPackageVersion=$PACKAGE_VERSION" \
   --detail "bun:openclawVersion=$BUN_INSTALLED_VERSION" \
