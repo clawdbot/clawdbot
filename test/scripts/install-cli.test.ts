@@ -666,7 +666,7 @@ describe("install-cli.sh", () => {
       'require_openclaw_version_compatible "$resolved_version"',
     );
     const dependencyInstallIndex = script.indexOf(
-      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install --prefer-offline "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
     );
     const wrapperIndex = script.indexOf(
       'publish_executable_wrapper "${PREFIX}/bin/openclaw"',
@@ -963,7 +963,7 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("branch=--no-frozen-lockfile");
     expect(result.stdout).toContain("tag=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install --prefer-offline "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
     );
   });
 
@@ -971,6 +971,28 @@ describe("install-cli.sh", () => {
     expect(script).toContain("activate_repo_pnpm_version()");
     expect(script).toContain('"$corepack_cmd" prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+  });
+
+  it("preserves explicit pnpm prefer-offline settings", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      unset PNPM_CONFIG_PREFER_OFFLINE pnpm_config_prefer_offline
+      if should_prefer_offline_pnpm_install; then printf 'default=true\\n'; fi
+      PNPM_CONFIG_PREFER_OFFLINE=false
+      if should_prefer_offline_pnpm_install; then printf 'upper=true\\n'; else printf 'upper=false\\n'; fi
+      unset PNPM_CONFIG_PREFER_OFFLINE
+      pnpm_config_prefer_offline=false
+      if should_prefer_offline_pnpm_install; then printf 'lower=true\\n'; else printf 'lower=false\\n'; fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("default=true");
+    expect(result.stdout).toContain("upper=false");
+    expect(result.stdout).toContain("lower=false");
+    expect(script).toContain(
+      'run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"',
+    );
   });
 
   it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {

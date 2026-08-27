@@ -837,6 +837,10 @@ run_pnpm() {
   "${PNPM_CMD[@]}" "$@"
 }
 
+should_prefer_offline_pnpm_install() {
+  [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]]
+}
+
 to_lowercase_ascii() {
   printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
 }
@@ -1650,8 +1654,12 @@ install_openclaw_from_git() {
 
   local install_lockfile_flag
   install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+  local -a pnpm_prefer_offline_args=()
+  if should_prefer_offline_pnpm_install; then
+    pnpm_prefer_offline_args=(--prefer-offline)
+  fi
   emit_json step name dependencies status start
-  CI="${CI:-true}" run_pnpm -C "$repo_dir" install --prefer-offline "$install_lockfile_flag"
+  CI="${CI:-true}" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
   emit_json step name dependencies status ok
 
   emit_json step name control-ui status start

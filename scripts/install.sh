@@ -2585,6 +2585,10 @@ run_pnpm() {
     "${PNPM_CMD[@]}" "$@"
 }
 
+should_prefer_offline_pnpm_install() {
+    [[ -z "${PNPM_CONFIG_PREFER_OFFLINE+x}" && -z "${pnpm_config_prefer_offline+x}" ]]
+}
+
 resolve_git_openclaw_ref() {
     local requested="${OPENCLAW_VERSION:-latest}"
     local resolved_version=""
@@ -3265,7 +3269,11 @@ install_openclaw_from_git() {
 
     local install_lockfile_flag
     install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
-    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install --prefer-offline "$install_lockfile_flag"
+    local -a pnpm_prefer_offline_args=()
+    if should_prefer_offline_pnpm_install; then
+        pnpm_prefer_offline_args=(--prefer-offline)
+    fi
+    CI="${CI:-true}" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "${pnpm_prefer_offline_args[@]}" "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
