@@ -128,7 +128,6 @@ internal suspend fun requestPhoneRealtimeSessionWithLanguageFallback(
 private enum class TalkStatusState {
   Off,
   Active,
-  SpeakFailure,
   TalkFailure,
 }
 
@@ -292,11 +291,11 @@ class TalkModeManager internal constructor(
     setStatus(TalkStatus(text = text, state = state, awaitingAgent = awaitingAgent))
   }
 
-  private fun setStatus(status: TalkStatus) =
-    synchronized(playbackLock) {
-      currentStatus = status
-      publishPlaybackState()
-    }
+  private fun setStatus(status: TalkStatus) {
+    currentStatus = status
+    _statusText.value = status.text
+    _awaitingAgent.value = status.awaitingAgent
+  }
 
   private fun setTalkFailure(text: NativeText) {
     setStatus(text, state = TalkStatusState.TalkFailure)
@@ -402,11 +401,9 @@ class TalkModeManager internal constructor(
   private var playbackEnabled = true
   private val playbackGeneration = AtomicLong(0L)
 
-  private enum class PlaybackPhase(
-    val status: TalkStatus,
-  ) {
-    Preparing(TalkStatus(nativeText("Generating voice…"), TalkStatusState.Active, awaitingAgent = true)),
-    Playing(TalkStatus(nativeText("Speaking…"), TalkStatusState.Active)),
+  private enum class PlaybackPhase {
+    Preparing,
+    Playing,
   }
 
   private data class PlaybackLease(
@@ -1028,7 +1025,7 @@ class TalkModeManager internal constructor(
         if (err is CancellationException) return@launch
         setStatus(nativeText("Start failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
         Log.w(tag, "start failed: ${err.message ?: err::class.simpleName}")
-        stopRealtimeRelay(closeSession = false)
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
         disableRealtimeModeAndNotifyOwner()
       }
     }
@@ -1218,7 +1215,7 @@ class TalkModeManager internal constructor(
   ) {
     if (realtimeSessionId != sessionId) return
     setTalkFailure(nativeText("Talk failed: \$message", message))
-    stopRealtimeRelay(cancelCapture = false, cancelAppend = false)
+    stopRealtimeRelay(cancelCapture = false, cancelAppend = false, preserveStatus = true)
     disableRealtimeModeAndNotifyOwner()
   }
 
@@ -1424,7 +1421,7 @@ class TalkModeManager internal constructor(
         val closeStatus =
           currentStatus.takeIf { it.state == TalkStatusState.TalkFailure } ?: realtimeCloseStatus(closeReason)
         Log.d(tag, "realtime close reason=$closeReason")
-        stopRealtimeRelay(closeSession = false)
+        stopRealtimeRelay(closeSession = false, preserveStatus = true)
         if (_isEnabled.value) {
           _isEnabled.value = false
           setStatus(closeStatus)
@@ -1558,6 +1555,7 @@ class TalkModeManager internal constructor(
       _outputLevel.value =
         TalkAudioLevel.smoothed(_outputLevel.value ?: 0f, TalkAudioLevel.pcm16Level(bytes, writtenBytes))
       setRealtimePlaying(true)
+      setStatus(nativeText("Speaking…"))
       val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
       realtimeWrittenFrames += writtenBytes / 2L
       val now = SystemClock.elapsedRealtime()
@@ -1640,6 +1638,9 @@ class TalkModeManager internal constructor(
             }
           acknowledgeRealtimePlaybackMarks(completed)
           if (idle) {
+            if (_isEnabled.value && realtimeSessionId != null) {
+              setStatus(nativeText("Listening"))
+            }
             return@launch
           }
         }
@@ -1671,13 +1672,20 @@ class TalkModeManager internal constructor(
       setRealtimePlaying(false)
     }
     _outputLevel.value = null
+    if (_isEnabled.value) {
+      setStatus(nativeText("Listening"))
+    }
   }
 
   private fun stopRealtimeRelay(
     closeSession: Boolean = true,
     cancelCapture: Boolean = true,
     cancelAppend: Boolean = true,
+    preserveStatus: Boolean = false,
   ) {
+    // Preserve the canonical status as one value so cleanup cannot split its
+    // user-visible text from typed failure and awaiting-agent semantics.
+    val status = currentStatus
     val (sessionId, captureJobs) =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
@@ -1707,6 +1715,9 @@ class TalkModeManager internal constructor(
     _speechActive.value = false
     _inputLevel.value = 0f
     stopRealtimePlayback()
+    if (preserveStatus) {
+      setStatus(status)
+    }
     _isListening.value = false
     if (closeSession && !sessionId.isNullOrBlank()) {
       gatewayWorkScope.launch {
@@ -1742,7 +1753,7 @@ class TalkModeManager internal constructor(
       )
     ) {
       Log.w(tag, "realtime output cancellation was not confirmed; closing relay")
-      stopRealtimeRelay()
+      stopRealtimeRelay(preserveStatus = true)
       synchronized(realtimeCapturePauseLock) {
         realtimeCapturePause =
           RealtimeCapturePause(
@@ -1794,7 +1805,7 @@ class TalkModeManager internal constructor(
       RealtimeCaptureResume.Restart -> start()
       RealtimeCaptureResume.Disconnected -> {
         setStatus(nativeText("Gateway not connected"))
-        stopRealtimeRelay()
+        stopRealtimeRelay(preserveStatus = true)
         disableRealtimeModeAndNotifyOwner()
       }
     }
@@ -2739,7 +2750,7 @@ class TalkModeManager internal constructor(
         ensurePlaybackActive(playbackToken)
         _lastAssistantText.value = cleaned
         lastSpokenText = cleaned
-        setStatus(nativeText("Listening"))
+        setStatus(nativeText("Generating voice…"), awaitingAgent = true)
       }
       try {
         val started = SystemClock.elapsedRealtime()
@@ -2777,7 +2788,8 @@ class TalkModeManager internal constructor(
         // Cancellation does not join: an old caller can finish after its replacement.
         if (localPlayback === lease) {
           localPlayback = null
-          failure?.let { setStatus(it, state = TalkStatusState.SpeakFailure) } ?: publishPlaybackState()
+          publishSpeakingState()
+          failure?.let { setStatus(it) }
         }
       }
       if (shouldResumeAfterSpeak) {
@@ -2794,7 +2806,7 @@ class TalkModeManager internal constructor(
         val token = playbackGeneration.incrementAndGet()
         val job = localPlayback?.job
         localPlayback = null
-        publishPlaybackState()
+        publishSpeakingState()
         token to job
       }
     // SystemSpeech's beforeSpeak callback takes playbackLock; never reverse that edge.
@@ -2806,19 +2818,14 @@ class TalkModeManager internal constructor(
 
   private fun setRealtimePlaying(playing: Boolean) =
     synchronized(playbackLock) {
-      val starting = playing && !realtimePlaying
       realtimePlaying = playing
-      if (starting) setStatus(nativeText("Listening")) else publishPlaybackState()
+      publishSpeakingState()
     }
 
   // Called under playbackLock; realtime producers enter only from realtimePlaybackLock.
-  // Playback overlays the base status without erasing what completion must reveal.
-  private fun publishPlaybackState() {
-    val phase = if (realtimePlaying) PlaybackPhase.Playing else localPlayback?.phase
-    _isSpeaking.value = phase == PlaybackPhase.Playing
-    val status = if (currentStatus.state == TalkStatusState.Active) phase?.status ?: currentStatus else currentStatus
-    _statusText.value = status.text
-    _awaitingAgent.value = status.awaitingAgent
+  // Either source can keep speaking after the other source completes or is cancelled.
+  private fun publishSpeakingState() {
+    _isSpeaking.value = realtimePlaying || localPlayback?.phase == PlaybackPhase.Playing
   }
 
   private fun markAudioPlaybackStarting(playbackToken: Long) {
@@ -2827,7 +2834,8 @@ class TalkModeManager internal constructor(
       val lease = localPlayback
       if (lease?.token != playbackToken || !lease.job.isActive) throw CancellationException("assistant speech cancelled")
       lease.phase = PlaybackPhase.Playing
-      publishPlaybackState()
+      publishSpeakingState()
+      setStatus(nativeText("Speaking…"))
     }
     ensureInterruptListener()
     requestAudioFocusForTts()

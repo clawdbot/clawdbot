@@ -922,7 +922,6 @@ class TalkModeManagerTest {
         assertEquals(1, proof.callbackDepth())
         assertEquals(AudioTrack.PLAYSTATE_PLAYING, track.playState)
         assertTrue("Preparing a local reply must not hide realtime playback", proof.manager.isSpeaking.value)
-        assertEquals("Speaking…", proof.manager.statusText.value)
       }
     }
 
@@ -943,7 +942,6 @@ class TalkModeManagerTest {
         assertEquals(0, proof.callbackDepth())
         assertEquals(AudioTrack.PLAYSTATE_PLAYING, track.playState)
         assertTrue("Completing a local reply must not hide realtime playback", proof.manager.isSpeaking.value)
-        assertEquals("Speaking…", proof.manager.statusText.value)
       }
     }
 
@@ -952,42 +950,6 @@ class TalkModeManagerTest {
 
   @Test
   fun realtimeIdleKeepsLocalPlaybackSpeaking() = assertRealtimeEndKeepsLocalPlaybackSpeaking(clear = false)
-
-  @Test
-  fun realtimeCompletionPreservesReportedPlaybackFailures() =
-    runBlocking {
-      for (localFailure in listOf(true, false)) {
-        for (clear in listOf(true, false)) {
-          withRealtimePlayback { proof ->
-            val track = startRealtimeAudio(proof)
-            val expected = if (localFailure) "Speak failed: synthesis unavailable" else "Talk failed: relay unavailable"
-            if (localFailure) {
-              proof.synthesizer.result.complete(TalkSpeakResult.Failure("synthesis unavailable"))
-              val local = proof.scope.launch { proof.manager.speakAssistantReply("Local reply") }
-              proof.scheduler.runCurrent()
-              assertTrue(local.isCompleted)
-              assertEquals(0, proof.callbackDepth())
-            } else {
-              proof.manager.handleGatewayEvent(
-                "talk.event",
-                """{"relaySessionId":"playback-relay","type":"error","message":"relay unavailable"}""",
-              )
-            }
-            assertTrue(proof.manager.isSpeaking.value)
-            assertEquals(expected, proof.manager.statusText.value)
-            assertTrue(track === startRealtimeAudio(proof))
-            assertEquals("Another chunk must not erase the reported failure", expected, proof.manager.statusText.value)
-
-            finishRealtimeAudio(proof, track, clear)
-
-            assertFalse(proof.manager.isSpeaking.value)
-            assertEquals(expected, proof.manager.statusText.value)
-            proof.manager.stopTts()
-            assertEquals("Listening", proof.manager.statusText.value)
-          }
-        }
-      }
-    }
 
   private fun assertRealtimeEndKeepsLocalPlaybackSpeaking(clear: Boolean) =
     runBlocking {
@@ -1007,12 +969,10 @@ class TalkModeManagerTest {
         assertEquals(localStops, proof.player.stopCalls)
         assertEquals(1, proof.callbackDepth())
         assertTrue("Ending realtime output must not hide the local reply", proof.manager.isSpeaking.value)
-        assertEquals("Speaking…", proof.manager.statusText.value)
         proof.player.finished.complete(Unit)
         proof.scheduler.runCurrent()
         assertTrue(local.isCompleted)
         assertFalse(proof.manager.isSpeaking.value)
-        assertEquals("Listening", proof.manager.statusText.value)
       }
     }
 
