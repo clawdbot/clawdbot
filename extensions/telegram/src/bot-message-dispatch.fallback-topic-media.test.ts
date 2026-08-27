@@ -2,6 +2,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { dispatchReplyWithBufferedBlockDispatcher as dispatchThroughSharedOwner } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTelegramDispatch,
@@ -227,16 +228,20 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     );
   });
 
-  it("delivers a visible failure when a message-tool-only agent run fails after admission", async () => {
-    const channelInbound = await import("openclaw/plugin-sdk/channel-inbound");
-    vi.spyOn(channelInbound, "readAgentRunTerminalOutcome").mockReturnValueOnce("failed");
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+  it("delivers exactly one replay fallback when the provider fails before visible output", async () => {
+    const providerError = new Error("provider returned HTTP 500");
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async (_ctx, options) => {
+          options?.onAgentRunStart?.("provider-500-run");
+          throw providerError;
+        },
+      }),
+    );
 
     await dispatchWithContext({
+      cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
       context: createMessageToolOnlyGroupContext(),
       retryDispatchErrors: true,
       streamMode: "off",
