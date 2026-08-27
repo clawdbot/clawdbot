@@ -34,32 +34,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
     if (!genericAdapter) {
       return undefined;
     }
-    return {
-      ...genericAdapter,
-      create: async (options) => {
-        const result = await genericAdapter.create({
-          ...options,
-          ...(typeof options.outputDimensionality === "number"
-            ? { dimensions: options.outputDimensionality }
-            : {}),
-        });
-        const provider = result.provider;
-        if (!provider) {
-          return { ...result, provider: null };
-        }
-        return {
-          ...result,
-          provider: {
-            ...provider,
-            embedQuery: (text, callOptions) =>
-              provider.embed(text, { ...callOptions, inputType: "query" }),
-            embedBatch: (texts, callOptions) =>
-              provider.embedBatch(texts, { ...callOptions, inputType: "document" }),
-            ...(provider.close ? { close: () => provider.close?.() } : {}),
-          },
-        };
-      },
-    } satisfies MemoryEmbeddingProviderAdapter;
+    return genericAdapter;
   },
   listMemoryEmbeddingProviders: () => [...mockEmbeddingRegistry.adapters],
   listRegisteredMemoryEmbeddingProviderAdapters: () => [...mockEmbeddingRegistry.adapters],
@@ -154,7 +129,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "openai",
           model: "text-embedding-3-small",
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),
@@ -208,7 +183,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: fallback,
           model: `${fallback}-embedding`,
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }));
@@ -273,7 +248,8 @@ describe("createEmbeddingProvider", () => {
           inputType: "passage",
           queryInputType: "query",
           documentInputType: "document",
-          outputDimensionality: 768,
+          dimensions: 768,
+          fallback: "none",
           local,
         }),
       );
@@ -299,7 +275,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "openai",
           model: "text-embedding-3-small",
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),
@@ -345,8 +321,10 @@ describe("createEmbeddingProvider", () => {
 
     expect(result.provider?.id).toBe("generic");
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([1]);
-    await expect(result.provider?.embedBatch(["doc"])).resolves.toEqual([[3]]);
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([1]);
+    await expect(result.provider?.embedBatch(["doc"], { inputType: "document" })).resolves.toEqual([
+      [3],
+    ]);
     await result.provider?.close?.();
     expect(genericProvider.closed).toBe(true);
   });
@@ -400,7 +378,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "legacy",
           model: "legacy-model",
-          embedQuery: async () => [0],
+          embed: async () => [0],
           embedBatch: async (texts) => texts.map(() => [0]),
         },
       }),
@@ -409,7 +387,7 @@ describe("createEmbeddingProvider", () => {
     const result = await createEmbeddingProvider(createOptions("openai-compatible"));
 
     expect(result.provider?.id).toBe("legacy");
-    await expect(result.provider?.embedQuery("hello")).resolves.toEqual([0]);
+    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([0]);
   });
 
   it("reports the llama.cpp plugin install command when local is unregistered", async () => {
@@ -427,7 +405,7 @@ describe("createEmbeddingProvider", () => {
         provider: {
           id: "legacy",
           model: "legacy-model",
-          embedQuery: async () => [1],
+          embed: async () => [1],
           embedBatch: async (texts) => texts.map(() => [1]),
         },
       }),

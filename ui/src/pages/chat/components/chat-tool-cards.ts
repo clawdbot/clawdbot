@@ -14,6 +14,7 @@ import type {
   ToolCardOutcome,
 } from "../../../lib/chat/chat-types.ts";
 import { readToolApprovalReviews } from "../../../lib/chat/tool-approval-reviews.ts";
+import type { DiffFilePaths } from "../../../lib/chat/tool-call-diff.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
   formatDistinctCollapsedToolSummaryText as distinctSummaryText,
@@ -673,6 +674,7 @@ function renderToolCardModes(
   diff: NonNullable<ToolCallView["diff"]>,
   outcome: ToolCardOutcome,
   isError: boolean,
+  file: DiffFilePaths,
 ) {
   const active = isError ? "raw" : "diff";
   const modeLabel = t("chat.toolCards.viewMode");
@@ -692,7 +694,7 @@ function renderToolCardModes(
         ${t("chat.toolCards.raw")}
       </wa-tab>
       <wa-tab-panel id=${`${card.id}-diff-panel`} name="diff" ?active=${active === "diff"}>
-        ${renderDiffBlock(diff, outcome)}
+        ${renderDiffBlock(diff, outcome, undefined, file)}
       </wa-tab-panel>
       <wa-tab-panel id=${`${card.id}-raw-panel`} name="raw" ?active=${active === "raw"}>
         ${renderToolDataBlock({
@@ -1010,6 +1012,7 @@ export function renderExpandedToolCardContent(
   // Edits and writes with a resolvable diff render it inline. When raw output
   // also exists, the shared tab primitive owns both views and their semantics.
   if ((view.kind === "edit" || view.kind === "write") && view.diff && view.diff.length > 0) {
+    const file = view.fileOperations?.[0] ?? { path: view.target ?? "" };
     return html`
       <div class="chat-tool-card ${isError ? "chat-tool-card--error" : ""}">
         <div class="chat-tool-card__header">
@@ -1021,8 +1024,8 @@ export function renderExpandedToolCardContent(
           <div class="chat-tool-card__actions">${diffCopyAction}${sidebarAction}</div>
         </div>
         ${hasOutput
-          ? renderToolCardModes(card, view.diff, outcome, isError)
-          : renderDiffBlock(view.diff, outcome)}
+          ? renderToolCardModes(card, view.diff, outcome, isError, file)
+          : renderDiffBlock(view.diff, outcome, undefined, file)}
         ${renderToolOutcome(outcome, card.exitCode)}
       </div>
     `;

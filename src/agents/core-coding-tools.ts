@@ -22,11 +22,8 @@ import { createLazyExecTool } from "./lazy-exec-tool.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
 import type { MemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import type { SandboxContext } from "./sandbox.js";
-import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
-import {
-  resolveReadOnlyWorkspaceSkillMounts,
-  type ReadOnlyWorkspaceSkillMount,
-} from "./sandbox/workspace-mounts.js";
+import { buildSandboxFsMounts } from "./sandbox/fs-paths.js";
+import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import type {
   createEditTool,
   createReadTool as CreateReadTool,
@@ -34,25 +31,12 @@ import type {
 } from "./sessions/tools/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
 
-function readOnlySandboxReadMounts(
+function sandboxReadMounts(
   sandbox: SandboxContext,
-  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[],
 ): Array<{ containerRoot: string; hostRoot: string }> | undefined {
-  const mounts: Array<{ containerRoot: string; hostRoot: string }> = [];
-  if (sandbox.workspaceAccess === "ro" && sandbox.agentWorkspaceDir !== sandbox.workspaceDir) {
-    mounts.push({
-      containerRoot: SANDBOX_AGENT_WORKSPACE_MOUNT,
-      hostRoot: sandbox.agentWorkspaceDir,
-    });
-  }
-  if (sandbox.workspaceAccess === "rw") {
-    mounts.push(
-      ...readOnlyWorkspaceSkillMounts.map((mount) => ({
-        containerRoot: mount.containerPath,
-        hostRoot: mount.hostPath,
-      })),
-    );
-  }
+  const mounts = buildSandboxFsMounts(sandbox)
+    .filter((mount) => mount.source !== "workspace")
+    .map((mount) => ({ containerRoot: mount.containerRoot, hostRoot: mount.hostRoot }));
   return mounts.length > 0 ? mounts : undefined;
 }
 
@@ -166,10 +150,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             sandboxRoot ?? options.containmentRoot,
             sandboxRoot
               ? {
-                  additionalContainerMounts: readOnlySandboxReadMounts(
-                    sandbox,
-                    readOnlyWorkspaceSkillMounts,
-                  ),
+                  additionalContainerMounts: sandboxReadMounts(sandbox),
                   containerWorkdir: sandbox.containerWorkdir,
                   bridge: sandboxFsBridge,
                 }

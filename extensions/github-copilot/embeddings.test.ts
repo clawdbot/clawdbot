@@ -328,7 +328,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     let caught: Error | undefined;
     try {
-      await result.provider?.embedQuery("hello");
+      await result.provider?.embed("hello", { inputType: "query" });
     } catch (error) {
       caught = error as Error;
     }

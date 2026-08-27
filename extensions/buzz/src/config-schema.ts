@@ -38,6 +38,7 @@ const RawBuzzConfigSchema = z
         BuzzGroupConfigSchema,
       )
       .optional(),
+    historyLimit: z.number().int().min(0).max(20).optional(),
     defaultTo: z.string().optional(),
   })
   .strict();

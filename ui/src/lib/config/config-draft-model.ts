@@ -587,16 +587,16 @@ export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
   // mutateConfigForm/diff path needs it synchronously.
   void warmJson5().catch(() => undefined);
   state.configRaw = value;
-  // A raw-text edit becomes the authoritative draft; without this,
-  // serializeFormForSubmit would submit the stale form and drop raw edits.
-  state.configFormMode = "raw";
   state.configFormDirty = value !== state.configRawOriginal;
-  resetStaleAutoSaveStatus(state);
   if (state.configFormDirty) {
     state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   } else {
-    state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+    resetConfigPendingChanges(state);
   }
+  // Raw edits own submission; a clean revert also restores the saved form
+  // above so a later form edit cannot resurrect discarded values.
+  state.configFormMode = "raw";
+  resetStaleAutoSaveStatus(state);
 }
 
 export function resetConfigPendingChanges(state: RuntimeConfigState) {

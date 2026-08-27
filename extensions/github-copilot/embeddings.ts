@@ -242,7 +242,7 @@ async function createGitHubCopilotEmbeddingProvider(
 ): Promise<{ provider: MemoryEmbeddingProvider; client: GitHubCopilotEmbeddingClient }> {
   const initialSession = await resolveGitHubCopilotEmbeddingSession(client);
 
-  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
+  const embedMany = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -278,11 +278,22 @@ async function createGitHubCopilotEmbeddingProvider(
     provider: {
       id: COPILOT_EMBEDDING_PROVIDER_ID,
       model: client.model,
-      embedQuery: async (text, options) => {
-        const [vector] = await embed([text], options?.signal);
+      embed: async (input, options) => {
+        const [vector] = await embedMany(
+          [typeof input === "string" ? input : input.text],
+          options?.signal,
+        );
         return vector ?? [];
       },
-      embedBatch: async (texts, options) => await embed(texts, options?.signal),
+      embedBatch: async (inputs, options) => {
+        const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
+        if (options?.inputType === "query") {
+          return await Promise.all(
+            texts.map(async (text) => (await embedMany([text], options.signal))[0] ?? []),
+          );
+        }
+        return await embedMany(texts, options?.signal);
+      },
     },
     client: {
       ...client,

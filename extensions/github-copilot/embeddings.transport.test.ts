@@ -197,7 +197,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
 
     let caught: Error | undefined;
     try {
-      await result.provider?.embedQuery("hello");
+      await result.provider?.embed("hello", { inputType: "query" });
     } catch (error) {
       caught = error as Error;
     }
@@ -252,7 +252,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter real transport", () => {
     pointTokenAt(server.baseUrl);
 
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
-    const vector = await result.provider?.embedQuery("hello");
+    const vector = await result.provider?.embed("hello", { inputType: "query" });
 
     expect(server.requests).toEqual([
       { method: "GET", url: "/models" },
