@@ -1,3 +1,4 @@
+import { authenticate } from "mailauth";
 import { simpleParser } from "mailparser";
 import { describe, expect, it, vi } from "vitest";
 import { resolveImapConfig } from "./config.js";
@@ -75,25 +76,54 @@ describe("IMAP sender admission", () => {
   it.each(["neutral", "temperror", "none"] as const)(
     "never dispatches on DMARC %s at the default verified threshold",
     async (result) => {
-      const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
-      const authenticator = vi.fn(async () => createImapAuthResult(result));
+      const mail = await message([
+        "From: trusted@example.com",
+        "To: reader+wrong-token@example.com",
+      ]);
+      const authentication =
+        result === "neutral"
+          ? createImapAuthResult(result)
+          : await authenticate(mail.raw, {
+              disableArc: true,
+              disableBimi: true,
+              resolver: async () => {
+                if (result === "temperror") {
+                  throw new Error("fixture DNS timeout");
+                }
+                return [];
+              },
+            });
+      expect(authentication.dmarc).toMatchObject({ status: { result } });
+      if (result !== "neutral") {
+        expect(authentication.dmarc).not.toHaveProperty("alignment");
+      }
+      const configured = account({
+        addressTokens: [{ token: "expected-token", senders: ["trusted@example.com"] }],
+      });
       await expect(
-        evaluateImapSender({ ...mail, account: account(), authenticator }),
-      ).resolves.toMatchObject({ accepted: false });
+        evaluateImapSender({
+          ...mail,
+          account: configured,
+          authenticator: async () => authentication,
+        }),
+      ).resolves.toMatchObject({ accepted: false, transient: result === "temperror" });
     },
   );
 
-  it("does not verify a passing DKIM signature that left message body bytes unsigned", async () => {
-    const result = createImapAuthResult("pass");
-    if (result.dmarc) {
-      result.dmarc.alignment.dkim.underSized = 32;
-    }
-    const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
-    const authenticator = vi.fn(async () => result);
-    await expect(
-      evaluateImapSender({ ...mail, account: account(), authenticator }),
-    ).resolves.toMatchObject({ accepted: false, reason: "dkim-unsigned-body" });
-  });
+  it.each(["pass", "fail"] as const)(
+    "rejects unsigned body bytes even with DMARC %s",
+    async (dmarc) => {
+      const result = createImapAuthResult(dmarc);
+      if (result.dmarc) {
+        result.dmarc.alignment.dkim.underSized = 32;
+      }
+      const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
+      const authenticator = vi.fn(async () => result);
+      await expect(
+        evaluateImapSender({ ...mail, account: account(), authenticator }),
+      ).resolves.toMatchObject({ accepted: false, reason: "dkim-unsigned-body" });
+    },
+  );
 
   it("accepts only configured Authentication-Results authorities", async () => {
     const configured = account({
