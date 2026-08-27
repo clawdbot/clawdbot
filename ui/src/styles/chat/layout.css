@@ -7074,7 +7074,7 @@ button.chat-pr__diff {
   text-overflow: ellipsis;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-main__conversation {
     --chat-composer-top-margin: 6px;
   }
