@@ -1045,6 +1045,7 @@ describe("frv continuation controller", () => {
       ...preflightMethods(children, (entry) => runFor(entry, 1, "success"), candidate()),
       deleteWorkflowRef: async (branch: string) => {
         deletedBranch = branch;
+        return { deleted: true };
       },
       dispatchContinuation: async () => {
         dispatched += 1;
@@ -1066,10 +1067,12 @@ describe("frv continuation controller", () => {
     };
     const operationDeadline = Date.now() + 10_000;
     const reviewedChildren = children.toReversed();
-    await continueFailed(continuationPlan(reviewedChildren, legacyContinuation), "77", client, {
-      loadExecutionPlan: async () => finalPlanPayload,
-      operationDeadline,
-    });
+    await expect(
+      continueFailed(continuationPlan(reviewedChildren, legacyContinuation), "77", client, {
+        loadExecutionPlan: async () => finalPlanPayload,
+        operationDeadline,
+      }),
+    ).resolves.toMatchObject({ action: "dispatched-parent", finalRunId: "88" });
     expect(dispatched).toBe(1);
     expect(deletedBranch).toBe("release-ci/current");
     expect(parentReruns).toBe(0);
@@ -1084,6 +1087,63 @@ describe("frv continuation controller", () => {
     );
     expect(dispatched).toBe(2);
   });
+
+  it.each([
+    {
+      cleanup: async () => ({ deleted: false }),
+      expected:
+        "continuation parent 88 verified but temporary workflow ref release-ci/current at " +
+        `${SHA} was not deleted`,
+      label: "reports no deletion",
+    },
+    {
+      cleanup: async () => {
+        throw new Error("lease deletion failed");
+      },
+      expected:
+        "continuation parent 88 verified but temporary workflow ref release-ci/current cleanup failed: lease deletion failed",
+      label: "throws",
+    },
+  ])(
+    "fails after final verification when temporary ref cleanup $label",
+    async ({ cleanup, expected }) => {
+      const children = requiredContinuationChildren();
+      const byRunId = new Map(children.map((entry) => [entry.runId, entry]));
+      const source = continuation();
+      const finalPlan = sealedContinuationPlan(children);
+      let verified = 0;
+      const client = {
+        ...preflightMethods(children, (entry) => runFor(entry, 1, "success"), candidate()),
+        deleteWorkflowRef: cleanup,
+        dispatchContinuation: async () => ({
+          branch: "release-ci/current",
+          runId: "88",
+          workflowSha: SHA,
+        }),
+        getAttemptJobs: async () => [job("test")],
+        getRun: async (runId: string) =>
+          runId === "88"
+            ? { conclusion: "success", id: 88, run_attempt: 1, status: "completed" }
+            : runFor(byRunId.get(runId)!, 1, "success"),
+        rerunFailed: async () => {},
+        rerunParent: async () => {},
+        verifyTrustedSourceSha: async () => {},
+        verifyTrustedToolingSha: async () => {},
+        verify: async () => {
+          verified += 1;
+          return "{}";
+        },
+        repository: "openclaw/openclaw",
+      };
+      await expect(
+        continueFailed(continuationPlan(children.toReversed(), source), "77", client, {
+          loadExecutionPlan: async () => finalPlan,
+          operationDeadline: Date.now() + 10_000,
+        }),
+      ).rejects.toThrow(expected);
+      expect(verified).toBe(1);
+    },
+  );
 
   it("rejects incomplete or drifted legacy child inventories", () => {
     const legacyChild = (key: string, runId: string) => {

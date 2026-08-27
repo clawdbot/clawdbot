@@ -1371,7 +1371,22 @@ export async function continueFailed(plan, rootRunId, client, options = {}) {
       throw new Error("continuation parent execution plan differs from the reviewed source plan");
     }
     await client.verify(dispatched.runId, finalPlan, operationDeadline);
-    await client.deleteWorkflowRef(dispatched.branch, dispatched.workflowSha);
+    let cleanup;
+    try {
+      cleanup = await client.deleteWorkflowRef(dispatched.branch, dispatched.workflowSha);
+    } catch (error) {
+      throw new Error(
+        `continuation parent ${dispatched.runId} verified but temporary workflow ref ${dispatched.branch} cleanup failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+    if (!cleanup?.deleted) {
+      throw new Error(
+        `continuation parent ${dispatched.runId} verified but temporary workflow ref ${dispatched.branch} at ${dispatched.workflowSha} was not deleted`,
+      );
+    }
     return { action: "dispatched-parent", finalRunId: dispatched.runId, status };
   }
   const parent = await client.getRun(rootRunId);

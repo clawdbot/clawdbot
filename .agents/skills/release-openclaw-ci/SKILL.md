@@ -81,6 +81,19 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   attempts, Diagnostic Drain, and final manifest are the only authorities. It
   never writes a tag, package, registry entry, release candidate, or
   publication.
+- Post-merge live proof must use the reviewed landed SHA on protected `main`,
+  leave accepted green attempts untouched, observe exactly one continuation
+  parent, pass final verification, and confirm the deterministic temporary ref
+  was deleted. Treat retained-ref cleanup as failure. For fault proof, use the
+  landed `loadPlan`, `continuationBranchName`, and `createClient` exports to
+  pre-seed the exact task-owned branch at a different trusted-main ancestor;
+  require wrong-OID rejection before dispatch, then exact-OID lease deletion.
+  Test read retries only through an owner-only task-local `OPENCLAW_GH_BIN`
+  wrapper against one exact read endpoint: one `HTTP 502` must recover and four
+  must fail nonzero during `status` or `continue --failed --dry-run`. Never
+  alter write arguments, expose tokens, weaken ancestry, or run PR-head code
+  with write credentials. See
+  [Full Release Validation](/reference/full-release-validation#post-merge-continuation-proof).
 - Use one release operator, one transition-only watcher, and at most one
   investigator for the current failed surface. Do not build audit-review-plan
   trees around a single workflow transition.

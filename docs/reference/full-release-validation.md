@@ -170,6 +170,39 @@ not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
 
+### Post-merge continuation proof
+
+Run live continuation proof only from the reviewed SHA after it lands on
+protected `main`, with no other release validation active. First run `pnpm frv
+status`, then `pnpm frv continue --failed --dry-run`, and finally the approved
+nonpublishing continuation. Accept the proof only when failed child attempts
+advance, accepted green attempts do not, exactly one continuation parent is
+observed, final verification passes, and the deterministic `release-ci/*` ref
+is absent afterward. A retained ref or cleanup warning is a failed operation.
+
+Exercise wrong-OID rejection without a race by using the landed exports in an
+owner-controlled Node driver. Load the authenticated reviewed plan with
+`loadPlan`, derive its exact branch with `continuationBranchName`, and create a
+client with `createClient`. Select a different SHA that is also on protected
+`main`, verify both SHAs with `verifyTrustedToolingSha`, then call
+`ensureWorkflowRef(branch, alternateSha)`. Calling `dispatchContinuation(plan)`
+must reject `continuation tooling ref exists at a different OID` before workflow
+dispatch. Lease-delete only that task-owned ref with
+`deleteWorkflowRef(branch, alternateSha)`, require `{ deleted: true }`, and
+confirm the exact ref is absent. Record that no continuation parent was created.
+
+Exercise transient reads through the explicit `OPENCLAW_GH_BIN` seam. Before
+setting it, resolve the absolute real `gh` path. Use an owner-only task-local
+wrapper that delegates every non-target invocation unchanged, records counts,
+and returns a nonzero `HTTP 502` only for one exact read endpoint. Run only
+`status` or `continue --failed --dry-run`: one injected failure must retry and
+succeed, while four injected failures must exhaust the read budget and return
+nonzero without reporting success. The wrapper must not rewrite arguments,
+print its inherited environment or tokens, or target a write invocation. Remove
+the wrapper and counter afterward. Neither proof weakens protected-main
+ancestry, executes PR-head code with write credentials, or dispatches a release
+workflow.
+
 The main-lineage requirement above applies to the initial validation tooling
 selection. Once release publication binds that Tooling SHA to an exact protected
 lightweight `release-publish/<12sha>-<provenance-run>` tag, the live tag-to-SHA
