@@ -1060,7 +1060,8 @@ class SessionsPage extends OpenClawLightDomElement {
     if (value === null) {
       return;
     }
-    void this.patchSession(row.key, { label: normalizeOptionalString(value) ?? null });
+    const patch = { label: normalizeOptionalString(value) ?? null };
+    void this.patchSession(row.key, patch, undefined, row.sessionId);
   }
 
   private async patchSession(
@@ -1095,7 +1096,7 @@ class SessionsPage extends OpenClawLightDomElement {
     try {
       const patched = await scope.sessions.patch(key, patch, {
         agentId,
-        ...(typeof patch.archived === "boolean" ? { expectedSessionId } : {}),
+        ...(expectedSessionId ? { expectedSessionId } : {}),
       });
       if (!this.isRequestScopeCurrent(scope)) {
         return "stale";
