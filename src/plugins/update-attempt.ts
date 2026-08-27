@@ -236,7 +236,7 @@ type PluginUpdateAttemptState = {
 };
 
 type PluginUpdateAttemptResult =
-  | { kind: "exception"; message: string }
+  | { kind: "exception"; message: string; error: unknown }
   | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
 
 function isPluginUpdateUnchanged(
@@ -468,6 +468,7 @@ export async function runPluginUpdateAttempt(params: {
     return {
       kind: "exception",
       message: `Failed to ${phase} ${params.pluginId}: ${String(error)}`,
+      error,
     };
   }
 

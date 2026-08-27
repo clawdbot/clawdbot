@@ -126,7 +126,7 @@ describe("chat plugin install explicit ClawHub selectors", () => {
       expect(result?.shouldContinue).toBe(false);
       expect(result?.reply?.text).toBe(
         [
-          "⚠️ Plugin capabilities require approval: Cold Control Plane (clawhub-demo)",
+          "⚠️ Plugin capabilities require approval: Cold Control Plane (clawhub-demo) @ 1.2.3",
           "Source: clawhub: clawhub:@openclaw/clawhub-demo@1.2.3",
           "Channels: cold-channel",
           "Providers: cold-model-provider",

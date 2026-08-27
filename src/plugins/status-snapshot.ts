@@ -4,10 +4,9 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatPluginCapabilityConsentRequired,
-  mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
 } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import { buildPluginCapabilitySummary, mergePluginDeclaredSurfaces } from "./capability-summary.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,

@@ -16,6 +16,7 @@ import {
   createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
+  deferred,
   mountPage,
   resetPluginsPageTestState,
 } from "./plugins-page.test-support.ts";
@@ -477,6 +478,75 @@ describe("PluginsPage consent", () => {
     expect(request.mock.calls.filter(([method]) => method === "plugins.inspect")).toHaveLength(2);
   });
 
+  it.each(["consent", "detail"])(
+    "closes an interrupted %s inspection and allows a fresh review after reconnect",
+    async (overlay) => {
+      const plugin = createPlugin({ origin: "global", enabled: false, state: "disabled" });
+      const pendingInspection = deferred<ReturnType<typeof createInspectResult>>();
+      let inspections = 0;
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          inspections += 1;
+          return inspections === 1
+            ? pendingInspection.promise
+            : createInspectResult({ reviewToken: "fresh-review" });
+        }
+        if (method === "plugins.setEnabled") {
+          return {
+            ok: true,
+            plugin: createPlugin({ ...plugin, enabled: true, state: "enabled" }),
+            restartRequired: true,
+          };
+        }
+        if (method === "plugins.list") {
+          return createResult(plugin);
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const harness = createGateway(client);
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(harness.gateway, createResult(plugin)),
+      );
+
+      if (overlay === "consent") {
+        await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+      } else {
+        page
+          .querySelector<HTMLButtonElement>(
+            '[data-plugin-id="workboard"] .plugins-item__detail-button',
+          )
+          ?.click();
+      }
+      await waitForFast(() =>
+        expect(page.querySelector("openclaw-modal-dialog .plugins-consent__hint")).not.toBeNull(),
+      );
+      harness.emit(client, false);
+      harness.emit(client, true);
+      pendingInspection.resolve(createInspectResult({ reviewToken: "stale-review" }));
+      await page.updateComplete;
+
+      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(request.mock.calls.some(([method]) => method === "plugins.setEnabled")).toBe(false);
+      await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
+      await waitForFast(() =>
+        expect(
+          page.querySelector<HTMLButtonElement>('[data-plugin-consent="enable"] .btn.primary')
+            ?.disabled,
+        ).toBe(false),
+      );
+      page.querySelector<HTMLButtonElement>('[data-plugin-consent="enable"] .btn.primary')?.click();
+
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("plugins.setEnabled", {
+          pluginId: "workboard",
+          enabled: true,
+          acknowledgeCapabilities: { reviewToken: "fresh-review" },
+        }),
+      );
+    },
+  );
+
   it("inspects an installed plugin only when its detail overlay opens", async () => {
     const inspection = createInspectResult({
       declared: { ...createInspectResult().declared, tools: ["workboard_create"] },
@@ -506,6 +576,56 @@ describe("PluginsPage consent", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledWith("plugins.inspect", { pluginId: "workboard" });
   });
+
+  it.each(["success", "failure"])(
+    "keeps the current detail inspection when a closed review finishes with %s",
+    async (outcome) => {
+      const staleInspection = deferred<ReturnType<typeof createInspectResult>>();
+      let inspections = 0;
+      const { client, request } = createClient(async (method) => {
+        if (method === "plugins.inspect") {
+          inspections += 1;
+          return inspections === 1
+            ? staleInspection.promise
+            : createInspectResult({
+                declared: { ...createInspectResult().declared, tools: ["current_tool"] },
+              });
+        }
+        throw new Error(`Unexpected method ${method}`);
+      });
+      const harness = createGateway(client);
+      const { page } = await mountPage(
+        createContext(harness.gateway),
+        createPluginsRouteData(harness.gateway),
+      );
+      const details = page.querySelector<HTMLButtonElement>(
+        '[data-plugin-id="workboard"] .plugins-item__detail-button',
+      );
+
+      details?.click();
+      await waitForFast(() => expect(inspections).toBe(1));
+      page.querySelector<HTMLButtonElement>(".plugins-detail__close")?.click();
+      await page.updateComplete;
+      details?.click();
+      await waitForFast(() =>
+        expect(page.querySelector(".plugins-detail__capabilities")?.textContent).toContain(
+          "current_tool",
+        ),
+      );
+
+      if (outcome === "success") {
+        staleInspection.resolve(createInspectResult());
+      } else {
+        staleInspection.reject(new Error("Earlier inspection failed"));
+      }
+      await Promise.allSettled(request.mock.results.map(({ value }) => value));
+      await page.updateComplete;
+
+      expect(page.querySelector(".plugins-detail__capabilities")?.textContent).toContain(
+        "current_tool",
+      );
+    },
+  );
 
   it("keeps detail inspection failures visible and retries in the same overlay", async () => {
     let attempts = 0;

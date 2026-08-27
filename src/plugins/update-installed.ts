@@ -8,7 +8,10 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
-import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
+import {
+  capturePluginCapabilityConsentHandlerErrors,
+  type PluginCapabilityConsentHandler,
+} from "./capability-consent.js";
 import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { ClawHubRiskAcknowledgementRequest } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -20,6 +23,7 @@ import {
   recordPluginInstall,
   resolveNpmInstallRecordSpec,
 } from "./installs.js";
+import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PackageManifest } from "./manifest.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubInstall as resolveOfficialClawHubInstall,
@@ -108,6 +112,7 @@ export async function updateNpmInstalledPlugins(params: {
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
 }): Promise<PluginUpdateSummary> {
   const logger = params.logger ?? {};
+  const consentCallbacks = capturePluginCapabilityConsentHandlerErrors(params.onCapabilityConsent);
   const installs = params.config.plugins?.installs ?? {};
   const targets = params.pluginIds?.length ? params.pluginIds : Object.keys(installs);
   const normalizedPluginConfig = params.skipDisabledPlugins
@@ -473,7 +478,7 @@ export async function updateNpmInstalledPlugins(params: {
       installPath,
       packagePluginIds: params.packagePluginIds?.[pluginId],
       expectedIntegrity,
-      onCapabilityConsent: params.onCapabilityConsent,
+      onCapabilityConsent: consentCallbacks.onCapabilityConsent,
     });
     const runAttempt = () =>
       runPluginUpdateAttempt(
@@ -507,7 +512,13 @@ export async function updateNpmInstalledPlugins(params: {
       dryRun: params.dryRun === true,
       run: runAttempt,
     });
+    consentCallbacks.rethrowCallbackError();
     if (attempt.kind === "exception") {
+      if (attempt.error instanceof ManagedPluginLifecycleError && attempt.error.capabilityConsent) {
+        // Staging was rolled back; pending consent must not disable the previous installation.
+        outcomes.push({ pluginId, status: "error", message: attempt.error.message });
+        continue;
+      }
       recordFailure(pluginId, attempt.message);
       continue;
     }

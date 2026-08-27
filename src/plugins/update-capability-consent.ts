@@ -15,6 +15,7 @@ import {
 } from "./capability-consent.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import { loadPluginManifest } from "./manifest.js";
 
 export function preparePluginUpdateCapabilityConsent(params: {
@@ -30,29 +31,40 @@ export function preparePluginUpdateCapabilityConsent(params: {
   acceptInstallRecord: <T extends PluginInstallRecord>(record: T) => T;
 } {
   let previousDeclared: PluginAcceptedDeclaredSurface | undefined;
-  let previousArtifactError: unknown;
   try {
     // Capture the installed artifact before npm can mutate its managed root;
     // comparing against stored self-declarations lets malicious updates hide widening.
-    previousDeclared = resolvePluginArtifactDeclaredSurface(params.installPath);
-  } catch (error) {
-    previousArtifactError = error;
+    previousDeclared = resolvePluginArtifactDeclaredSurface(params.installPath, process.env, {
+      config: params.config,
+    });
+  } catch {
+    // An unverifiable old payload cannot authorize its replacement; review the full stage.
   }
 
   let acceptedSurface: PluginAcceptedDeclaredSurface | undefined;
-  let acceptedSurfaceAt: string | undefined;
   let artifactReviewed = false;
   return {
     onBeforePluginArtifactCommit: async ({ stagedArtifactDir }) => {
-      if (!previousDeclared) {
-        throw new Error(
-          `Cannot verify installed capabilities for "${params.pluginId}": ${String(previousArtifactError)}`,
-        );
-      }
-      const declared = resolvePluginArtifactDeclaredSurface(stagedArtifactDir);
+      // Fallback attempts must not inherit an earlier stage's review or acceptance.
+      acceptedSurface = undefined;
+      artifactReviewed = false;
+      const artifactContext = {
+        config: params.config,
+        // npm can stage a new generation; configured paths still refer to the recorded install.
+        currentArtifactDir: params.installPath,
+      };
+      const declared = resolvePluginArtifactDeclaredSurface(
+        stagedArtifactDir,
+        process.env,
+        artifactContext,
+      );
       artifactReviewed = true;
-      const { widened, hasWidening } = diffDeclaredSurfaceWidening(previousDeclared, declared);
-      const priorAcceptanceCurrent = resolveAcceptedSurfaceCurrent(params.record, previousDeclared);
+      const { widened, hasWidening } = previousDeclared
+        ? diffDeclaredSurfaceWidening(previousDeclared, declared)
+        : { widened: undefined, hasWidening: false };
+      const priorAcceptanceCurrent =
+        previousDeclared !== undefined &&
+        resolveAcceptedSurfaceCurrent(params.record, previousDeclared);
       const priorIntegrity = resolvePluginInstallRecordIntegrity(params.record);
       // Unknown package ownership must not let a disabled owner hide an enabled sibling.
       const enabled =
@@ -68,6 +80,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
         );
 
       const requiresAcceptance =
+        !previousDeclared ||
         hasWidening ||
         (params.record.acceptedSurface !== undefined &&
           (!priorAcceptanceCurrent || !priorIntegrity));
@@ -92,6 +105,10 @@ export function preparePluginUpdateCapabilityConsent(params: {
           npmIntegrity: _previousNpmIntegrity,
           clawpackSha256: _previousClawpackIntegrity,
           gitCommit: _previousGitCommit,
+          acceptedSurface: _previousAcceptedSurface,
+          acceptedSurfaceHash: _previousAcceptedSurfaceHash,
+          acceptedSurfaceAt: _previousAcceptedSurfaceAt,
+          acceptedSurfaceIntegrity: _previousAcceptedSurfaceIntegrity,
           ...previousRecordWithoutIntegrity
         } = params.record;
         const review = buildPluginCapabilityConsentReview({
@@ -107,28 +124,41 @@ export function preparePluginUpdateCapabilityConsent(params: {
         });
         const acknowledgment = await params.onCapabilityConsent?.(review);
         // The prompt can yield while staged files change; bind approval to the final artifact.
-        const finalDeclared = resolvePluginArtifactDeclaredSurface(stagedArtifactDir);
+        const finalDeclared = resolvePluginArtifactDeclaredSurface(
+          stagedArtifactDir,
+          process.env,
+          artifactContext,
+        );
         if (acknowledgment?.reviewToken !== computeDeclaredSurfaceHash(finalDeclared)) {
-          throw new Error(
+          throw new ManagedPluginLifecycleError(
             `Plugin "${params.pluginId}" requires capability consent; rerun with --accept-capabilities.`,
+            {
+              capabilityConsent: {
+                pluginId: params.pluginId,
+                reviewToken: computeDeclaredSurfaceHash(finalDeclared),
+                ...(previousDeclared
+                  ? {
+                      widened: diffDeclaredSurfaceWidening(previousDeclared, finalDeclared).widened,
+                    }
+                  : {}),
+              },
+            },
           );
         }
         acceptedSurface = finalDeclared;
-        acceptedSurfaceAt = new Date().toISOString();
         return;
       }
       if (!hasWidening && priorAcceptanceCurrent && priorIntegrity) {
         acceptedSurface = declared;
-        acceptedSurfaceAt = new Date().toISOString();
       }
     },
     acceptInstallRecord: (record) => {
-      if (previousDeclared && !artifactReviewed) {
+      if (!artifactReviewed) {
         throw new Error(
           `Plugin "${params.pluginId}" update did not review the staged artifact capabilities.`,
         );
       }
-      if (!acceptedSurface || !acceptedSurfaceAt) {
+      if (!acceptedSurface) {
         return record;
       }
       const integrity = resolvePluginInstallRecordIntegrity(record)?.integrity;
@@ -136,7 +166,7 @@ export function preparePluginUpdateCapabilityConsent(params: {
         ...record,
         acceptedSurface,
         acceptedSurfaceHash: computeDeclaredSurfaceHash(acceptedSurface),
-        acceptedSurfaceAt,
+        acceptedSurfaceAt: new Date().toISOString(),
         ...(integrity ? { acceptedSurfaceIntegrity: integrity } : {}),
       };
     },

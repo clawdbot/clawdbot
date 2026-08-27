@@ -82,10 +82,6 @@ export class PluginsConsentController {
 
   reset(): void {
     this.close();
-    this.invalidateMutations();
-  }
-
-  invalidateMutations(): void {
     this.mutationTokens.clear();
   }
 

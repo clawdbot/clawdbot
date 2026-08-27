@@ -107,11 +107,24 @@ also lists declared channels, providers, tools, hooks, MCP servers, CLI
 commands and backends, skills, and dangerous configuration flags, along with
 the operator grants that apply to hooks, model access, and subagents.
 
-The Gateway records acceptance against the installed artifact's integrity and
-a hash of the exact declared capability surface. Enabling an installed plugin
-requires acceptance for its current surface. Updates require fresh consent
-only when the new artifact declares additional capabilities; unchanged or
-narrower surfaces refresh an existing acceptance automatically.
+The review token hashes the exact declared capability surface, not the plugin's
+executable files. Acceptance separately records installer-provided artifact
+integrity when available. Enabling an installed plugin requires acceptance for
+its current surface. Updates of enabled plugins require fresh consent
+when the new artifact declares additional capabilities; unchanged or narrower
+surfaces can refresh an existing valid acceptance. Updating a disabled
+plugin preserves disablement and defers any required consent until enablement.
+Reinstalling through `plugins install` activates the plugin and must satisfy
+consent before activation.
+
+Already-enabled legacy installations remain usable without an initial review;
+disabling and re-enabling them requires consent. Setup rechecks consent when
+saving its final config, so a plugin update during login cannot activate a
+replacement with unaccepted capabilities.
+
+Declining an update's capability review leaves the previous plugin enabled
+and unchanged. Repairing a missing or damaged artifact requires a fresh review;
+OpenClaw cannot carry acceptance forward from an artifact it cannot verify.
 
 Carrying an earlier acceptance forward requires the install record to pin
 artifact integrity, which registry and ClawHub installs provide. Sources
@@ -119,9 +132,12 @@ without recorded integrity — notably local paths — cannot prove the new byte
 are the artifact you approved before, so they ask for consent on every install
 rather than inheriting it.
 
-Interactive CLI commands prompt when consent is required. For noninteractive
-installs, updates, or enablement, review the plugin first and pass
-`--accept-capabilities` explicitly:
+Interactive CLI commands, onboarding, and provider, search, or channel setup
+prompt when consent is required, including automatic installs of required
+runtime plugins. Noninteractive or silent setup cannot approve new capabilities.
+Review and preinstall or enable the plugin with `--accept-capabilities`, then
+retry setup. Noninteractive plugin install, update, and enable commands also
+require the explicit flag when consent is needed:
 
 ```bash
 openclaw plugins install clawhub:<package> --accept-capabilities
@@ -129,19 +145,30 @@ openclaw plugins update <plugin-id> --accept-capabilities
 openclaw plugins enable <plugin-id> --accept-capabilities
 ```
 
-Chat installs also require explicit capability consent. Review the capabilities
-in the reply, then rerun the same command with `--accept-capabilities`:
+Doctor uses the same review before installing or adopting a replacement plugin.
+`doctor --fix` and `--yes` do not approve capabilities automatically. For
+noninteractive repair, review and install the plugin with the explicit flag
+above, then rerun doctor.
+
+Chat installs and enablement use the same capability consent. When consent is
+required, review the capabilities in the reply, then rerun the same command
+with `--accept-capabilities`:
 
 ```text
 /plugins install clawhub:<package> --accept-capabilities
 /plugins install npm:<package> --force --accept-capabilities
+/plugins enable <plugin-id> --accept-capabilities
 ```
 
 Bundled plugins are exempt because they ship with the OpenClaw release rather
-than arriving as separately installed artifacts. Workspace plugins and plugins
-loaded directly from configured paths have no managed install record, so the
-Gateway cannot persist capability acceptance for them. The Control UI can
-still present their declared capabilities before enabling them.
+than arriving as separately installed artifacts. Plugins discovered directly
+in a workspace or through `plugins.load.paths`, without a managed install
+record, cannot persist capability acceptance. The Control UI can still present
+their declared capabilities before enabling them.
+
+`openclaw plugins install --link <path>` creates a managed install record and
+requires capability consent even though it loads the plugin from its source
+directory. It is not the same as adding a bare `plugins.load.paths` entry.
 
 ## Install plugins
 

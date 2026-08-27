@@ -311,4 +311,54 @@ describe("plugin management registry refresh", () => {
     expect(logger.warn).not.toHaveBeenCalled();
     expect(result).toMatchObject({ ok: true, warnings: [instruction] });
   });
+
+  it("requires artifact consent before a linked source is enabled or recorded", async () => {
+    const artifactDir = makeTrackedTempDir("managed-linked-consent", trackedArtifactDirs);
+    const stateDir = makeTrackedTempDir("managed-linked-state", trackedArtifactDirs);
+    createColdPluginFixture({
+      rootDir: artifactDir,
+      pluginId: "linked-plugin",
+      manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] },
+    });
+    const params = {
+      request: {
+        source: "local" as const,
+        path: artifactDir,
+        recordSource: "path" as const,
+        mode: "install" as const,
+        link: true,
+      },
+      snapshot: installSnapshot,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    };
+
+    await expect(installManagedPluginSource(params)).rejects.toMatchObject({
+      capabilityConsent: {
+        pluginId: "linked-plugin",
+        reviewToken: emptyArtifactAcknowledgment.reviewToken,
+      },
+    });
+    expect(mocks.persistInstall).not.toHaveBeenCalled();
+
+    mocks.persistInstall.mockResolvedValue({});
+    const result = await installManagedPluginSource({
+      ...params,
+      acknowledgeCapabilities: emptyArtifactAcknowledgment,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mocks.persistInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        install: expect.objectContaining({
+          installPath: artifactDir,
+          acceptedSurfaceHash: emptyArtifactAcknowledgment.reviewToken,
+        }),
+        snapshot: expect.objectContaining({
+          config: expect.objectContaining({
+            plugins: expect.objectContaining({ load: { paths: [artifactDir] } }),
+          }),
+        }),
+      }),
+    );
+  });
 });

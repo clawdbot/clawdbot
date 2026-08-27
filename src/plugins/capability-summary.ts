@@ -1,3 +1,4 @@
+import { PLUGIN_DECLARED_SURFACE_GROUPS } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
@@ -8,6 +9,7 @@ import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
+import type { InstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestContracts } from "./manifest-types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -59,6 +61,48 @@ type PluginCapabilityManifest = {
   skills?: readonly string[];
   configContracts?: PluginManifestRecord["configContracts"];
 };
+
+export function mergePluginDeclaredSurfaces(
+  surfaces: Iterable<PluginDeclaredSurface>,
+): PluginDeclaredSurface {
+  const merged: PluginDeclaredSurface = {
+    channels: [],
+    providers: [],
+    tools: [],
+    contracts: [],
+    hooks: [],
+    mcpServers: [],
+    cliCommands: [],
+    cliBackends: [],
+    skills: [],
+    dangerousConfigFlags: [],
+  };
+  for (const surface of surfaces) {
+    for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
+      merged[group].push(...surface[group]);
+    }
+  }
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
+    merged[group] = [...new Set(merged[group])].toSorted();
+  }
+  return merged;
+}
+
+/** Acceptance belongs to the package; missing siblings must never shrink its review. */
+export function resolvePluginPackageDeclaredSurface(
+  ownership: Pick<InstalledPluginPackageOwnership, "pluginIds">,
+  manifests: ReadonlyMap<string, PluginManifestRecord>,
+): PluginDeclaredSurface | undefined {
+  const surfaces: PluginDeclaredSurface[] = [];
+  for (const pluginId of ownership.pluginIds) {
+    const manifest = manifests.get(pluginId);
+    if (!manifest) {
+      return undefined;
+    }
+    surfaces.push(buildPluginCapabilitySummary({ manifest, origin: manifest.origin }).declared);
+  }
+  return mergePluginDeclaredSurfaces(surfaces);
+}
 
 function buildHookGrant(effective: boolean, configured: boolean | undefined): PluginHookGrant {
   return {

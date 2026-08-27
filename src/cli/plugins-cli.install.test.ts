@@ -12,6 +12,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
+import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   applyExclusiveSlotSelectionMock,
@@ -2552,6 +2553,7 @@ describe("plugins cli install", () => {
     } as OpenClawConfig;
     const enabledCfg = createEnabledPluginConfig("demo");
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-link-"));
+    createColdPluginFixture({ rootDir: tmpRoot, pluginId: "demo", packageVersion: "1.2.3" });
 
     pluginCliConfigMock.mockReturnValue(cfg);
     installPluginFromPathMock.mockResolvedValueOnce({
@@ -2559,7 +2561,7 @@ describe("plugins cli install", () => {
       pluginId: "demo",
       targetDir: tmpRoot,
       version: "1.2.3",
-      extensions: ["./dist/index.js"],
+      extensions: ["./index.cjs"],
     });
     enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });
     recordPluginInstallMock.mockReturnValue(enabledCfg);
@@ -2737,6 +2739,7 @@ describe("plugins cli install", () => {
 
   it("passes the install logger to the --link dry-run probe", async () => {
     const localPluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-link-plugin-"));
+    createColdPluginFixture({ rootDir: localPluginDir, pluginId: "demo" });
     const cfg = {
       plugins: {
         entries: {},
@@ -2763,7 +2766,7 @@ describe("plugins cli install", () => {
         pluginId: "demo",
         targetDir: localPluginDir,
         version: "1.0.0",
-        extensions: [],
+        extensions: ["./index.cjs"],
       };
     });
     enablePluginInConfigMock.mockReturnValue({ config: enabledCfg });

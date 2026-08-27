@@ -433,12 +433,19 @@ vi.mock("../plugins/installed-plugin-index-store.js", async (importOriginal) => 
   };
 });
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistryCore: ((...args: unknown[]) =>
-    invokeMock<unknown[], unknown>(loadPluginManifestRegistryMock, ...args)) as (
-    ...args: unknown[]
-  ) => unknown,
-}));
+vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/manifest-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryCore: (
+      params: Parameters<typeof actual.loadPluginManifestRegistryCore>[0],
+    ) =>
+      // Artifact reviews inspect the real staged fixture; only installed inventory is mocked.
+      params?.discovery
+        ? actual.loadPluginManifestRegistryCore(params)
+        : invokeMock(loadPluginManifestRegistryMock, params),
+  };
+});
 
 vi.mock("../plugins/status.js", () => ({
   buildPluginSnapshotReport: ((

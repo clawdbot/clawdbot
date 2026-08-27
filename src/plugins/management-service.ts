@@ -28,9 +28,8 @@ import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
   computeDeclaredSurfaceHash,
-  createManagedPluginArtifactConsentHandler,
+  prepareManagedPluginArtifactConsentHandler,
   formatPluginCapabilityConsentRequired,
-  mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
   resolvePendingPluginCapabilityReview,
   resolvePluginCapabilityConsent,
@@ -39,7 +38,10 @@ import {
   type PluginCapabilityConsentAcknowledgment,
   type PluginCapabilityConsentHandler,
 } from "./capability-consent.js";
-import { buildPluginCapabilitySummary } from "./capability-summary.js";
+import {
+  buildPluginCapabilitySummary,
+  resolvePluginPackageDeclaredSurface,
+} from "./capability-summary.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import {
   buildClawHubPluginInstallRecordFields,
@@ -81,7 +83,6 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "./install.js";
-import { resolveInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   removePluginInstallRecordFromRecords,
@@ -844,24 +845,8 @@ export async function listManagedPlugins(params: {
     const installOwner = ownership.ok ? ownership.value.installOwner : undefined;
     const installRecord = installOwner ? metadata.index.installRecords[installOwner] : undefined;
     if (record.enabled && record.origin !== "bundled" && ownership.ok && installRecord) {
-      const ownedManifests = ownership.value.pluginIds.flatMap((ownedPluginId) => {
-        const ownedManifest = metadata.byPluginId.get(ownedPluginId);
-        return ownedManifest ? [ownedManifest] : [];
-      });
-      const declared = mergePluginDeclaredSurfaces(
-        ownedManifests.map(
-          (ownedManifest) =>
-            buildPluginCapabilitySummary({
-              manifest: ownedManifest,
-              origin: ownedManifest.origin,
-              entryConfig: params.config.plugins?.entries?.[ownedManifest.id],
-            }).declared,
-        ),
-      );
-      if (
-        ownedManifests.length !== ownership.value.pluginIds.length ||
-        !resolveAcceptedSurfaceCurrent(installRecord, declared)
-      ) {
+      const declared = resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId);
+      if (!declared || !resolveAcceptedSurfaceCurrent(installRecord, declared)) {
         capabilityConsentDiagnostics.push({
           level: "warn",
           pluginId: record.pluginId,
@@ -1092,6 +1077,14 @@ export async function inspectManagedPlugin(params: {
       origin: record.origin,
       entryConfig: params.config.plugins?.entries?.[pluginId],
     });
+    const declared = ownership.ok
+      ? resolvePluginPackageDeclaredSurface(ownership.value, metadata.byPluginId)
+      : summary.declared;
+    if (!declared) {
+      throw new ManagedPluginLifecycleError(
+        `Plugin package "${installOwner}" has incomplete manifest metadata.`,
+      );
+    }
     return {
       ok: true,
       plugin: {
@@ -1109,7 +1102,8 @@ export async function inspectManagedPlugin(params: {
       },
       ...(source ? { source } : {}),
       ...summary,
-      reviewToken: computeDeclaredSurfaceHash(summary.declared),
+      declared,
+      reviewToken: computeDeclaredSurfaceHash(declared),
       ...(trust ? { trust } : {}),
     };
   }
@@ -1463,34 +1457,7 @@ async function installResolvedManagedPluginSource(
     };
   }
 
-  // Bundled release sources and linked development paths never introduce a managed artifact.
-  const consentExemptSource =
-    request.source === "local" && (request.bundledOrigin === true || request.link === true);
-  const previousRecords = consentExemptSource
-    ? undefined
-    : await loadInstalledPluginIndexInstallRecords({ env });
-  const previousMetadata =
-    previousRecords && Object.keys(previousRecords).length > 0
-      ? resolvePluginMetadataSnapshot(
-          resolveManagedPluginMetadataParams(params.snapshot.config, env),
-        )
-      : undefined;
-  const previousPluginOwners = previousMetadata
-    ? new Map(
-        previousMetadata.index.plugins.flatMap((plugin) => {
-          const owner = resolveInstalledPluginIndexInstallOwner(plugin);
-          return owner ? [[plugin.pluginId, owner] as const] : [];
-        }),
-      )
-    : undefined;
-  const previouslyEnabledInstallOwners = previousMetadata
-    ? new Set(
-        previousMetadata.index.plugins.flatMap((plugin) => {
-          const owner = resolveInstalledPluginIndexInstallOwner(plugin);
-          return plugin.enabled && owner ? [owner] : [];
-        }),
-      )
-    : undefined;
+  const consentExemptSource = request.source === "local" && request.bundledOrigin === true;
   const source =
     request.source === "local"
       ? request.recordSource
@@ -1499,7 +1466,7 @@ async function installResolvedManagedPluginSource(
         : request.source;
   const capabilityConsent = consentExemptSource
     ? undefined
-    : createManagedPluginArtifactConsentHandler({
+    : await prepareManagedPluginArtifactConsentHandler({
         config: params.snapshot.config,
         env,
         source,
@@ -1507,9 +1474,6 @@ async function installResolvedManagedPluginSource(
         ...("expectedIntegrity" in request && request.expectedIntegrity
           ? { expectedIntegrity: request.expectedIntegrity }
           : {}),
-        ...(previousRecords ? { previousRecords } : {}),
-        ...(previousPluginOwners ? { previousPluginOwners } : {}),
-        ...(previouslyEnabledInstallOwners ? { previouslyEnabledInstallOwners } : {}),
         acknowledgeCapabilities: params.acknowledgeCapabilities,
         onCapabilityConsent: params.onCapabilityConsent,
       });
@@ -1540,6 +1504,14 @@ async function installResolvedManagedPluginSource(
       pluginId: string;
       targetDir: string;
     };
+    // Linking skips the installer's staging transaction but still grants durable authority.
+    if (request.source === "local" && request.link) {
+      await capabilityConsent?.onBeforePluginArtifactCommit({
+        pluginId: installed.pluginId,
+        stagedArtifactDir: request.path,
+        mode: request.mode ?? "install",
+      });
+    }
     const transaction = resolvePluginInstallTransaction(installed);
     if (completed.expectedPluginId && installed.pluginId !== completed.expectedPluginId) {
       await transaction?.rollback();

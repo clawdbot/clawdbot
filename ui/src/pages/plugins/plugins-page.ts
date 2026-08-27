@@ -83,9 +83,11 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, PluginRowMessage> = {};
   @state() private pendingRemoval: Record<string, boolean> = {};
-  @state() private detailPluginId: string | null = null;
-  @state() private detailInspection: PluginsInspectResult | null = null;
-  @state() private detailInspectionError: string | null = null;
+  @state() private detail: {
+    pluginId: string;
+    inspection: PluginsInspectResult | null;
+    error: string | null;
+  } | null = null;
   @state() private iconUrls: Record<string, string> = {};
   @state() private pageNotice: PluginRowMessage | null = null;
   private routeDataConsumed = false;
@@ -104,10 +106,6 @@ class PluginsPage extends OpenClawLightDomElement {
       this.error = null;
       this.messages = {};
       this.pendingRemoval = {};
-      this.detailPluginId = null;
-      this.detailInspection = null;
-      this.detailInspectionError = null;
-      this.consentController.reset();
       this.pageNotice = null;
       this.mcpController.resetMessage();
     },
@@ -129,7 +127,7 @@ class PluginsPage extends OpenClawLightDomElement {
       this.pageNotice = null;
     },
     closeDetails: () => {
-      this.detailPluginId = null;
+      this.detail = null;
     },
     applyMutationResult: (result) => this.applyMutationResult(result),
     refreshCatalogAfterMutation: (client) => this.refreshCatalogAfterMutation(client),
@@ -207,8 +205,8 @@ class PluginsPage extends OpenClawLightDomElement {
       event.stopPropagation();
       return;
     }
-    if (this.detailPluginId) {
-      this.detailPluginId = null;
+    if (this.detail) {
+      this.detail = null;
       event.stopPropagation();
     }
   };
@@ -314,7 +312,9 @@ class PluginsPage extends OpenClawLightDomElement {
     }
     this.mcpController.invalidate();
     void this.searchTask.run([null, ""]);
-    this.consentController.invalidateMutations();
+    // Inspection results belong to one connection epoch, including same-client reconnects.
+    this.detail = null;
+    this.consentController.reset();
   }
 
   private replaceResult(result: PluginListResult | null, preserveIcons = false) {
@@ -627,31 +627,29 @@ class PluginsPage extends OpenClawLightDomElement {
     await this.catalogTask.run([client]);
   }
 
-  private showDetails(pluginId: string | null) {
-    this.detailPluginId = pluginId;
-    this.detailInspection = null;
-    this.detailInspectionError = null;
+  private async showDetails(pluginId: string | null) {
+    const detail = pluginId ? { pluginId, inspection: null, error: null } : null;
+    this.detail = detail;
     const plugin = pluginId
       ? this.result?.plugins.find((entry) => entry.id === pluginId)
       : undefined;
-    if (!plugin?.installed) {
+    if (!plugin?.installed || !detail) {
       return;
     }
     const scope = this.gateway.capture();
     if (!scope) {
       return;
     }
-    void inspectPlugin(scope.client, plugin.id)
-      .then((inspection) => {
-        if (this.gateway.isCurrent(scope) && this.detailPluginId === plugin.id) {
-          this.detailInspection = inspection;
-        }
-      })
-      .catch((error: unknown) => {
-        if (this.gateway.isCurrent(scope) && this.detailPluginId === plugin.id) {
-          this.detailInspectionError = formatUiError(error);
-        }
-      });
+    try {
+      const inspection = await inspectPlugin(scope.client, plugin.id);
+      if (this.gateway.isCurrent(scope) && this.detail === detail) {
+        this.detail = { ...detail, inspection };
+      }
+    } catch (error) {
+      if (this.gateway.isCurrent(scope) && this.detail === detail) {
+        this.detail = { ...detail, error: formatUiError(error) };
+      }
+    }
   }
 
   private updateEnabled(pluginId: string, enabled: boolean, key?: string): Promise<void> {
@@ -704,9 +702,9 @@ class PluginsPage extends OpenClawLightDomElement {
           busy: this.busy,
           messages: this.messages,
           pendingRemoval: this.pendingRemoval,
-          detailPluginId: this.detailPluginId,
-          detailInspection: this.detailInspection,
-          detailInspectionError: this.detailInspectionError,
+          detailPluginId: this.detail?.pluginId ?? null,
+          detailInspection: this.detail?.inspection ?? null,
+          detailInspectionError: this.detail?.error ?? null,
           consent: this.consentController.consent,
           consentInspection: this.consentController.inspection,
           consentInspectionLoading: this.consentController.inspectionLoading,
@@ -722,7 +720,7 @@ class PluginsPage extends OpenClawLightDomElement {
           },
           onRefresh: () => void this.mcpController.refreshPage(() => this.refreshCatalog()),
           onIconError: (pluginId) => this.handlePluginIconError(pluginId),
-          onShowDetails: (pluginId) => this.showDetails(pluginId),
+          onShowDetails: (pluginId) => void this.showDetails(pluginId),
           onSetEnabled: (pluginId, enabled, rowKey) =>
             void this.updateEnabled(pluginId, enabled, rowKey),
           onInstall: (request, installIdentity) =>

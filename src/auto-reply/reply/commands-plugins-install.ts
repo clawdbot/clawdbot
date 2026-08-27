@@ -16,6 +16,23 @@ import {
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { installManagedPluginSource } from "../../plugins/management-service.js";
 
+export function formatPluginCommandCapabilityConsentError(
+  error: unknown,
+  retryCommand: string,
+): string | null {
+  if (!(error instanceof ManagedPluginLifecycleError) || !error.capabilityConsent) {
+    return null;
+  }
+  const review = resolvePendingPluginCapabilityReview(error.capabilityConsent.pluginId);
+  if (review?.reviewToken !== error.capabilityConsent.reviewToken) {
+    return null;
+  }
+  return [
+    ...formatPluginCapabilityConsentLines(review),
+    `Review these capabilities, then rerun ${stripAnsi(retryCommand)} --accept-capabilities to continue.`,
+  ].join("\n");
+}
+
 function resolveNonClawHubChatInstallAcknowledgement(params: {
   force: boolean;
   sourceClass: NonClawHubInstallSourceClass;
@@ -78,18 +95,13 @@ export async function installPluginFromPluginsCommand(params: {
         : logger,
     });
   } catch (error) {
-    if (error instanceof ManagedPluginLifecycleError && error.capabilityConsent) {
-      const review = resolvePendingPluginCapabilityReview(error.capabilityConsent.pluginId);
-      if (review?.reviewToken === error.capabilityConsent.reviewToken) {
-        const forceFlag = params.force ? " --force" : "";
-        return {
-          ok: false,
-          error: [
-            ...formatPluginCapabilityConsentLines(review),
-            `Review these capabilities, then rerun /plugins install ${stripAnsi(params.raw)}${forceFlag} --accept-capabilities to continue.`,
-          ].join("\n"),
-        };
-      }
+    const forceFlag = params.force ? " --force" : "";
+    const consentError = formatPluginCommandCapabilityConsentError(
+      error,
+      `/plugins install ${params.raw}${forceFlag}`,
+    );
+    if (consentError) {
+      return { ok: false, error: consentError };
     }
     throw error;
   }
