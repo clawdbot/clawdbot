@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import {
   createWizardTestRuntime as createRuntime,
@@ -163,6 +164,40 @@ describe("runConfigureWizard", () => {
     },
   );
 
+  it.each([
+    { platform: "linux", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
+    { platform: "darwin", deadlineMs: 45_000, probeTimeoutMs: 10_000 },
+    { platform: "win32", deadlineMs: 90_000, probeTimeoutMs: 15_000 },
+  ] as const)(
+    "allows managed daemon startup before health on $platform",
+    async ({ platform, ...timing }) => {
+      setupBaseWizardState({ gateway: { mode: "local" } });
+      queueWizardPrompts({ select: ["local"], confirm: [] });
+      maybeInstallDaemon.mockResolvedValueOnce("succeeded");
+      mocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
+
+      await withMockedPlatform(platform, () =>
+        runConfigureWizard(
+          { command: "configure", sections: ["daemon", "health"] },
+          createRuntime(),
+        ),
+      );
+
+      expect(mocks.waitForGatewayReachable).toHaveBeenNthCalledWith(1, {
+        url: "ws://127.0.0.1:18789",
+        token: undefined,
+        password: undefined,
+        ...timing,
+      });
+      expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith({
+        url: "ws://127.0.0.1:18789",
+        token: undefined,
+        password: undefined,
+        ...timing,
+      });
+    },
+  );
+
   it("observes fresh startup after an interactive health check followed by daemon setup", async () => {
     setupBaseWizardState({ gateway: { mode: "local" } });
     queueWizardPrompts({ select: ["local", "health", "daemon", "__continue"], confirm: [] });
@@ -171,13 +206,22 @@ describe("runConfigureWizard", () => {
       .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: true });
 
-    await runConfigureWizard({ command: "configure" }, createRuntime());
+    await withMockedPlatform("linux", () =>
+      runConfigureWizard({ command: "configure" }, createRuntime()),
+    );
 
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway: reachable"),
       "Control UI",
     );
     expect(mocks.waitForGatewayReachable).toHaveBeenCalledTimes(2);
+    expect(mocks.waitForGatewayReachable).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ deadlineMs: 15_000 }),
+    );
+    expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith(
+      expect.objectContaining({ deadlineMs: 45_000, probeTimeoutMs: 10_000 }),
+    );
   });
 
   it("keeps remote password health when the configured token ref is unresolved", async () => {
@@ -388,11 +432,13 @@ describe("runConfigureWizard", () => {
     expect(mocks.waitForGatewayReachable).toHaveBeenCalledWith(
       expect.objectContaining({ token: "configured-token" }),
     );
-    expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith({
-      url: "ws://127.0.0.1:18789",
-      token: "configured-token",
-      password: undefined,
-    });
+    expect(mocks.waitForGatewayReachable).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: "configured-token",
+        password: undefined,
+      }),
+    );
     expect(mocks.healthCommand).toHaveBeenCalledWith(
       expect.objectContaining({ token: "configured-token" }),
       expect.anything(),
