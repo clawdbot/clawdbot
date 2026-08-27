@@ -222,6 +222,9 @@ const threadBindingSchema = z
     // Continue creates the OpenClaw Chat before native execution. This closed
     // snapshot state is materialized only inside the fully configured harness.
     pendingSupervisionBranch: pendingSupervisionBranchSchema.optional(),
+    // Manual attachment records intent; only the harness can attest its native
+    // tool catalog and observe a configured reload before admitting a turn.
+    pendingResumeConfiguration: z.literal(true).optional(),
     modelProvider: z
       .string()
       .transform((value) => value.trim())
@@ -577,6 +580,7 @@ export type CodexAppServerBindingStore = {
   mutate(
     identity: CodexAppServerBindingIdentity,
     mutation: CodexAppServerBindingMutation,
+    assertCurrent?: () => void,
   ): Promise<boolean>;
   prepareSessionGenerationReclaim(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
@@ -627,7 +631,8 @@ export function scopeCodexRunBindingStore(params: {
         threadId,
         identity ? mapIdentity(identity) : undefined,
       ),
-    mutate: (identity, mutation) => params.bindingStore.mutate(mapIdentity(identity), mutation),
+    mutate: (identity, mutation, assertCurrent) =>
+      params.bindingStore.mutate(mapIdentity(identity), mutation, assertCurrent),
     prepareSessionGenerationReclaim: (identity) =>
       params.bindingStore.prepareSessionGenerationReclaim(mapSessionIdentity(identity)),
     adoptSessionGeneration: (identity, expectedPreviousSessionId) =>
@@ -1008,7 +1013,7 @@ export function createCodexAppServerBindingStore(
       return { kind: "verify", expectedPreviousSessionId: currentSessionId };
     },
 
-    async mutate(identity, mutation) {
+    async mutate(identity, mutation, assertCurrent) {
       return await runBindingMutation(async () => {
         const key = bindingStoreKey(identity);
         // A retained legacy sidecar may be revisited by doctor after runtime
@@ -1167,6 +1172,7 @@ export function createCodexAppServerBindingStore(
           mutation.kind === "clear" && !retainLegacyClear && !leaseContext.getStore()?.has(key)
             ? 1
             : undefined,
+          assertCurrent,
         );
       });
     },

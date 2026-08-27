@@ -38,7 +38,8 @@ export function createLazyCodexAppServerBindingStore(
     read: async (identity) => (await store()).read(identity),
     hasOtherThreadOwner: async (threadId, currentIdentity) =>
       (await store()).hasOtherThreadOwner(threadId, currentIdentity),
-    mutate: async (identity, mutation) => (await store()).mutate(identity, mutation),
+    mutate: async (identity, mutation, assertCurrent) =>
+      (await store()).mutate(identity, mutation, assertCurrent),
     prepareSessionGenerationReclaim: async (identity) =>
       (await store()).prepareSessionGenerationReclaim(identity),
     adoptSessionGeneration: async (identity, previousSessionId) =>

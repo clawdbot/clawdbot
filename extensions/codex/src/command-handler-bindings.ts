@@ -344,6 +344,7 @@ export async function resumeThread(
         }
         const currentBinding = await deps.bindingStore.read(identity);
         assertCodexBindingMayBeReplaced(currentBinding, "attaching a different resumed thread");
+        let pendingResumeConfiguration = false;
         const commitResumedThread = async (
           value: unknown,
           client: CodexAppServerClient,
@@ -376,6 +377,13 @@ export async function resumeThread(
             threadId: effectiveThreadId,
             clientId,
           });
+          const sameThreadBinding =
+            bindingBeforeCommit?.threadId === effectiveThreadId ? bindingBeforeCommit : undefined;
+          pendingResumeConfiguration =
+            sameThreadBinding?.preserveNativeModel !== true &&
+            (!sameThreadBinding?.dynamicToolsFingerprint ||
+              !sameThreadBinding.webSearchThreadConfigFingerprint ||
+              sameThreadBinding.pendingResumeConfiguration === true);
           let retained = false;
           try {
             const knownOwnership = sameOwner
@@ -397,10 +405,12 @@ export async function resumeThread(
             const committed = await deps.bindingStore.mutate(identity, {
               kind: "set",
               binding: {
-                ...(bindingBeforeCommit?.threadId === effectiveThreadId ? bindingBeforeCommit : {}),
+                ...sameThreadBinding,
                 threadId: effectiveThreadId,
                 clientId,
                 cwd: resumedCwd,
+                rolloutPath: response.thread.path ?? sameThreadBinding?.rolloutPath,
+                pendingResumeConfiguration: pendingResumeConfiguration ? true : undefined,
                 authProfileId,
                 model: response.model,
                 modelProvider,
@@ -436,7 +446,7 @@ export async function resumeThread(
         );
         return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
           normalizedThreadId,
-        )}.`;
+        )}.${pendingResumeConfiguration ? " The next turn will validate its tools and apply this session's configuration before continuing." : ""}`;
       }),
   });
 }

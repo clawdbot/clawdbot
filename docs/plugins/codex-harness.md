@@ -996,6 +996,22 @@ disable <name>` update its persisted policy. Mutations require an owner or
 - `/codex computer-use [status|install]` manages Codex Computer Use.
 - `/codex help` lists the full command tree.
 
+When `/codex resume` attaches a thread without an existing verified harness
+binding, its next turn checks the native thread's stored tool catalog and
+applies the current harness configuration before continuing. This first
+attachment requires the local stdio app-server and its per-agent Codex home.
+It also needs exclusive use of that app-server while applying configuration;
+if another turn or native child is active, wait for it to finish and retry.
+Use [Codex supervision](/plugins/codex-supervision) or native Codex to continue
+threads in a shared user home or on another app-server.
+
+Codex cannot replace a thread's dynamic tool catalog during resume. If that
+catalog differs from the current harness tools, its metadata cannot be read,
+or Codex cannot confirm that it applied the configuration, OpenClaw reports
+the problem and keeps the selected native thread intact. It does not silently
+start another thread. Use `/new` to start with the current harness tools, or
+continue the preserved thread in native Codex.
+
 ### Shared Fast mode and Codex fast mode
 
 `/fast` controls the shared OpenClaw policy. A directive-only `/fast off`

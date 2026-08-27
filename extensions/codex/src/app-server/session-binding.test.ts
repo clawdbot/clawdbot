@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createLazyCodexAppServerBindingStore } from "./session-binding-store.js";
 import {
   bindingStoreKey,
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -64,6 +65,35 @@ afterEach(() => {
 });
 
 describe("Codex app-server binding store", () => {
+  it("rechecks resume authority after the lazy store resolves and before writing", async () => {
+    const { state } = createStateStore();
+    const store = createLazyCodexAppServerBindingStore(state);
+    const identity = { kind: "conversation" as const, bindingId: "pending-resume" };
+    const binding = {
+      threadId: "thread-pending",
+      cwd: "/repo",
+      pendingResumeConfiguration: true as const,
+    };
+    await store.mutate(identity, { kind: "set", binding });
+    let current = true;
+    const writing = store.mutate(
+      identity,
+      {
+        kind: "patch",
+        threadId: binding.threadId,
+        patch: { pendingResumeConfiguration: undefined },
+      },
+      () => {
+        if (!current) {
+          throw new Error("resume authority changed");
+        }
+      },
+    );
+    current = false;
+    await expect(writing).rejects.toThrow("resume authority changed");
+    expect(await store.read(identity)).toEqual(binding);
+  });
+
   it("deletes only the requested stable owner and restores it on transaction rollback", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-binding-delete-"));
     try {

@@ -2090,6 +2090,17 @@ async function verifyCodexSessionDeletion(params: {
   );
   expect(siblingBinding).toBeDefined();
 
+  // A competing attachment must reject before displacing either native owner.
+  await requestCodexCommandText({
+    client,
+    events,
+    sessionKey,
+    command: `/codex resume ${siblingThreadId}`,
+    expectedText: "owned by another OpenClaw session or conversation",
+  });
+  expect(readBindings().find((row) => row.key === before?.key)).toEqual(before);
+  expect(readBindings().find((row) => row.key === siblingBinding?.key)).toEqual(siblingBinding);
+
   const deletion = await client.request<{ deleted: boolean }>("sessions.delete", {
     key: sessionKey,
   });
@@ -2124,6 +2135,7 @@ async function verifyCodexSessionDeletion(params: {
   });
   expect(observedCodexThreadIds.get(sessionKey)).toBe(threadId);
   logCodexLiveStep("session-deletion", {
+    competingResumeRejected: true,
     removedBinding: true,
     siblingContinued: true,
     nativeHistoryResumed: true,

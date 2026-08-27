@@ -684,7 +684,7 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createContext("resume thread-123", sessionFile), { deps }),
     ).resolves.toEqual({
-      text: "Attached this OpenClaw session to Codex thread thread-123.",
+      text: "Attached this OpenClaw session to Codex thread thread-123. The next turn will validate its tools and apply this session's configuration before continuing.",
     });
 
     expect(codexControlRequest).toHaveBeenCalledExactlyOnceWith(
@@ -907,6 +907,7 @@ describe("codex command", () => {
       cwd: "/repo",
       authProfileId: "openai:previous",
       dynamicToolsFingerprint: "known-dynamic-tools",
+      webSearchThreadConfigFingerprint: "known-web-search",
       pluginAppsFingerprint: "known-plugin-apps",
     });
     const release = vi.fn(async () => undefined);
@@ -1101,7 +1102,7 @@ describe("codex command", () => {
 
     resolveResume(createThreadResumeResponse({ threadId: "thread-123" }));
     await expect(command).resolves.toEqual({
-      text: "Attached this OpenClaw session to Codex thread thread-123.",
+      text: "Attached this OpenClaw session to Codex thread thread-123. The next turn will validate its tools and apply this session's configuration before continuing.",
     });
     await competingOwner;
     expect(order).toEqual(["resume-start", "resume-done", "competing-owner"]);
@@ -1157,7 +1158,9 @@ describe("codex command", () => {
       { deps: createDeps({ codexControlRequest }) },
     );
 
-    expect(result.text).toBe("Attached this OpenClaw session to Codex thread thread-new.");
+    expect(result.text).toBe(
+      "Attached this OpenClaw session to Codex thread thread-new. The next turn will validate its tools and apply this session's configuration before continuing.",
+    );
     expect(codexControlRequest).toHaveBeenCalledTimes(1);
     await expect(
       testCodexAppServerBindingStore.read({
@@ -1248,6 +1251,7 @@ describe("codex command", () => {
       authProfileId: "openai:work",
       model: "gpt-5.4",
       historyCoveredThrough: expect.any(String),
+      pendingResumeConfiguration: true,
     });
   });
 
