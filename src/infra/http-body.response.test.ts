@@ -177,6 +177,54 @@ describe("readResponseWithLimit", () => {
     });
   });
 
+  it.each([
+    {
+      name: "overflow",
+      chunks: [new Uint8Array([1, 2, 3, 4, 5])],
+      maxBytes: 4,
+      options: undefined,
+      expectedError: /Content too large: 5 bytes \(limit: 4 bytes\)/,
+    },
+    {
+      name: "an expired lazy deadline",
+      chunks: [],
+      maxBytes: 1024,
+      options: {
+        timeoutMs: () => {
+          throw new Error("deadline expired");
+        },
+      },
+      expectedError: /deadline expired/,
+    },
+  ])("surfaces $name without waiting for an unread response clone", async (testCase) => {
+    const response = new Response(makeStallingStream(testCase.chunks));
+    const unreadClone = response.clone();
+    const reading = readResponseWithLimit(response, testCase.maxBytes, testCase.options).then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      const result = await Promise.race([
+        reading,
+        new Promise<{ status: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ status: "timeout" }), 250);
+        }),
+      ]);
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(result.error).toEqual(
+          expect.objectContaining({ message: expect.stringMatching(testCase.expectedError) }),
+        );
+      }
+    } finally {
+      clearTimeout(timeout);
+      void unreadClone.body?.cancel().catch(() => undefined);
+      await reading;
+    }
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -1])(
     "rejects invalid maxBytes before reading: %s",
     async (maxBytes) => {

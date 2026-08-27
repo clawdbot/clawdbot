@@ -226,7 +226,9 @@ async function readResponsePrefixFromReader(
         size = nextTotal;
         truncated = true;
         try {
-          await reader.cancel();
+          // A response clone keeps tee cancellation pending until its sibling closes.
+          // Cleanup must not delay the authoritative overflow or prefix result.
+          void reader.cancel().catch(() => undefined);
         } catch {}
         break;
       }
@@ -260,7 +262,7 @@ async function readResponsePrefix(
   try {
     timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
   } catch (error) {
-    await response.body?.cancel(error).catch(() => undefined);
+    void response.body?.cancel(error).catch(() => undefined);
     throw error;
   }
   const body = response.body;

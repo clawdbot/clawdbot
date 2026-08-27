@@ -99,13 +99,13 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
-async function cancelReaderBestEffort(
+function cancelReaderBestEffort(
   reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
   reason?: unknown,
-): Promise<void> {
-  // Reader cancellation is cleanup. An upstream cancel failure must not replace
-  // the wrapper's authoritative stream error or downstream cancellation.
-  await reader?.cancel(reason).catch(() => undefined);
+): void {
+  // A cloned response keeps tee cancellation pending while its sibling is open.
+  // Cleanup must not block the wrapper's stream error or downstream cancellation.
+  void reader?.cancel(reason).catch(() => undefined);
 }
 
 function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
@@ -135,18 +135,18 @@ function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Respo
           }
           total = maxBytes;
           controller.close();
-          void cancelReaderBestEffort(reader);
+          cancelReaderBestEffort(reader);
           return;
         }
         total += chunk.value.byteLength;
         controller.enqueue(chunk.value);
       } catch (error) {
         controller.error(error);
-        void cancelReaderBestEffort(reader, error);
+        cancelReaderBestEffort(reader, error);
       }
     },
-    async cancel(reason) {
-      await cancelReaderBestEffort(reader, reason);
+    cancel(reason) {
+      cancelReaderBestEffort(reader, reason);
     },
   });
   return new Response(capped, response);
@@ -201,12 +201,12 @@ function sanitizeOpenAISdkSseResponse(
             buffer += decoder.decode(chunk.value, { stream: true });
           }
         } catch (error) {
-          await cancelReaderBestEffort(reader, error);
+          cancelReaderBestEffort(reader, error);
           controller.error(error);
         }
       },
-      async cancel(reason) {
-        await cancelReaderBestEffort(reader, reason);
+      cancel(reason) {
+        cancelReaderBestEffort(reader, reason);
       },
     });
     const headers = new Headers(response.headers);
@@ -289,12 +289,12 @@ function sanitizeOpenAISdkSseResponse(
           }
         }
       } catch (error) {
-        await cancelReaderBestEffort(reader, error);
+        cancelReaderBestEffort(reader, error);
         controller.error(error);
       }
     },
-    async cancel(reason) {
-      await cancelReaderBestEffort(reader, reason);
+    cancel(reason) {
+      cancelReaderBestEffort(reader, reason);
     },
   });
 
@@ -373,7 +373,7 @@ async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISd
     text += decoder.decode();
     return classifyOpenAISdkStreamBodyPrefix(text);
   } finally {
-    void cancelReaderBestEffort(reader);
+    cancelReaderBestEffort(reader);
   }
 }
 

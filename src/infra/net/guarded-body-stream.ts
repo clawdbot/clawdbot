@@ -35,8 +35,12 @@ export function wrapGuardedBodyStream(params: {
     }
     finalized = true;
     guardedBodyCleanupRegistry.unregister(cleanupRegistrationToken);
+    let cancellation: Promise<void> | undefined;
     try {
-      await cancelReader();
+      cancellation = cancelReader();
+      // Tee cancellation can remain pending while an unread response clone is
+      // alive; release guarded resources before awaiting its eventual outcome.
+      void cancellation.catch(() => undefined);
     } finally {
       try {
         reader?.releaseLock();
@@ -48,6 +52,7 @@ export function wrapGuardedBodyStream(params: {
         }
       }
     }
+    await cancellation;
   };
   const wrappedBody = new ReadableStream<Uint8Array>({
     start() {

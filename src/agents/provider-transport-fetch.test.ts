@@ -1454,6 +1454,77 @@ describe("buildGuardedModelFetch", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    {
+      name: "JSON-to-SSE synthesis",
+      contentType: "application/json",
+      expectedError: /exceeded.*bytes while synthesizing SSE/i,
+    },
+    {
+      name: "SSE sanitization",
+      contentType: "text/event-stream",
+      expectedError: /exceeded max buffer size/i,
+    },
+  ])("surfaces $name errors without waiting for an unread response clone", async (testCase) => {
+    const upstream = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1));
+        },
+      }),
+      { headers: { "content-type": testCase.contentType } },
+    );
+    const unreadClone = upstream.clone();
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: upstream,
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release,
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.4", stream: true }),
+      },
+    );
+    const reading = response
+      .body!.getReader()
+      .read()
+      .then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      const result = await Promise.race([
+        reading,
+        new Promise<{ status: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ status: "timeout" }), 750);
+        }),
+      ]);
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(result.error).toEqual(
+          expect.objectContaining({ message: expect.stringMatching(testCase.expectedError) }),
+        );
+      }
+      await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1), { timeout: 250 });
+    } finally {
+      clearTimeout(timeout);
+      void unreadClone.body?.cancel().catch(() => undefined);
+      await reading;
+    }
+  });
+
   it("does not re-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
     const source = openResponseStreamText(
       'data: {"id":"a","choices":[{"index":0,"delta":{"content":"Hi","role":"assistant"}}]}\n\n' +

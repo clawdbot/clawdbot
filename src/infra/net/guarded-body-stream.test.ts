@@ -16,6 +16,25 @@ describe("wrapGuardedBodyStream", () => {
     expect(source.locked).toBe(false);
   });
 
+  it("releases guarded resources without waiting for an unread response clone", async () => {
+    const response = new Response(new ReadableStream<Uint8Array>());
+    const unreadClone = response.clone();
+    const cleanup = vi.fn();
+    const wrapped = wrapGuardedBodyStream({ body: response.body!, cleanup });
+    const cancellation = wrapped.cancel("consumer stopped").then(
+      () => ({ status: "resolved" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    try {
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce(), { timeout: 250 });
+      expect(response.body!.locked).toBe(false);
+    } finally {
+      void unreadClone.body?.cancel().catch(() => undefined);
+      await expect(cancellation).resolves.toEqual({ status: "resolved" });
+    }
+  });
+
   it("propagates downstream cancellation failure after releasing resources", async () => {
     const expected = new Error("source cancellation failed");
     const cleanup = vi.fn();
