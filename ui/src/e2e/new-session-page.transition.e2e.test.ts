@@ -215,4 +215,81 @@ suite.define(() => {
       await context.close();
     }
   });
+
+  it("keeps a newer user route when chat preparation completes late", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    let releaseChatModule!: () => void;
+    let chatModuleRequested = false;
+    const chatModuleBlocked = new Promise<void>((resolve) => {
+      releaseChatModule = resolve;
+    });
+    await page.route("**/assets/chat-page-*.js*", async (route) => {
+      chatModuleRequested = true;
+      await chatModuleBlocked;
+      await route.continue();
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.create": {
+          key: SESSION_KEY,
+          messageSeq: 1,
+          runId: RUN_ID,
+          runStarted: true,
+        },
+        "sessions.list": createdSessionListResult(SESSION_KEY),
+      },
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill("do not override my navigation");
+      await page.getByRole("button", { name: "Start session" }).click();
+      await gateway.waitForRequest("sessions.create");
+      await expect.poll(() => chatModuleRequested).toBe(true);
+      await captureProof(page, "04-transition-awaits-preload.png");
+
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-identity-card").click();
+      await sidebar
+        .locator("wa-dropdown.sidebar-identity-menu")
+        .getByRole("menuitem", { exact: true, name: "Settings" })
+        .click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
+      await page.getByRole("heading", { name: "Settings" }).waitFor();
+
+      const chatModuleResponse = page.waitForResponse((response) =>
+        /\/assets\/chat-page-.*\.js/.test(new URL(response.url()).pathname),
+      );
+      releaseChatModule();
+      await chatModuleResponse;
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+
+      expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+      expect(await page.locator("openclaw-chat-page").count()).toBe(0);
+      expect(
+        await page.evaluate(() =>
+          document.getAnimations().some((animation) => {
+            const effect = animation.effect as KeyframeEffect | null;
+            return (
+              effect?.target instanceof HTMLElement &&
+              effect.target.tagName === "OPENCLAW-ROUTER-OUTLET"
+            );
+          }),
+        ),
+      ).toBe(false);
+      await captureProof(page, "05-superseded-transition-stays-on-settings.png");
+    } finally {
+      releaseChatModule();
+      await context.close();
+    }
+  });
 });

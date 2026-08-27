@@ -1,4 +1,5 @@
 import type { RouteId } from "../app-routes.ts";
+import { claimActiveRouteTransition, type RouteTransitionOwner } from "./route-transition-owner.ts";
 
 type RouteTransitionOptions = {
   document: Document;
@@ -19,6 +20,59 @@ const SESSION_ROUTE_ENTER_OPTIONS: KeyframeAnimationOptions = {
   easing: "cubic-bezier(0.16, 1, 0.3, 1)",
 };
 
+type ActiveRouteTransition = RouteTransitionOwner & {
+  animation?: Animation;
+  canceled: Promise<void>;
+  isCanceled: boolean;
+};
+
+function createRouteTransition(target: RouteId): ActiveRouteTransition {
+  let resolveCanceled!: () => void;
+  const canceled = new Promise<void>((resolve) => {
+    resolveCanceled = resolve;
+  });
+  const transition: ActiveRouteTransition = {
+    canceled,
+    isCanceled: false,
+    isStartingNavigation: false,
+    target,
+    cancel: () => {
+      if (transition.isCanceled) {
+        return;
+      }
+      transition.isCanceled = true;
+      transition.animation?.cancel();
+      resolveCanceled();
+    },
+  };
+  return transition;
+}
+
+async function awaitRouteTransitionStep(
+  transition: ActiveRouteTransition,
+  step: Promise<unknown> | undefined,
+): Promise<boolean> {
+  return Promise.race([
+    Promise.resolve(step).then(() => true),
+    transition.canceled.then(() => false),
+  ]);
+}
+
+function startRouteNavigation(
+  transition: ActiveRouteTransition,
+  navigate: () => Promise<void>,
+): Promise<void> {
+  if (transition.isCanceled) {
+    return Promise.resolve();
+  }
+  transition.isStartingNavigation = true;
+  try {
+    return navigate();
+  } finally {
+    transition.isStartingNavigation = false;
+  }
+}
+
 function waitForChatRouteReady(document: Document) {
   if (document.querySelector(".agent-chat__composer-combobox")) {
     return { cancel: () => undefined, ready: Promise.resolve() };
@@ -37,6 +91,7 @@ function waitForChatRouteReady(document: Document) {
 
 async function navigateAndAnimate(
   document: Document,
+  transition: ActiveRouteTransition,
   navigate: () => Promise<void>,
   prefersReducedMotion: boolean,
 ) {
@@ -45,9 +100,15 @@ async function navigateAndAnimate(
   );
   const chatReady = waitForChatRouteReady(document);
   try {
-    await navigate();
-    await outlet?.updateComplete;
-    await chatReady.ready;
+    if (!(await awaitRouteTransitionStep(transition, startRouteNavigation(transition, navigate)))) {
+      return;
+    }
+    if (!(await awaitRouteTransitionStep(transition, outlet?.updateComplete))) {
+      return;
+    }
+    if (!(await awaitRouteTransitionStep(transition, chatReady.ready))) {
+      return;
+    }
   } finally {
     chatReady.cancel();
   }
@@ -55,7 +116,15 @@ async function navigateAndAnimate(
     return;
   }
   const animation = outlet?.animate?.(SESSION_ROUTE_ENTER_KEYFRAMES, SESSION_ROUTE_ENTER_OPTIONS);
-  await animation?.finished.catch(() => undefined);
+  if (transition.isCanceled) {
+    animation?.cancel();
+  } else {
+    transition.animation = animation;
+  }
+  await awaitRouteTransitionStep(
+    transition,
+    animation?.finished.catch(() => undefined),
+  );
 }
 
 export async function navigateWithRouteTransition(options: RouteTransitionOptions): Promise<void> {
@@ -64,13 +133,22 @@ export async function navigateWithRouteTransition(options: RouteTransitionOption
     return navigate();
   }
 
+  const transition = createRouteTransition(to);
+  const release = claimActiveRouteTransition(document, transition);
   try {
-    await prepare?.();
-  } catch {
-    // Preparation is an enhancement. Preserve direct navigation so its normal
-    // route error handling remains authoritative when preloading fails.
-    return navigate();
-  }
+    try {
+      if (!(await awaitRouteTransitionStep(transition, prepare?.()))) {
+        return;
+      }
+    } catch {
+      // Preparation is an enhancement. Preserve direct navigation so its normal
+      // route error handling remains authoritative when preloading fails.
+      await awaitRouteTransitionStep(transition, startRouteNavigation(transition, navigate));
+      return;
+    }
 
-  return navigateAndAnimate(document, navigate, prefersReducedMotion);
+    await navigateAndAnimate(document, transition, navigate, prefersReducedMotion);
+  } finally {
+    release();
+  }
 }

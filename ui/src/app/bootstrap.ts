@@ -54,6 +54,7 @@ import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+import { cancelActiveRouteTransition } from "./route-transition-owner.ts";
 import { createApplicationPlacementStartup } from "./session-placement-startup.ts";
 import {
   loadSettings,
@@ -515,6 +516,7 @@ export function bootstrapApplication(
     options: ApplicationNavigationOptions | undefined,
     requested: "push" | "replace",
   ) => {
+    cancelActiveRouteTransition(document, { routeId, mode: requested });
     const location = routeLocation(routeId, options);
     // Preserve pre-start navigation exactly as the fire-and-forget entry point does.
     if (!routerStarted) {
@@ -657,6 +659,7 @@ export function bootstrapApplication(
       return startupLifecycle.run(steps);
     },
     stop: () => {
+      cancelActiveRouteTransition(document);
       startupLifecycle.stop();
       stopPostConnect();
       agents.dispose();
