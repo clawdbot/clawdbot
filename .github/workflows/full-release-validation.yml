@@ -1164,14 +1164,24 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      # Parent reruns hide prior-attempt artifacts. This exact-key cache is immutable;
-      # a miss fails closed instead of reconstructing or redispatching child identities.
+      # Cache is acceleration only. Parent reruns recover the immutable attempt-one
+      # plan from the workflow artifact before validating its complete provenance.
       - name: Cache immutable release execution plan
+        id: plan_cache
+        continue-on-error: true
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/full-release-execution-plan
           key: full-release-execution-plan-v1-${{ github.run_id }}
-          fail-on-cache-miss: ${{ github.run_attempt != 1 }}
+
+      - name: Restore immutable release execution plan artifact
+        if: ${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: full-release-execution-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/full-release-execution-plan
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Seal immutable release execution plan
         id: plan

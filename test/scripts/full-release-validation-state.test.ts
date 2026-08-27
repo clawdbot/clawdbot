@@ -16,6 +16,7 @@ import {
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   formatReleaseStateOutcome,
+  readChild,
   releaseStateChildEvidence,
   selectReleaseStateArtifacts,
   validateChildBinding,
@@ -445,6 +446,176 @@ describe("release decision policy", () => {
     );
     expect(result.errors).toEqual([]);
     expect(result).toMatchObject({ plannedRunAttempt: 1, runAttempt: 2 });
+  });
+
+  it("preserves the last valid snapshot through a transient read and then recovers", async () => {
+    const planned = child("normalCi");
+    const previous = {
+      ...planned,
+      conclusion: "success",
+      jobs: [{ conclusion: "success", name: "test", status: "completed" }],
+      status: "completed",
+    };
+    let fail = true;
+    const readRun = async () => {
+      if (fail) {
+        fail = false;
+        throw Object.assign(new Error("HTTP 503: Server Error"), {
+          stderr: "HTTP 503: Server Error",
+        });
+      }
+      return {
+        actor: { login: "github-actions[bot]" },
+        conclusion: "success",
+        created_at: "2026-08-21T00:00:00Z",
+        display_title: planned.displayTitle,
+        event: "workflow_dispatch",
+        head_branch: planned.workflowRef,
+        head_sha: planned.workflowSha,
+        html_url: planned.url,
+        id: 101,
+        path: ".github/workflows/ci.yml",
+        repository: { full_name: "openclaw/openclaw" },
+        run_attempt: 1,
+        status: "completed",
+        triggering_actor: { login: "github-actions[bot]" },
+        updated_at: "2026-08-21T00:01:00Z",
+      };
+    };
+    const readAttemptJobs = async () => [
+      {
+        completed_at: "2026-08-21T00:01:00Z",
+        conclusion: "success",
+        html_url: "https://example.invalid/jobs/test",
+        name: "test",
+        started_at: "2026-08-21T00:00:00Z",
+        status: "completed",
+      },
+    ];
+
+    const degraded = await readChild(planned, previous, undefined, {
+      readAttemptJobs,
+      readRun,
+      transientGracePolls: 2,
+    });
+    expect(degraded).toMatchObject({
+      conclusion: "success",
+      errors: [],
+      jobs: previous.jobs,
+      status: "read_degraded",
+      transientReadFailures: 1,
+    });
+    expect(
+      classifyReleaseSnapshot({
+        children: [degraded],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({ errors: [], state: "qualifying" });
+
+    const recovered = await readChild(planned, degraded, undefined, {
+      readAttemptJobs,
+      readRun,
+      transientGracePolls: 2,
+    });
+    expect(recovered).toMatchObject({
+      conclusion: "success",
+      errors: [],
+      status: "completed",
+    });
+    expect(
+      classifyReleaseSnapshot({
+        children: [recovered],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({ errors: [], state: "passed" });
+  });
+
+  it("fails closed after the transient read grace boundary", async () => {
+    const planned = child("normalCi");
+    const readRun = async () => {
+      throw Object.assign(new Error("HTTP 503: Server Error"), {
+        stderr: "HTTP 503: Server Error",
+      });
+    };
+    let snapshot: Record<string, unknown> = planned;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      snapshot = await readChild(planned, snapshot, undefined, {
+        readRun,
+        transientGracePolls: 2,
+      });
+    }
+    expect(snapshot).toMatchObject({
+      errors: [expect.objectContaining({ kind: "api_error" })],
+      transientReadFailures: 3,
+    });
+    expect(
+      classifyReleaseSnapshot({
+        children: [snapshot],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({
+      errors: [expect.objectContaining({ kind: "api_error" })],
+      state: "orchestration_error",
+    });
+  });
+
+  it("keeps degraded reads nonterminal and cancellation-visible", async () => {
+    const planned = child("normalCi");
+    const degraded = await readChild(planned, planned, undefined, {
+      readRun: async () => {
+        throw Object.assign(new Error("read ECONNRESET"), { stderr: "read ECONNRESET" });
+      },
+      transientGracePolls: 2,
+    });
+    expect(
+      classifyReleaseSnapshot({
+        cancelled: true,
+        children: [degraded],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({
+      activeRunIds: ["101"],
+      errors: [],
+      state: "cancelled_with_children",
+    });
+  });
+
+  it("fails child provenance mismatches without consuming preserved success", async () => {
+    const planned = child("normalCi");
+    const observed = await readChild(
+      planned,
+      { ...planned, conclusion: "success", status: "completed" },
+      undefined,
+      {
+        readAttemptJobs: async () => [],
+        readRun: async () => ({
+          actor: { login: "github-actions[bot]" },
+          conclusion: "success",
+          display_title: planned.displayTitle,
+          event: "workflow_dispatch",
+          head_branch: planned.workflowRef,
+          head_sha: "c".repeat(40),
+          id: 101,
+          path: ".github/workflows/ci.yml",
+          repository: { full_name: "openclaw/openclaw" },
+          run_attempt: 1,
+          status: "completed",
+          triggering_actor: { login: "github-actions[bot]" },
+        }),
+      },
+    );
+    expect(observed.errors).toEqual([expect.objectContaining({ kind: "provenance_mismatch" })]);
+    expect(
+      classifyReleaseSnapshot({
+        children: [observed],
+        releaseProfile: "stable",
+        workflowRef: "main",
+      }),
+    ).toMatchObject({ state: "orchestration_error" });
   });
 
   it("cancels only exact active affected children", () => {
@@ -1726,6 +1897,42 @@ printf '%s\\n' '{"id":101,"event":"workflow_dispatch","path":".github/workflows/
       parentRunAttempt: 1,
       sha256: sealed.sha256,
     });
+  });
+
+  it.each([
+    {
+      mutate: (artifact: Record<string, any>) => {
+        artifact.parentRunAttempt = 2;
+      },
+      name: "wrong source parent attempt",
+    },
+    {
+      mutate: (artifact: Record<string, any>) => {
+        artifact.targetSha = "c".repeat(40);
+      },
+      name: "wrong validation SHA",
+    },
+    {
+      mutate: (artifact: Record<string, any>) => {
+        artifact.children[0].workflow = "plugin-prerelease.yml";
+      },
+      name: "wrong child identity",
+    },
+  ])("rejects restored execution plan artifact with $name", ({ mutate }) => {
+    const artifact = structuredClone(executionPlan({ rerunGroup: "ci" }));
+    mutate(artifact);
+    artifact.sha256 = releaseExecutionPlanSha256(artifact);
+    expect(() =>
+      validateReleaseExecutionPlanArtifact(artifact, {
+        parentRunId: "77",
+        releaseProfile: "stable",
+        rerunGroup: "ci",
+        sourceParentRunAttempt: 1,
+        targetSha: TARGET_SHA,
+        workflowRef: "release-ci/tooling",
+        workflowSha: SHA,
+      }),
+    ).toThrow(/release execution plan (artifact binding|child identity) is invalid/u);
   });
 
   it("writes the execution plan immediately when SIGTERM interrupts a stalled reuse API", async () => {

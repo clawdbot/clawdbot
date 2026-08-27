@@ -1444,6 +1444,8 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
     (payload.targetSha !== "" && !/^[a-f0-9]{40}$/u.test(String(payload.targetSha ?? ""))) ||
     (expected.parentRunId !== undefined &&
       String(payload.parentRunId) !== String(expected.parentRunId)) ||
+    (expected.sourceParentRunAttempt !== undefined &&
+      Number(payload.parentRunAttempt) !== Number(expected.sourceParentRunAttempt)) ||
     (expected.maxParentRunAttempt !== undefined &&
       Number(payload.parentRunAttempt) > Number(expected.maxParentRunAttempt)) ||
     (expected.workflowRef !== undefined && payload.workflowRef !== expected.workflowRef) ||
@@ -1461,6 +1463,7 @@ export function validateReleaseExecutionPlanArtifact(payload, expected = {}) {
   const trustedWorkflow = normalizedTrustedWorkflow(payload.trustedWorkflow);
   const continuation = normalizedContinuation(payload.continuation);
   const children = validatePlan(payload.children);
+  validateExecutionPlanChildBindings(children, payload, continuation);
   if (
     continuation &&
     children
@@ -1871,6 +1874,39 @@ function validatePlan(value) {
     keys.add(normalized.key);
     return normalized;
   });
+}
+
+function validateExecutionPlanChildBindings(children, payload, continuation) {
+  const expectedKeys = CHILD_SPECS.map((spec) => spec.key).toSorted();
+  if (
+    JSON.stringify(children.map((child) => child.key).toSorted()) !== JSON.stringify(expectedKeys)
+  ) {
+    throw new Error("release execution plan child inventory is invalid");
+  }
+  for (const child of children) {
+    const spec = releaseChildSpec(child.key);
+    if (child.dispatchName !== spec.dispatchName || child.workflow !== spec.workflow) {
+      throw new Error(`release execution plan child identity is invalid: ${child.key}`);
+    }
+    if (
+      child.source === "fresh" &&
+      (child.displayTitle !==
+        `${spec.displayName} full-release-validation-${payload.parentRunId}-${payload.parentRunAttempt}${spec.suffix}` ||
+        child.workflowRef !== payload.workflowRef ||
+        child.workflowSha !== payload.workflowSha)
+    ) {
+      throw new Error(`release execution plan child identity is invalid: ${child.key}`);
+    }
+    if (
+      child.source === "continuation" &&
+      (child.displayTitle !==
+        `${spec.displayName} full-release-validation-${continuation.sourceRunId}-${child.sourceParentAttempt}${spec.suffix}` ||
+        child.workflowRef !== continuation.sourceWorkflowRef ||
+        child.workflowSha !== continuation.sourceWorkflowSha)
+    ) {
+      throw new Error(`release execution plan child identity is invalid: ${child.key}`);
+    }
+  }
 }
 
 export function validateReleaseStateArtifact(payload, expected, expectedMode) {

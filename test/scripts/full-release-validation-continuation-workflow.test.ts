@@ -57,6 +57,37 @@ describe("full release continuation workflow", () => {
     });
   });
 
+  it("restores attempt-one plans from artifacts when the cache is absent or errors", () => {
+    const cache = step("release_execution_plan", "Cache immutable release execution plan");
+    const restore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan artifact",
+    );
+    const upload = step("release_execution_plan", "Upload immutable release execution plan");
+    expect(cache).toMatchObject({
+      id: "plan_cache",
+      "continue-on-error": true,
+    });
+    expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
+    expect(restore).toMatchObject({
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
+      with: {
+        "github-token": "${{ github.token }}",
+        name: "full-release-execution-plan-${{ github.run_id }}",
+        path: "${{ runner.temp }}/full-release-execution-plan",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(upload.with).toMatchObject({
+      name: "full-release-execution-plan-${{ github.run_id }}",
+    });
+    for (const job of ["release_decision", "diagnostic_drain", "summary"]) {
+      expect(step(job, "Download immutable release execution plan").with).toMatchObject({
+        name: "full-release-execution-plan-${{ github.run_id }}",
+      });
+    }
+  });
+
   it("requires nonpublishing all-group continuation dispatch", () => {
     const validateStep = step("resolve_target", "Validate release inputs");
     expect(validateStep.env).toMatchObject({

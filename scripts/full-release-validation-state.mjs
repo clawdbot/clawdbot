@@ -38,6 +38,7 @@ const API_ERROR_PATTERN =
   /HTTP [45][0-9][0-9]|API|Bad credentials|rate limit|network|connection|timeout|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u;
 const DEFAULT_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 5 * 60_000;
+const DEFAULT_TRANSIENT_READ_GRACE_POLLS = 2;
 const GH_TIMEOUT_MS = 60_000;
 
 function stringValue(value, fallback = "") {
@@ -173,7 +174,7 @@ export function validateChildBinding(child, run, composite) {
   };
 }
 
-async function readChild(child, previous, signal) {
+export async function readChild(child, previous, signal, options = {}) {
   if (!child.selected) {
     return { ...child, errors: [], jobs: [], status: "skipped" };
   }
@@ -186,7 +187,9 @@ async function readChild(child, previous, signal) {
     };
   }
   try {
-    const run = await githubJson(`actions/runs/${child.runId}`, signal);
+    const run = options.readRun
+      ? await options.readRun(child.runId, signal)
+      : await githubJson(`actions/runs/${child.runId}`, signal);
     const currentAttempt = positiveInteger(run.run_attempt, `${child.key} run attempt`);
     const plannedAttempt = positiveInteger(child.runAttempt, `${child.key} planned run attempt`);
     if (currentAttempt < plannedAttempt) {
@@ -200,7 +203,9 @@ async function readChild(child, previous, signal) {
       Array.from({ length: currentAttempt - plannedAttempt + 1 }, async (_, index) => {
         const runAttempt = plannedAttempt + index;
         return {
-          jobs: await githubAttemptJobs(child.runId, runAttempt, signal),
+          jobs: options.readAttemptJobs
+            ? await options.readAttemptJobs(child.runId, runAttempt, signal)
+            : await githubAttemptJobs(child.runId, runAttempt, signal),
           runAttempt,
         };
       }),
@@ -230,20 +235,36 @@ async function readChild(child, previous, signal) {
       sha256: evidence.compositeJobsSha256,
     });
   } catch (error) {
+    const transientReadFailures = Number(previous?.transientReadFailures ?? 0) + 1;
+    const transientGracePolls =
+      Number.isSafeInteger(options.transientGracePolls) && options.transientGracePolls >= 0
+        ? options.transientGracePolls
+        : DEFAULT_TRANSIENT_READ_GRACE_POLLS;
+    const degraded =
+      classifyReleaseGhTransportError(error) === "transient" &&
+      transientReadFailures <= transientGracePolls;
+    const provenanceMismatch =
+      error instanceof Error && error.message.startsWith("release child provenance changed:");
+    const readError = issue(
+      provenanceMismatch ? "provenance_mismatch" : "api_error",
+      child,
+      `${child.key} GitHub read failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    if (degraded) {
+      console.warn(
+        `${child.key} GitHub read degraded (${transientReadFailures}/${transientGracePolls}); preserving the last snapshot`,
+      );
+    }
     return {
       ...child,
       conclusion: stringValue(previous?.conclusion),
       createdAt: stringValue(previous?.createdAt),
-      errors: [
-        ...(previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch"),
-        issue(
-          "api_error",
-          child,
-          `${child.key} GitHub read failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        ),
-      ],
+      errors: degraded
+        ? (previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch")
+        : [
+            ...(previous?.errors ?? []).filter((entry) => entry.kind === "provenance_mismatch"),
+            readError,
+          ],
       jobs: previous?.jobs ?? [],
       compositeJobsSha256: stringValue(previous?.compositeJobsSha256),
       observedRunAttempts: previous?.observedRunAttempts ?? [],
@@ -251,7 +272,8 @@ async function readChild(child, previous, signal) {
         previous?.plannedRunAttempt ?? child.runAttempt,
         "planned run attempt",
       ),
-      status: stringValue(previous?.status, "unknown"),
+      status: degraded ? "read_degraded" : stringValue(previous?.status, "unknown"),
+      transientReadFailures,
       updatedAt: stringValue(previous?.updatedAt),
     };
   }
@@ -523,7 +545,7 @@ async function planMode() {
   if (process.env.FULL_RELEASE_RESTORE_PLAN === "true") {
     const restored = validateReleaseExecutionPlanArtifact(
       readArtifact(outputPath, "execution plan"),
-      expected,
+      { ...expected, sourceParentRunAttempt: 1 },
     );
     writeExecutionPlan(outputPath, restored);
     return;
