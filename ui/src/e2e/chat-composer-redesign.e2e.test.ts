@@ -49,8 +49,6 @@ suite.define(() => {
         buffer: Buffer.from("mobile composer attachment"),
       });
       await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
-      const mobileModelSettings = composer.locator('[data-chat-model-settings="true"]');
-
       for (const picker of [
         {
           menu: ".chat-controls__model-menu",
@@ -654,7 +652,11 @@ suite.define(() => {
         })
         .toBeLessThanOrEqual(393);
       await expect.poll(() => mobileModelSettings.isVisible()).toBe(true);
-      await expect.poll(() => effort.isVisible()).toBe(false);
+      await expect.poll(() => effort.isVisible()).toBe(true);
+      const mobileEffortBox = await effort.boundingBox();
+      expect(mobileEffortBox).not.toBeNull();
+      expect(mobileEffortBox?.width).toBeCloseTo(32, 2);
+      expect(mobileEffortBox?.height).toBeCloseTo(32, 2);
       await permission.click();
       await expect
         .poll(() => composer.locator(".chat-controls__permission-option").first().isVisible())
@@ -746,8 +748,12 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-menu").isVisible())
         .toBe(true);
+      const mobileModelMenu = composer.locator(".chat-controls__model-menu");
+      await expect
+        .poll(() => mobileModelMenu.getByRole("button", { name: /^Effort\b/u }).count())
+        .toBe(0);
       await captureMobileState("mobile-composer-model-open.png");
-      const mobilePickerBox = await composer.locator(".chat-controls__model-menu").boundingBox();
+      const mobilePickerBox = await mobileModelMenu.boundingBox();
       expect(mobilePickerBox).not.toBeNull();
       if (!mobilePickerBox) {
         throw new Error("expected mobile model picker to have a layout box");

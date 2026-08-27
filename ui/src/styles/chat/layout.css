@@ -7390,6 +7390,11 @@ button.chat-pr__diff {
     --chat-mobile-row-chevron-size: 14px;
     --chat-mobile-row-chip-gap: 2px;
     --chat-mobile-row-chip-padding-inline: 6px;
+    --chat-mobile-row-effort-width: calc(
+      var(--chat-mobile-row-icon-size) + var(--chat-mobile-row-chevron-size) +
+        var(--chat-mobile-row-chip-gap) + var(--chat-mobile-row-chip-padding-inline) +
+        var(--chat-mobile-row-chip-padding-inline)
+    );
     --chat-mobile-row-action-padding: var(--chat-mobile-row-icon-padding);
     --chat-mobile-row-action-gap: 4px;
     --chat-mobile-row-stop-icon-size: 18px;
@@ -7501,16 +7506,22 @@ button.chat-pr__diff {
   }
 
   .agent-chat__input--mobile-toolbar .chat-controls__effort-picker {
-    position: absolute;
-    width: 0;
+    position: static;
+    width: auto;
     min-width: 0;
+    flex: 0 0 auto;
   }
 
   .agent-chat__input--mobile-toolbar
     .chat-controls__effort-picker
     > .chat-controls__effort-trigger {
     --chat-effort-badge-backdrop: var(--chat-composer-surface);
-    display: none;
+    display: flex;
+    width: var(--chat-mobile-row-effort-width);
+    min-width: var(--chat-mobile-row-effort-width);
+    max-width: var(--chat-mobile-row-effort-width);
+    height: var(--chat-mobile-row-target-size);
+    padding-inline: var(--chat-composer-chip-padding-inline);
   }
 
   .agent-chat__input--mobile-toolbar
