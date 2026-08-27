@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Covers npm spec parsing for plugin install inputs.
 import fs from "node:fs";
 import path from "node:path";
@@ -674,6 +675,7 @@ beforeAll(async () => {
 
   const result = await installPluginFromNpmPackArchive({
     archivePath,
+    expectedArchiveSha256: createHash("sha256").update("fixture pack contents").digest("hex"),
     npmDir: npmRoot,
     logger: { info: () => {}, warn: () => {} },
   });

@@ -51,6 +51,9 @@ struct PrewarmedRuntimeManifest: Decodable, Equatable, Sendable {
     let runtimeDirectory: String
     let archiveFile: String
     let archiveSHA256: String
+    let pluginCacheDirectory: String
+    let pluginCacheManifestFile: String
+    let pluginCacheManifestSHA256: String
 }
 
 struct PrewarmedRuntimeResource: Equatable, Sendable {
@@ -231,17 +234,32 @@ enum CLIInstaller {
     {
         guard let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(PrewarmedRuntimeManifest.self, from: data),
-              manifest.schemaVersion == 1,
+              manifest.schemaVersion == 2,
               URL(fileURLWithPath: manifest.archiveFile).lastPathComponent == manifest.archiveFile,
               !manifest.archiveFile.isEmpty,
               !manifest.appVersion.isEmpty,
               manifest.gitCommit.range(of: #"^[0-9a-f]{40}$"#, options: .regularExpression) != nil,
               manifest.archiveSHA256.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil,
+              manifest.pluginCacheDirectory == "prewarmed-plugin-cache",
+              URL(fileURLWithPath: manifest.pluginCacheManifestFile).lastPathComponent ==
+              manifest.pluginCacheManifestFile,
+              manifest.pluginCacheManifestFile == "manifest.json",
+              manifest.pluginCacheManifestSHA256.range(
+                  of: #"^[0-9a-f]{64}$"#,
+                  options: .regularExpression) != nil,
               !manifest.nodeVersion.isEmpty,
               !manifest.runtimeDirectory.isEmpty
         else { return nil }
         let archiveURL = resourceDirectory.appendingPathComponent(manifest.archiveFile)
-        guard fileManager.isReadableFile(atPath: archiveURL.path) else { return nil }
+        let cacheDirectoryURL = resourceDirectory.appendingPathComponent(
+            manifest.pluginCacheDirectory,
+            isDirectory: true)
+        let cacheManifestURL = cacheDirectoryURL.appendingPathComponent(manifest.pluginCacheManifestFile)
+        let cacheVerifierURL = resourceDirectory.appendingPathComponent("prewarmed-plugin-cache.mjs")
+        guard fileManager.isReadableFile(atPath: archiveURL.path),
+              fileManager.isReadableFile(atPath: cacheManifestURL.path),
+              fileManager.isReadableFile(atPath: cacheVerifierURL.path)
+        else { return nil }
         return PrewarmedRuntimeResource(
             archivePath: archiveURL.path,
             manifestPath: manifestURL.path,

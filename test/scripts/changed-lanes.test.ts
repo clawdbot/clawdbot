@@ -2021,6 +2021,8 @@ describe("scripts/changed-lanes", () => {
       "scripts/notarize-mac-artifact.sh",
       "scripts/package-mac-app.sh",
       "scripts/package-mac-dist.sh",
+      "scripts/prewarmed-plugin-cache.mjs",
+      "scripts/stage-macos-prewarmed-plugin-cache.mts",
       "scripts/verify-macos-prewarmed-runtime.mts",
       "test/scripts/codesign-mac-app.test.ts",
       "test/scripts/create-dmg.test.ts",
@@ -2029,6 +2031,7 @@ describe("scripts/changed-lanes", () => {
       "test/scripts/notarize-mac-artifact.test.ts",
       "test/scripts/package-mac-app.test.ts",
       "test/scripts/package-mac-dist.test.ts",
+      "test/scripts/prewarmed-plugin-cache.test.ts",
       "test/scripts/verify-macos-prewarmed-runtime.test.ts",
     ]) {
       const result = detectChangedLanes([changedPath]);

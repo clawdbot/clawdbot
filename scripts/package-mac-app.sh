@@ -654,6 +654,7 @@ run_pnpm() {
 bundle_prewarmed_runtime() {
   local work_dir package_dir prefix_dir runtime_tgz runtime_directory runtime_root node_path entry_path
   local archive_name archive_path manifest_path archive_sha manifest_arch version_output
+  local plugin_cache_dir plugin_cache_manifest_sha
   work_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-mac-runtime.XXXXXX")"
   PACKAGE_TEMP_DIRS+=("$work_dir")
   package_dir="$work_dir/package"
@@ -699,6 +700,14 @@ bundle_prewarmed_runtime() {
     --runtime-root "$runtime_root" \
     --runtime-bin "$prefix_dir/tools/$runtime_directory/bin"
 
+  echo "📦 Caching exact external plugin packages"
+  plugin_cache_dir="$APP_ROOT/Contents/Resources/prewarmed-plugin-cache"
+  node --import tsx "$ROOT_DIR/scripts/stage-macos-prewarmed-plugin-cache.mts" \
+    --repo-root "$ROOT_DIR" \
+    --output-dir "$plugin_cache_dir" \
+    --git-commit "$BUILD_GIT_COMMIT"
+  plugin_cache_manifest_sha="$(/usr/bin/shasum -a 256 "$plugin_cache_dir/manifest.json" | /usr/bin/awk '{print $1}')"
+
   version_output="$("$node_path" "$entry_path" --version)"
   [[ "$version_output" == *"OpenClaw ${APP_VERSION}"* ]] || {
     echo "ERROR: Prewarmed runtime version does not match app version: $version_output" >&2
@@ -717,18 +726,22 @@ bundle_prewarmed_runtime() {
   manifest_arch="$PRIMARY_ARCH"
   [[ "$manifest_arch" != "x86_64" ]] || manifest_arch="x64"
   node - "$manifest_path" "$APP_VERSION" "$BUILD_GIT_COMMIT" "$manifest_arch" \
-    "$PREWARMED_NODE_VERSION" "$runtime_directory" "$archive_name" "$archive_sha" <<'NODE'
-const fs = require("node:fs");
-const [manifestPath, appVersion, gitCommit, architecture, nodeVersion, runtimeDirectory, archiveFile, archiveSHA256] = process.argv.slice(2);
-fs.writeFileSync(manifestPath, `${JSON.stringify({
-  schemaVersion: 1,
+    "$PREWARMED_NODE_VERSION" "$runtime_directory" "$archive_name" "$archive_sha" \
+    "$plugin_cache_manifest_sha" <<'NODE'
+	const fs = require("node:fs");
+	const [manifestPath, appVersion, gitCommit, architecture, nodeVersion, runtimeDirectory, archiveFile, archiveSHA256, pluginCacheManifestSHA256] = process.argv.slice(2);
+	fs.writeFileSync(manifestPath, `${JSON.stringify({
+	  schemaVersion: 2,
   appVersion,
   gitCommit,
   architecture,
   nodeVersion,
   runtimeDirectory,
-  archiveFile,
-  archiveSHA256,
+	  archiveFile,
+	  archiveSHA256,
+	  pluginCacheDirectory: "prewarmed-plugin-cache",
+	  pluginCacheManifestFile: "manifest.json",
+	  pluginCacheManifestSHA256,
 }, null, 2)}\n`);
 NODE
   echo "✅ Bundled prewarmed runtime $archive_name"
@@ -1017,6 +1030,9 @@ cp "$INSTALL_CLI_SRC" "$APP_ROOT/Contents/Resources/install-cli.sh"
 chmod 0644 "$APP_ROOT/Contents/Resources/install-cli.sh"
 
 if [[ "$BUNDLE_PREWARMED_RUNTIME" == "1" ]]; then
+  cp "$ROOT_DIR/scripts/prewarmed-plugin-cache.mjs" \
+    "$APP_ROOT/Contents/Resources/prewarmed-plugin-cache.mjs"
+  chmod 0644 "$APP_ROOT/Contents/Resources/prewarmed-plugin-cache.mjs"
   bundle_prewarmed_runtime
 fi
 

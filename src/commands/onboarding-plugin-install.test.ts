@@ -47,6 +47,9 @@ vi.mock("../plugins/install.js", () => ({
   installPluginFromNpmPackArchive,
 }));
 
+const resolvePrewarmedPluginCache = vi.hoisted(() => vi.fn(() => ({ status: "miss" })));
+vi.mock("../plugins/prewarmed-plugin-cache.js", () => ({ resolvePrewarmedPluginCache }));
+
 const installPluginFromClawHub = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
@@ -153,6 +156,7 @@ type NpmPackInstallCall = {
   config?: OpenClawConfig;
   expectedPluginId?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
+  expectedArchiveSha256?: string;
 };
 
 type NpmSpecInstallCall = {
@@ -209,6 +213,7 @@ type PluginInstallRecord = {
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolvePrewarmedPluginCache.mockReturnValue({ status: "miss" });
     delete process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES;
     delete process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES;
     withTimeout.mockImplementation(async <T>(promise: Promise<T>) => await promise);
@@ -436,6 +441,106 @@ describe("ensureOnboardingPluginInstalled", () => {
         logger: expect.objectContaining({ warn: expect.any(Function) }),
       }),
     );
+  });
+
+  it("installs a trusted official plugin from the exact prewarmed cache", async () => {
+    const archivePath = "/tmp/prewarmed/codex.tgz";
+    const archiveSHA256 = "a".repeat(64);
+    resolvePrewarmedPluginCache.mockReturnValue({
+      status: "hit",
+      archivePath,
+      archiveSHA256,
+      canonicalSpec: "@openclaw/codex@2026.8.1",
+      packageVersion: "2026.8.1",
+    });
+    const npmResolution = {
+      name: "@openclaw/codex",
+      version: "2026.8.1",
+      resolvedSpec: "@openclaw/codex@2026.8.1",
+    };
+    buildNpmResolutionInstallFields.mockReturnValue({
+      resolvedName: npmResolution.name,
+      resolvedVersion: npmResolution.version,
+      resolvedSpec: npmResolution.resolvedSpec,
+    });
+    installPluginFromNpmPackArchive.mockResolvedValue({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/managed/codex",
+      version: "2026.8.1",
+      npmResolution,
+    });
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "codex",
+        label: "Codex",
+        install: { npmSpec: "@openclaw/codex" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        note: vi.fn(),
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: { log: vi.fn() } as never,
+    });
+
+    expect(result.status).toBe("installed");
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    const [packCall] = readFirstMockCall(
+      installPluginFromNpmPackArchive,
+      "installPluginFromNpmPackArchive",
+    ) as [NpmPackInstallCall];
+    expect(packCall).toMatchObject({
+      archivePath,
+      expectedPluginId: "codex",
+      expectedArchiveSha256: archiveSHA256,
+      trustedSourceLinkedOfficialInstall: true,
+    });
+    const [, recordUpdate] = readFirstMockCall(recordPluginInstall, "recordPluginInstall") as [
+      OpenClawConfig,
+      PluginInstallRecord,
+    ];
+    expect(recordUpdate).toMatchObject({
+      pluginId: "codex",
+      source: "npm",
+      spec: "@openclaw/codex",
+      installPath: "/tmp/managed/codex",
+      version: "2026.8.1",
+      resolvedSpec: "@openclaw/codex@2026.8.1",
+    });
+    expect(recordUpdate.sourcePath).toBeUndefined();
+  });
+
+  it("fails closed when a matching prewarmed cache entry is corrupt", async () => {
+    resolvePrewarmedPluginCache.mockReturnValue({
+      status: "invalid",
+      error: "Prewarmed plugin cache is invalid for codex: archive changed",
+    });
+    const note = vi.fn();
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "codex",
+        label: "Codex",
+        install: { npmSpec: "@openclaw/codex" },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        note,
+        progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+      } as never,
+      runtime: { error: vi.fn() } as never,
+    });
+
+    expect(result.status).toBe("failed");
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(installPluginFromNpmPackArchive).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalled();
   });
 
   it("uses a guarded npm install override without official-trust flags", async () => {

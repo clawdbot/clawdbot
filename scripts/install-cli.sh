@@ -1700,6 +1700,9 @@ install_openclaw_from_prewarmed_runtime() {
   local schema_version app_version git_commit architecture node_version runtime_directory
   local archive_file expected_sha actual_sha current_arch stage new_runtime target_runtime backup_runtime
   local node_path entry_path version_output old_node_link wrapper_tmp backup_wrapper node_link_tmp
+  local cache_directory cache_manifest_file cache_manifest_sha cache_source cache_helper
+  local cache_root cache_target cache_new cache_backup cache_backed_up cache_activated
+  local cached_commit_dir cached_commit_name
 
   [[ -r "$PREWARMED_RUNTIME" ]] || fail "Prewarmed runtime archive is unreadable: $PREWARMED_RUNTIME"
   [[ -r "$PREWARMED_MANIFEST" ]] || fail "Prewarmed runtime manifest is unreadable: $PREWARMED_MANIFEST"
@@ -1712,9 +1715,12 @@ install_openclaw_from_prewarmed_runtime() {
   runtime_directory="$(prewarmed_manifest_value runtimeDirectory)"
   archive_file="$(prewarmed_manifest_value archiveFile)"
   expected_sha="$(prewarmed_manifest_value archiveSHA256)"
+  cache_directory="$(prewarmed_manifest_value pluginCacheDirectory)"
+  cache_manifest_file="$(prewarmed_manifest_value pluginCacheManifestFile)"
+  cache_manifest_sha="$(prewarmed_manifest_value pluginCacheManifestSHA256)"
   current_arch="$(arch_detect)"
 
-  [[ "$schema_version" == "1" ]] || fail "Unsupported prewarmed runtime manifest schema: ${schema_version:-missing}"
+  [[ "$schema_version" == "2" ]] || fail "Unsupported prewarmed runtime manifest schema: ${schema_version:-missing}"
   [[ "$git_commit" =~ ^[0-9a-f]{40}$ ]] || fail "Prewarmed runtime manifest has an invalid Git commit"
   [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || fail "Prewarmed runtime manifest has an invalid SHA-256"
   [[ "$runtime_directory" =~ ^node-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "Prewarmed runtime directory is invalid"
@@ -1723,6 +1729,9 @@ install_openclaw_from_prewarmed_runtime() {
   [[ "$architecture" == "$current_arch" ]] || fail "Prewarmed runtime architecture ${architecture:-missing} does not match $current_arch"
   [[ "$archive_file" == "$(basename "$PREWARMED_RUNTIME")" ]] || fail "Prewarmed runtime archive name does not match its manifest"
   [[ -n "$app_version" ]] || fail "Prewarmed runtime manifest has no OpenClaw version"
+  [[ "$cache_directory" == "prewarmed-plugin-cache" ]] || fail "Prewarmed plugin cache directory is invalid"
+  [[ "$cache_manifest_file" == "manifest.json" ]] || fail "Prewarmed plugin cache manifest filename is invalid"
+  [[ "$cache_manifest_sha" =~ ^[0-9a-f]{64}$ ]] || fail "Prewarmed plugin cache manifest SHA-256 is invalid"
 
   actual_sha="$(sha256_file "$PREWARMED_RUNTIME")"
   [[ "$actual_sha" == "$expected_sha" ]] || fail "Prewarmed runtime SHA-256 mismatch"
@@ -1758,6 +1767,29 @@ install_openclaw_from_prewarmed_runtime() {
   [[ "$version_output" == *"OpenClaw ${app_version}"* ]] || fail "Prewarmed OpenClaw version verification failed"
   [[ "$version_output" == *"(${git_commit:0:7}"* ]] || fail "Prewarmed OpenClaw commit verification failed"
 
+  cache_source="$(dirname "$PREWARMED_MANIFEST")/$cache_directory"
+  cache_helper="$(dirname "$PREWARMED_MANIFEST")/prewarmed-plugin-cache.mjs"
+  [[ -d "$cache_source" && ! -L "$cache_source" ]] || fail "Prewarmed plugin cache is unavailable"
+  [[ -r "$cache_helper" && ! -L "$cache_helper" ]] || fail "Prewarmed plugin cache verifier is unavailable"
+  cache_root="$PREFIX/cache/prewarmed-plugins"
+  cache_target="$cache_root/$git_commit"
+  cache_new="$cache_root/.${git_commit}.new.$$"
+  cache_backup="$cache_root/.${git_commit}.backup.$$"
+  cache_backed_up=0
+  cache_activated=0
+  mkdir -p "$cache_root"
+  rm -rf "$cache_new" "$cache_backup"
+  mkdir "$cache_new"
+  if ! "$node_path" "$cache_helper" \
+    --source-dir "$cache_source" \
+    --stage-dir "$cache_new" \
+    --expected-version "$app_version" \
+    --expected-commit "$git_commit" \
+    --expected-manifest-sha256 "$cache_manifest_sha"; then
+    rm -rf "$cache_new"
+    fail "Prewarmed plugin cache verification failed"
+  fi
+
   old_node_link=""
   if [[ -L "$PREFIX/tools/node" ]]; then
     old_node_link="$(readlink "$PREFIX/tools/node")"
@@ -1779,13 +1811,33 @@ EOF
   chmod +x "$wrapper_tmp"
 
   rollback_prewarmed_runtime() {
-    rm -rf "$target_runtime"
-    [[ ! -e "$backup_runtime" ]] || mv "$backup_runtime" "$target_runtime"
-    rm -f "$PREFIX/tools/node"
-    [[ -z "$old_node_link" ]] || ln -s "$old_node_link" "$PREFIX/tools/node"
-    rm -f "$PREFIX/bin/openclaw"
-    [[ ! -e "$backup_wrapper" ]] || mv "$backup_wrapper" "$PREFIX/bin/openclaw"
-    rm -f "$wrapper_tmp" "$node_link_tmp"
+    local rollback_failed=0
+    rm -rf "$target_runtime" || rollback_failed=1
+    if [[ -e "$backup_runtime" ]] && ! mv "$backup_runtime" "$target_runtime"; then
+      rollback_failed=1
+    fi
+    rm -f "$PREFIX/tools/node" || rollback_failed=1
+    if [[ -n "$old_node_link" ]] && ! ln -s "$old_node_link" "$PREFIX/tools/node"; then
+      rollback_failed=1
+    fi
+    rm -f "$PREFIX/bin/openclaw" || rollback_failed=1
+    if [[ -e "$backup_wrapper" ]] && ! mv "$backup_wrapper" "$PREFIX/bin/openclaw"; then
+      rollback_failed=1
+    fi
+    rm -f "$wrapper_tmp" "$node_link_tmp" || rollback_failed=1
+    if [[ "$cache_activated" == "1" ]]; then
+      rm -rf "$cache_target" || rollback_failed=1
+    fi
+    if [[ "$cache_backed_up" == "1" && -e "$cache_backup" ]] &&
+      ! mv "$cache_backup" "$cache_target"; then
+      rollback_failed=1
+    fi
+    rm -rf "$cache_new" || rollback_failed=1
+    if [[ "$rollback_failed" == "1" ]]; then
+      emit_json step name prewarmed-runtime-rollback status warn reason incomplete
+      log "WARNING: Prewarmed runtime rollback could not restore every path"
+    fi
+    return 0
   }
 
   if [[ -e "$target_runtime" || -L "$target_runtime" ]]; then
@@ -1810,12 +1862,32 @@ EOF
     fail "Could not activate the prewarmed OpenClaw launcher"
   fi
 
+  if [[ -e "$cache_target" || -L "$cache_target" ]]; then
+    if ! mv "$cache_target" "$cache_backup"; then
+      rollback_prewarmed_runtime
+      fail "Could not back up the existing prewarmed plugin cache"
+    fi
+    cache_backed_up=1
+  fi
+  if ! mv "$cache_new" "$cache_target"; then
+    rollback_prewarmed_runtime
+    fail "Could not activate the prewarmed plugin cache"
+  fi
+  cache_activated=1
+
   version_output="$("$PREFIX/bin/openclaw" --version 2>/dev/null || true)"
   if [[ "$version_output" != *"OpenClaw ${app_version}"* || "$version_output" != *"(${git_commit:0:7}"* ]]; then
     rollback_prewarmed_runtime
     fail "Installed prewarmed runtime verification failed"
   fi
-  rm -rf "$backup_runtime" "$backup_wrapper"
+  rm -rf "$backup_runtime" "$backup_wrapper" "$cache_backup"
+  for cached_commit_dir in "$cache_root"/*; do
+    [[ -d "$cached_commit_dir" && ! -L "$cached_commit_dir" ]] || continue
+    cached_commit_name="$(basename "$cached_commit_dir")"
+    [[ "$cached_commit_name" == "$git_commit" ]] && continue
+    [[ "$cached_commit_name" =~ ^[0-9a-f]{40}$ ]] || continue
+    rm -rf "$cached_commit_dir"
+  done
   unset -f rollback_prewarmed_runtime
   emit_json step name prewarmed-runtime status ok version "$app_version"
 }

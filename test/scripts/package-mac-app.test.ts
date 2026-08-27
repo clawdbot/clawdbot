@@ -1477,6 +1477,7 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
     expect(macosCi).toContain("test/scripts/install-cli-prewarmed.test.ts");
+    expect(macosCi).toContain("test/scripts/prewarmed-plugin-cache.test.ts");
     expect(macosCi).toContain("test/scripts/verify-macos-prewarmed-runtime.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
     expect(macosCi).toContain("test/scripts/codesign-mac-app.test.ts");
@@ -1733,7 +1734,7 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
-  it("keeps the prewarmed runtime opt-in, development-only, and core-only", () => {
+  it("keeps the prewarmed runtime core-only and stages plugins as a separate cache", () => {
     const script = readFileSync(scriptPath, "utf8");
     const bundleStart = script.indexOf("bundle_prewarmed_runtime() {");
     const bundleEnd = script.indexOf("merge_framework_machos()", bundleStart);
@@ -1744,6 +1745,9 @@ describe("package-mac-app plist stamping", () => {
     const packageIndex = script.indexOf('node "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs"');
     const verifyIndex = script.indexOf(
       'node --import tsx "$ROOT_DIR/scripts/verify-macos-prewarmed-runtime.mts"',
+    );
+    const cacheIndex = script.indexOf(
+      'node --import tsx "$ROOT_DIR/scripts/stage-macos-prewarmed-plugin-cache.mts"',
     );
 
     expect(script).toContain('BUNDLE_PREWARMED_RUNTIME="${OPENCLAW_BUNDLE_PREWARMED_RUNTIME:-0}"');
@@ -1756,9 +1760,11 @@ describe("package-mac-app plist stamping", () => {
     expect(refreshIndex).toBeGreaterThanOrEqual(0);
     expect(packageIndex).toBeGreaterThan(refreshIndex);
     expect(verifyIndex).toBeGreaterThan(packageIndex);
+    expect(cacheIndex).toBeGreaterThan(verifyIndex);
     expect(bundleBlock).not.toContain("codex");
     expect(bundleBlock).not.toContain("dist/extensions");
-    expect(bundleBlock).not.toContain("plugin");
+    expect(bundleBlock).toContain('pluginCacheDirectory: "prewarmed-plugin-cache"');
+    expect(bundleBlock).toContain("pluginCacheManifestSHA256");
     expect(bundleBlock).toContain('[[ "$manifest_arch" != "x86_64" ]] || manifest_arch="x64"');
   });
 
