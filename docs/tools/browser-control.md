@@ -384,6 +384,10 @@ profiles; send actions individually there.
   `stopOnError` is the default, the array ends at the first failure; with
   `--continue` it covers every action. Any failed entry makes the CLI exit
   nonzero; pass `--json` to preserve the full ordered response for scripts.
+- Nested batches occupy one parent result. If a child action fails, that result
+  reports the first child error. Each batch applies its own `stopOnError`:
+  continuing inside a nested batch does not make it successful or make its
+  parent continue.
 
 ## Wait power-ups
 
