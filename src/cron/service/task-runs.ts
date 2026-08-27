@@ -201,12 +201,10 @@ function findLatestCronTaskRunForRecoveryFromRecords(
         // Exact match covers detail-less pre-discriminator rows from older releases.
         return task.runId === executionRunId;
       }
+      // A matching timestamp cannot authorize adopting an unrelated task row.
       return (
         taskStoreKey === storeKey &&
-        (task.runId === executionRunId ||
-          task.runId?.startsWith(prefix) ||
-          // Released reservation-keyed rows still record the authoritative execution start.
-          task.startedAt === startedAt)
+        (task.runId === executionRunId || task.runId?.startsWith(prefix))
       );
     })
     .toSorted(
