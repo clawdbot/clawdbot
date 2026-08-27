@@ -1,6 +1,7 @@
 // Provider catalog shared tests cover catalog hashing, normalization, and model visibility.
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applyProviderNativeStreamingUsageCompat,
   buildManifestModelDefinition,
@@ -124,7 +125,7 @@ describe("provider-catalog-shared live catalog cache", () => {
     async (outcome) => {
       let now = 1_000;
       const keyParts = ["provider", "models"];
-      const pending = Promise.withResolvers<string>();
+      const pending = createDeferred<string>();
       const error = new Error("expired failure");
       const first = getCachedLiveCatalogValue({
         keyParts,
