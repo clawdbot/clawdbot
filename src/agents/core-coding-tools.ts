@@ -9,6 +9,7 @@ import {
   createSandboxedReadTool,
   createSandboxedWriteTool,
   resolveAdaptiveReadMaxBytes,
+  type SkillInstructionDeliveryCache,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuard,
   wrapToolWorkspaceRootGuardWithOptions,
@@ -75,6 +76,7 @@ type CoreCodingToolsOptions = {
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
   skillInstructionPaths?: readonly string[];
+  skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
@@ -164,6 +166,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           cwd: options.codingRoot,
           containerWorkdir: sandbox?.containerWorkdir,
           instructionPaths: options.skillInstructionPaths,
+          instructionDeliveryCache: options.skillInstructionDeliveryCache,
         }),
       );
     }

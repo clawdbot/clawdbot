@@ -317,7 +317,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -5: approval display sanitizers moved to a non-public leaf module
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +17: continuation tool, dispatch, tracing, and lifecycle exports.
-      4355,
+      // +3: typed ask_user option-index contract and two bounded owner-order resolvers.
+      // +2: exact-session deletion parameters and synchronous companion mutation contract.
+      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      4362,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -413,7 +416,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // -4: approval display sanitizers moved to a non-public leaf module
       //     (exec-approval-text-sanitize) to break the exec-approvals cycle.
       // +5: continuation runtime callables.
-      2583,
+      // +2: bounded ask_user owner-order map builder and option resolver.
+      // +2: canonical session-model selection and auxiliary runtime-auth preparation.
+      2587,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

@@ -186,6 +186,28 @@ const noopRegisterMemoryCorpusSupplement: OpenClawPluginApi["registerMemoryCorpu
   () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
+export function createUnavailableRuntime(
+  registrationMode: "cli-metadata" | "setup-only",
+  pluginId?: string,
+): PluginRuntime {
+  const owner = pluginId ? `Plugin "${pluginId}"` : "Plugin";
+  const guidance =
+    registrationMode === "cli-metadata"
+      ? "Declare root commands in the manifest's cliCommands or defer runtime access out of register()."
+      : "Defer runtime access out of register().";
+  // SAFETY: String capabilities fail closed; symbols stay inert so reflection cannot trigger runtime errors.
+  return new Proxy(Object.create(null) as PluginRuntime, {
+    get(_target, property) {
+      if (typeof property === "symbol") {
+        return undefined;
+      }
+      throw new Error(
+        `${owner} runtime is intentionally unavailable during "${registrationMode}" registration. ${guidance}`,
+      );
+    },
+  });
+}
+
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
   const handlers = params.handlers ?? {};
   const registerCli = handlers.registerCli ?? noopRegisterCli;

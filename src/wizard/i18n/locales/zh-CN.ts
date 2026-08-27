@@ -1103,8 +1103,6 @@ export const zh_CN = {
       gatewayServiceRestarted: "Gateway 服务已重启。",
       gatewayServiceRestarting: "正在重启 Gateway 服务...",
       gatewayServiceRestartScheduled: "Gateway 服务重启已排队。",
-      gatewayServiceUninstalled: "Gateway 服务已卸载。",
-      gatewayServiceUninstalling: "正在卸载 Gateway 服务...",
       gatewayTokenGenerate: "生成令牌：{command}",
       gatewayTokenShared: "Gateway 令牌：Gateway 和 Control UI 的共享认证。",
       gatewayTokenStored:

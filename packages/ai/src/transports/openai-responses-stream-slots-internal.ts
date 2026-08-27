@@ -51,9 +51,8 @@ export function createResponsesOutputTracker() {
     if ((item.type === "reasoning" || item.type === "message") && item.id) {
       return `${item.type}:${item.id}`;
     }
-    return item.type === "function_call"
-      ? `function_call:${item.call_id ?? item.id ?? ""}`
-      : undefined;
+    const callId = item.call_id ?? item.id;
+    return item.type === "function_call" && callId ? `function_call:${callId}` : undefined;
   };
   const get = (item: ResponsesOutputIdentityItem, outputIndex?: number) => {
     const key = identity(item);

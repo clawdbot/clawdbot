@@ -9,7 +9,6 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -28,12 +27,18 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import {
+  runPreparedSqliteSessionWrite,
+  runSqliteSessionDeletionTransaction as runOpenClawAgentWriteTransaction,
+} from "./session-accessor.sqlite-deletion.js";
+import {
   readSessionEntryCache,
   type SessionEntryCacheSnapshot,
 } from "./session-accessor.sqlite-entry-cache.js";
 import {
   assertLifecycleTargetSnapshotUnchanged,
   assertSessionEntrySelectionUnchanged,
+} from "./session-accessor.sqlite-entry-equality.js";
+import {
   collectSessionEntryLookupKeys,
   createSessionIdentitySnapshot,
   deleteLegacySessionEntryRows,
@@ -64,7 +69,6 @@ import {
   resolveSqliteStoreScope,
   resolveSqliteTranscriptArchiveDirectory,
   resolveSqliteTranscriptReadScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
   type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
@@ -567,73 +571,85 @@ async function patchSqliteSessionEntrySnapshot<TSnapshot>(
   params: SqliteSessionEntrySnapshotPatchParams<TSnapshot>,
 ): Promise<SessionEntry | null> {
   const { options, resolved, sessionKey } = params;
-  const committed = await runExclusiveSqliteSessionWrite(resolved, async () => {
+  const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const prepared = params.readSnapshot(database);
     const existing = params.existingEntry(prepared);
     const writeBase = existing ?? options.fallbackEntry;
     if (!writeBase) {
-      return { maintenancePlans: [], result: null };
+      return { deletedEntries: [], commit: () => ({ maintenancePlans: [], result: null }) };
     }
     const patch = await params.update(cloneSessionEntry(writeBase), {
       existingEntry: existing ? cloneSessionEntry(existing) : undefined,
     });
-    const maintenancePlans: SessionEntryMaintenancePlan[] = [];
-    let result: SessionEntry | null = null;
-    let previousIdentity = new Map<string, SessionEntry>();
-    let currentIdentity = new Map<string, SessionEntry>();
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
-      const fresh = params.readSnapshot(writeDatabase);
-      params.assertSnapshotUnchanged(prepared, fresh);
-      options.assertCommitAllowed?.();
-      if (!patch) {
-        result = cloneSessionEntry(writeBase);
-        return;
-      }
-      const snapshotRows = params.snapshotRows(fresh);
-      const legacyKeys = params.legacyKeys(fresh);
-      const identityKeys = [
-        sessionKey,
-        ...legacyKeys,
-        ...snapshotRows.map((row) => row.sessionKey),
-      ];
-      previousIdentity = createSessionIdentitySnapshot(snapshotRows);
-      const merged = options.replaceEntry
+    const merged = !patch
+      ? undefined
+      : options.replaceEntry
         ? cloneSessionEntry(patch as SessionEntry)
         : options.preserveActivity
           ? mergeSessionEntryPreserveActivity(writeBase, patch)
           : mergeSessionEntry(writeBase, patch);
-      const next = options.replaceEntry
+    const next = !merged
+      ? undefined
+      : options.replaceEntry
         ? merged
         : preserveSqliteSameKeySessionRolloverLineage({
             next: merged,
             previous: writeBase,
             sessionKey,
           });
-      const selectedPreviousEntry = params.existingEntry(fresh) ?? writeBase;
-      writeSessionEntry(writeDatabase, sessionKey, next, {
-        previousEntry: selectedPreviousEntry,
-      });
-      if (params.rehomeWindows) {
-        rehomeSessionWindows(writeDatabase, sessionKey, legacyKeys);
-      }
-      deleteLegacySessionEntryRows(writeDatabase, legacyKeys, sessionKey, {
-        rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId,
-      });
-      maintenancePlans.push(
-        applySessionEntryMaintenance(writeDatabase, {
-          activeSessionKey: sessionKey,
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          maintenanceConfig: options.maintenanceConfig,
-          skipMaintenance: options.skipMaintenance,
-          storePath: params.storePath,
-        }),
-      );
-      currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
-      result = cloneSessionEntry(next);
-    }, toDatabaseOptions(resolved));
-    emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    return { maintenancePlans, result };
+    const deletedOwners = next
+      ? params.snapshotRows(prepared).filter((row) => row.sessionKey !== sessionKey)
+      : [];
+    return {
+      deletedEntries: deletedOwners,
+      commit: () => {
+        const maintenancePlans: SessionEntryMaintenancePlan[] = [];
+        let result: SessionEntry | null = null;
+        let previousIdentity = new Map<string, SessionEntry>();
+        let currentIdentity = new Map<string, SessionEntry>();
+        runOpenClawAgentWriteTransaction((writeDatabase) => {
+          const fresh = params.readSnapshot(writeDatabase);
+          params.assertSnapshotUnchanged(prepared, fresh);
+          options.assertCommitAllowed?.();
+          if (!next) {
+            result = cloneSessionEntry(writeBase);
+            return;
+          }
+          const snapshotRows = params.snapshotRows(fresh);
+          const legacyKeys = params.legacyKeys(fresh);
+          const identityKeys = [
+            sessionKey,
+            ...legacyKeys,
+            ...snapshotRows.map((row) => row.sessionKey),
+          ];
+          previousIdentity = createSessionIdentitySnapshot(snapshotRows);
+          const selectedPreviousEntry = params.existingEntry(fresh) ?? writeBase;
+          writeSessionEntry(writeDatabase, sessionKey, next, {
+            previousEntry: selectedPreviousEntry,
+          });
+          if (params.rehomeWindows) {
+            rehomeSessionWindows(writeDatabase, sessionKey, legacyKeys);
+          }
+          deleteLegacySessionEntryRows(writeDatabase, legacyKeys, sessionKey, {
+            rehomeMembers: selectedPreviousEntry.sessionId === next.sessionId,
+          });
+          maintenancePlans.push(
+            applySessionEntryMaintenance(writeDatabase, {
+              activeSessionKey: sessionKey,
+              archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+              maintenanceConfig: options.maintenanceConfig,
+              skipMaintenance: options.skipMaintenance,
+              storePath: params.storePath,
+            }),
+          );
+          currentIdentity = readSessionIdentitySnapshot(writeDatabase, identityKeys);
+          result = cloneSessionEntry(next);
+        }, toDatabaseOptions(resolved));
+        emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
+        return { maintenancePlans, result };
+      },
+    };
   });
   // Worker materialization runs after the initial write releases the lane;
   // final deletion reacquires it and revalidates every planned row.

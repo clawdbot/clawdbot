@@ -5719,6 +5719,74 @@ describe("verifySetupInference", () => {
     });
   });
 
+  it("binds Claude native login when a retired profile remains in the store", async () => {
+    const authProfileId = "anthropic:claude-cli";
+    const config = {
+      agents: { defaults: { model: "claude-cli/claude-opus-5" } },
+    } satisfies OpenClawConfig;
+    const profiles = {
+      [authProfileId]: {
+        type: "oauth" as const,
+        provider: "claude-cli",
+        access: "retired-access",
+        refresh: "retired-refresh",
+        expires: Date.now() - 60_000,
+      },
+    };
+    const nativeRuntimeOwner = "native-claude-runtime-owner";
+    const resolveCliRuntimeOwnerFingerprint = vi.fn(async (params: { authProfileId?: string }) =>
+      params.authProfileId ? "retired-profile-owner" : nativeRuntimeOwner,
+    );
+    const runCliAgent = vi.fn(
+      async (params: {
+        authProfileId?: string;
+        onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
+      }) => {
+        params.onSuccessfulAuthBinding?.({
+          runtimeOwnerFingerprint: nativeRuntimeOwner,
+          runtimeOwnerKind: "cli-runtime",
+          runtimeOwnerId: "claude-cli",
+          runtimeArtifactFingerprint: testCliRuntimeArtifactFingerprint,
+          runtimeArtifactId: "claude-cli",
+        });
+        return {
+          meta: {
+            finalAssistantVisibleText: "OK",
+            executionTrace: {
+              winnerProvider: "claude-cli",
+              winnerModel: "claude-opus-5",
+            },
+          },
+        };
+      },
+    );
+
+    const result = await verifySetupInference({
+      bindSession: true,
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => ({ exists: true, valid: true, config })) as never,
+        loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
+        ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles })) as never,
+        createSystemAgentVerifiedInferenceBinding,
+        resolveCliRuntimeArtifactFingerprint: vi.fn(async () => testCliRuntimeArtifactFingerprint),
+        resolveCliRuntimeOwnerFingerprint: resolveCliRuntimeOwnerFingerprint as never,
+        runCliAgent: runCliAgent as never,
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      binding: {
+        auth: { authFingerprint: nativeRuntimeOwner, proofKind: "runtime-owner" },
+        execution: { provider: "claude-cli", model: "claude-opus-5" },
+      },
+    });
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runCliAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+    expect(resolveCliRuntimeOwnerFingerprint).toHaveBeenCalledOnce();
+    expect(resolveCliRuntimeOwnerFingerprint.mock.calls[0]?.[0].authProfileId).toBeUndefined();
+  });
+
   it("rejects an owner plugin replacement during the live inference turn", async () => {
     const profileId = "openai:verified";
     const credential = {

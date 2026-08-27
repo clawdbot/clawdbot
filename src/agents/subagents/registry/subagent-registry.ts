@@ -320,6 +320,10 @@ export function resumeSubagentRun(runId: string) {
   if (typeof entry.execution.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
+  if (entry.delivery?.status === "in_progress") {
+    // The durable session queue resumes this delivery from its own owner row.
+    return;
+  }
   // Yielded runs stay paused until explicitly steered, except orchestrators
   // waiting on descendants: their settle retry must reach the wake path.
   if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
@@ -352,19 +356,18 @@ export function resumeSubagentRun(runId: string) {
       return;
     }
     const orphanReason = resolveSubagentRunOrphanReason({ entry });
-    if (orphanReason) {
-      if (
-        reconcileOrphanedRun({
-          runId,
-          entry,
-          reason: orphanReason,
-          source: "resume",
-          runs: subagentRuns,
-          resumedRuns,
-        })
-      ) {
-        persistSubagentRuns(runId);
-      }
+    if (
+      orphanReason &&
+      reconcileOrphanedRun({
+        runId,
+        entry,
+        reason: orphanReason,
+        source: "resume",
+        runs: subagentRuns,
+        resumedRuns,
+      })
+    ) {
+      persistSubagentRuns(runId);
       return;
     }
     if (contextCleanup.suppressAnnounceForSteerRestart(entry)) {

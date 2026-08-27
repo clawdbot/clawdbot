@@ -174,7 +174,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-90 plugins
+91 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -209,6 +209,8 @@ Each entry lists the package, distribution route, and description.
 - **[comfy](/plugins/reference/comfy)** (`@openclaw/comfy-provider`) - npm; ClawHub: `clawhub:@openclaw/comfy-provider`. Adds ComfyUI model provider support to OpenClaw.
 
 - **[copilot](/plugins/reference/copilot)** (`@openclaw/copilot`) - npm; ClawHub: `clawhub:@openclaw/copilot`. Registers the GitHub Copilot agent runtime.
+
+- **[daytona](/plugins/reference/daytona)** (`@openclaw/daytona-sandbox`) - npm; ClawHub. OpenClaw sandbox backend that runs agent exec and file tools inside Daytona cloud sandboxes over the Daytona toolbox API.
 
 - **[deepinfra](/plugins/reference/deepinfra)** (`@openclaw/deepinfra-provider`) - npm; ClawHub: `clawhub:@openclaw/deepinfra-provider`. Adds DeepInfra model provider support to OpenClaw.
 

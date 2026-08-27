@@ -8,6 +8,7 @@ import {
   createEmbeddingProvider,
   resolveEmbeddingProviderFallbackModel,
   resolveEmbeddingProviderFallbackRemote,
+  resolveEmbeddingProviderIndexIdentity,
 } from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
@@ -117,6 +118,32 @@ describe("createEmbeddingProvider", () => {
 
   afterEach(() => {
     clearTestMemoryAdapters();
+  });
+
+  it("uses the provider's canonical model for cold identity and creation without inventing a cache key", async () => {
+    registerTestMemoryAdapter({
+      id: "dynamic",
+      normalizeModel: ({ model }) => model.replace(/^dynamic\//, ""),
+      create: async ({ model }) => ({
+        provider: {
+          id: "dynamic",
+          model,
+          embed: async () => [1],
+          embedBatch: async (texts) => texts.map(() => [1]),
+        },
+      }),
+    });
+    const options = { ...createOptions("dynamic"), model: " dynamic/embed-v1 " };
+    expect(resolveEmbeddingProviderIndexIdentity(options)).toEqual({
+      provider: { id: "dynamic", model: "embed-v1" },
+      cacheKeyData: undefined,
+      aliases: undefined,
+    });
+    expect((await createEmbeddingProvider(options)).provider?.model).toBe("embed-v1");
+    expect(resolveEmbeddingProviderIndexIdentity({ ...options, model: "" })?.provider).toEqual({
+      id: "dynamic",
+      model: "",
+    });
   });
 
   it("normalizes legacy auto mode to OpenAI", async () => {
@@ -427,7 +454,7 @@ describe("createEmbeddingProvider", () => {
     );
   });
 
-  it("uses config-scoped lookup for generic fallback model resolution", () => {
+  it("uses config-scoped defaults for cold identity and fallback model resolution", () => {
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
       defaultModel: "generic-default",
@@ -444,6 +471,10 @@ describe("createEmbeddingProvider", () => {
     );
 
     expect(model).toBe("generic-default");
-    expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
+    expect(resolveEmbeddingProviderIndexIdentity(options)?.provider).toEqual({
+      id: "openai-compatible",
+      model: "generic-default",
+    });
+    expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config, options.config]);
   });
 });

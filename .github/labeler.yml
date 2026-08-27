@@ -375,6 +375,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/copilot-proxy/**"
+"extensions: daytona":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/daytona/**"
+          - "docs/gateway/daytona.md"
 "extensions: diagnostics-otel":
   - changed-files:
       - any-glob-to-any-file:

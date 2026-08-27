@@ -16,6 +16,7 @@ import {
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+import { getFinishedSession, markTerminalPollObserved } from "./bash-process-registry.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 
 const requestHeartbeatMock = vi.hoisted(() => vi.fn());
@@ -62,7 +63,7 @@ beforeAll(async () => {
 beforeEach(() => {
   resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetProcessRegistryForTests();
-  requestHeartbeatMock.mockClear();
+  requestHeartbeatMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReset();
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
@@ -360,18 +361,18 @@ describe("sandbox exec finalization suspension", () => {
       const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(
         async () => await finalization.promise,
       );
-      supervisorMock.spawn.mockImplementationOnce(
-        async (input: { onStdout?: (chunk: string) => void }) => {
-          input.onStdout?.("sandbox output\n");
-          return {
-            runId: "sandbox-run",
-            startedAtMs: Date.now(),
-            pid: 123,
-            wait: async () => await exit.promise,
-            cancel: vi.fn(),
-          };
-        },
-      );
+      let producer: SpawnInput | undefined;
+      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+        producer = input;
+        input.onStdout?.("sandbox output\n");
+        return {
+          runId: "sandbox-run",
+          startedAtMs: Date.now(),
+          pid: 123,
+          wait: async () => await exit.promise,
+          cancel: vi.fn(),
+        };
+      });
 
       const run = await runExecProcess({
         command: "sandbox-command",
@@ -412,6 +413,8 @@ describe("sandbox exec finalization suspension", () => {
       });
       await vi.waitFor(() => expect(finalizeExec).toHaveBeenCalledOnce());
       expect(run.session.finalizing).toBe(true);
+      producer?.onStderr?.("during cleanup\n");
+      expect(getFinishedSession(run.session.id)).toBeUndefined();
 
       const busy = prepareSuspension(`before-finalize-${expectedFailureKind ?? "success"}`);
       expect(busy.status).toBe("busy");
@@ -443,12 +446,124 @@ describe("sandbox exec finalization suspension", () => {
       expect(requireSystemEventCall()[0]).toContain(
         expectedStatus === "failed" ? "Exec failed" : "Exec completed",
       );
+      expect(requireSystemEventCall()[0]).toContain("during cleanup");
+      const retained = getFinishedSession(run.session.id);
+      const outputBeforeLateCallback = {
+        aggregated: retained?.aggregated,
+        tail: retained?.tail,
+        totalOutputChars: retained?.totalOutputChars,
+        truncated: retained?.truncated,
+      };
+      expect(outputBeforeLateCallback.aggregated).toContain("sandbox output\nduring cleanup\n");
+      if (finalizeRejects && !processTimesOut) {
+        expect(outputBeforeLateCallback.aggregated).toContain("sandbox finalize failed");
+      }
+      producer?.onStdout?.("late output".repeat(1_000));
+      expect(getFinishedSession(run.session.id)).toMatchObject(outputBeforeLateCallback);
 
       const ready = prepareSuspension(`after-finalize-${expectedFailureKind ?? "success"}`);
       expect(ready.status).toBe("ready");
       if (ready.status === "ready") {
         expect(resumeGatewaySuspend(ready.suspensionId)).toMatchObject({ ok: true });
       }
+    },
+  );
+});
+
+describe("terminal execution-context release", () => {
+  it.each([
+    { path: "notify", trace: ["task", "enqueue", "wake"] },
+    { path: "quiet", trace: ["task"] },
+    { path: "unrouted", trace: ["task"] },
+    { path: "observed", trace: ["task"] },
+    { path: "task failure", trace: ["task", "task"] },
+    { path: "enqueue failure", trace: ["task", "enqueue", "task"] },
+    { path: "wake failure", trace: ["task", "enqueue", "wake", "task"] },
+  ])(
+    "releases routing after $path without changing notification order",
+    async ({ path, trace }) => {
+      const exit = createDeferred<RunExit>();
+      const observed: string[] = [];
+      const removal = vi.fn(() => true);
+      const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
+      const failure = new Error("notification boundary failed");
+      enqueueSystemEventWithReceiptMock.mockImplementation((_text, options) => {
+        observed.push("enqueue");
+        expect(options.deliveryContext).toEqual(deliveryContext);
+        if (path === "enqueue failure") {
+          throw failure;
+        }
+        return removal;
+      });
+      requestHeartbeatMock.mockImplementation(() => {
+        observed.push("wake");
+        if (path === "wake failure") {
+          throw failure;
+        }
+      });
+      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+        ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
+        wait: () => exit.promise,
+      }));
+      const run = await runExecProcess({
+        command: "context-release",
+        workdir: "/tmp",
+        env: {},
+        usePty: false,
+        warnings: [],
+        maxOutput: 1_000,
+        pendingMaxOutput: 1_000,
+        scopeKey: "process-scope",
+        sessionKey: path === "unrouted" ? undefined : "agent:main:main",
+        agentId: "main",
+        mainKey: "main",
+        sessionScope: "per-sender",
+        eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+        notifyDeliveryContext: deliveryContext,
+        notifyOnExit: true,
+        notifyOnExitEmptySuccess: false,
+        timeoutSec: null,
+        onSettledBeforeNotify: () => {
+          observed.push("task");
+          if (path === "task failure" && observed.length === 1) {
+            throw failure;
+          }
+        },
+      });
+      markBackgrounded(run.session);
+      if (path === "observed") {
+        markTerminalPollObserved(run.session);
+      }
+      exit.resolve({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+      const outcome = await run.promise;
+      expect(observed).toEqual(trace);
+      expect(outcome.status).toBe(path.endsWith("failure") ? "failed" : "completed");
+      const retained = getFinishedSession(run.session.id);
+      expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
+      for (const field of [
+        "sessionKey",
+        "agentId",
+        "mainKey",
+        "sessionScope",
+        "eventRouting",
+        "notifyDeliveryContext",
+        "notifyOnExit",
+        "notifyOnExitEmptySuccess",
+        "stdin",
+      ] as const) {
+        expect(retained?.[field], field).toBeUndefined();
+      }
+      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("wake") ? removal : undefined);
+      expect(removal).not.toHaveBeenCalled();
     },
   );
 });

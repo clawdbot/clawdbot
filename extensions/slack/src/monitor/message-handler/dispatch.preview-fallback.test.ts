@@ -823,6 +823,7 @@ vi.mock("openclaw/plugin-sdk/reply-history", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
+  resolveAskUserQuestionOptionIndices: () => undefined,
   isReplyPayloadNonTerminalToolErrorWarning: () => false,
   buildTtsSupplementMediaPayload: (payload: {
     text?: string;

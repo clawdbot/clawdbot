@@ -82,4 +82,23 @@ class NodeUtilsTest {
     }
     assertNull(resolveGatewayAccentArgb(null))
   }
+
+  @Test
+  fun resolveProfileAccentArgb_readsUiAccentEntryStrictly() {
+    val cases =
+      linkedMapOf(
+        """{"ui.accent":"#123456"}""" to 0xFF123456L,
+        """{"ui.accent":"ABCDEF"}""" to 0xFFABCDEFL,
+        """{"ui.accent":"invalid"}""" to null,
+        """{"ui.accent":123}""" to null,
+        """{"ui.accent":null}""" to null,
+        """{}""" to null,
+      )
+
+    for ((source, expected) in cases) {
+      val entries = json.parseToJsonElement(source) as JsonObject
+      assertEquals(source, expected, resolveProfileAccentArgb(entries))
+    }
+    assertNull(resolveProfileAccentArgb(null))
+  }
 }

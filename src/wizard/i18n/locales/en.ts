@@ -1140,8 +1140,6 @@ export const en = {
       gatewayServiceRestarted: "Gateway service restarted.",
       gatewayServiceRestarting: "Restarting Gateway service...",
       gatewayServiceRestartScheduled: "Gateway service restart scheduled.",
-      gatewayServiceUninstalled: "Gateway service uninstalled.",
-      gatewayServiceUninstalling: "Uninstalling Gateway service...",
       gatewayTokenGenerate: "Generate token: {command}",
       gatewayTokenShared: "Gateway token: shared auth for the Gateway + Control UI.",
       gatewayTokenStored:

@@ -151,8 +151,9 @@ without exceptions outside doctor/import/export/debug boundaries.
   Doctor owns their validated import and verified removal.
 - Inferred commitments: retired. Extraction, delivery, runtime storage access,
   and the CLI are removed. The schema 7 migration discards canonical commitment
-  rows. Legacy `commitments.json` stays untouched and inert pending an accepted
-  retention decision.
+  rows. Explicit Doctor repair also validates and irreversibly discards the
+  exact version 1 `commitments/commitments.json` store without importing,
+  archiving, or exporting it. Unknown or unsafe files remain unchanged.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
@@ -1122,7 +1123,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
 - Shared schema version 7 validates and removes the exact retired `commitments`
   table and discards its inert rows. Unknown same-named tables or indexes are
   preserved and the migration is refused. Runtime no longer reads or writes
-  commitment state. Doctor leaves the legacy `commitments.json` source untouched.
+  commitment state. Explicit Doctor repair validates and discards only the exact
+  version 1 `commitments/commitments.json` source, records a migration receipt,
+  and leaves malformed, changed, linked, or otherwise unsafe files untouched.
 - Web Push subscriptions use typed shared `web_push_subscriptions` rows, and
   generated VAPID identity uses the `webPush.vapidKeys` machine-state key.
   Runtime registration,
@@ -1636,7 +1639,8 @@ Move these into the global database:
   cache, installed plugin index, and app-server bindings. Android device auth
   remains app-local in `SecurePrefs`.
 - Shared schema version 7 discards retired commitment rows and removes their
-  table. The legacy `commitments.json` source stays inert and untouched.
+  table. Explicit Doctor repair discards the exact retired version 1
+  `commitments/commitments.json` source without import, archive, or export.
 - Device/node pairing and bootstrap records now use typed SQLite tables
 - Device-pair notification subscribers and delivered-request markers now use the
   shared SQLite plugin-state table instead of `device-pair-notify.json`.

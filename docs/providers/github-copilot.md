@@ -263,6 +263,17 @@ configured default model is never replaced.
     transport based on the model ref.
   </Accordion>
 
+  <Accordion title="Thinking levels">
+    Use `/think xhigh` or `/think max` when the selected model exposes that
+    level. Copilot's live catalog determines the supported efforts for your
+    account, and OpenClaw preserves those efforts in Responses requests.
+    When a Responses model starts its native effort range at `low`, `minimal`
+    maps to `low` instead of sending an unsupported value.
+    Explicit live limits take precedence over the bundled catalog. Gemini's
+    Chat Completions transport does not expose `max`.
+    See [Thinking levels](/tools/thinking) for session and per-message controls.
+  </Accordion>
+
   <Accordion title="Request compatibility">
     OpenClaw sends Copilot-compatible request headers with a Copilot CLI request
     identity, marks tool-result follow-up turns as agent-initiated, and sets the

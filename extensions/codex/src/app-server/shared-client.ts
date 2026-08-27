@@ -46,6 +46,7 @@ import {
   resolveManagedCodexNativeCommand,
 } from "./managed-binary.js";
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
+import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 import { withTimeout } from "./timeout.js";
 
 export type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
@@ -57,6 +58,7 @@ type SharedCodexAppServerClientEntry = {
   startup?: SharedCodexAppServerClientStartup;
   activeLeases: number;
   pendingAcquires: number;
+  leaseGeneration: number;
   closeWhenIdle: boolean;
   closeError?: Error;
   startupAbort?: AbortController;
@@ -726,6 +728,7 @@ async function acquireSharedCodexAppServerClient(
     }
   }
   if (warmClient) {
+    warmClient.entry.leaseGeneration += 1;
     options?.onStartedClient?.(warmClient.client);
     const release = leaseOptions?.leased ? retainSharedClientEntry(warmClient.entry) : undefined;
     return release ? { client: warmClient.client, release } : { client: warmClient.client };
@@ -1430,6 +1433,37 @@ export function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
+/** Captures sole physical-client ownership across awaited configuration adoption. */
+export function captureExclusiveSharedCodexAppServerClient(
+  client: CodexAppServerClient,
+): () => void {
+  const state = getSharedCodexAppServerClientState();
+  for (const [key, entry] of state.clients) {
+    if (entry.client !== client) {
+      continue;
+    }
+    const generation = entry.leaseGeneration;
+    const assertExclusive = () => {
+      // A sibling can resume native children without OpenClaw's thread queue.
+      // Even a completed intervening lease invalidates this configuration proof.
+      if (
+        state.clients.get(key) !== entry ||
+        entry.client !== client ||
+        entry.closeWhenIdle ||
+        entry.closeError ||
+        entry.activeLeases !== 1 ||
+        entry.pendingAcquires !== 0 ||
+        entry.leaseGeneration !== generation
+      ) {
+        throw new CodexAdoptedThreadActiveError();
+      }
+    };
+    assertExclusive();
+    return assertExclusive;
+  }
+  throw new CodexAdoptedThreadActiveError();
+}
+
 /**
  * Retires a matching shared client. Default is graceful: detach from the map
  * (future acquisitions get a fresh client) and close once leases drain.
@@ -1624,6 +1658,7 @@ function getOrCreateSharedClientEntry(
     entry = {
       activeLeases: 0,
       pendingAcquires: 0,
+      leaseGeneration: 0,
       closeWhenIdle: false,
       onStartedClientCallbacks: new Set(),
     };
@@ -1663,6 +1698,7 @@ export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
 
 function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
+  entry.leaseGeneration += 1;
   entry.pendingAcquires += 1;
   return () => {
     if (released) {
@@ -1677,6 +1713,7 @@ function retainPendingSharedClientAcquire(entry: SharedCodexAppServerClientEntry
 
 function retainSharedClientEntry(entry: SharedCodexAppServerClientEntry): () => void {
   let released = false;
+  entry.leaseGeneration += 1;
   entry.activeLeases += 1;
   return () => {
     if (released) {

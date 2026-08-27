@@ -1,7 +1,6 @@
 // Slack plugin module implements outbound adapter behavior.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import {
-  createMessageReceiptFromOutboundResults,
   resolveOutboundSendDep,
   type OutboundIdentity,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -41,6 +40,7 @@ import {
   type SlackReplyBlockResolution,
   type SlackReplyBlockSegment,
 } from "./reply-blocks.js";
+import { mergeSlackSendResults } from "./send-results.js";
 import type { SlackSendIdentity, SlackSendResult } from "./send.js";
 import { parseSlackTarget } from "./target-parsing.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
@@ -337,47 +337,24 @@ export const slackOutbound: ChannelOutboundAdapter = {
             sentResults.push(result);
           },
           finalize: async () => {
-            let lastResult: Awaited<ReturnType<SlackSendFn>> | undefined;
             for (const message of deliveryMessages) {
-              lastResult = await sendSlackOutboundMessage({
-                ...ctx,
-                text: message.text,
-                ...(message.blocks ? { blocks: message.blocks } : {}),
-                ...(message.authoredTextPlacement
-                  ? { authoredTextPlacement: message.authoredTextPlacement }
-                  : {}),
-                ...(message.nativeDataFallbackBaseText
-                  ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
-                  : {}),
-                ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
-                deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
-              });
-              sentResults.push(lastResult);
+              sentResults.push(
+                await sendSlackOutboundMessage({
+                  ...ctx,
+                  text: message.text,
+                  ...(message.blocks ? { blocks: message.blocks } : {}),
+                  ...(message.authoredTextPlacement
+                    ? { authoredTextPlacement: message.authoredTextPlacement }
+                    : {}),
+                  ...(message.nativeDataFallbackBaseText
+                    ? { nativeDataFallbackBaseText: message.nativeDataFallbackBaseText }
+                    : {}),
+                  ...(message.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+                  deliveryQueueId: useSingleDeliveryMarker ? ctx.deliveryQueueId : undefined,
+                }),
+              );
             }
-            if (!lastResult) {
-              throw new Error("Slack rendered presentation produced no deliverable segment");
-            }
-            if (sentResults.length === 1) {
-              return lastResult;
-            }
-            const receipt = createMessageReceiptFromOutboundResults({ results: sentResults });
-            receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
-            const questionResult = sentResults.find(
-              (result) => result.meta?.slackQuestionActionIds.length,
-            );
-            return {
-              ...lastResult,
-              receipt,
-              ...(questionResult?.meta
-                ? {
-                    meta: {
-                      ...questionResult.meta,
-                      slackQuestionMessageId:
-                        questionResult.meta.slackQuestionMessageId ?? questionResult.messageId,
-                    },
-                  }
-                : {}),
-            };
+            return mergeSlackSendResults(sentResults);
           },
         }),
       ),

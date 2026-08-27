@@ -8,6 +8,7 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-a
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import type { RestartSafeChatTerminalState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
@@ -32,16 +33,14 @@ export async function handleChatSendSetupError(params: {
   markTerminalBroadcasted: () => void;
   respond: RespondFn;
   session: Pick<PreparedChatSendSession, "agentId" | "clientRunId" | "sessionKey">;
-  terminalizeRestartSafeAdmission: (state: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }) => Promise<boolean>;
+  terminalizeRestartSafeAdmission: (state: RestartSafeChatTerminalState) => Promise<boolean>;
 }): Promise<void> {
   const { cleanupAdmittedRun, lifecycleGeneration, restartSafeAdmission } = params.admission;
   const { agentId, clientRunId, sessionKey } = params.session;
+  const errorMessage = String(params.error);
   if (restartSafeAdmission) {
     const terminalized = await params
-      .terminalizeRestartSafeAdmission({ retryable: true, status: "failed" })
+      .terminalizeRestartSafeAdmission({ error: errorMessage, retryable: true, status: "failed" })
       .catch((terminalizeError: unknown) => {
         params.context.logGateway.warn(
           `failed to release restart-safe chat admission after setup error: ${formatForLog(
@@ -61,7 +60,6 @@ export async function handleChatSendSetupError(params: {
   cleanupAdmittedRun({ force: true });
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
-  const errorMessage = String(params.error);
   const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
   setGatewayDedupeEntry({
@@ -94,10 +92,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     PreparedChatSendSession,
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "now" | "rawSessionKey" | "sessionKey"
   >;
-  terminalizeRestartSafeAdmission: (state: {
-    retryable: boolean;
-    status: "failed" | "killed";
-  }) => Promise<boolean>;
+  terminalizeRestartSafeAdmission: (state: RestartSafeChatTerminalState) => Promise<boolean>;
   userTurnRecorder: Pick<UserTurnTranscriptRecorder, "hasPersisted" | "isBlocked">;
 }) {
   const {
@@ -203,6 +198,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     let restartSafeDispatchFailureTerminalized = false;
     if (restartSafeAdmission && !agentTerminalPersistenceOwnedAtDispatchReject) {
       restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
+        error: errorMessage,
         retryable: true,
         status: "failed",
       }).catch((terminalizeError: unknown) => {

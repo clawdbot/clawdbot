@@ -299,6 +299,23 @@ test("sessions.create survives Gateway restart after remote project failure and 
   );
   const entryAfterFailure = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
 
+  // The first chat pane subscribes only after create-and-navigate. Its history
+  // must recover the failure without receiving the already-emitted chat event.
+  for (const method of ["chat.startup", "chat.history"] as const) {
+    const history = await directSessionReq(method, { sessionKey: key }, controlUiClient);
+    expect(history.ok, JSON.stringify(history.error)).toBe(true);
+    expect(history.payload).toMatchObject({
+      sessionInfo: {
+        sessionId,
+        status: "failed",
+        hasActiveRun: false,
+        lastRunId: runId,
+        lastRunError: expect.stringContaining(failureMessage),
+      },
+      messages: [expect.objectContaining({ role: "user" })],
+    });
+  }
+
   const retriedMaterialization = createDeferredCore<typeof project>();
   projectCloneMocks.materialize.mockReturnValueOnce(retriedMaterialization.promise);
   const restartedContext = { broadcast, chatAbortControllers: new Map(), dedupe: new Map() };
@@ -321,6 +338,9 @@ test("sessions.create survives Gateway restart after remote project failure and 
       status: "started",
     });
     await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.lastRunError).toBe(
+      undefined,
+    );
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect(entryAfterCreation).toMatchObject({
       sessionId,

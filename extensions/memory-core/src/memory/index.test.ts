@@ -80,7 +80,7 @@ describe("memory index", () => {
     const vector = Reflect.get(manager, "vector") as VectorState;
     vector.available = true;
     vector.dims = 4;
-    Reflect.set(manager, "vectorReady", Promise.resolve(true));
+    Reflect.set(Reflect.get(manager, "database"), "vectorReady", Promise.resolve(true));
 
     await expect(
       Reflect.apply(Reflect.get(manager, "runInPlaceReindex"), manager, [

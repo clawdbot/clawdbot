@@ -152,9 +152,12 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
 ) {
   await waitForCommittedChatRoute(page);
   expect(page.url()).toContain(controlUiSessionPath(sessionKey));
-  const startupStatus = page.locator('.chat-cloud-startup[role="status"]');
+  const startupStatus = page.locator('.chat-thread .chat-working-indicator[role="status"]');
   await expect.poll(() => startupStatus.count()).toBe(1);
-  await pollLocatorText(startupStatus).toContain("Starting…");
+  await pollLocatorText(startupStatus).toContain("Provisioning environment…");
+  expect(await page.locator(".chat-cloud-startup, .agent-chat__composer-status-band").count()).toBe(
+    0,
+  );
   await expect
     .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
     .toBe(true);

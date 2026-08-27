@@ -496,6 +496,101 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     );
   });
 
+  it.each(
+    [false, true].flatMap((visibleTextAlreadyDelivered) =>
+      ["direct", "core-rendered"].flatMap((deliveryPath) =>
+        ["controls", "empty", "empty-with-prose"].map((presentationKind) => ({
+          visibleTextAlreadyDelivered,
+          deliveryPath,
+          presentationKind,
+        })),
+      ),
+    ),
+  )(
+    "preserves oversized presentation before TTS ($deliveryPath, prose visible: $visibleTextAlreadyDelivered, content: $presentationKind)",
+    async ({ visibleTextAlreadyDelivered, deliveryPath, presentationKind }) => {
+      const hasPresentationContent = presentationKind === "controls";
+      const payload = {
+        text: presentationKind === "empty" ? undefined : "Spoken summary",
+        mediaUrl: "https://example.com/reply.ogg",
+        audioAsVoice: true,
+        ttsSupplement: { spokenText: "Spoken summary", visibleTextAlreadyDelivered },
+        presentation: {
+          blocks: hasPresentationContent
+            ? [
+                ...Array.from({ length: 196 }, () => ({ type: "divider" as const })),
+                { type: "text" as const, text: "Presentation detail" },
+                {
+                  type: "buttons" as const,
+                  buttons: [
+                    { label: "Help", action: { type: "command" as const, command: "/help" } },
+                    {
+                      label: "Inspect",
+                      action: { type: "callback" as const, value: "opaque-tts" },
+                    },
+                  ],
+                },
+              ]
+            : Array.from({ length: 201 }, () => ({ type: "divider" as const })),
+        },
+      };
+      const context = {
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: payload.text ?? "",
+        accountId: "main",
+        replyToId: "om_root",
+        replyToIdSource: "implicit" as const,
+        replyToMode: "first" as const,
+      };
+      let outboundPayload: ReplyPayload = payload;
+      if (deliveryPath === "core-rendered") {
+        const rendered = await feishuOutbound.renderPresentation?.({
+          payload,
+          presentation: payload.presentation,
+          ctx: { ...context, payload },
+        });
+        if (!rendered) {
+          throw new Error("expected Feishu-rendered presentation");
+        }
+        const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+        outboundPayload = coreRenderedPayload;
+      }
+      const onDeliveryResult = vi.fn();
+      await feishuOutbound.sendPayload?.({
+        ...context,
+        text: outboundPayload.text ?? "",
+        payload: outboundPayload,
+        onDeliveryResult,
+      });
+
+      const text = sendMessageFeishuMock.mock.calls
+        .map((call) => String(call[0]?.text ?? ""))
+        .join("\n");
+      if (hasPresentationContent) {
+        expect(text).toContain("Presentation detail");
+        expect(text).toContain("- Help: `/help`");
+        expect(text).toContain("- Inspect");
+        expect(text).not.toContain("opaque-tts");
+      } else {
+        expect(text).toBe(visibleTextAlreadyDelivered ? "" : "Spoken summary");
+      }
+      const sendsText = hasPresentationContent || !visibleTextAlreadyDelivered;
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(sendsText ? 1 : 0);
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expect(onDeliveryResult).toHaveBeenCalledTimes(sendsText ? 2 : 1);
+      expect(sendMediaCall()?.mediaUrl).toBe(payload.mediaUrl);
+      expect(sendMessageCall()?.replyToMessageId).toBe(sendsText ? "om_root" : undefined);
+      expect(sendMediaCall()?.replyToMessageId).toBe(sendsText ? undefined : "om_root");
+      if (sendsText) {
+        expect(sendMessageFeishuMock.mock.invocationCallOrder[0]).toBeLessThan(
+          sendMediaFeishuMock.mock.invocationCallOrder[0] ?? 0,
+        );
+      }
+    },
+  );
+
   it.each([".png", ".heic", ".tif", ".tiff"])(
     "sends an existing absolute %s image path as media instead of leaking it",
     async (extension) => {
@@ -938,6 +1033,19 @@ describe("feishuOutbound.sendPayload native cards", () => {
 
   it("falls back to chunked text when a table exceeds the Feishu card envelope", async () => {
     const presentation = createOversizedTablePresentation();
+    presentation.blocks.push({
+      type: "buttons",
+      buttons: [
+        { label: "Unavailable link", url: "javascript:alert(1)" },
+        { label: "Docs", action: { type: "url", url: "https://example.com/docs" } },
+        { label: "Help", action: { type: "command", command: "/help" } },
+        {
+          label: "[Inspect](https://example.com/label)",
+          action: { type: "callback", value: "opaque-inspect" },
+        },
+        { label: "Disabled", disabled: true, action: { type: "command", command: "/disabled" } },
+      ],
+    });
     const rawCardText = JSON.stringify({
       schema: "2.0",
       body: { elements: [{ tag: "markdown", content: "Raw card JSON must stay hidden" }] },
@@ -993,6 +1101,16 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(deliveredText).toContain("account-0-");
     expect(deliveredText).toContain("account-399-");
     expect(deliveredText).not.toContain("Raw card JSON must stay hidden");
+    for (const text of [directDeliveredText, deliveredText]) {
+      expect(text).toContain("- Unavailable link");
+      expect(text).not.toContain("javascript:");
+      expect(text).toContain("- Docs: https://example.com/docs");
+      expect(text).toContain("- Help: `/help`");
+      expect(text).toContain("- \\[Inspect\\]\\(https://example.com/label\\)");
+      expect(text).not.toContain("opaque-inspect");
+      expect(text).toContain("- Disabled");
+      expect(text).not.toContain("/disabled");
+    }
     expectFeishuResult(directResult, "text_msg");
     expectFeishuResult(result, "text_msg");
   });
@@ -1603,6 +1721,33 @@ describe("feishuOutbound.sendPayload native cards", () => {
       { type: "open_url", default_url: "https://example.com/path" },
     ]);
     expect(JSON.stringify(card)).not.toContain("javascript:");
+    expect(card.body.elements.at(-1)).toEqual({ tag: "markdown", content: "- Bad" });
+  });
+
+  it("keeps rejected button URLs out of oversized presentation fallback", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "",
+      accountId: "main",
+      payload: {
+        presentation: {
+          blocks: [
+            ...Array.from({ length: 200 }, () => ({ type: "divider" as const })),
+            {
+              type: "buttons",
+              buttons: [
+                { label: "[Unavailable](https://example.com/label)", url: "javascript:alert(1)" },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageCall()?.text).toContain("- \\[Unavailable\\]\\(https://example.com/label\\)");
+    expect(sendMessageCall()?.text).not.toContain("javascript:");
   });
 
   it("normalizes caller-supplied native Feishu cards before sending", async () => {
@@ -2219,38 +2364,57 @@ describe("feishuOutbound.sendPayload native cards", () => {
       },
     });
 
-    expect(commentThreadParams()?.content).toBe("Review this\n\n- Open URL: `/approve req_1`");
+    expect(commentThreadParams()?.content).toBe(
+      "Review this\n\n- Open URL: `/approve req_1`\n\n> Interactive buttons are unavailable in Feishu document comments. You can type the command shown above manually.",
+    );
     expectFeishuResult(result, "reply_msg");
   });
 
-  it("omits command guidance for disabled command buttons", async () => {
-    const result = await feishuOutbound.sendPayload?.({
-      cfg: emptyConfig,
-      to: "comment:docx:doxcn123:7623358762119646411",
-      text: "Review this",
-      accountId: "main",
-      payload: {
+  it.each(["direct", "core-rendered"] as const)(
+    "keeps disabled labels literal without command guidance in %s document comments",
+    async (deliveryPath) => {
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Disabled [Approve](https://example.com) & <at>",
+                disabled: true,
+                action: { type: "command", command: "/approve req_1" },
+              },
+            ],
+          },
+        ],
+      } satisfies MessagePresentation;
+      const context = {
+        cfg: emptyConfig,
+        to: "comment:docx:doxcn123:7623358762119646411",
         text: "Review this",
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Disabled Approve",
-                  disabled: true,
-                  action: { type: "command", command: "/approve req_1" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
+        accountId: "main",
+      };
+      let payload: ReplyPayload = { text: context.text, interactive: presentation };
+      if (deliveryPath === "core-rendered") {
+        const originalPayload = { text: context.text, presentation };
+        const rendered = await feishuOutbound.renderPresentation?.({
+          payload: originalPayload,
+          presentation,
+          ctx: { ...context, payload: originalPayload },
+        });
+        if (!rendered) {
+          throw new Error("expected Feishu-rendered presentation");
+        }
+        const { presentation: _presentation, ...coreRenderedPayload } = rendered;
+        payload = coreRenderedPayload;
+      }
+      const result = await feishuOutbound.sendPayload?.({ ...context, payload });
 
-    expect(commentThreadParams()?.content).toBe("Review this\n\n- Disabled Approve");
-    expectFeishuResult(result, "reply_msg");
-  });
+      expect(commentThreadParams()?.content).toBe(
+        "Review this\n\n- Disabled [Approve](https://example.com) & <at>",
+      );
+      expectFeishuResult(result, "reply_msg");
+    },
+  );
 
   it("adds command guidance when presentation is stripped but channelData carries the rendered-command marker", async () => {
     // Core strips presentation before sendPayload; channelData retains the fact.
