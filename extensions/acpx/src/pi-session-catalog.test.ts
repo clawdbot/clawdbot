@@ -659,7 +659,9 @@ describe("Pi session catalog", () => {
         return await actualStat(target);
       }
       await fs.appendFile(file, growth);
-      return { isFile: () => true, size: content.length } as Awaited<ReturnType<typeof fs.stat>>;
+      const stats = await actualStat(file);
+      Object.assign(stats, { size: content.length });
+      return stats;
     });
     const legacyStats = await fs.stat(file);
     const legacyText = await fs.readFile(file, "utf8");
