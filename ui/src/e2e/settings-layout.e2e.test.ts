@@ -179,6 +179,10 @@ suite.define(() => {
                   viewport.width <= 640
                     ? Math.round(actionsBox.y - descriptionBox.y - descriptionBox.height)
                     : Math.round(actionsBox.y - headingBox.y),
+                actionGap:
+                  viewport.width <= 640
+                    ? null
+                    : Math.round(actionsBox.x - descriptionBox.x - descriptionBox.width),
                 actionRightInset: Math.round(
                   sectionBox.x + sectionBox.width - actionsBox.x - actionsBox.width,
                 ),
@@ -198,6 +202,7 @@ suite.define(() => {
               };
             })
             .toEqual({
+              actionGap: viewport.width <= 640 ? null : 20,
               actionPlacement: viewport.width <= 640 ? 8 : 0,
               actionRightInset: 0,
               copyGap: 4,

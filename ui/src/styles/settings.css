@@ -136,6 +136,10 @@
   align-items: flex-start;
 }
 
+.settings-section__header:has(.settings-section__copy):has(.settings-section__actions) {
+  column-gap: var(--space-5);
+}
+
 .settings-section__heading {
   margin: 0;
   font-size: var(--control-ui-text-xs);
