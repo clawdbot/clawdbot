@@ -7,7 +7,10 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-events.js";
+import {
+  readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedActiveContextCore,
+} from "./session-accessor.sqlite-active-events.js";
 
 async function withBoundedContextScope(
   run: (scope: {
@@ -121,5 +124,54 @@ it("retains the latest compaction boundary before a truncated tail", async () =>
     ]);
     expect(context.events.at(-1)).toMatchObject({ parentId: "summary" });
     expect(context.boundaryCount).toBe(1);
+  });
+});
+
+it("counts the retained tail instead of compacted transcript bytes", async () => {
+  await withBoundedContextScope(async (scope) => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "discarded-old",
+          parentId: null,
+          message: { role: "user", content: `discarded ${"x".repeat(20_000)}` },
+        },
+        {
+          eventId: "kept-user",
+          parentId: "discarded-old",
+          message: { role: "user", content: `kept ${"k".repeat(3_000)}` },
+        },
+        {
+          eventId: "kept-assistant",
+          parentId: "kept-user",
+          message: { role: "assistant", content: "kept answer" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await appendTranscriptEvent(scope, {
+      type: "compaction",
+      id: "compaction-boundary",
+      parentId: "kept-assistant",
+      timestamp: "2026-08-15T00:00:00.000Z",
+      summary: `earlier ${"s".repeat(4_000)}`,
+      firstKeptEntryId: "kept-user",
+      tokensBefore: 10_000,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "post-compaction",
+          parentId: "compaction-boundary",
+          message: { role: "user", content: "fresh turn" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const stats = readSessionTranscriptActiveStats(scope);
+    expect(stats.eventCount).toBe(4);
+    expect(stats.sizeBytes).toBeGreaterThan(7_000);
+    expect(stats.sizeBytes).toBeLessThan(12_000);
   });
 });

@@ -76,9 +76,51 @@ afterEach(() => {
   document.body.replaceChildren();
   clearNativeGatewayTestState();
   vi.restoreAllMocks();
+  Reflect.deleteProperty(navigator, "clipboard");
 });
 
 describe("SessionDiffPanel", () => {
+  it.each([
+    { surface: "file", failed: false, feedback: "Copied!" },
+    { surface: "file", failed: true, feedback: "Copy failed" },
+    { surface: "sync", failed: false, feedback: "Copied!" },
+    { surface: "sync", failed: true, feedback: "Copy failed" },
+  ])(
+    "keeps $surface path copy feedback visible: $feedback",
+    async ({ surface, failed, feedback }) => {
+      const writeText = failed
+        ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
+        : vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { writeText },
+      });
+      setNativeGatewayTestState(null);
+      const panel = document.createElement("openclaw-session-diff") as SessionDiffElement;
+      panel.loader = vi.fn(async () => ({ ...fileResult(SNAPSHOT_PATCH), root: "/workspace" }));
+      document.body.append(panel);
+
+      const triggerSelector =
+        surface === "file" ? ".session-diff__file-menu" : ".session-diff__toolbar-button";
+      await vi.waitFor(() => expect(panel.querySelector(triggerSelector)).not.toBeNull());
+      panel.querySelector<HTMLButtonElement>(triggerSelector)?.click();
+      await panel.updateComplete;
+
+      const menu = panel.querySelector("openclaw-session-diff-menu");
+      expect(menu).not.toBeNull();
+      const label = surface === "file" ? "Copy Path" : "Checkout path";
+      const button = menu?.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+      expect(button).toBeInstanceOf(HTMLButtonElement);
+
+      button?.click();
+      await vi.waitFor(() => expect(button?.getAttribute("aria-label")).toBe(feedback));
+
+      expect(writeText).toHaveBeenCalledWith(surface === "file" ? "example.txt" : "/workspace");
+      expect(button?.dataset[failed ? "error" : "copied"]).toBe("1");
+      expect(panel.querySelector("openclaw-session-diff-menu")).toBe(menu);
+    },
+  );
+
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
     { name: "native local gateway", nativeGateway: "local", offered: true },

@@ -13,6 +13,7 @@ const gatewayMocks = vi.hoisted(() => ({
         message: import("./message-event.js").BuzzInboundMessage,
         bus: BuzzBus,
         signal: AbortSignal,
+        assertCurrent: () => void,
       ) => Promise<void>)
     | undefined,
   onMessageError: undefined as ((error: Error) => void) | undefined,
@@ -173,6 +174,7 @@ describe("Buzz gateway lifecycle", () => {
           message: import("./message-event.js").BuzzInboundMessage,
           bus: BuzzBus,
           signal: AbortSignal,
+          assertCurrent: () => void,
         ) => Promise<void>;
         onMessageError?: (error: Error) => void;
         onFatalError?: (error: Error) => void;
@@ -501,7 +503,7 @@ describe("Buzz gateway lifecycle", () => {
     await expect(lifecycle).resolves.toBeUndefined();
   });
 
-  it("uses the rolling lookback after a failed initial session", async () => {
+  it("preserves room activation after a failed initial session", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     gatewayMocks.startBuzzBus.mockRejectedValueOnce(new Error("connect failed"));
     const { abortController, lifecycle } = startTestGateway();
@@ -512,7 +514,7 @@ describe("Buzz gateway lifecycle", () => {
     });
     const firstSince = resolveBusSince(0);
     const secondSince = resolveBusSince(1);
-    expect(secondSince).toBeLessThanOrEqual(firstSince - 24 * 60 * 60 + 2);
+    expect(secondSince).toBe(firstSince);
 
     abortController.abort();
     await expect(lifecycle).resolves.toBeUndefined();
@@ -537,7 +539,7 @@ describe("Buzz gateway lifecycle", () => {
     });
   });
 
-  it("reconnects with a rolling lookback without trusting sender time", async () => {
+  it("preserves the activation floor on reconnect without trusting sender time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const invalidateDirectoryCache = vi.fn();
     const { abortController, lifecycle } = startTestGateway({ invalidateDirectoryCache });
@@ -556,6 +558,7 @@ describe("Buzz gateway lifecycle", () => {
       },
       createMockBus(),
       new AbortController().signal,
+      () => {},
     );
     const reconnectStartedAt = Math.floor(Date.now() / 1000);
     gatewayMocks.onFatalError?.(new Error("relay failed"));
@@ -566,8 +569,8 @@ describe("Buzz gateway lifecycle", () => {
     });
     expect(invalidateDirectoryCache).toHaveBeenCalledTimes(2);
     const secondSince = resolveBusSince(1);
-    expect(secondSince).toBeGreaterThanOrEqual(reconnectStartedAt - 24 * 60 * 60);
-    expect(secondSince).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 24 * 60 * 60);
+    expect(secondSince).toBe(resolveBusSince(0));
+    expect(secondSince).toBeLessThanOrEqual(reconnectStartedAt);
     expect(secondSince).toBeLessThan(createdAt);
 
     abortController.abort();

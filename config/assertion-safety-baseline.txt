@@ -299,7 +299,6 @@ extensions/cua-computer/src/driver-client.ts	15
 extensions/cua-computer/src/driver-result.ts	10
 extensions/cua-computer/src/mcp-driver-client.ts	5
 extensions/cua-computer/src/window-actions.ts	3
-extensions/deepinfra/embedding-adapter.ts	1
 extensions/deepinfra/provider-models.ts	3
 extensions/deepinfra/video-generation-provider.ts	2
 extensions/deepseek/provider-policy-api.ts	4
@@ -313,7 +312,7 @@ extensions/diagnostics-otel/src/service-propagation.ts	2
 extensions/diagnostics-otel/src/service-trace-context.ts	1
 extensions/diagnostics-otel/src/service.ts	1
 extensions/diagnostics-prometheus/src/service.ts	1
-extensions/diffs/src/config.ts	5
+extensions/diffs/src/config.ts	4
 extensions/diffs/src/language-hints.ts	9
 extensions/diffs/src/plugin.ts	4
 extensions/diffs/src/store.ts	3
@@ -875,7 +874,6 @@ extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/sso-token-store.ts	2
 extensions/msteams/src/token-response.ts	2
 extensions/msteams/src/user-agent.ts	1
-extensions/mxc/src/config.ts	1
 extensions/mxc/src/fs-bridge.ts	1
 extensions/nextcloud-talk/src/approval-auth.ts	1
 extensions/nextcloud-talk/src/channel.ts	2
@@ -958,7 +956,6 @@ extensions/openrouter/usage.ts	2
 extensions/openrouter/video-generation-provider.ts	1
 extensions/openrouter/video-model-catalog.ts	1
 extensions/openshell/src/backend.ts	2
-extensions/openshell/src/config.ts	1
 extensions/openshell/src/fs-bridge.ts	2
 extensions/parallel/src/parallel-free-web-search-provider.runtime.ts	1
 extensions/parallel/src/parallel-search-normalize.ts	1
@@ -1679,7 +1676,7 @@ src/agents/agent-tool-definition-adapter.ts	4
 src/agents/agent-tool-metadata.ts	2
 src/agents/agent-tools.abort.ts	1
 src/agents/agent-tools.before-tool-call.diagnostics.ts	1
-src/agents/agent-tools.before-tool-call.wrapper.ts	8
+src/agents/agent-tools.before-tool-call.wrapper.ts	4
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
@@ -3582,7 +3579,6 @@ src/plugins/manifest-registry.ts	2
 src/plugins/manifest-setup-normalizers.ts	5
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	7
-src/plugins/memory-embedding-providers.ts	1
 src/plugins/memory-runtime.ts	1
 src/plugins/module-export.ts	2
 src/plugins/native-module-require.ts	3
@@ -3949,7 +3945,7 @@ ui/src/app/native-window-drag.ts	1
 ui/src/app/overlays.ts	1
 ui/src/app/question-prompt.ts	2
 ui/src/app/server-prefs-state.ts	14
-ui/src/app/server-prefs.ts	17
+ui/src/app/server-prefs.ts	15
 ui/src/app/settings.ts	9
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1

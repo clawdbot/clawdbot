@@ -230,10 +230,10 @@ export async function handleDiscordMessageAction(
       allowEmpty: true,
     });
     const deliveryContent =
-      presentationFellBack && adaptedPresentation
+      presentationFellBack && presentation
         ? renderMessagePresentationFallbackText({
             text: content,
-            presentation: adaptedPresentation,
+            presentation,
           })
         : content;
     const filename = readStringParam(params, "filename");

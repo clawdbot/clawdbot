@@ -17,6 +17,7 @@ export const tuiPtyTestFiles = [
   "src/tui/tui-pty-harness.e2e.test.ts",
   "src/tui/tui-session-identity-pty.e2e.test.ts",
   "src/tui/tui-reset-transition-pty.e2e.test.ts",
+  "src/tui/tui-task-suggestions-pty.e2e.test.ts",
   "src/tui/tui-pty-local.e2e.test.ts",
 ];
 

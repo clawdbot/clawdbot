@@ -77,17 +77,11 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesListCommand: mocks.modelsAliasesListCommand,
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
-vi.mock("../commands/models/fallbacks.js", () => ({
-  modelsFallbacksAddCommand: mocks.noopAsync,
-  modelsFallbacksClearCommand: mocks.noopAsync,
-  modelsFallbacksListCommand: mocks.noopAsync,
-  modelsFallbacksRemoveCommand: mocks.noopAsync,
-}));
-vi.mock("../commands/models/image-fallbacks.js", () => ({
-  modelsImageFallbacksAddCommand: mocks.noopAsync,
-  modelsImageFallbacksClearCommand: mocks.noopAsync,
-  modelsImageFallbacksListCommand: mocks.noopAsync,
-  modelsImageFallbacksRemoveCommand: mocks.noopAsync,
+vi.mock("../commands/models/fallbacks-shared.js", () => ({
+  addFallbackCommand: mocks.noopAsync,
+  clearFallbacksCommand: mocks.noopAsync,
+  listFallbacksCommand: mocks.noopAsync,
+  removeFallbackCommand: mocks.noopAsync,
 }));
 vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.modelsScanCommand,

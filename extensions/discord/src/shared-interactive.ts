@@ -197,7 +197,7 @@ export function buildDiscordPresentationComponents(
   }
   for (const block of presentation.blocks) {
     if (block.type === "text" || block.type === "context") {
-      const text = block.text.trim();
+      const text = block.text;
       if (text) {
         blocks.push({
           type: "text",

@@ -28,9 +28,10 @@ export type EmbeddingProviderResult = {
   runtime?: EmbeddingProviderRuntime;
 };
 
-type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
+type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  outputDimensionality?: number;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
@@ -63,6 +64,19 @@ function resolveProviderModel(
     return trimmed;
   }
   return adapter.defaultModel ?? "";
+}
+
+function resolveAdapterCreateOptions(
+  options: CreateEmbeddingProviderOptions,
+  model: string,
+): MemoryEmbeddingProviderCreateOptions {
+  const { outputDimensionality, ...base } = options;
+  return {
+    ...base,
+    fallback: "none",
+    model,
+    ...(typeof outputDimensionality === "number" ? { dimensions: outputDimensionality } : {}),
+  };
 }
 
 export function resolveEmbeddingProviderFallbackModel(
@@ -113,11 +127,9 @@ export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingPr
   try {
     const adapter = getAdapter(provider, options.config);
     const model = resolveProviderModel(adapter, options.model);
-    const identity = adapter.resolveIndexIdentity?.({
-      ...options,
-      provider,
-      model,
-    });
+    const identity = adapter.resolveIndexIdentity?.(
+      resolveAdapterCreateOptions({ ...options, provider }, model),
+    );
     return identity
       ? {
           provider: { id: adapter.id, model: identity.model },
@@ -134,10 +146,10 @@ async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  const createOptions = {
-    ...options,
-    model: resolveProviderModel(adapter, options.model),
-  };
+  const createOptions = resolveAdapterCreateOptions(
+    options,
+    resolveProviderModel(adapter, options.model),
+  );
   const result = await adapter.create(createOptions);
   return {
     provider: result.provider,

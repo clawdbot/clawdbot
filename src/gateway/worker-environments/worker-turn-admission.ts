@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.js";
+import {
+  withSessionPlacementForcedTerminalSettlement,
+  type LocalTurnPlacementClaim,
+} from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -172,6 +175,28 @@ export async function releaseClaimIfOwned(
       await placements.closeWorkerTurnToolState(turnClaim);
     }
     placements.releaseTurn(turnClaim);
+  }
+}
+
+export async function executeLocalTurn<T>(params: {
+  claim: LocalTurnPlacementClaim;
+  placements: WorkerSessionPlacementStore;
+  runLocal: () => Promise<T>;
+}): Promise<T> {
+  const current = params.placements.get(params.claim.sessionId);
+  const turnClaim = params.placements.claimTurn({
+    ...resolvePlacementIdentity(params.claim, current),
+    claimId: randomUUID(),
+    runId: params.claim.runId,
+    owner: { kind: "local" },
+  });
+  // Forced terminalization and ordinary completion share this exact-claim closure.
+  // Replacement fencing makes a late finally harmless after recovery settles it.
+  const settle = () => releaseClaimIfOwned(params.placements, turnClaim);
+  try {
+    return await withSessionPlacementForcedTerminalSettlement(settle, params.runLocal);
+  } finally {
+    await settle();
   }
 }
 

@@ -265,7 +265,8 @@ async function createConfiguredEmbeddingProvider(params: {
     inputType: params.memorySearch?.inputType,
     queryInputType: params.memorySearch?.queryInputType,
     documentInputType: params.memorySearch?.documentInputType,
-    outputDimensionality: params.memorySearch?.outputDimensionality,
+    dimensions: params.memorySearch?.outputDimensionality,
+    fallback: "none",
     acquireLocalService,
   };
   const { provider } = await adapter.create(createOptions);
@@ -419,7 +420,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
-      const embeddings = await provider.embedBatch(texts, { signal: abortController.signal });
+      const embeddings = await provider.embedBatch(texts, {
+        signal: abortController.signal,
+        inputType: "document",
+      });
       if (abortController.signal.aborted) {
         return true;
       }

@@ -129,6 +129,199 @@ function launchRequest(input = launchInput()) {
 }
 
 describe("node worker launch adapter", () => {
+  it("re-arms only a settled pre-admission deadline with fresh idempotent launch identities", async () => {
+    const input = launchInput();
+    const launches: NodeWorkerLaunchInput[] = [];
+    const delays: number[] = [];
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      const attempt = request.params as NodeWorkerLaunchInput;
+      launches.push(attempt);
+      return wire({
+        ...receipt(attempt, "completed"),
+        state: "completed",
+        resultJson: JSON.stringify(
+          launches.length === 1
+            ? {
+                status: "not-started",
+                reason: "admission-deadline",
+                errorText: "gateway unreachable",
+              }
+            : { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 },
+        ),
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+    await expect(adapter.launch(launchRequest(input))).resolves.toMatchObject({
+      resultJson: JSON.stringify({
+        status: "completed",
+        transcriptLeafId: "leaf-1",
+        transcriptNextSeq: 2,
+      }),
+    });
+    expect(launches).toHaveLength(2);
+    expect(launches[1]?.launchId).not.toBe(input.launchId);
+    expect(launches[1]?.descriptor.assignment.turnId).toBe(launches[1]?.launchId);
+    expect(launches[1]?.descriptor.assignment.runId).toBe(input.descriptor.assignment.runId);
+    expect(delays[0]).toBeGreaterThanOrEqual(1_000);
+    expect(delays[0]).toBeLessThanOrEqual(1_100);
+    const retried = launches[1];
+    launches.length = 0;
+    await adapter.launch(launchRequest(input));
+    expect(launches[1]).toEqual(retried);
+  });
+
+  it("stops re-arming once the next attempt would outlive the admission credential", async () => {
+    const nowMs = 1_700_000_000_000;
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      const input = request.params as NodeWorkerLaunchInput;
+      return wire({
+        ...receipt(input, "completed"),
+        state: "completed",
+        resultJson: JSON.stringify({
+          status: "not-started",
+          reason: "admission-deadline",
+          errorText: "gateway unreachable",
+        }),
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      now: () => nowMs,
+      sleep: async () => {},
+    });
+    // First re-arm backoff is at most 1_100ms and fits; the second needs at
+    // least 2_000ms and would start inside the final admission window.
+    const result = await adapter.launch({
+      ...launchRequest(),
+      credentialExpiresAtMs: nowMs + 120_000 + 1_500,
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(JSON.parse((result as { resultJson: string }).resultJson)).toMatchObject({
+      reason: "admission-deadline",
+    });
+  });
+
+  it("admits a final re-arm that fits inside the credential lifetime", async () => {
+    const nowMs = 1_700_000_000_000;
+    const launches: NodeWorkerLaunchInput[] = [];
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      const input = request.params as NodeWorkerLaunchInput;
+      launches.push(input);
+      return wire({
+        ...receipt(input, "completed"),
+        state: "completed",
+        resultJson: JSON.stringify(
+          launches.length === 1
+            ? {
+                status: "not-started",
+                reason: "admission-deadline",
+                errorText: "gateway unreachable",
+              }
+            : { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 },
+        ),
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      now: () => nowMs,
+      sleep: async () => {},
+    });
+    await expect(
+      adapter.launch({
+        ...launchRequest(),
+        credentialExpiresAtMs: nowMs + 10 * 60_000,
+      }),
+    ).resolves.toMatchObject({
+      resultJson: JSON.stringify({
+        status: "completed",
+        transcriptLeafId: "leaf-1",
+        transcriptNextSeq: 2,
+      }),
+    });
+    expect(launches).toHaveLength(2);
+  });
+
+  it("bounds admission re-arms to five journaled attempts", async () => {
+    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
+      const input = request.params as NodeWorkerLaunchInput;
+      return wire({
+        ...receipt(input, "completed"),
+        state: "completed",
+        resultJson: JSON.stringify({
+          status: "not-started",
+          reason: "admission-deadline",
+          errorText: "gateway unreachable",
+        }),
+      });
+    });
+    const adapter = createNodeWorkerLaunchAdapter({
+      getTransport: () => transportWith(invoke),
+      sleep: async () => {},
+    });
+    await adapter.launch(launchRequest());
+    expect(invoke).toHaveBeenCalledTimes(5);
+    expect(
+      new Set(
+        invoke.mock.calls.map(([request]) => (request.params as NodeWorkerLaunchInput).launchId),
+      ).size,
+    ).toBe(5);
+  });
+
+  it.each(["invalid-credential", "stale-worker-build", "admission deadline exceeded"])(
+    "does not re-arm terminal rejection text: %s",
+    async (errorText) => {
+      const input = launchInput();
+      const terminal = { ...receipt(input, "failed"), state: "failed" as const, errorText };
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () => wire(terminal));
+      const adapter = createNodeWorkerLaunchAdapter({ getTransport: () => transportWith(invoke) });
+      await expect(adapter.launch(launchRequest(input))).resolves.toEqual(terminal);
+      expect(invoke).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["abort", "claim-loss"])(
+    "fences admission re-arm after %s during backoff",
+    async (reason) => {
+      const input = launchInput();
+      const controller = new AbortController();
+      let authorized = true;
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async () =>
+        wire({
+          ...receipt(input, "completed"),
+          state: "completed",
+          resultJson: JSON.stringify({
+            status: "not-started",
+            reason: "admission-deadline",
+            errorText: "gateway unreachable",
+          }),
+        }),
+      );
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke),
+        sleep: async () => {
+          if (reason === "abort") {
+            controller.abort(new Error("turn cancelled"));
+          } else {
+            authorized = false;
+          }
+        },
+      });
+      await expect(
+        adapter.launch({
+          ...launchRequest(input),
+          signal: controller.signal,
+          isDispatchAuthorized: () => authorized,
+        }),
+      ).rejects.toThrow(reason === "abort" ? "turn cancelled" : "authority closed");
+      expect(invoke).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     { label: "offline", slots: [undefined], code: "runner-offline" },
     { label: "full", slots: [0], code: NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE },

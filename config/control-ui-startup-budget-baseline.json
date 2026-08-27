@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 341333,
-  "reason": "Tide, Beacon, and Phosphor themes: theme-name wiring, three appearance options, locale strings, and two font stylesheet mappings",
+  "startupJsGzipBytes": 342930,
+  "reason": "per-profile appearance preferences: profile-scoped resolution, users.prefs routing, and live cross-device sync on the boot path; measured 342875 B on the tide/beacon/phosphor base, pinned with jitter headroom",
   "updatedAt": "2026-08-26"
 }

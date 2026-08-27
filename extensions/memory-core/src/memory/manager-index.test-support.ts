@@ -1,6 +1,7 @@
 import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -64,6 +65,7 @@ type ProviderControls = {
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
   embedBatchInputCalls: number;
+  embeddedBatchInputs: EmbeddingInput[][];
   providerRuntimeBatchCalls: string[][];
   providerRuntimeBatchGate: Promise<void> | null;
   providerRuntimeBatchErrors: unknown[];
@@ -125,6 +127,7 @@ const providerState = vi.hoisted(() => ({
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
   embedBatchInputCalls: 0,
+  embeddedBatchInputs: [] as EmbeddingInput[][],
   providerRuntimeBatchCalls: [] as string[][],
   providerRuntimeBatchGate: null as Promise<void> | null,
   providerRuntimeBatchErrors: [] as unknown[],
@@ -262,46 +265,43 @@ vi.mock("./embeddings.js", async (importOriginal) => {
               throw providerState.providerCloseFailure;
             }
           },
-          embedQuery: async (text: string) => {
+          embed: async (input: EmbeddingInput) => {
+            const text = typeof input === "string" ? input : input.text;
             providerState.embedQueryCalls += 1;
             providerState.embeddedQueryTexts.push(text);
             return embedText(text);
           },
-          embedBatch: async (texts: string[]) => {
+          embedBatch: async (inputs: EmbeddingInput[]) => {
+            if (providerId === "gemini" || providerId === "fallback-provider") {
+              const structuredInputs = inputs.filter(
+                (input): input is Exclude<EmbeddingInput, string> =>
+                  typeof input !== "string" && input.parts?.length !== undefined,
+              );
+              if (structuredInputs.length > 0) {
+                providerState.embedBatchInputCalls += 1;
+                providerState.embeddedBatchInputs.push(inputs);
+                return structuredInputs.map((input) => {
+                  const inlineData = input.parts?.find((part) => part.type === "inline-data");
+                  if (inlineData?.type === "inline-data" && inlineData.data.length > 9000) {
+                    throw new Error("payload too large");
+                  }
+                  const mimeType =
+                    inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
+                  if (mimeType?.startsWith("image/")) {
+                    return [0, 0, 1, 0];
+                  }
+                  if (mimeType?.startsWith("audio/")) {
+                    return [0, 0, 0, 1];
+                  }
+                  return embedText(input.text);
+                });
+              }
+            }
+            const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
             providerState.embedBatchCalls += 1;
             providerState.embeddedBatchTexts.push(...texts);
             return texts.map(embedText);
           },
-          ...(providerId === "gemini" || providerId === "fallback-provider"
-            ? {
-                embedBatchInputs: async (
-                  inputs: Array<{
-                    text: string;
-                    parts?: Array<
-                      | { type: "text"; text: string }
-                      | { type: "inline-data"; mimeType: string; data: string }
-                    >;
-                  }>,
-                ) => {
-                  providerState.embedBatchInputCalls += 1;
-                  return inputs.map((input) => {
-                    const inlineData = input.parts?.find((part) => part.type === "inline-data");
-                    if (inlineData?.type === "inline-data" && inlineData.data.length > 9000) {
-                      throw new Error("payload too large");
-                    }
-                    const mimeType =
-                      inlineData?.type === "inline-data" ? inlineData.mimeType : undefined;
-                    if (mimeType?.startsWith("image/")) {
-                      return [0, 0, 1, 0];
-                    }
-                    if (mimeType?.startsWith("audio/")) {
-                      return [0, 0, 0, 1];
-                    }
-                    return embedText(input.text);
-                  });
-                },
-              }
-            : {}),
         },
         ...(providerId === providerState.identityAlias.provider
           ? {
@@ -563,6 +563,7 @@ export function createManagerIndexFixture(deps: {
     providerState.embedBatchCalls = 0;
     providerState.embeddedBatchTexts = [];
     providerState.embedBatchInputCalls = 0;
+    providerState.embeddedBatchInputs = [];
     providerState.providerRuntimeBatchCalls = [];
     providerState.providerRuntimeBatchGate = null;
     providerState.providerRuntimeBatchErrors = [];

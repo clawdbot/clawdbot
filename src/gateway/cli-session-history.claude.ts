@@ -34,6 +34,7 @@ export type ClaudeCliProjectEntry = {
   isSidechain?: unknown;
   isMeta?: unknown;
   isCompactSummary?: unknown;
+  isVisibleInTranscriptOnly?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -274,11 +275,24 @@ type ClaudeCliPromptTextCandidate = {
   blockIndex?: number;
 };
 
+// Claude marks harness-written user turns with isMeta (skill instruction
+// bodies, injected notices), isCompactSummary (compaction summaries), and
+// isVisibleInTranscriptOnly (transcript-only synthetic rows); its own UI
+// groups these flags as "not a real operator turn" (verified against the
+// v2.1.246 bundle). The operator never typed these rows.
+function isClaudeCliHarnessInjectedEntry(entry: ClaudeCliProjectEntry): boolean {
+  return (
+    entry.isMeta === true ||
+    entry.isCompactSummary === true ||
+    entry.isVisibleInTranscriptOnly === true
+  );
+}
+
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
 ): ClaudeCliPromptTextCandidate[] {
-  if (entry.isMeta === true || entry.isCompactSummary === true) {
+  if (isClaudeCliHarnessInjectedEntry(entry)) {
     return [];
   }
   if (typeof content === "string") {
@@ -396,10 +410,16 @@ export function parseClaudeCliHistoryEntry(
         }
       }
     }
+    // Record provenance here, where the native flags are known, so downstream
+    // display never has to infer operator authorship from message text.
+    const harnessInjected = isClaudeCliHarnessInjectedEntry(entry);
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
+        ...(harnessInjected
+          ? { provenance: { kind: "internal_system", sourceTool: "cli_harness_context" } }
+          : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       baseMeta,

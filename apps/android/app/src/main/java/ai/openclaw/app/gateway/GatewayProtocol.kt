@@ -821,6 +821,7 @@ enum class GatewayEvent(
   DevicePairResolved("device.pair.resolved"),
   DevicePairSetupCompleted("device.pair.setup.completed"),
   DevicePairSetupDeliveryUncertain("device.pair.setup.deliveryUncertain"),
+  UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),

@@ -84,7 +84,14 @@ const writeResultAndExit = (value) => {
   exitWorker(0);
 };
 const mode = descriptor.assignment.prompt;
-if (mode === "connection-failure" || mode === "connection-deadline") {
+if (mode === "admission-rearm") {
+  const marker = path.join(descriptor.assignment.workspaceDir, "admission-attempt");
+  const first = !fs.existsSync(marker);
+  fs.writeFileSync(marker, descriptor.assignment.turnId);
+  writeResultAndExit(JSON.stringify(first
+    ? { status: "not-started", reason: "admission-deadline", errorText: "gateway unreachable " + descriptor.admission.credential }
+    : { status: "completed", transcriptLeafId: "leaf-1", transcriptNextSeq: 2 }) + "\n");
+} else if (mode === "connection-failure" || mode === "connection-deadline") {
   const target = new URL(descriptor.connectionEndpoint.url).host;
   const report = (cause) => new Promise((resolve) => process.send(
     { type: "openclaw-worker-connection-failure-v1", cause }, resolve,

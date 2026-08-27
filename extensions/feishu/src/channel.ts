@@ -112,6 +112,7 @@ import { resolveFeishuSessionConversation } from "./session-conversation.js";
 import { resolveFeishuOutboundSessionRoute } from "./session-route.js";
 import { feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
+import { resolveFeishuStickerSet, searchFeishuStickerSet } from "./sticker-catalog.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
@@ -468,6 +469,13 @@ function describeFeishuMessageTool({
   }
   if (enabledAccounts.some((account) => isFeishuActionEnabled(account, "sticker"))) {
     actions.add("sticker");
+  }
+  const selectedAccount = resolveFeishuAccount({ cfg, accountId });
+  if (
+    isFeishuActionEnabled(selectedAccount, "sticker") &&
+    resolveFeishuStickerSet(cfg, selectedAccount).length > 0
+  ) {
+    actions.add("sticker-search");
   }
   return {
     actions: Array.from(actions),
@@ -1078,19 +1086,27 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reply: true,
       },
       agentPrompt: {
-        messageToolHints: ({ cfg, accountId }) => [
-          "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
-          "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-          "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
-          ...(describeFeishuMessageTool({
+        messageToolHints: ({ cfg, accountId }) => {
+          const actions = describeFeishuMessageTool({
             cfg,
             accountId: accountId ?? undefined,
-          }).actions?.includes("sticker")
-            ? [
-                "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker search and upload are not supported.",
-              ]
-            : []),
-        ],
+          }).actions;
+          return [
+            "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
+            "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
+            "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
+            ...(actions?.includes("sticker")
+              ? [
+                  "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker upload is not supported.",
+                ]
+              : []),
+            ...(actions?.includes("sticker-search")
+              ? [
+                  "- Feishu `action=sticker-search`: configured keyword lookup only, not store search or learned/visual matching. Supply `query` (1–128 characters) and optional `limit` (1–10, default 5); send a returned `fileId` with `action=sticker` on the same account. If `truncated` is true, narrow the query.",
+                ]
+              : []),
+          ];
+        },
       },
       groups: {
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
@@ -1172,11 +1188,20 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           ) {
             throw new Error("Feishu reactions are disabled via actions.reactions.");
           }
-          if (ctx.action === "sticker") {
+          if (ctx.action === "sticker" || ctx.action === "sticker-search") {
             if (!isFeishuActionEnabled(account, "sticker")) {
               throw new Error(
                 "Feishu stickers are disabled; enable actions.sticker for a configured account.",
               );
+            }
+            if (ctx.action === "sticker-search") {
+              const stickers = resolveFeishuStickerSet(ctx.cfg, account);
+              if (stickers.length === 0) {
+                throw new Error(
+                  "Feishu sticker-search requires a nonempty channels.feishu.stickerSets entry for this account's appId.",
+                );
+              }
+              return jsonActionResult(searchFeishuStickerSet(stickers, ctx.params));
             }
             const to = resolveFeishuActionTarget(ctx);
             if (!to) {
@@ -2035,21 +2060,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           },
         },
       },
-      renderPresentation: async (ctx) => {
-        const runtime = await loadFeishuChannelRuntime();
-        const renderPresentation = runtime.feishuOutbound.renderPresentation;
-        return renderPresentation ? await renderPresentation(ctx) : null;
-      },
-      sendPayload: async (ctx) => {
-        const runtime = await loadFeishuChannelRuntime();
-        const sendPayload = runtime.feishuOutbound.sendPayload;
-        if (!sendPayload) {
-          throw new Error("Feishu payload sending is not available.");
-        }
-        return await sendPayload(ctx);
-      },
       ...createRuntimeOutboundDelegates({
         getRuntime: loadFeishuChannelRuntime,
+        renderPresentation: { resolve: (runtime) => runtime.feishuOutbound.renderPresentation },
+        sendPayload: {
+          resolve: (runtime) => runtime.feishuOutbound.sendPayload,
+          unavailableMessage: "Feishu payload sending is not available.",
+        },
         sendText: { resolve: (runtime) => runtime.feishuOutbound.sendText },
         sendMedia: { resolve: (runtime) => runtime.feishuOutbound.sendMedia },
       }),

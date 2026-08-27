@@ -165,7 +165,7 @@ describe("voyage batch bounded reads", () => {
         },
       });
 
-      await expect(provider.embedQuery("hello")).resolves.toEqual([7, 11]);
+      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([7, 11]);
       expect(received).toEqual([
         {
           url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=beta",
