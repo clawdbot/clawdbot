@@ -8,9 +8,9 @@ import type { GatewayServer } from "../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getFreeGatewayPort,
+  getGatewayE2ePortBlock,
 } from "../../../src/gateway/test-helpers.e2e.js";
-import { waitForActiveGatewayRootWork } from "../../../src/process/gateway-work-admission.js";
+import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -91,7 +91,7 @@ function isolatedGatewayPath(): string {
 }
 
 async function startRealGateway(allowedOrigin: string): Promise<RealGateway> {
-  const port = await getFreeGatewayPort();
+  const port = await getGatewayE2ePortBlock();
   const state = await createOpenClawTestState({
     label: "websearch-kill-switch",
     layout: "home",
@@ -352,6 +352,6 @@ describeControlUiE2e("Control UI web-search kill switch against a real Gateway",
 
     await context.close();
     openContexts.delete(context);
-    await expect(waitForActiveGatewayRootWork()).resolves.toEqual({ active: 0, drained: true });
+    await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
   }, 180_000);
 });
