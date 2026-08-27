@@ -82,6 +82,21 @@ export function buildSessionCreationStamp(params: {
   };
 }
 
+/** A required node keeps its original isolation identity across every write and rollover. */
+export function preserveCreationStamp<
+  T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
+>(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
+  return authoritative?.sandbox === "required"
+    ? {
+        ...entry,
+        createdVia: authoritative.createdVia,
+        createdActor: authoritative.createdActor,
+        createdAt: authoritative.createdAt,
+        sandbox: authoritative.sandbox,
+      }
+    : entry;
+}
+
 export type SessionEntryProvenance = {
   /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;

@@ -3521,7 +3521,7 @@ EOF
         is_gateway_daemon_loaded() { return 0; }
         run_quiet_step() {
           case "$1" in
-            "Restarting gateway service"|"Checking gateway service") return 1 ;;
+            "Checking gateway service") return 1 ;;
             *) return 0 ;;
           esac
         }
@@ -3534,8 +3534,42 @@ EOF
 
     const quotedBin = openclawBin.replace(/ /g, "\\ ");
     expect(result?.status).toBe(0);
-    expect(result?.stdout).toContain(`Run: ${quotedBin} gateway restart`);
+    expect(result?.stdout).not.toContain(`Run: ${quotedBin} gateway restart`);
     expect(result?.stdout).toContain(`Run: ${quotedBin} gateway status --deep`);
+  });
+
+  it("does not explicitly restart after force-installing a loaded gateway", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-gateway-transition-"));
+    const openclawBin = join(tmp, "openclaw");
+    const commandLog = join(tmp, "commands.log");
+    writeFileSync(openclawBin, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG"\n');
+    chmodSync(openclawBin, 0o755);
+
+    try {
+      const result = runInstallShell(
+        `
+          set -euo pipefail
+          source "${SCRIPT_PATH}"
+          OPENCLAW_BIN=${JSON.stringify(openclawBin)}
+          is_gateway_daemon_loaded() { return 0; }
+          run_quiet_step() {
+            local title="$1"
+            shift
+            "$@"
+          }
+          refresh_gateway_service_if_loaded
+        `,
+        { COMMAND_LOG: commandLog },
+      );
+
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      expect(readFileSync(commandLog, "utf8").trim().split("\n")).toEqual([
+        "gateway install --force",
+        "gateway status --deep",
+      ]);
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("refreshes the shell command cache after loading a persisted PATH update", () => {

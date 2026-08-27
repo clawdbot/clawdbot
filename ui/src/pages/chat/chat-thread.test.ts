@@ -17,6 +17,7 @@ import {
   getExpandedToolCards,
   getExpandedUserMessages,
   persistedMessageEntryId,
+  readPendingSendFailure,
   resetChatThreadState,
   setExpansionState,
   syncToolCardExpansionState,
@@ -3510,50 +3511,68 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
-  it("hides a pending send after history accepts its idempotency key", () => {
-    const groups = messageGroups({
-      messages: [
-        userMessage("accepted prompt", 1, {
-          __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
-        }),
-      ],
-      queue: [
-        queuedSend("pending-send-1", "accepted prompt", 2, "sending", {
+  it.each(["sending", "failed", "unconfirmed"] as const)(
+    "hands a %s bubble to matching history without changing its key",
+    (sendState) => {
+      const queue = [
+        queuedSend("pending-send-1", "accepted prompt", 2, sendState, {
           sendRunId: "accepted-run",
-          sendSubmittedAtMs: 10,
+          sendAttempts: 1,
         }),
-      ],
-    });
+      ];
+      const pending = messageGroups({ queue });
+      expect(pending).toHaveLength(1);
+      const groups = messageGroups({
+        messages: [
+          userMessage("accepted prompt", 1, {
+            __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
+          }),
+        ],
+        queue,
+      });
 
-    expect(groups).toHaveLength(1);
-    expect(groupAt(groups, 0).messages).toHaveLength(1);
-    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
-      idempotencyKey: "accepted-run:user",
-      seq: 1,
-    });
-  });
+      expect(groups).toHaveLength(1);
+      expect(groupAt(groups, 0).messages).toHaveLength(1);
+      expect(messageAt(groupAt(groups, 0), 0).key).toBe(messageAt(groupAt(pending, 0), 0).key);
+      expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
+        idempotencyKey: "accepted-run:user",
+        seq: 1,
+      });
+    },
+  );
 
-  it("keeps failed submitted sends in the thread for inline retry", () => {
-    const groups = messageGroups({
-      queue: [
-        queuedSend("failed-send-1", "retry me from the transcript", 1, "failed", {
-          sendError: "send failed",
-          sendSubmittedAtMs: 10,
-        }),
-      ],
-    });
+  it.each(["failed", "unconfirmed"] as const)(
+    "keeps a %s attempted send after the preceding reply for inline retry",
+    (sendState) => {
+      const groups = messageGroups({
+        messages: [assistantMessage("Previous reply", 2)],
+        queue: [
+          queuedSend("attempted-send-1", "retry me from the transcript", 1, sendState, {
+            sendError: "Delivery diagnostic",
+            sendAttempts: 1,
+          }),
+        ],
+      });
 
-    expect(groups).toHaveLength(1);
-    expect(messageRecord(groupAt(groups, 0))).toMatchObject({
-      content: [{ type: "text", text: "retry me from the transcript" }],
-      __openclaw: {
-        id: "failed-send-1",
-        kind: "pending-send",
-        state: "failed",
-        error: "send failed",
-      },
-    });
-  });
+      expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
+      const message = messageRecord(groupAt(groups, 1));
+      expect(message).toMatchObject({
+        timestamp: 1,
+        content: [{ type: "text", text: "retry me from the transcript" }],
+        __openclaw: {
+          id: "attempted-send-1",
+          kind: "pending-send",
+          state: sendState,
+          error: "Delivery diagnostic",
+        },
+      });
+      expect(readPendingSendFailure(message)).toEqual({
+        id: "attempted-send-1",
+        state: sendState,
+        error: "Delivery diagnostic",
+      });
+    },
+  );
 
   it("filters submitted queued sends while chat search is active", () => {
     const groups = messageGroups({

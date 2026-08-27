@@ -2,17 +2,21 @@ import { timingSafeEqual } from "node:crypto";
 import { Resolver } from "node:dns/promises";
 import { authenticate, type AuthenticateResult } from "mailauth";
 import type { AddressObject, ParsedMail } from "mailparser";
-import { SENDER_STRENGTHS, type ImapAccountConfig, type SenderStrength } from "./config.js";
+import {
+  meetsIdentifierAuthentication,
+  type IdentifierAuthentication,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ImapAccountConfig } from "./config.js";
 
 const AUTH_FRESHNESS_MS = 48 * 60 * 60 * 1_000;
 const DNS_TIMEOUT_MS = 5_000;
 
 export type SenderGateVerdict =
-  | { accepted: true; sender: string; strength: SenderStrength; reason: string }
+  | { accepted: true; sender: string; strength: IdentifierAuthentication; reason: string }
   | {
       accepted: false;
       sender?: string;
-      strength: SenderStrength;
+      strength: IdentifierAuthentication;
       reason: string;
       transient: boolean;
     };
@@ -115,7 +119,7 @@ function mapImapAuthStrength(
   result: AuthenticateResult | undefined,
   headers: readonly AuthenticationHeader[],
   account: ImapAccountConfig,
-): { strength: SenderStrength; reason: string; transient: boolean } {
+): { strength: IdentifierAuthentication; reason: string; transient: boolean } {
   const dmarc = result?.dmarc && result.dmarc.status.result;
   // mailauth omits alignment when no DMARC policy exists or its DNS lookup fails.
   if (result?.dmarc && result.dmarc.alignment?.dkim.underSized) {
@@ -143,7 +147,7 @@ function mapImapAuthStrength(
     };
   }
   return {
-    strength: "mutable",
+    strength: "unverified",
     reason: dmarc === "temperror" ? "authentication-temperror" : `dmarc-${dmarc || "none"}`,
     transient: dmarc === "temperror",
   };
@@ -200,24 +204,20 @@ export async function evaluateImapSender(params: {
     );
     if (
       fallback.strength === "asserted" &&
-      SENDER_STRENGTHS.indexOf(fallback.strength) >=
-        SENDER_STRENGTHS.indexOf(params.account.senderAuth.min)
+      meetsIdentifierAuthentication(fallback.strength, params.account.senderAuth.min)
     ) {
       return { accepted: true, sender, strength: fallback.strength, reason: fallback.reason };
     }
     return {
       accepted: false,
       sender,
-      strength: "mutable",
+      strength: "unverified",
       reason: "authentication-temperror",
       transient: true,
     };
   }
   const evidence = mapImapAuthStrength(result, authenticationHeaders(params.mail), params.account);
-  if (
-    SENDER_STRENGTHS.indexOf(evidence.strength) <
-    SENDER_STRENGTHS.indexOf(params.account.senderAuth.min)
-  ) {
+  if (!meetsIdentifierAuthentication(evidence.strength, params.account.senderAuth.min)) {
     return { accepted: false, sender, ...evidence };
   }
   return { accepted: true, sender, strength: evidence.strength, reason: evidence.reason };

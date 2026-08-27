@@ -132,7 +132,8 @@ export type ToolSearchCatalogSession = {
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
   onChange?: () => void;
-  onDispose?: () => void;
+  disposeObserver?: () => void;
+  onDispose?: Set<() => void>;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

@@ -613,6 +613,12 @@ automatically when the Gateway returns. Live controls and slash commands remain 
 offline, except that **Stop** can queue an exact local run ID for replay. A session-only stop
 is not replayed because newer work may start in that session before the connection returns.
 
+If the connection drops before a send is acknowledged, reconnect checks the transcript and
+the session's active or last run ID for delivery proof. A matching run confirms receipt even
+before its transcript row appears. Without proof, an attempted message stays in the conversation
+with an amber **Delivery unconfirmed** footer and **Retry**. Check the conversation and retry only
+if the message did not arrive. Unconfirmed local commands keep their retry/discard queue controls.
+
 First opens and reloads show a small animated OpenClaw mark while the Gateway resolves the initial
 connection, including when authentication comes from a trusted proxy or Tailscale instead of a
 browser-stored credential. The login gate appears only after the initial connection fails or the

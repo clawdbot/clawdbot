@@ -3591,15 +3591,9 @@ refresh_gateway_service_if_loaded() {
         return 0
     fi
 
-    if run_quiet_step "Restarting gateway service" "$claw" gateway restart; then
-        ui_success "Gateway service restarted"
-    else
-        local user_claw
-        user_claw="$(openclaw_command_for_user "$claw")"
-        ui_warn "Gateway service restart failed; continuing. Run: ${user_claw} gateway restart"
-        return 0
-    fi
-
+    # `gateway install --force` activates the replacement service. Keep the
+    # explicit lifecycle restart in the finalization phase so doctor/plugin
+    # changes can still be applied without restarting twice here.
     run_quiet_step "Probing gateway service" "$claw" gateway status --deep || true
 }
 

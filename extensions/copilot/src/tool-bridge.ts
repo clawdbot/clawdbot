@@ -184,21 +184,7 @@ export async function createCopilotToolBridge(
     isRawModelRun: isRawCopilotModelRun(attemptParams),
     toolsAllow: attemptParams.toolsAllow,
   });
-  const effectiveToolPlan = hasNonWildcardGlobAllowlist(toolPlan.runtimeToolAllowlist)
-    ? {
-        ...toolPlan,
-        codingToolConstructionPlan: {
-          includeBaseCodingTools: true,
-          includeChannelTools: true,
-          includeOpenClawTools: true,
-          includePluginTools: true,
-          includeShellTools: true,
-        },
-        constructTools: true,
-        includeCoreTools: true,
-      }
-    : toolPlan;
-  if (!effectiveToolPlan.constructTools) {
+  if (!toolPlan.constructTools) {
     return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
   }
 
@@ -221,7 +207,7 @@ export async function createCopilotToolBridge(
     modelToolsEnabled: true,
     prompt: attemptParams.prompt,
     runId: attemptParams.runId,
-    runtimeToolAllowlist: effectiveToolPlan.runtimeToolAllowlist,
+    runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
     sessionId: input.sessionId,
     sessionKey: attemptParams.sandboxSessionKey ?? attemptParams.sessionKey ?? input.sessionKey,
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
@@ -231,7 +217,7 @@ export async function createCopilotToolBridge(
   const toolOptions = buildOpenClawCodingToolsOptions(
     input,
     {
-      ...effectiveToolPlan,
+      ...toolPlan,
       runtimeToolAllowlist: toolSurfaceRuntime.runtimeToolAllowlist,
     },
     toolSurfaceRuntime,
@@ -269,7 +255,7 @@ export async function createCopilotToolBridge(
   );
   const plannedSourceTools = filterCopilotToolsForConstructionPlan(
     allowedSourceTools,
-    effectiveToolPlan.codingToolConstructionPlan,
+    toolPlan.codingToolConstructionPlan,
     { preserveToolNames: toolSurfaceRuntime.runtimeToolAllowlist },
   );
   const compactedTools = toolSurfaceRuntime.compactTools(plannedSourceTools, {
@@ -869,13 +855,6 @@ function filterCopilotToolsForConstructionPlan<T extends { name: string }>(
       return false;
     }
     return true;
-  });
-}
-
-function hasNonWildcardGlobAllowlist(toolsAllow: string[] | undefined): boolean {
-  return (toolsAllow ?? []).some((entry) => {
-    const trimmed = entry.trim();
-    return trimmed !== "*" && trimmed.includes("*");
   });
 }
 

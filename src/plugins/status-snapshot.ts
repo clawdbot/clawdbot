@@ -3,10 +3,11 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  buildPluginCapabilitySummary,
   formatPluginCapabilityConsentRequired,
+  mergePluginDeclaredSurfaces,
   resolveAcceptedSurfaceCurrent,
-} from "./capability-consent.js";
-import { buildPluginCapabilitySummary, mergePluginDeclaredSurfaces } from "./capability-summary.js";
+} from "./capability-summary.js";
 import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,

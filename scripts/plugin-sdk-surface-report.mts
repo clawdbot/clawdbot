@@ -322,7 +322,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: identifier authentication input type for external channel plugins.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      4348,
+      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
+      4349,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -421,7 +422,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: canonical session-model selection and auxiliary runtime-auth preparation.
       // +1: shared channel-account logout config cleanup.
       // +1: descriptor-based allowFrom authentication classifier for channel security audits.
-      2584,
+      // +1: downstream strength mappers need canonical ordering instead of duplicate rank tables.
+      2585,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

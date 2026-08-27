@@ -289,8 +289,9 @@ configured default model is never replaced.
   <Accordion title="Transport selection">
     Claude model IDs use the Anthropic Messages transport automatically.
     Gemini models use the OpenAI Chat Completions transport; GPT and o-series
-    models keep the OpenAI Responses transport. OpenClaw selects the correct
-    transport based on the model ref.
+    models keep the OpenAI Responses transport. The bundled static catalog
+    includes these transports and request compatibility settings, so Gemini
+    keeps using Chat Completions when live discovery is disabled or unavailable.
   </Accordion>
 
   <Accordion title="Thinking levels">
