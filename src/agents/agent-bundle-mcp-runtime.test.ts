@@ -3314,6 +3314,99 @@ describe("requester-scoped MCP connection resolution", () => {
     vi.useRealTimers();
   });
 
+  it.each([
+    ["static", 1],
+    ["full", 2],
+    ["requester-only", 1],
+  ] as const)(
+    "expires %s runtimes at ten idle minutes while preserving reuse and active leases",
+    async (entrypoint, expectedExpired) => {
+      let nowMs = 100_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        {
+          serverName: "user-mail",
+          resolve: async () => ({ url: "https://mcp.example.test/user" }),
+        },
+      ]);
+      const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+      const sessionKey = "agent:test:session-fixed-idle";
+      const params: RuntimeParams = {
+        sessionId: "session-fixed-idle",
+        sessionKey,
+        workspaceDir: "/workspace",
+        ...(entrypoint === "static" ? {} : { requesterSenderId: "sender-a" }),
+        cfg: {
+          mcp: {
+            servers: {
+              shared: { command: "true" },
+              ...(entrypoint === "static"
+                ? {}
+                : { "user-mail": { transport: "streamable-http" as const } }),
+            },
+          },
+        },
+      };
+      const getRuntime = () =>
+        entrypoint === "requester-only"
+          ? manager.getOrCreateRequesterScoped(params)
+          : manager.getOrCreate(params);
+      try {
+        await getRuntime();
+        nowMs += 10 * 60 * 1000 - 1;
+        expect(await manager.sweepIdleRuntimes()).toBe(0);
+
+        const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
+        expect(reused.lastUsedAt).toBe(nowMs);
+        nowMs += 10 * 60 * 1000 - 1;
+        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
+        nowMs += 1;
+        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        expect(manager.listSessionIds()).toContain(params.sessionId);
+
+        release();
+        expect(await manager.sweepIdleRuntimes()).toBe(expectedExpired);
+        expect(manager.listRuntimeKeys()).toEqual([]);
+        expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
+      } finally {
+        await manager.disposeAll();
+        clock.mockRestore();
+      }
+    },
+  );
+
+  it("sweeps admitted runtimes on the fixed idle timer and stops maintenance after disposal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(100_000);
+    const now = vi.fn(() => Date.now());
+    const manager = testing.createSessionMcpRuntimeManager({ now });
+    const params: RuntimeParams = {
+      sessionId: "session-idle-timer",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    };
+    try {
+      await manager.getOrCreate(params);
+      await manager.getOrCreate(params);
+      now.mockClear();
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 1);
+      expect(manager.listSessionIds()).toEqual([params.sessionId]);
+      expect(now).toHaveBeenCalledTimes(9);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(manager.listSessionIds()).toEqual([]);
+      expect(now).toHaveBeenCalledTimes(10);
+
+      await manager.disposeAll();
+      now.mockClear();
+      await vi.advanceTimersByTimeAsync(60 * 1000);
+      expect(now).not.toHaveBeenCalled();
+    } finally {
+      await manager.disposeAll();
+    }
+  });
+
   it("keys requester-scoped runtimes per sender while sharing static servers", async () => {
     const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
     resolverTesting.setMcpServerConnectionResolversForTest([
@@ -4144,7 +4237,6 @@ describe("requester-scoped MCP connection resolution", () => {
       createInFlight: 0,
       requesterWorkChains: 0,
       sessionKeys: 0,
-      idleTtl: 0,
       deferredRetirement: 0,
       advertisedScopedCatalogs: 0,
     });
@@ -4568,11 +4660,10 @@ describe("requester-scoped MCP connection resolution", () => {
       connectionMeta: 1,
       requesterWorkChains: 0,
       sessionKeys: 1,
-      idleTtl: 1,
     });
 
     now.mockClear();
-    nowMs += testing.resolveSessionMcpRuntimeIdleTtlMs() + 1;
+    nowMs += 10 * 60 * 1000 + 1;
     for (const [requesterSenderId, attemptedSessionId] of [
       [undefined, "session-missing"],
       ["  ", "session-blank"],
