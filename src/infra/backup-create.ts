@@ -429,28 +429,24 @@ export async function createBackupArchive(
     const hasLegacyAuditSources = stateAsset
       ? await hasLegacyAuditBackupSources(stateAsset.sourcePath)
       : false;
-    const createSnapshotPlans = async () => {
-      const legacyAuditSnapshots =
-        stateAsset && hasLegacyAuditSources
-          ? await createLegacyAuditBackupSnapshots({
+    // Capture legacy audit files under the lease, then release it before the
+    // potentially long SQLite snapshot transaction begins.
+    const legacyAuditSnapshots =
+      stateAsset && hasLegacyAuditSources
+        ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, () =>
+            createLegacyAuditBackupSnapshots({
               stateDir: stateAsset.sourcePath,
               tempDir,
-            })
-          : [];
-      const stateSqliteBackup = !onlyConfig
-        ? await createBackupSqliteSnapshotPlan({
-            inventory: plan.inventory,
-            tempDir,
-            legacyAuditSnapshots,
-          })
-        : { snapshots: [], discoveredSourcePaths: new Set<string>() };
-      return { legacyAuditSnapshots, stateSqliteBackup };
-    };
-    const snapshotPlans =
-      stateAsset && hasLegacyAuditSources
-        ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, createSnapshotPlans)
-        : await createSnapshotPlans();
-    const { legacyAuditSnapshots, stateSqliteBackup } = snapshotPlans;
+            }),
+          )
+        : [];
+    const stateSqliteBackup = !onlyConfig
+      ? await createBackupSqliteSnapshotPlan({
+          inventory: plan.inventory,
+          tempDir,
+          legacyAuditSnapshots,
+        })
+      : { snapshots: [], discoveredSourcePaths: new Set<string>() };
     const sourcePathRemaps = new Map<string, string>();
     const skippedStateSourcePaths = new Set<string>();
     for (const snapshot of stateSqliteBackup.snapshots) {
