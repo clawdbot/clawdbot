@@ -222,21 +222,6 @@ function hasLocalMemoryIntent(config: ProviderAuthContext["config"]): boolean {
   );
 }
 
-function routesToLlamaCpp(
-  model: string | { primary?: string; fallbacks?: string[] } | undefined,
-): boolean {
-  const refs = typeof model === "string" ? [model] : [model?.primary, ...(model?.fallbacks ?? [])];
-  return refs.some((ref) => ref?.startsWith(`${LLAMA_CPP_PROVIDER_ID}/`) === true);
-}
-
-function hasLlamaCppChatRoute(config: ProviderAuthContext["config"]): boolean {
-  return (
-    routesToLlamaCpp(config.agents?.defaults?.model) ||
-    Object.values(config.agents?.entries ?? {}).some((agent) => routesToLlamaCpp(agent.model)) ||
-    config.agents?.list?.some((agent) => routesToLlamaCpp(agent.model)) === true
-  );
-}
-
 async function resolveSetupPlan(
   ctx: ProviderAuthContext,
   candidates: LlamaCppChatCandidate[],
@@ -268,10 +253,7 @@ async function resolveSetupPlan(
   }
 
   const existing = ctx.config.models?.providers?.[LLAMA_CPP_PROVIDER_ID];
-  if (
-    localMemoryIntent &&
-    ((existing && !existing.localService) || hasLlamaCppChatRoute(ctx.config))
-  ) {
+  if (localMemoryIntent && existing && (!existing.localService || existing.models.length > 0)) {
     await ctx.prompter.note(
       "Embedding-only setup cannot replace an existing llama.cpp server or configured llama.cpp chat routes. Move those routes to another provider, remove any existing server config, then retry llama.cpp setup.",
       "Setup skipped",

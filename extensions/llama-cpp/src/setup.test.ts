@@ -125,6 +125,24 @@ const externalChatRoutes: Array<{
       },
     },
   },
+  {
+    name: "the default subagent model",
+    agents: {
+      defaults: {
+        model: { primary: "openai/gpt-5.4" },
+        subagents: { model: "llama-cpp/external-chat" },
+      },
+    },
+  },
+  {
+    name: "an agent subagent model",
+    agents: {
+      defaults: { model: { primary: "openai/gpt-5.4" } },
+      entries: {
+        helper: { subagents: { model: "llama-cpp/external-chat" } },
+      },
+    },
+  },
 ];
 
 describe("llama.cpp managed setup", () => {
@@ -336,7 +354,7 @@ describe("llama.cpp managed setup", () => {
     },
   );
 
-  it.each(externalChatRoutes.slice(0, 2))(
+  it.each(externalChatRoutes.filter(({ name }) => name !== "an agent primary"))(
     "does not replace a managed llama.cpp provider used as $name",
     async ({ agents }) => {
       vi.mocked(os.totalmem).mockReturnValue(8 * GIB);
